@@ -178,9 +178,31 @@ Future<void> main(List<String> argv) async {
     editId = null;
     stdout.writeln('==> committed — $versionName ($versionCode) is on "$track"');
   } on DetailedApiRequestError catch (e) {
-    // The default toString is a single dense line; the message is the part that
-    // says what Play actually objected to.
-    _fail('Play API error ${e.status}: ${e.message}');
+    // Deliberately not _fail: that calls exit(), which terminates the process
+    // without unwinding, so the finally below would never run and every failed
+    // upload would leave an open edit behind. Record the failure, let cleanup
+    // happen, and exit with the code once main returns.
+    stderr.writeln('play_upload: Play API error ${e.status}: ${e.message}');
+
+    // The resumable uploader reports only the transport status and discards
+    // Play's response body, so a 403 on the upload arrives with no reason
+    // attached. Listed most-likely first; the first one is easy to hit because
+    // a build number is allocated per commit, so rebuilding without committing
+    // re-sends a versionCode Play already has.
+    if (e.status == 403) {
+      stderr.writeln(
+        '  A 403 on the upload itself, in order of likelihood:\n'
+        '  - versionCode $expectedVersionCode already exists for this app. Play\n'
+        '    never accepts one twice, including one uploaded by hand. Commit and\n'
+        '    rebuild to allocate the next number.\n'
+        '  - the service account lacks "Release to testing tracks" for this app\n'
+        '    (Play Console > Users and permissions > App permissions).\n'
+        '  - the app has never had a release; Play requires the first bundle for\n'
+        '    a package to be uploaded by hand in the console.\n'
+        '  Opening the edit succeeded, so the account can at least see the app.',
+      );
+    }
+    exitCode = 1;
   } finally {
     // An edit left open is harmless — Play expires them — but leaving one
     // behind means the next run sees a stale draft in the console for no
