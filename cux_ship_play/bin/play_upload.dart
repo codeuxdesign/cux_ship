@@ -108,6 +108,66 @@ Future<void> _publishDataSafety(
   }
 }
 
+/// The listing half of the read side: what Play holds for the store listing,
+/// as opposed to what store/play/ says it should hold.
+///
+/// Worth having for the same reason as [_listTracks]. A push reports what it
+/// sent, which is not evidence of what arrived — and the console's own setup
+/// checklist can lag behind a committed edit, so "the task is still open" and
+/// "the push did not land" look identical from the outside until something
+/// reads it back.
+Future<void> _listListing(AndroidPublisherApi api, String packageName) async {
+  String? editId;
+  try {
+    editId = (await api.edits.insert(AppEdit(), packageName)).id;
+    if (editId == null) {
+      _fail('Play did not return an edit id');
+    }
+
+    final details = await api.edits.details.get(packageName, editId);
+    stdout.writeln('  default language: ${details.defaultLanguage}');
+    stdout.writeln('  contact email:    ${details.contactEmail}');
+    stdout.writeln('  contact website:  ${details.contactWebsite}');
+    stdout.writeln('  contact phone:    ${details.contactPhone ?? "(none)"}');
+
+    final listings =
+        (await api.edits.listings.list(packageName, editId)).listings ??
+        <Listing>[];
+    for (final l in listings) {
+      stdout.writeln('  ${l.language}:');
+      stdout.writeln('    title:  ${l.title}');
+      stdout.writeln('    short:  ${l.shortDescription}');
+      stdout.writeln(
+        '    full:   ${l.fullDescription?.length ?? 0} characters',
+      );
+      stdout.writeln('    video:  ${l.video ?? "(none)"}');
+      for (final type in _imageSpecs.keys) {
+        final images =
+            (await api.edits.images.list(
+              packageName,
+              editId,
+              l.language!,
+              type,
+            )).images ??
+            <Image>[];
+        if (images.isNotEmpty) {
+          stdout.writeln('    $type: ${images.length}');
+        }
+      }
+    }
+    if (listings.isEmpty) {
+      stdout.writeln('  no listings at all — nothing has ever been pushed');
+    }
+  } on DetailedApiRequestError catch (e) {
+    stderr.writeln('play_upload: Play API error ${e.status}: ${e.message}');
+    exitCode = 1;
+  } finally {
+    if (editId != null) {
+      await api.edits.delete(packageName, editId);
+    }
+  }
+}
+
 /// Reads back what Play actually has, rather than what a previous run reported
 /// having sent. Reading tracks needs an edit even though nothing is modified,
 /// so the edit is discarded immediately afterwards.
@@ -561,7 +621,9 @@ Future<void> main(List<String> argv) async {
     )
     ..addOption(
       'release-notes',
-      help: 'Optional file whose contents become the en-GB notes.',
+      help:
+          'Optional file whose contents become the release notes, in the '
+          "listing's default language.",
     )
     ..addOption(
       'metadata',
@@ -578,6 +640,19 @@ Future<void> main(List<String> argv) async {
       help:
           'Print what Play currently has on each track, and exit. '
           'Needs only --package.',
+    )
+    ..addFlag(
+      'list-listing',
+      negatable: false,
+      help:
+          'Print what Play currently holds for the store listing, and exit. '
+          'Needs only --package.',
+    )
+    ..addMultiOption(
+      'delete-locale',
+      help:
+          'BCP-47 locale to remove from the listing. Explicit because the '
+          'normal rule is that anything absent from the tree is left alone.',
     )
     ..addFlag('help', abbr: 'h', negatable: false);
 
@@ -596,11 +671,17 @@ Future<void> main(List<String> argv) async {
 
   // Reading needs nothing else, so it goes before the upload path's checks and
   // builds its own client.
-  if (args.flag('list-tracks')) {
+  if (args.flag('list-tracks') || args.flag('list-listing')) {
     final client = await clientViaServiceAccount(_loadCredentials(), [
       AndroidPublisherApi.androidpublisherScope,
     ]);
-    await _listTracks(AndroidPublisherApi(client), packageName);
+    final api = AndroidPublisherApi(client);
+    if (args.flag('list-tracks')) {
+      await _listTracks(api, packageName);
+    }
+    if (args.flag('list-listing')) {
+      await _listListing(api, packageName);
+    }
     client.close();
     return;
   }
@@ -609,14 +690,19 @@ Future<void> main(List<String> argv) async {
   final buildNumber = args.option('build-number');
   final metadataPath = args.option('metadata');
   final dataSafetyPath = args.option('data-safety');
+  final deleteLocales = args.multiOption('delete-locale');
 
-  // The three jobs are independent, so any one of them alone is a valid run —
-  // a listing typo should not need an artifact to fix. Requiring at least one
+  // The jobs are independent, so any one of them alone is a valid run — a
+  // listing typo should not need an artifact to fix. Requiring at least one
   // stops a no-argument invocation from opening and committing an empty edit,
   // which succeeds and does nothing.
-  if (aabPath == null && metadataPath == null && dataSafetyPath == null) {
+  if (aabPath == null &&
+      metadataPath == null &&
+      dataSafetyPath == null &&
+      deleteLocales.isEmpty) {
     _fail(
-      'nothing to do — pass --aab, --metadata or --data-safety\n${parser.usage}',
+      'nothing to do — pass --aab, --metadata, --data-safety or '
+      '--delete-locale\n${parser.usage}',
     );
   }
 
@@ -673,6 +759,11 @@ Future<void> main(List<String> argv) async {
       );
     }
   }
+
+  // The listing's default language, when the tree declares one. Play rejects
+  // release notes in a locale the listing does not have, so this follows the
+  // listing rather than being chosen separately.
+  final notesLanguage = metadata?.details['defaultLanguage'] ?? 'en-US';
 
   // Built only once every local check has passed, so a 4001-character
   // description or a missing screenshot fails with no credential in scope at
@@ -736,9 +827,18 @@ Future<void> main(List<String> argv) async {
               name: '$versionName ($versionCode)',
               versionCodes: ['$versionCode'],
               status: args.option('status'),
+              // Whatever the metadata tree declares as the listing's default
+              // language, so the notes cannot end up in a locale the listing
+              // does not have. Hardcoding one is how they were left in en-GB
+              // after the listing itself moved to en-US.
               releaseNotes: releaseNotes == null
                   ? null
-                  : [LocalizedText(language: 'en-GB', text: releaseNotes)],
+                  : [
+                      LocalizedText(
+                        language: notesLanguage,
+                        text: releaseNotes,
+                      ),
+                    ],
             ),
           ],
         ),
@@ -752,8 +852,17 @@ Future<void> main(List<String> argv) async {
       released = '$versionName ($versionCode) is on "$track"';
     }
 
+    // After the metadata below would be wrong: Play will not delete a listing
+    // that is still the default language, so the deletion has to follow the
+    // details patch that moves defaultLanguage elsewhere — and both are in this
+    // one edit, so ordering within it is all there is to get right.
     if (metadata != null) {
       await _publishMetadata(api, packageName, editId, metadata);
+    }
+
+    for (final locale in deleteLocales) {
+      await api.edits.listings.delete(packageName, editId, locale);
+      stdout.writeln('==> removed the $locale listing');
     }
 
     if (dryRun) {
