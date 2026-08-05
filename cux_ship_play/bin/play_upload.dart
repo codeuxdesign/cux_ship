@@ -78,6 +78,36 @@ ServiceAccountCredentials _loadCredentials() {
   }
 }
 
+/// Sent with a plain POST rather than through `api.applications.dataSafety`,
+/// which cannot handle this endpoint: Play answers a successful declaration with
+/// `204 No Content`, and the generated wrapper casts the body to a Map — so a
+/// success arrives as `type 'Null' is not a subtype of type Map<String, dynamic>`
+/// and an accepted declaration looks exactly like a crash.
+///
+/// Going direct also surfaces Play's rejection text in full. Its validation
+/// gates questions on other answers, undocumented, one complaint at a time, and
+/// that text is the only way to find out which cell it objects to.
+Future<void> _publishDataSafety(
+  AuthClient client,
+  String packageName,
+  String csv,
+) async {
+  final response = await client.post(
+    Uri.parse(
+      'https://androidpublisher.googleapis.com/androidpublisher/v3/'
+      'applications/$packageName/dataSafety',
+    ),
+    headers: {'Content-Type': 'application/json'},
+    body: jsonEncode({'safetyLabels': csv}),
+  );
+  if (response.statusCode != 200 && response.statusCode != 204) {
+    throw _Abort(
+      'data safety declaration rejected (${response.statusCode}):\n'
+      '${response.body}',
+    );
+  }
+}
+
 /// Reads back what Play actually has, rather than what a previous run reported
 /// having sent. Reading tracks needs an edit even though nothing is modified,
 /// so the edit is discarded immediately afterwards.
@@ -747,10 +777,7 @@ Future<void> main(List<String> argv) async {
     // whole, so sending it first would change what Play shows users even if the
     // edit then failed to commit and the release never happened.
     if (dataSafetyCsv != null) {
-      await api.applications.dataSafety(
-        SafetyLabelsUpdateRequest(safetyLabels: dataSafetyCsv),
-        packageName,
-      );
+      await _publishDataSafety(client, packageName, dataSafetyCsv);
       stdout.writeln('==> data safety declaration updated');
     }
   } on _Abort catch (e) {
