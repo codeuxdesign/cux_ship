@@ -26,16 +26,98 @@ Never _fail(String message) {
   exit(1);
 }
 
+/// Passed as JSON in the environment rather than a path, because that is what
+/// tool/with-secrets.sh can supply without writing a credential to disk.
+ServiceAccountCredentials _loadCredentials() {
+  final raw = Platform.environment[_serviceAccountVar];
+  if (raw == null || raw.trim().isEmpty) {
+    _fail(
+      '$_serviceAccountVar is not set.\n'
+      '  It holds the Google Play service account JSON. Run this through\n'
+      '  tool/with-secrets.sh, or export it yourself.',
+    );
+  }
+  try {
+    return ServiceAccountCredentials.fromJson(
+      jsonDecode(raw) as Map<String, dynamic>,
+    );
+  } on FormatException catch (e) {
+    _fail('$_serviceAccountVar is not valid JSON: ${e.message}');
+  }
+}
+
+/// Reads back what Play actually has, rather than what a previous run reported
+/// having sent. Reading tracks needs an edit even though nothing is modified,
+/// so the edit is discarded immediately afterwards.
+Future<void> _listTracks(AndroidPublisherApi api, String packageName) async {
+  String? editId;
+  try {
+    editId = (await api.edits.insert(AppEdit(), packageName)).id;
+    if (editId == null) {
+      _fail('Play did not return an edit id');
+    }
+    for (final t
+        in (await api.edits.tracks.list(packageName, editId)).tracks ??
+            <Track>[]) {
+      final releases = t.releases ?? <TrackRelease>[];
+      if (releases.isEmpty) {
+        stdout.writeln('  ${t.track}: (empty)');
+      }
+      for (final r in releases) {
+        stdout.writeln(
+          '  ${t.track}: "${r.name}" codes=${r.versionCodes} ${r.status}',
+        );
+      }
+    }
+    final bundles =
+        (await api.edits.bundles.list(packageName, editId)).bundles ??
+        <Bundle>[];
+    stdout.writeln(
+      '  uploaded bundles: ${bundles.map((b) => b.versionCode).toList()}',
+    );
+  } on DetailedApiRequestError catch (e) {
+    stderr.writeln('play_upload: Play API error ${e.status}: ${e.message}');
+    exitCode = 1;
+  } finally {
+    if (editId != null) {
+      await api.edits.delete(packageName, editId);
+    }
+  }
+}
+
 Future<void> main(List<String> argv) async {
   final parser = ArgParser()
     ..addOption('aab', help: 'Path to the signed app bundle.')
-    ..addOption('package', help: 'applicationId, e.g. design.codeux.holdthewheel.')
-    ..addOption('build-number', help: 'Expected versionCode; verified against the bundle.')
-    ..addOption('version-name', help: 'Used only to name the release in the console.')
+    ..addOption(
+      'package',
+      help: 'applicationId, e.g. design.codeux.holdthewheel.',
+    )
+    ..addOption(
+      'build-number',
+      help: 'Expected versionCode; verified against the bundle.',
+    )
+    ..addOption(
+      'version-name',
+      help: 'Used only to name the release in the console.',
+    )
     ..addOption('track', defaultsTo: 'internal')
-    ..addOption('status', defaultsTo: 'completed', help: 'completed | draft | inProgress')
-    ..addOption('release-notes', help: 'Optional file whose contents become the en-GB notes.')
+    ..addOption(
+      'status',
+      defaultsTo: 'completed',
+      help: 'completed | draft | inProgress',
+    )
+    ..addOption(
+      'release-notes',
+      help: 'Optional file whose contents become the en-GB notes.',
+    )
     ..addFlag('dry-run', negatable: false, help: 'Do everything except commit.')
+    ..addFlag(
+      'list-tracks',
+      negatable: false,
+      help:
+          'Print what Play currently has on each track, and exit. '
+          'Needs only --package.',
+    )
     ..addFlag('help', abbr: 'h', negatable: false);
 
   final args = parser.parse(argv);
@@ -44,11 +126,28 @@ Future<void> main(List<String> argv) async {
     return;
   }
 
-  final aabPath = args.option('aab');
+  // --package is the one argument both modes need, so it is checked before the
+  // split; the upload-only arguments are checked after, where they apply.
   final packageName = args.option('package');
+  if (packageName == null) {
+    _fail('--package is required\n${parser.usage}');
+  }
+
+  final client = await clientViaServiceAccount(_loadCredentials(), [
+    AndroidPublisherApi.androidpublisherScope,
+  ]);
+  final api = AndroidPublisherApi(client);
+
+  if (args.flag('list-tracks')) {
+    await _listTracks(api, packageName);
+    client.close();
+    return;
+  }
+
+  final aabPath = args.option('aab');
   final buildNumber = args.option('build-number');
-  if (aabPath == null || packageName == null || buildNumber == null) {
-    _fail('--aab, --package and --build-number are all required\n${parser.usage}');
+  if (aabPath == null || buildNumber == null) {
+    _fail('--aab and --build-number are required to upload\n${parser.usage}');
   }
 
   final expectedVersionCode = int.tryParse(buildNumber);
@@ -59,26 +158,6 @@ Future<void> main(List<String> argv) async {
   final aab = File(aabPath);
   if (!aab.existsSync()) {
     _fail('no such file: $aabPath');
-  }
-
-  // Passed as JSON in the environment rather than a path, because that is what
-  // tool/with-secrets.sh can supply without writing a credential to disk.
-  final rawCredentials = Platform.environment[_serviceAccountVar];
-  if (rawCredentials == null || rawCredentials.trim().isEmpty) {
-    _fail(
-      '$_serviceAccountVar is not set.\n'
-      '  It holds the Google Play service account JSON. Run this through\n'
-      '  tool/with-secrets.sh, or export it yourself.',
-    );
-  }
-
-  final ServiceAccountCredentials credentials;
-  try {
-    credentials = ServiceAccountCredentials.fromJson(
-      jsonDecode(rawCredentials) as Map<String, dynamic>,
-    );
-  } on FormatException catch (e) {
-    _fail('$_serviceAccountVar is not valid JSON: ${e.message}');
   }
 
   final dryRun = args.flag('dry-run');
@@ -96,16 +175,12 @@ Future<void> main(List<String> argv) async {
     // Play rejects notes over 500 characters for a release, and does so after
     // the bundle has already been uploaded.
     if (releaseNotes.length > 500) {
-      _fail('release notes are ${releaseNotes.length} characters; Play allows 500');
+      _fail(
+        'release notes are ${releaseNotes.length} characters; Play allows 500',
+      );
     }
   }
 
-  final client = await clientViaServiceAccount(
-    credentials,
-    [AndroidPublisherApi.androidpublisherScope],
-  );
-
-  final api = AndroidPublisherApi(client);
   String? editId;
 
   try {
@@ -176,7 +251,9 @@ Future<void> main(List<String> argv) async {
 
     await api.edits.commit(packageName, editId);
     editId = null;
-    stdout.writeln('==> committed — $versionName ($versionCode) is on "$track"');
+    stdout.writeln(
+      '==> committed — $versionName ($versionCode) is on "$track"',
+    );
   } on DetailedApiRequestError catch (e) {
     // Deliberately not _fail: that calls exit(), which terminates the process
     // without unwinding, so the finally below would never run and every failed
