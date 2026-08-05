@@ -1,0 +1,24 @@
+name: play_upload
+description: >-
+  Uploads a signed .aab to a Google Play track. Invoked by tool/upload.sh; not
+  part of the app.
+publish_to: 'none'
+version: 1.0.0
+
+# Its own package rather than a script under tool/ in the app. googleapis is a
+# very large generated package covering every Google API, and there is no reason
+# for it to appear in the app's lockfile or its dependency graph. Keeping it
+# separate also means this directory can be copied to another project whole.
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  args: ^2.4.0
+  # androidpublisher_v3 is the Play Developer Publishing API, generated from
+  # Google's discovery document. Worth the size: it handles the resumable media
+  # upload for a 45 MB bundle, which is the one genuinely fiddly part of this.
+  googleapis: ^16.0.0
+  googleapis_auth: ^2.0.0
+
+dev_dependencies:
+  lints: ^6.0.0
