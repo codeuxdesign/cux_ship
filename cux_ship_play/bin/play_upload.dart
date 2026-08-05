@@ -21,6 +21,12 @@
 //   dart run play_upload --package design.codeux.holdthewheel \
 //     --metadata ../../store/play --dry-run
 //
+// --list-tracks is the read side, and the only way to confirm a publish
+// independently of the run that claims to have done it. It needs nothing but
+// --package, and touches none of the above:
+//
+//   dart run play_upload --list-tracks --package design.codeux.holdthewheel
+//
 // What is *not* here is everything Play has no API for: the privacy policy URL,
 // the IARC content rating questionnaire, the app category, target audience, and
 // the rest of "App content". Those are set once in the console by hand. The
@@ -50,6 +56,65 @@ class _Abort implements Exception {
   _Abort(this.message);
 
   final String message;
+}
+
+/// Passed as JSON in the environment rather than a path, because that is what
+/// tool/with-secrets.sh can supply without writing a credential to disk.
+ServiceAccountCredentials _loadCredentials() {
+  final raw = Platform.environment[_serviceAccountVar];
+  if (raw == null || raw.trim().isEmpty) {
+    _fail(
+      '$_serviceAccountVar is not set.\n'
+      '  It holds the Google Play service account JSON. Run this through\n'
+      '  tool/with-secrets.sh, or export it yourself.',
+    );
+  }
+  try {
+    return ServiceAccountCredentials.fromJson(
+      jsonDecode(raw) as Map<String, dynamic>,
+    );
+  } on FormatException catch (e) {
+    _fail('$_serviceAccountVar is not valid JSON: ${e.message}');
+  }
+}
+
+/// Reads back what Play actually has, rather than what a previous run reported
+/// having sent. Reading tracks needs an edit even though nothing is modified,
+/// so the edit is discarded immediately afterwards.
+Future<void> _listTracks(AndroidPublisherApi api, String packageName) async {
+  String? editId;
+  try {
+    editId = (await api.edits.insert(AppEdit(), packageName)).id;
+    if (editId == null) {
+      _fail('Play did not return an edit id');
+    }
+    for (final t
+        in (await api.edits.tracks.list(packageName, editId)).tracks ??
+            <Track>[]) {
+      final releases = t.releases ?? <TrackRelease>[];
+      if (releases.isEmpty) {
+        stdout.writeln('  ${t.track}: (empty)');
+      }
+      for (final r in releases) {
+        stdout.writeln(
+          '  ${t.track}: "${r.name}" codes=${r.versionCodes} ${r.status}',
+        );
+      }
+    }
+    final bundles =
+        (await api.edits.bundles.list(packageName, editId)).bundles ??
+        <Bundle>[];
+    stdout.writeln(
+      '  uploaded bundles: ${bundles.map((b) => b.versionCode).toList()}',
+    );
+  } on DetailedApiRequestError catch (e) {
+    stderr.writeln('play_upload: Play API error ${e.status}: ${e.message}');
+    exitCode = 1;
+  } finally {
+    if (editId != null) {
+      await api.edits.delete(packageName, editId);
+    }
+  }
 }
 
 // ------------------------------------------------------------------ metadata
@@ -477,6 +542,13 @@ Future<void> main(List<String> argv) async {
       help: 'CSV of Data Safety answers, exported from the console.',
     )
     ..addFlag('dry-run', negatable: false, help: 'Do everything except commit.')
+    ..addFlag(
+      'list-tracks',
+      negatable: false,
+      help:
+          'Print what Play currently has on each track, and exit. '
+          'Needs only --package.',
+    )
     ..addFlag('help', abbr: 'h', negatable: false);
 
   final args = parser.parse(argv);
@@ -485,15 +557,29 @@ Future<void> main(List<String> argv) async {
     return;
   }
 
-  final aabPath = args.option('aab');
+  // --package is the one argument both modes need, so it is checked before the
+  // split; the upload-only arguments are checked after, where they apply.
   final packageName = args.option('package');
+  if (packageName == null) {
+    _fail('--package is required\n${parser.usage}');
+  }
+
+  // Reading needs nothing else, so it goes before the upload path's checks and
+  // builds its own client.
+  if (args.flag('list-tracks')) {
+    final client = await clientViaServiceAccount(_loadCredentials(), [
+      AndroidPublisherApi.androidpublisherScope,
+    ]);
+    await _listTracks(AndroidPublisherApi(client), packageName);
+    client.close();
+    return;
+  }
+
+  final aabPath = args.option('aab');
   final buildNumber = args.option('build-number');
   final metadataPath = args.option('metadata');
   final dataSafetyPath = args.option('data-safety');
 
-  if (packageName == null) {
-    _fail('--package is required\n${parser.usage}');
-  }
   // The three jobs are independent, so any one of them alone is a valid run —
   // a listing typo should not need an artifact to fix. Requiring at least one
   // stops a no-argument invocation from opening and committing an empty edit,
@@ -537,26 +623,6 @@ Future<void> main(List<String> argv) async {
     }
   }
 
-  // Passed as JSON in the environment rather than a path, because that is what
-  // tool/with-secrets.sh can supply without writing a credential to disk.
-  final rawCredentials = Platform.environment[_serviceAccountVar];
-  if (rawCredentials == null || rawCredentials.trim().isEmpty) {
-    _fail(
-      '$_serviceAccountVar is not set.\n'
-      '  It holds the Google Play service account JSON. Run this through\n'
-      '  tool/with-secrets.sh, or export it yourself.',
-    );
-  }
-
-  final ServiceAccountCredentials credentials;
-  try {
-    credentials = ServiceAccountCredentials.fromJson(
-      jsonDecode(rawCredentials) as Map<String, dynamic>,
-    );
-  } on FormatException catch (e) {
-    _fail('$_serviceAccountVar is not valid JSON: ${e.message}');
-  }
-
   final dryRun = args.flag('dry-run');
   final track = args.option('track')!;
   final versionName = args.option('version-name') ?? buildNumber ?? '';
@@ -578,11 +644,14 @@ Future<void> main(List<String> argv) async {
     }
   }
 
-  final client = await clientViaServiceAccount(credentials, [
+  // Built only once every local check has passed, so a 4001-character
+  // description or a missing screenshot fails with no credential in scope at
+  // all — which is what makes `--metadata` usable as an offline lint.
+  final client = await clientViaServiceAccount(_loadCredentials(), [
     AndroidPublisherApi.androidpublisherScope,
   ]);
-
   final api = AndroidPublisherApi(client);
+
   String? editId;
 
   try {
