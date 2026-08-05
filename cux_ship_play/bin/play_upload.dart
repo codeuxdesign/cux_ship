@@ -47,7 +47,7 @@ import 'dart:io';
 import 'package:args/args.dart';
 import 'package:googleapis/androidpublisher/v3.dart';
 import 'package:googleapis_auth/auth_io.dart';
-import 'package:play_upload/changelog.dart';
+import 'package:release_notes/release_notes.dart';
 
 const _serviceAccountVar = 'GOOGLE_PLAY_SERVICE_ACCOUNT_JSON';
 
@@ -967,10 +967,10 @@ Future<void> main(List<String> argv) async {
     releaseNotes = f.readAsStringSync().trim();
     // Play rejects notes over 500 characters for a release, and does so after
     // the bundle has already been uploaded.
-    if (releaseNotes.length > releaseNotesLimit) {
+    if (releaseNotes.length > playReleaseNotesLimit) {
       _fail(
         'release notes are ${releaseNotes.length} characters; Play allows '
-        '$releaseNotesLimit',
+        '$playReleaseNotesLimit',
       );
     }
   }
@@ -998,11 +998,11 @@ Future<void> main(List<String> argv) async {
           '  answer as empty.',
         );
       case NotesText(:final text, :final fromVersion):
-        if (text.length > releaseNotesLimit) {
+        if (text.length > playReleaseNotesLimit) {
           throw _Abort(
             "$changelogPath's $fromVersion section is ${text.length} "
             'characters once filtered to $_platform; Play allows '
-            '$releaseNotesLimit',
+            '$playReleaseNotesLimit',
           );
         }
         // Said out loud: publishing one version's notes under another

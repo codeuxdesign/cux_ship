@@ -19,9 +19,12 @@ dependencies:
   # upload for a 45 MB bundle, which is the one genuinely fiddly part of this.
   googleapis: ^16.0.0
   googleapis_auth: ^2.0.0
+  # The changelog parser, which used to live here as lib/changelog.dart. Moved
+  # out when tool/asc_upload appeared and needed the same rules with a different
+  # platform — the alternative was the App Store uploader depending on the Play
+  # one, which is not a relationship either of them has.
+  release_notes:
+    path: ../release_notes
 
 dev_dependencies:
   lints: ^6.0.0
-  # For lib/changelog.dart, the one piece of this package that decides
-  # something rather than calling an API — see test/changelog_test.dart.
-  test: ^1.25.0

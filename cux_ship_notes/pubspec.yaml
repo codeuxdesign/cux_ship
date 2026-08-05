@@ -1,0 +1,17 @@
+name: release_notes
+description: >-
+  Turns CHANGELOG.md into the release notes a store shows. Shared by
+  tool/play_upload and tool/asc_upload; not part of the app.
+publish_to: 'none'
+version: 1.0.0
+
+# Extracted from tool/play_upload, whose copy of this said in its own header
+# that "an iOS uploader will want the same parser with a different platform".
+# It has no dependencies at all, which is what makes it cheap to share: neither
+# uploader inherits anything from the other by depending on it.
+environment:
+  sdk: ^3.12.2
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.25.0
