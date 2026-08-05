@@ -22,3 +22,6 @@ dependencies:
 
 dev_dependencies:
   lints: ^6.0.0
+  # For lib/changelog.dart, the one piece of this package that decides
+  # something rather than calling an API — see test/changelog_test.dart.
+  test: ^1.25.0

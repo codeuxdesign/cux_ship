@@ -21,6 +21,15 @@
 //   dart run play_upload --package design.codeux.holdthewheel \
 //     --metadata ../../store/play --dry-run
 //
+// --promote-from is how a wider track is reached, and builds nothing: it points
+// --track at a versionCode Play already holds, so production gets the identical
+// bundle testers ran rather than a rebuild of the same commit. Release notes
+// come from the changelog section for whatever version that build turned out to
+// be. tool/promote.sh drives it.
+//
+//   dart run play_upload --package design.codeux.holdthewheel \
+//     --promote-from internal --track production --changelog ../../CHANGELOG.md
+//
 // --list-tracks is the read side, and the only way to confirm a publish
 // independently of the run that claims to have done it. It needs nothing but
 // --package, and touches none of the above:
@@ -38,6 +47,7 @@ import 'dart:io';
 import 'package:args/args.dart';
 import 'package:googleapis/androidpublisher/v3.dart';
 import 'package:googleapis_auth/auth_io.dart';
+import 'package:play_upload/changelog.dart';
 
 const _serviceAccountVar = 'GOOGLE_PLAY_SERVICE_ACCOUNT_JSON';
 
@@ -206,6 +216,139 @@ Future<void> _listTracks(AndroidPublisherApi api, String packageName) async {
     }
   }
 }
+
+/// Prints the newest versionCode on [trackName] and nothing else.
+///
+/// Bare stdout rather than the `==>` lines everything else uses, because the
+/// only caller is a shell script capturing it — tool/promote.sh names the
+/// versionCode it is about to promote so that the release, the console and the
+/// git tag it writes afterwards cannot end up describing three different
+/// builds.
+Future<void> _printVersionCode(
+  AndroidPublisherApi api,
+  String packageName,
+  String trackName,
+) async {
+  String? editId;
+  try {
+    editId = (await api.edits.insert(AppEdit(), packageName)).id;
+    if (editId == null) {
+      _fail('Play did not return an edit id');
+    }
+    final track = await api.edits.tracks.get(packageName, editId, trackName);
+    final release = _newestRelease(track);
+    if (release == null) {
+      throw _Abort('nothing is on the "$trackName" track');
+    }
+    stdout.writeln(_soleVersionCode(release, trackName));
+  } on _Abort catch (e) {
+    stderr.writeln('play_upload: ${e.message}');
+    exitCode = 1;
+  } on DetailedApiRequestError catch (e) {
+    stderr.writeln('play_upload: Play API error ${e.status}: ${e.message}');
+    exitCode = 1;
+  } finally {
+    if (editId != null) {
+      await api.edits.delete(packageName, editId);
+    }
+  }
+}
+
+/// The newest release Play holds on [track], or null when the track is empty.
+///
+/// "Newest" is the highest versionCode rather than the first release listed,
+/// because Play does not promise an order and a track can carry more than one
+/// release at a time — a halted rollout sits alongside the one that replaced it.
+TrackRelease? _newestRelease(Track track) {
+  TrackRelease? newest;
+  var newestCode = -1;
+  for (final release in track.releases ?? <TrackRelease>[]) {
+    for (final code in release.versionCodes ?? <String>[]) {
+      final n = int.tryParse(code);
+      if (n != null && n > newestCode) {
+        newestCode = n;
+        newest = release;
+      }
+    }
+  }
+  return newest;
+}
+
+/// The single versionCode in [release], for a release that carries exactly one.
+///
+/// A TrackRelease can hold several — an app shipping separate bundles per ABI,
+/// which this one does not. Promoting a multi-code release by taking one of
+/// them would publish a subset of the app, so that case stops here.
+int _soleVersionCode(TrackRelease release, String track) {
+  final codes = release.versionCodes ?? <String>[];
+  if (codes.length != 1) {
+    throw _Abort(
+      'the newest release on "$track" carries ${codes.length} version codes '
+      '($codes).\n'
+      '  Promotion assumes one bundle per release. Name one with '
+      '--version-code.',
+    );
+  }
+  final code = int.tryParse(codes.single);
+  if (code == null) {
+    throw _Abort('Play returned a non-numeric versionCode: "${codes.single}"');
+  }
+  return code;
+}
+
+/// Points [track] at [versionCode], which is the only way a release becomes
+/// visible to anyone.
+///
+/// Shared by the upload path and the promotion path deliberately: they differ
+/// in where the bundle came from and in nothing else, and two copies of this
+/// would be two chances for a promoted release to be described differently from
+/// the one it was promoted from.
+Future<void> _assignToTrack(
+  AndroidPublisherApi api,
+  String packageName,
+  String editId, {
+  required String track,
+  required String name,
+  required int versionCode,
+  required String? status,
+  required double? userFraction,
+  required String? notes,
+  required String notesLanguage,
+}) async {
+  await api.edits.tracks.update(
+    Track(
+      track: track,
+      releases: [
+        TrackRelease(
+          name: name,
+          versionCodes: ['$versionCode'],
+          status: status,
+          userFraction: userFraction,
+          // Whatever the metadata tree declares as the listing's default
+          // language, so the notes cannot end up in a locale the listing does
+          // not have. Hardcoding one is how they were left in en-GB after the
+          // listing itself moved to en-US.
+          releaseNotes: notes == null
+              ? null
+              : [LocalizedText(language: notesLanguage, text: notes)],
+        ),
+      ],
+    ),
+    packageName,
+    editId,
+    track,
+  );
+  final rollout = userFraction == null ? '' : ', to $userFraction of users';
+  stdout.writeln('==> assigned to track "$track" ($status$rollout)');
+}
+
+/// The platform this program publishes for.
+///
+/// Changelog entries may be prefixed `[android]`, `[ios]`, `[web]`; anything
+/// carrying a prefix that does not name this platform is not something a Play
+/// user can see. Passed to the parser rather than baked into it, because an iOS
+/// uploader will want the same parser with a different value.
+const _platform = 'android';
 
 // ------------------------------------------------------------------ metadata
 
@@ -615,6 +758,24 @@ Future<void> main(List<String> argv) async {
     )
     ..addOption('track', defaultsTo: 'internal')
     ..addOption(
+      'promote-from',
+      help:
+          'Track whose newest release is assigned to --track, with no build '
+          'and no upload. How a wider track gets what testers already have.',
+    )
+    ..addOption(
+      'version-code',
+      help:
+          'With --promote-from, the versionCode to promote. Defaults to the '
+          'newest on that track.',
+    )
+    ..addOption(
+      'rollout',
+      help:
+          'Fraction between 0 and 1 to release to, e.g. 0.1. Implies '
+          'inProgress; without it a release goes to everyone.',
+    )
+    ..addOption(
       'status',
       defaultsTo: 'completed',
       help: 'completed | draft | inProgress',
@@ -624,6 +785,19 @@ Future<void> main(List<String> argv) async {
       help:
           'Optional file whose contents become the release notes, in the '
           "listing's default language.",
+    )
+    ..addOption(
+      'changelog',
+      help:
+          'CHANGELOG.md to take the release notes from, using the section for '
+          'the version being released. Alternative to --release-notes.',
+    )
+    ..addFlag(
+      'print-version-code',
+      negatable: false,
+      help:
+          'Print the newest versionCode on --track and exit, and nothing else. '
+          'For scripts that have to name what they are about to act on.',
     )
     ..addOption(
       'metadata',
@@ -671,7 +845,9 @@ Future<void> main(List<String> argv) async {
 
   // Reading needs nothing else, so it goes before the upload path's checks and
   // builds its own client.
-  if (args.flag('list-tracks') || args.flag('list-listing')) {
+  if (args.flag('list-tracks') ||
+      args.flag('list-listing') ||
+      args.flag('print-version-code')) {
     final client = await clientViaServiceAccount(_loadCredentials(), [
       AndroidPublisherApi.androidpublisherScope,
     ]);
@@ -682,6 +858,9 @@ Future<void> main(List<String> argv) async {
     if (args.flag('list-listing')) {
       await _listListing(api, packageName);
     }
+    if (args.flag('print-version-code')) {
+      await _printVersionCode(api, packageName, args.option('track')!);
+    }
     client.close();
     return;
   }
@@ -691,20 +870,50 @@ Future<void> main(List<String> argv) async {
   final metadataPath = args.option('metadata');
   final dataSafetyPath = args.option('data-safety');
   final deleteLocales = args.multiOption('delete-locale');
+  final promoteFrom = args.option('promote-from');
 
   // The jobs are independent, so any one of them alone is a valid run — a
   // listing typo should not need an artifact to fix. Requiring at least one
   // stops a no-argument invocation from opening and committing an empty edit,
   // which succeeds and does nothing.
   if (aabPath == null &&
+      promoteFrom == null &&
       metadataPath == null &&
       dataSafetyPath == null &&
       deleteLocales.isEmpty) {
     _fail(
-      'nothing to do — pass --aab, --metadata, --data-safety or '
-      '--delete-locale\n${parser.usage}',
+      'nothing to do — pass --aab, --promote-from, --metadata, --data-safety '
+      'or --delete-locale\n${parser.usage}',
     );
   }
+
+  // Promotion is the deliberate opposite of a build: it publishes bits Play
+  // already holds, which is the whole reason a wider track can be trusted to
+  // carry exactly what testers ran. Handing it an artifact would mean one of
+  // the two is not what goes out.
+  if (promoteFrom != null && aabPath != null) {
+    _fail('--promote-from publishes what Play already has; drop --aab');
+  }
+  if (promoteFrom != null && promoteFrom == args.option('track')) {
+    _fail('--promote-from and --track are both "$promoteFrom"');
+  }
+
+  // Play models a staged rollout as a release that is still in progress, and
+  // rejects a userFraction on a completed one. Setting both from the single
+  // flag keeps the pair from being half-specified.
+  double? userFraction;
+  if (args.option('rollout') != null) {
+    userFraction = double.tryParse(args.option('rollout')!);
+    if (userFraction == null || userFraction <= 0 || userFraction >= 1) {
+      _fail(
+        '--rollout must be a fraction between 0 and 1 exclusive, got '
+        '"${args.option('rollout')}" — omit it to release to everyone',
+      );
+    }
+  }
+  final releaseStatus = userFraction == null
+      ? args.option('status')
+      : 'inProgress';
 
   int? expectedVersionCode;
   File? aab;
@@ -743,8 +952,13 @@ Future<void> main(List<String> argv) async {
   final track = args.option('track')!;
   final versionName = args.option('version-name') ?? buildNumber ?? '';
 
-  String? releaseNotes;
   final notesPath = args.option('release-notes');
+  final changelogPath = args.option('changelog');
+  if (notesPath != null && changelogPath != null) {
+    _fail('--release-notes and --changelog both supply the notes; pick one');
+  }
+
+  String? releaseNotes;
   if (notesPath != null) {
     final f = File(notesPath);
     if (!f.existsSync()) {
@@ -753,10 +967,58 @@ Future<void> main(List<String> argv) async {
     releaseNotes = f.readAsStringSync().trim();
     // Play rejects notes over 500 characters for a release, and does so after
     // the bundle has already been uploaded.
-    if (releaseNotes.length > 500) {
+    if (releaseNotes.length > releaseNotesLimit) {
       _fail(
-        'release notes are ${releaseNotes.length} characters; Play allows 500',
+        'release notes are ${releaseNotes.length} characters; Play allows '
+        '$releaseNotesLimit',
       );
+    }
+  }
+
+  // Not resolved here with everything else local, because promotion does not
+  // know its version until Play has said what is on the source track. Called
+  // from inside the transaction guard instead — still before anything is
+  // uploaded, so a changelog missing a section costs an edit and no bytes.
+  String? notesFor(String forVersion) {
+    if (changelogPath == null) {
+      return releaseNotes;
+    }
+    final notes = changelogNotesOf(
+      changelogPath,
+      forVersion,
+      platform: _platform,
+    );
+    switch (notes) {
+      case NoSection():
+        throw _Abort(
+          '$changelogPath has no section for $forVersion.\n'
+          '  Add one. Empty is a fine answer — it publishes the newest older\n'
+          '  version that did change something here, or\n'
+          '  "$noUserVisibleChanges" if there is none. Absent is not the same\n'
+          '  answer as empty.',
+        );
+      case NotesText(:final text, :final fromVersion):
+        if (text.length > releaseNotesLimit) {
+          throw _Abort(
+            "$changelogPath's $fromVersion section is ${text.length} "
+            'characters once filtered to $_platform; Play allows '
+            '$releaseNotesLimit',
+          );
+        }
+        // Said out loud: publishing one version's notes under another
+        // version's name should never happen quietly.
+        if (fromVersion.isEmpty) {
+          stdout.writeln(
+            '==> nothing at or below $forVersion is user-visible on '
+            '$_platform — publishing "$text"',
+          );
+        } else if (fromVersion != forVersion) {
+          stdout.writeln(
+            '==> $forVersion changes nothing on $_platform — publishing '
+            "$fromVersion's notes instead",
+          );
+        }
+        return text;
     }
   }
 
@@ -788,68 +1050,145 @@ Future<void> main(List<String> argv) async {
     var released = '';
 
     if (aab != null) {
-      // Resumable rather than a single PUT: this is tens of megabytes, and a
-      // simple upload that fails at 90% has to start over. Resumable also
-      // retries with exponential backoff on its own.
-      final media = Media(
-        aab.openRead(),
-        aab.lengthSync(),
-        contentType: 'application/octet-stream',
-      );
-      stdout.writeln('==> uploading ${aab.lengthSync()} bytes');
-      final bundle = await api.edits.bundles.upload(
-        packageName,
-        editId,
-        uploadMedia: media,
-        uploadOptions: UploadOptions.resumable,
-      );
+      // Resolved before the upload rather than at assignment time below. A
+      // changelog with no section for this version should cost nothing, and
+      // Play enforces the 500-character limit only once the bundle is already
+      // up — the same reason the listing text is validated before any of this.
+      final notes = notesFor(versionName);
 
-      final versionCode = bundle.versionCode;
-      stdout.writeln('==> Play accepted versionCode $versionCode');
+      // Play never accepts a versionCode twice and answers the attempt with a
+      // bare 403. That used to be the right failure, and stopped being so once
+      // main publishes every commit to the internal track: tagging a commit
+      // that is already on main asks Play for a number it has, and the tagged
+      // release would die on an artifact Play is already holding.
+      //
+      // A build number is allocated once per commit and a release build
+      // refuses a dirty tree, so "Play holds this versionCode" means "Play
+      // holds this commit's bundle" — nothing is being confused with anything
+      // else, and the honest thing is to point the track at it. The binaries
+      // are deliberately not compared: two Gradle runs over one commit differ
+      // byte for byte (zip timestamps, signature), so provenance rests on the
+      // commit here as it does everywhere else in this tooling.
+      final uploaded =
+          (await api.edits.bundles.list(packageName, editId)).bundles ??
+          <Bundle>[];
 
-      // The versionCode is baked into the bundle at build time from
-      // --build-number. If Play reports a different one, the artifact is not
-      // the one that was just built, and assigning it to a track would publish
-      // something nobody verified.
-      if (versionCode != expectedVersionCode) {
-        throw _Abort(
-          'versionCode mismatch: the bundle contains $versionCode but the build '
-          'says $expectedVersionCode.\n'
-          '  dist/ is stale, or the .aab was built from a different commit.',
+      final int? versionCode;
+      if (uploaded.any((b) => b.versionCode == expectedVersionCode)) {
+        versionCode = expectedVersionCode;
+        stdout.writeln(
+          '==> Play already holds versionCode $versionCode — reusing that '
+          'bundle rather than re-uploading',
         );
+      } else {
+        // Resumable rather than a single PUT: this is tens of megabytes, and a
+        // simple upload that fails at 90% has to start over. Resumable also
+        // retries with exponential backoff on its own.
+        final media = Media(
+          aab.openRead(),
+          aab.lengthSync(),
+          contentType: 'application/octet-stream',
+        );
+        stdout.writeln('==> uploading ${aab.lengthSync()} bytes');
+        final bundle = await api.edits.bundles.upload(
+          packageName,
+          editId,
+          uploadMedia: media,
+          uploadOptions: UploadOptions.resumable,
+        );
+
+        versionCode = bundle.versionCode;
+        stdout.writeln('==> Play accepted versionCode $versionCode');
+
+        // The versionCode is baked into the bundle at build time from
+        // --build-number. If Play reports a different one, the artifact is not
+        // the one that was just built, and assigning it to a track would
+        // publish something nobody verified.
+        if (versionCode != expectedVersionCode) {
+          throw _Abort(
+            'versionCode mismatch: the bundle contains $versionCode but the '
+            'build says $expectedVersionCode.\n'
+            '  dist/ is stale, or the .aab was built from a different commit.',
+          );
+        }
       }
 
-      await api.edits.tracks.update(
-        Track(
-          track: track,
-          releases: [
-            TrackRelease(
-              name: '$versionName ($versionCode)',
-              versionCodes: ['$versionCode'],
-              status: args.option('status'),
-              // Whatever the metadata tree declares as the listing's default
-              // language, so the notes cannot end up in a locale the listing
-              // does not have. Hardcoding one is how they were left in en-GB
-              // after the listing itself moved to en-US.
-              releaseNotes: releaseNotes == null
-                  ? null
-                  : [
-                      LocalizedText(
-                        language: notesLanguage,
-                        text: releaseNotes,
-                      ),
-                    ],
-            ),
-          ],
-        ),
+      await _assignToTrack(
+        api,
         packageName,
         editId,
-        track,
-      );
-      stdout.writeln(
-        '==> assigned to track "$track" (${args.option('status')})',
+        track: track,
+        name: '$versionName ($versionCode)',
+        versionCode: versionCode!,
+        status: releaseStatus,
+        userFraction: userFraction,
+        notes: notes,
+        notesLanguage: notesLanguage,
       );
       released = '$versionName ($versionCode) is on "$track"';
+    }
+
+    if (promoteFrom != null) {
+      // Read rather than assumed. The point of promoting is that the bits a
+      // wider track gets are the bits testers ran, and that only holds if the
+      // versionCode comes from what Play says is on the source track.
+      final source = await api.edits.tracks.get(
+        packageName,
+        editId,
+        promoteFrom,
+      );
+      final newest = _newestRelease(source);
+      if (newest == null) {
+        throw _Abort('nothing is on the "$promoteFrom" track to promote');
+      }
+
+      // --version-code is checked against the source track rather than trusted,
+      // so a typo promotes nothing instead of promoting some other build.
+      final TrackRelease promoting;
+      final int promotedCode;
+      final requested = args.option('version-code');
+      if (requested == null) {
+        promoting = newest;
+        promotedCode = _soleVersionCode(newest, promoteFrom);
+      } else {
+        promotedCode =
+            int.tryParse(requested) ??
+            (throw _Abort(
+              '--version-code must be an integer, got "$requested"',
+            ));
+        final match = (source.releases ?? <TrackRelease>[]).where(
+          (r) => (r.versionCodes ?? []).contains('$promotedCode'),
+        );
+        if (match.isEmpty) {
+          throw _Abort(
+            'versionCode $promotedCode is not on the "$promoteFrom" track',
+          );
+        }
+        promoting = match.first;
+      }
+
+      // Carried over rather than rebuilt from pubspec: the name Play already
+      // shows for this build is the one it was uploaded under, and the version
+      // in the working tree has usually moved on by the time anything is
+      // promoted.
+      final name = promoting.name ?? '$promotedCode';
+      final notes = notesFor(versionFromReleaseName(name));
+
+      stdout.writeln('==> promoting "$name" from "$promoteFrom" to "$track"');
+
+      await _assignToTrack(
+        api,
+        packageName,
+        editId,
+        track: track,
+        name: name,
+        versionCode: promotedCode,
+        status: releaseStatus,
+        userFraction: userFraction,
+        notes: notes,
+        notesLanguage: notesLanguage,
+      );
+      released = '$name is on "$track"';
     }
 
     // After the metadata below would be wrong: Play will not delete a listing
@@ -905,17 +1244,18 @@ Future<void> main(List<String> argv) async {
     // account can at least see the app — it is a per-permission problem, not a
     // wrong service account.
     if (e.status == 403 && aab != null) {
-      // The first is easy to hit: a build number is allocated per commit, so
-      // rebuilding without committing re-sends a versionCode Play already has.
+      // The duplicate-versionCode case is last now that the upload is skipped
+      // when Play already lists that bundle — reaching a 403 for it means the
+      // listing disagreed with what an upload is allowed to add.
       stderr.writeln(
         '  A 403 with a bundle in the edit, in order of likelihood:\n'
-        '  - versionCode $expectedVersionCode already exists for this app. Play\n'
-        '    never accepts one twice, including one uploaded by hand. Commit and\n'
-        '    rebuild to allocate the next number.\n'
         '  - the service account lacks "Release to testing tracks" for this app\n'
         '    (Play Console > Users and permissions > App permissions).\n'
         '  - the app has never had a release; Play requires the first bundle for\n'
-        '    a package to be uploaded by hand in the console.',
+        '    a package to be uploaded by hand in the console.\n'
+        '  - versionCode $expectedVersionCode already exists for this app but did\n'
+        '    not appear in the edit\'s bundle list, so the upload was not skipped.\n'
+        '    Commit and rebuild to allocate the next number.',
       );
     } else if (e.status == 403) {
       stderr.writeln(
