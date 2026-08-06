@@ -451,6 +451,14 @@ Future<void> main(List<String> argv) async {
             '    (dry run created no version, so the fields below are skipped)',
           );
         } else {
+          final copyright = metadata.copyright;
+          if (copyright != null) {
+            stdout.writeln('==> copyright');
+            await store.writeVersionAttributes(version, {
+              'copyright': copyright,
+            });
+          }
+
           for (final localeMetadata in metadata.locales) {
             if (localeMetadata.version.isNotEmpty) {
               stdout.writeln('==> ${localeMetadata.locale}: listing text');

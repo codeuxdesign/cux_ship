@@ -169,6 +169,13 @@ class AppStoreMetadata {
   /// `apps.contentRightsDeclaration`, from info/content_rights.txt.
   String? contentRights;
 
+  /// `appStoreVersions.copyright`, from info/copyright.txt.
+  ///
+  /// Kept in info/ rather than per-locale even though Apple stores it on the
+  /// version: it names the rights holder, which does not translate, and a
+  /// second locale should not get a second answer.
+  String? copyright;
+
   final List<LocaleMetadata> locales = [];
 
   /// `ageRatingDeclarations` attributes, straight from age-rating.json.
@@ -234,6 +241,21 @@ AppStoreMetadata loadMetadata(String path) {
       }
       metadata.contentRights = contentRights;
     }
+
+    final copyright = _readField(info, 'copyright');
+    if (copyright != null && copyright.isNotEmpty) {
+      // Apple's own guidance is "the year the rights were obtained, then the
+      // name of the person or entity" — it renders the © itself, so a string
+      // that carries one ends up showing two.
+      if (copyright.contains('©')) {
+        throw MetadataException(
+          'info/copyright.txt contains a © symbol; Apple adds one itself, so '
+          'write just "2026 Example Inc."',
+        );
+      }
+      _checkLength('info', 'copyright.txt', copyright, 200);
+      metadata.copyright = copyright;
+    }
   }
 
   final ageRating = File('${root.path}${separator}age-rating.json');
@@ -256,7 +278,8 @@ AppStoreMetadata loadMetadata(String path) {
   if (metadata.categories.isEmpty &&
       metadata.locales.isEmpty &&
       metadata.ageRating == null &&
-      metadata.contentRights == null) {
+      metadata.contentRights == null &&
+      metadata.copyright == null) {
     throw MetadataException(
       '$path holds no info/, no listings/ and no age-rating.json — nothing to '
       'publish',

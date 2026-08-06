@@ -426,6 +426,27 @@ class AppStore {
     );
   }
 
+  /// Writes the version's own attributes, as opposed to a locale's.
+  ///
+  /// `copyright` is required before Apple will review a version, and is null
+  /// on a version it created itself — another of the fields whose absence is
+  /// reported only as "this resource cannot be reviewed".
+  Future<void> writeVersionAttributes(
+    Map<String, dynamic> version,
+    Map<String, String> attributes,
+  ) async {
+    if (attributes.isEmpty) {
+      return;
+    }
+    await writer.patch('/v1/appStoreVersions/${_id(version)}', {
+      'data': {
+        'type': 'appStoreVersions',
+        'id': _id(version),
+        'attributes': attributes,
+      },
+    }, describe: attributes.keys.join(', '));
+  }
+
   /// Writes one locale's version-scoped fields, including the release notes.
   Future<void> writeVersionLocalization(
     Map<String, dynamic> version,
@@ -891,6 +912,10 @@ class AppStore {
         '  ${attributes['versionString']}  ${attributes['appStoreState']}  '
         '${attributes['releaseType']}',
       );
+      // Printed because it is required before review and null by default, and
+      // because a run that reports having written it is not evidence Apple
+      // kept it.
+      stdout.writeln('    copyright: ${attributes['copyright'] ?? "(unset)"}');
     }
   }
 
