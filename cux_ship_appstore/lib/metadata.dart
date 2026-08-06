@@ -149,10 +149,25 @@ class LocaleMetadata {
   bool get isEmpty => appInfo.isEmpty && version.isEmpty && screenshots.isEmpty;
 }
 
+/// The two answers Apple accepts for "does this app contain, show or access
+/// third-party content".
+///
+/// It is an attribute of the *app* rather than of a version, it starts null,
+/// and a null one makes the version unreviewable — with an error that says
+/// only "this resource cannot be reviewed", which is how it costs an
+/// afternoon.
+const contentRightsDeclarations = {
+  'DOES_NOT_USE_THIRD_PARTY_CONTENT',
+  'USES_THIRD_PARTY_CONTENT',
+};
+
 class AppStoreMetadata {
   /// `appInfos` relationships: primaryCategory, secondaryCategory. Values are
   /// `appCategories` ids such as `HEALTH_AND_FITNESS`.
   final Map<String, String> categories = {};
+
+  /// `apps.contentRightsDeclaration`, from info/content_rights.txt.
+  String? contentRights;
 
   final List<LocaleMetadata> locales = [];
 
@@ -208,6 +223,17 @@ AppStoreMetadata loadMetadata(String path) {
         metadata.categories[field.value] = value;
       }
     }
+
+    final contentRights = _readField(info, 'content_rights');
+    if (contentRights != null && contentRights.isNotEmpty) {
+      if (!contentRightsDeclarations.contains(contentRights)) {
+        throw MetadataException(
+          'info/content_rights.txt is "$contentRights"; Apple accepts '
+          '${contentRightsDeclarations.join(" or ")}',
+        );
+      }
+      metadata.contentRights = contentRights;
+    }
   }
 
   final ageRating = File('${root.path}${separator}age-rating.json');
@@ -229,7 +255,8 @@ AppStoreMetadata loadMetadata(String path) {
 
   if (metadata.categories.isEmpty &&
       metadata.locales.isEmpty &&
-      metadata.ageRating == null) {
+      metadata.ageRating == null &&
+      metadata.contentRights == null) {
     throw MetadataException(
       '$path holds no info/, no listings/ and no age-rating.json — nothing to '
       'publish',

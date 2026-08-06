@@ -470,6 +470,21 @@ class AppStore {
     }
   }
 
+  /// Whether [version] is the first this app has ever had on this platform.
+  ///
+  /// Apple has no "What's New in This Version" for a first release — there is
+  /// no previous version for it to be new against — and refuses a write to
+  /// `whatsNew` with `Attribute 'whatsNew' cannot be edited at this time`,
+  /// which does not say why. Checking first turns that into a skip with a
+  /// reason.
+  Future<bool> isFirstVersion(App app, Map<String, dynamic> version) async {
+    final all = await client.getAll(
+      '/v1/apps/${app.id}/appStoreVersions',
+      query: {'filter[platform]': platform.api},
+    );
+    return all.every((v) => _id(v) == _id(version));
+  }
+
   /// The `appStoreVersionLocalizations` record for [locale], or null.
   Future<Map<String, dynamic>?> versionLocalization(
     Map<String, dynamic> version,
@@ -513,6 +528,21 @@ class AppStore {
       'Create the next version first, or cancel the submission in App Store '
           'Connect.',
     ], request: 'GET /v1/appInfos');
+  }
+
+  /// Declares whether the app carries third-party content.
+  ///
+  /// An attribute of the app rather than of a version, so it is written once
+  /// and outlives every release. Apple will not review a version while it is
+  /// null, and says so only as "this resource cannot be reviewed".
+  Future<void> writeContentRights(App app, String declaration) async {
+    await writer.patch('/v1/apps/${app.id}', {
+      'data': {
+        'type': 'apps',
+        'id': app.id,
+        'attributes': {'contentRightsDeclaration': declaration},
+      },
+    }, describe: 'content rights: $declaration');
   }
 
   Future<void> writeCategories(

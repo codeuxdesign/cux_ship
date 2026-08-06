@@ -401,6 +401,12 @@ Future<void> main(List<String> argv) async {
     if (metadata != null) {
       final appInfo = await store.editableAppInfo(app);
 
+      final contentRights = metadata.contentRights;
+      if (contentRights != null) {
+        stdout.writeln('==> content rights');
+        await store.writeContentRights(app, contentRights);
+      }
+
       if (metadata.categories.isNotEmpty) {
         stdout.writeln('==> categories');
         await store.writeCategories(appInfo, metadata.categories);
@@ -529,10 +535,24 @@ Future<void> main(List<String> argv) async {
 
         final notes = notesFor(versionName);
         if (notes != null) {
-          stdout.writeln('==> release notes');
-          await store.writeVersionLocalization(version, locale, {
-            'whatsNew': notes,
-          });
+          // A first release has no "What's New": there is no previous version
+          // for it to be new against, and Apple refuses the write with a
+          // message that does not explain itself. The description carries the
+          // story for a first release, and it is already published from
+          // store/appstore/.
+          if (await store.isFirstVersion(app, version)) {
+            stdout.writeln(
+              '==> $versionName is this app\'s first App Store version, so it '
+              'has no\n'
+              '    "What\'s New" — the release notes are skipped and the '
+              'description stands',
+            );
+          } else {
+            stdout.writeln('==> release notes');
+            await store.writeVersionLocalization(version, locale, {
+              'whatsNew': notes,
+            });
+          }
         }
         if (args.flag('phased')) {
           stdout.writeln('==> phased release');
