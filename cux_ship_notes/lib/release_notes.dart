@@ -1,11 +1,17 @@
 // Turns CHANGELOG.md into the release notes a store shows.
 //
-// A library rather than more of bin/play_upload.dart for two reasons. It is the
-// only part of the uploader with real branching — present or absent, empty or
-// not, this platform or another — and every branch decides what a stranger
-// reads on a store page, so it wants tests rather than a careful reading. And
-// an iOS uploader will want the same parser with a different platform, which is
-// why the platform is an argument here and a constant at the call site.
+// Its own package rather than a file inside one of the uploaders, because both
+// of them need it and neither should depend on the other. That was anticipated
+// where this code used to live, in tool/play_upload/lib/changelog.dart: "an iOS
+// uploader will want the same parser with a different platform, which is why
+// the platform is an argument here and a constant at the call site."
+//
+// It is the only part of publishing with real branching — present or absent,
+// empty or not, this platform or another — and every branch decides what a
+// stranger reads on a store page, so it wants tests rather than a careful
+// reading.
+//
+// No dependencies at all, which is what makes it cheap to share.
 import 'dart:convert';
 import 'dart:io';
 
@@ -17,9 +23,22 @@ import 'dart:io';
 /// inventing a feature to announce.
 const noUserVisibleChanges = 'Performance improvements and bug fixes 🚀';
 
-/// Play's cap on release notes. Enforced *after* the bundle has been uploaded,
-/// like every other limit in this tool, so it is checked locally first.
-const releaseNotesLimit = 500;
+/// Play's cap on release notes.
+///
+/// Both store caps live here, beside the parser that produces the text they
+/// constrain, because both stores enforce them at exactly the wrong moment —
+/// *after* the artifact has been uploaded. Checking locally first is the whole
+/// reason either number is written down, and keeping them together means the
+/// two are reviewed in one place rather than drifting apart in two uploaders.
+const playReleaseNotesLimit = 500;
+
+/// The App Store's cap on an `appStoreVersionLocalizations` `whatsNew`, and on
+/// a `betaBuildLocalizations` `whatsNew` ("What to Test").
+///
+/// Eight times Play's, so a section that fits Play always fits here — but the
+/// check still runs, because the reverse is not true and the failure mode is
+/// identical.
+const appStoreReleaseNotesLimit = 4000;
 
 /// What looking a version up in the changelog produced.
 sealed class Notes {

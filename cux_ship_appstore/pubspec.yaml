@@ -1,0 +1,45 @@
+name: asc_upload
+description: >-
+  Publishes a signed .ipa and the App Store listing through the App Store
+  Connect API. Invoked by tool/upload.sh and tool/promote.sh; not part of the app.
+publish_to: 'none'
+version: 1.0.0
+
+# Its own package, on the same reasoning as tool/play_upload: nothing here
+# belongs in the app's dependency graph, and the directory can be copied to
+# another project whole.
+#
+# Unlike the Play side there is no generated client to lean on — Apple publishes
+# no Dart library and no discovery document — so this talks to the REST API
+# directly over package:http. That is less code than it sounds: App Store
+# Connect is plain JSON:API, and the only genuinely fiddly parts are the ES256
+# JWT and the three-step asset upload, both of which are small and tested.
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  args: ^2.4.0
+  # MD5, which App Store Connect requires as the sourceFileChecksum when
+  # committing an uploaded screenshot. Not a security choice — Apple picked it.
+  crypto: ^3.0.0
+  # ES256 over the .p8 private key. App Store Connect accepts nothing else, and
+  # package:crypto has no ECDSA, so this or pointycastle-by-hand were the
+  # options.
+  dart_jsonwebtoken: ^3.0.0
+  http: ^1.2.0
+  # Only bin/flatten_screenshots.dart uses this, and only to re-encode a PNG
+  # without its alpha channel — which every screen capture has and Apple
+  # rejects. It earns a dependency here because the alternative was asking
+  # everyone who captures a screenshot to install ImageMagick: `sips` cannot do
+  # it while staying PNG, and this package is pure Dart, so `tool/deps.sh` and
+  # a Homebrew install both stop being part of the recipe.
+  #
+  # It stays out of the app's dependency graph for the same reason googleapis
+  # does — this is its own package.
+  image: ^4.2.0
+  release_notes:
+    path: ../release_notes
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.25.0
