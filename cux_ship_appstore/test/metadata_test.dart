@@ -343,6 +343,34 @@ void main() {
     });
   });
 
+  // The committed tree, checked by the same code that would check it at upload
+  // time. Everything Apple validates late — text limits, screenshot sizes, and
+  // above all the alpha channel every screen capture carries — is caught here
+  // when the file is committed instead of after it has been uploaded one image
+  // at a time.
+  //
+  // The same arrangement release_notes has for the real CHANGELOG.md, and for
+  // the same reason: the guard is worth nothing if it only ever sees fixtures.
+  group('the committed store/appstore tree', () {
+    test('loads and passes every check', () {
+      final tree = Directory('../../store/appstore');
+      if (!tree.existsSync()) {
+        fail('store/appstore is missing');
+      }
+      final metadata = loadMetadata(tree.path);
+      expect(metadata.locales, isNotEmpty);
+    });
+
+    test('carries both screenshot sets Apple requires of a universal app', () {
+      // TARGETED_DEVICE_FAMILY is "1,2", so an iPad set is required rather
+      // than optional, and a submission without one is refused.
+      final metadata = loadMetadata('../../store/appstore');
+      final locale = metadata.locales.firstWhere((l) => l.locale == 'en-US');
+      expect(locale.screenshots.keys, contains('APP_IPHONE_67'));
+      expect(locale.screenshots.keys, contains('APP_IPAD_PRO_3GEN_129'));
+    });
+  });
+
   group('readImageInfo', () {
     test('reads PNG dimensions and colour type', () {
       final info = readImageInfo(png(width: 640, height: 480))!;

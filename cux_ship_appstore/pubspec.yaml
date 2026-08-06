@@ -27,6 +27,16 @@ dependencies:
   # options.
   dart_jsonwebtoken: ^3.0.0
   http: ^1.2.0
+  # Only bin/flatten_screenshots.dart uses this, and only to re-encode a PNG
+  # without its alpha channel — which every screen capture has and Apple
+  # rejects. It earns a dependency here because the alternative was asking
+  # everyone who captures a screenshot to install ImageMagick: `sips` cannot do
+  # it while staying PNG, and this package is pure Dart, so `tool/deps.sh` and
+  # a Homebrew install both stop being part of the recipe.
+  #
+  # It stays out of the app's dependency graph for the same reason googleapis
+  # does — this is its own package.
+  image: ^4.2.0
   release_notes:
     path: ../release_notes
 

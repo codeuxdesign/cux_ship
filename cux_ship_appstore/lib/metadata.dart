@@ -401,15 +401,11 @@ List<File> _loadScreenshots(
       throw MetadataException(
         '$name has an alpha channel; Apple rejects screenshots with '
         'transparency.\n'
-        '  Any of these work:\n'
-        '    sips -s format jpeg -s formatOptions best "$name" --out '
-        '"${name.replaceAll(RegExp(r'\.png$'), '.jpg')}"\n'
-        '        — Apple takes JPEG, which cannot carry alpha at all. No '
-        'extra tools.\n'
-        '    magick mogrify -alpha off "$name"      (brew install imagemagick)\n'
-        '    Preview.app > File > Export, with "Alpha" unticked\n'
-        '  Note that `sips` cannot do this while staying PNG: it writes RGBA '
-        'regardless.',
+        '  Fix every screenshot in the tree, in place:\n'
+        '    tool/flatten-screenshots.sh\n'
+        '  Pure Dart, nothing to install. Note that `sips` cannot do this '
+        'while staying\n'
+        '  PNG — it writes RGBA whatever flags it is given.',
       );
     }
 
