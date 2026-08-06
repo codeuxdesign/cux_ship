@@ -46,6 +46,7 @@ import 'package:args/args.dart';
 import 'package:asc_upload/app_store.dart';
 import 'package:asc_upload/asc_client.dart';
 import 'package:asc_upload/metadata.dart';
+import 'package:asc_upload/testflight_notes.dart';
 import 'package:release_notes/release_notes.dart';
 
 Never _fail(String message) {
@@ -373,7 +374,19 @@ Future<void> main(List<String> argv) async {
         final notes = notesFor(versionName!);
         if (notes != null) {
           stdout.writeln('==> TestFlight notes');
-          await store.setWhatToTest(build, locale, notes);
+          // TestFlight refuses emoji, which CHANGELOG.md is full of by design.
+          // Said out loud rather than done quietly, because what testers read
+          // then differs from what Play users read.
+          var testFlightNotes = notes;
+          if (needsStrippingForTestFlight(notes)) {
+            testFlightNotes = stripForTestFlight(notes);
+            stdout.writeln(
+              '    TestFlight rejects emoji, so they are stripped from the '
+              'notes\n'
+              '    (the App Store release notes keep them)',
+            );
+          }
+          await store.setWhatToTest(build, locale, testFlightNotes);
         }
         final group = args.option('beta-group');
         if (group != null) {
