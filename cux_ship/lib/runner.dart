@@ -358,16 +358,21 @@ class _FlattenCommand extends Command<void> {
 class VerifyCommand extends Command<void> {
   VerifyCommand() {
     argParser
+      // Both default to what the project has, found from the repository root
+      // rather than the working directory — a literal 'CHANGELOG.md' default
+      // would resolve against wherever this was invoked from, which for every
+      // consumer is the package that pins it rather than the repository.
       ..addOption(
         'changelog',
-        defaultsTo: 'CHANGELOG.md',
-        help: 'CHANGELOG.md to check every version section of.',
+        help:
+            'CHANGELOG.md to check every version section of. Defaults to the '
+            "repository's, when it has one.",
       )
       ..addOption(
         'appstore',
         help:
-            'App Store metadata tree to validate. Skipped when not given, '
-            'because a project may have no Apple listing.',
+            'App Store metadata tree to validate. Defaults to store/appstore '
+            'when the project has one, and is skipped when it does not.',
       )
       ..addMultiOption(
         'require-screenshot-type',
@@ -394,11 +399,27 @@ class VerifyCommand extends Command<void> {
   @override
   void run() {
     final args = argResults!;
+    final project = ProjectContext.read();
+    final changelog = args.option('changelog') ?? project.changelog;
+    final appstore = args.option('appstore') ?? project.appStoreMetadata;
+
+    // Refused rather than passed: checking nothing and reporting success is the
+    // failure this command exists to prevent, so having nothing to check is
+    // itself the finding.
+    if (changelog == null && appstore == null) {
+      stderr.writeln(
+        'cux_ship verify: nothing to check — no CHANGELOG.md and no App Store '
+        'metadata tree were found, and neither was named.',
+      );
+      exitCode = 1;
+      return;
+    }
+
     final problems = <ReleaseProblem>[
-      ...checkChangelogFile(args.option('changelog')!),
-      if (args.option('appstore') case final tree?)
+      if (changelog != null) ...checkChangelogFile(changelog),
+      if (appstore != null)
         ...checkAppStoreTree(
-          tree,
+          appstore,
           requireScreenshotTypes: args
               .multiOption('require-screenshot-type')
               .toSet(),
