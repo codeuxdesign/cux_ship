@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [cux_ship_notes, cux_ship_play, cux_ship_appstore, cux_ship_verify]
+        package: [cux_ship_notes, cux_ship_play, cux_ship_appstore, cux_ship_verify, cux_ship]
     defaults:
       run:
         working-directory: ${{ matrix.package }}
@@ -53,9 +53,9 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dart-lang/setup-dart@v1
 
-      # Deliberately resolves against the commit under test rather than a tag,
-      # so a change that would break consumers fails here rather than after it
-      # has been tagged.
+      # One dependency, exactly as a consumer declares it. Deliberately resolved
+      # against the commit under test rather than a tag, so a change that would
+      # break consumers fails here rather than after it has been tagged.
       - name: Build a throwaway consumer
         run: |
           mkdir -p /tmp/consumer
@@ -66,35 +66,48 @@ jobs:
           environment:
             sdk: ^3.12.2
           dependencies:
-            cux_ship_appstore:
+            cux_ship:
               git:
                 url: https://github.com/${{ github.repository }}.git
-                path: cux_ship_appstore
-                ref: ${{ github.sha }}
-            cux_ship_play:
-              git:
-                url: https://github.com/${{ github.repository }}.git
-                path: cux_ship_play
-                ref: ${{ github.sha }}
-            cux_ship_verify:
-              git:
-                url: https://github.com/${{ github.repository }}.git
-                path: cux_ship_verify
+                path: cux_ship
                 ref: ${{ github.sha }}
           EOF
           dart pub get
 
-      # The relative path: dependency between the packages is the mechanism the
-      # whole arrangement rests on. Confirm it resolved rather than assuming it.
-      - name: Confirm cux_ship_notes resolved transitively
+      # The relative path: dependencies between the packages are the mechanism
+      # the whole arrangement rests on: one direct dependency has to pull the
+      # other four. Confirm rather than assume.
+      - name: Confirm the rest resolved transitively
         run: |
           cd /tmp/consumer
-          grep -q 'cux_ship_notes' pubspec.lock \
-            || { echo 'cux_ship_notes did not resolve transitively'; exit 1; }
+          for p in cux_ship_notes cux_ship_verify cux_ship_appstore cux_ship_play; do
+            grep -q "$p" pubspec.lock \
+              || { echo "$p did not resolve transitively"; exit 1; }
+          done
 
-      - name: Confirm the executables run without credentials
+      # Every leaf of the tree renders its help without authenticating. This is
+      # also the check that each subcommand's parser is constructible: a
+      # duplicate option name throws when the Command is built, not when it runs.
+      - name: Confirm the command runs without credentials
         run: |
           cd /tmp/consumer
-          dart run cux_ship_appstore:asc_upload --help
-          dart run cux_ship_appstore:flatten_screenshots --help
-          dart run cux_ship_play:play_upload --help
+          dart run cux_ship --help
+          for c in upload promote builds versions screenshot-types build-number; do
+            dart run cux_ship appstore "$c" --help > /dev/null
+          done
+          for c in upload promote tracks listing version-code; do
+            dart run cux_ship play "$c" --help > /dev/null
+          done
+          dart run cux_ship screenshots flatten --help > /dev/null
+          dart run cux_ship verify --help > /dev/null
+
+      # Releasing with no terminal and no --yes must refuse rather than assume
+      # yes. Asserted here because the failure mode is a CI job that silently
+      # publishes, which is exactly what nobody would notice until it had.
+      - name: Confirm an unattended release refuses
+        run: |
+          cd /tmp/consumer
+          if dart run cux_ship play promote --package com.example.nothing < /dev/null; then
+            echo 'released unattended without --yes'
+            exit 1
+          fi

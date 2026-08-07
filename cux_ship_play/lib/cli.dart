@@ -2,41 +2,54 @@
 
 // Uploads a signed .aab, a store listing, or both, to Google Play.
 //
-//   dart run cux_ship_play:play_upload --aab dist/android/x.aab --package design.codeux.holdthewheel \
+//   cux_ship play upload --aab dist/android/x.aab --package design.codeux.holdthewheel \
 //     --build-number 12 --version-name 1.0.0 --track internal [--dry-run]
 //
-// Invoked by tool/upload.sh, which has already checked the manifest, the
-// artifact digest and the provenance rules. This program does the API work and
-// nothing else — everything it needs arrives as an argument or, for the service
-// account, as an environment variable. It knows nothing about SOPS or manifests.
+// A library rather than an executable: the `cux_ship` package wires
+// [PlayCommand] to subcommands, so there is one binary rather than one per
+// store. What used to be modes selected by flag — `--promote-from`,
+// `--list-tracks` — are subcommands now, which is why [runPlay] takes the mode
+// as an argument instead of reading it back out of [ArgResults].
+//
+// Invoked by a project's upload script, which has already checked the manifest,
+// the artifact digest and the provenance rules. This program does the API work
+// and nothing else — everything it needs arrives as an argument or, for the
+// service account, as an environment variable. It knows nothing about SOPS or
+// manifests.
 //
 // The Play edit is a transaction: open one, attach a bundle, point a track at
 // it, commit. Nothing is visible to anyone until the commit, which is what
 // makes --dry-run genuinely safe — it does every step and then deletes the edit
 // instead of committing it.
 //
-// --metadata publishes the store listing from a directory tree, described in
-// store/play/README.md. It rides the same transaction as the bundle, so a
-// release and the listing that describes it go live together or not at all.
-// Every argument is independent, so listing-only pushes need no artifact:
+// --metadata publishes the store listing from a directory tree. It rides the
+// same transaction as the bundle, so a release and the listing that describes
+// it go live together or not at all. Every argument is independent, so
+// listing-only pushes need no artifact:
 //
-//   dart run cux_ship_play:play_upload --package design.codeux.holdthewheel \
-//     --metadata ../../store/play --dry-run
+//   cux_ship play upload --package design.codeux.holdthewheel \
+//     --metadata store/play --dry-run
 //
-// --promote-from is how a wider track is reached, and builds nothing: it points
+// `play promote` is how a wider track is reached, and builds nothing: it points
 // --track at a versionCode Play already holds, so production gets the identical
 // bundle testers ran rather than a rebuild of the same commit. Release notes
 // come from the changelog section for whatever version that build turned out to
-// be. tool/promote.sh drives it.
+// be.
 //
-//   dart run cux_ship_play:play_upload --package design.codeux.holdthewheel \
-//     --promote-from internal --track production --changelog ../../CHANGELOG.md
+//   cux_ship play promote --package design.codeux.holdthewheel \
+//     --from internal --track production --changelog CHANGELOG.md
 //
-// --list-tracks is the read side, and the only way to confirm a publish
+// It changes no version and touches no git. The version belongs to the commit
+// the build came from, and both stores promote that same build — so tagging and
+// bumping is a separate, once-per-release step rather than something each
+// store's promote repeats. Promoting to Play and to the App Store must be able
+// to publish the *same* version, which is impossible if either one moves it.
+//
+// `play tracks` is the read side, and the only way to confirm a publish
 // independently of the run that claims to have done it. It needs nothing but
 // --package, and touches none of the above:
 //
-//   dart run cux_ship_play:play_upload --list-tracks --package design.codeux.holdthewheel
+//   cux_ship play tracks --package design.codeux.holdthewheel
 //
 // What is *not* here is everything Play has no API for: the privacy policy URL,
 // the IARC content rating questionnaire, the app category, target audience, and
@@ -54,7 +67,7 @@ import 'package:googleapis_auth/auth_io.dart';
 const _serviceAccountVar = 'GOOGLE_PLAY_SERVICE_ACCOUNT_JSON';
 
 Never _fail(String message) {
-  stderr.writeln('play_upload: $message');
+  stderr.writeln('cux_ship play: $message');
   exit(1);
 }
 
@@ -171,7 +184,7 @@ Future<void> _listListing(AndroidPublisherApi api, String packageName) async {
       stdout.writeln('  no listings at all — nothing has ever been pushed');
     }
   } on DetailedApiRequestError catch (e) {
-    stderr.writeln('play_upload: Play API error ${e.status}: ${e.message}');
+    stderr.writeln('cux_ship play: Play API error ${e.status}: ${e.message}');
     exitCode = 1;
   } finally {
     if (editId != null) {
@@ -210,7 +223,7 @@ Future<void> _listTracks(AndroidPublisherApi api, String packageName) async {
       '  uploaded bundles: ${bundles.map((b) => b.versionCode).toList()}',
     );
   } on DetailedApiRequestError catch (e) {
-    stderr.writeln('play_upload: Play API error ${e.status}: ${e.message}');
+    stderr.writeln('cux_ship play: Play API error ${e.status}: ${e.message}');
     exitCode = 1;
   } finally {
     if (editId != null) {
@@ -244,10 +257,10 @@ Future<void> _printVersionCode(
     }
     stdout.writeln(_soleVersionCode(release, trackName));
   } on _Abort catch (e) {
-    stderr.writeln('play_upload: ${e.message}');
+    stderr.writeln('cux_ship play: ${e.message}');
     exitCode = 1;
   } on DetailedApiRequestError catch (e) {
-    stderr.writeln('play_upload: Play API error ${e.status}: ${e.message}');
+    stderr.writeln('cux_ship play: Play API error ${e.status}: ${e.message}');
     exitCode = 1;
   } finally {
     if (editId != null) {
@@ -743,33 +756,66 @@ Future<void> _publishMetadata(
   }
 }
 
-Future<void> main(List<String> argv) async {
+/// Which Play operation [runPlay] performs.
+///
+/// These were flags on one executable — `--promote-from`, `--list-tracks` and
+/// the rest. As subcommands each carries only its own arguments, so
+/// combinations that used to be accepted by the parser and rejected by the code
+/// are now unrepresentable.
+enum PlayCommand {
+  upload('upload'),
+  promote('promote'),
+  tracks('tracks'),
+  listing('listing'),
+  versionCode('version-code');
+
+  const PlayCommand(this.name);
+
+  /// The subcommand as typed, used in diagnostics.
+  final String name;
+
+  /// True for the operations that only read, which return before any write.
+  bool get isRead => const {
+    PlayCommand.tracks,
+    PlayCommand.listing,
+    PlayCommand.versionCode,
+  }.contains(this);
+}
+
+/// The arguments [cmd] accepts.
+///
+/// No `help` flag: `CommandRunner` adds one to every command it owns, and a
+/// second would collide.
+ArgParser buildPlayParser(PlayCommand cmd) {
   final parser = ArgParser()
-    ..addOption('aab', help: 'Path to the signed app bundle.')
     ..addOption(
       'package',
       help: 'applicationId, e.g. design.codeux.holdthewheel.',
-    )
-    ..addOption(
-      'build-number',
-      help: 'Expected versionCode; verified against the bundle.',
-    )
+    );
+
+  // `tracks` and `listing` need nothing else; `version-code` needs to know
+  // which track to read.
+  if (cmd == PlayCommand.tracks || cmd == PlayCommand.listing) {
+    return parser;
+  }
+
+  // Promotion's whole purpose is to widen the audience, so `production` is the
+  // only sensible default target — and `internal`, where CI puts every commit,
+  // the only sensible source. Defaulting both is what lets `cux_ship play
+  // promote` be run with no arguments at all.
+  parser.addOption(
+    'track',
+    defaultsTo: cmd == PlayCommand.promote ? 'production' : 'internal',
+    help: 'The track to publish to.',
+  );
+  if (cmd == PlayCommand.versionCode) {
+    return parser;
+  }
+
+  parser
     ..addOption(
       'version-name',
       help: 'Used only to name the release in the console.',
-    )
-    ..addOption('track', defaultsTo: 'internal')
-    ..addOption(
-      'promote-from',
-      help:
-          'Track whose newest release is assigned to --track, with no build '
-          'and no upload. How a wider track gets what testers already have.',
-    )
-    ..addOption(
-      'version-code',
-      help:
-          'With --promote-from, the versionCode to promote. Defaults to the '
-          'newest on that track.',
     )
     ..addOption(
       'rollout',
@@ -795,133 +841,195 @@ Future<void> main(List<String> argv) async {
           'the version being released. Alternative to --release-notes.',
     )
     ..addFlag(
-      'print-version-code',
+      'dry-run',
       negatable: false,
-      help:
-          'Print the newest versionCode on --track and exit, and nothing else. '
-          'For scripts that have to name what they are about to act on.',
-    )
-    ..addOption(
-      'metadata',
-      help: 'Directory of store listing text and images to publish.',
-    )
-    ..addOption(
-      'data-safety',
-      help: 'CSV of Data Safety answers, exported from the console.',
-    )
-    ..addFlag('dry-run', negatable: false, help: 'Do everything except commit.')
-    ..addFlag(
-      'list-tracks',
-      negatable: false,
-      help:
-          'Print what Play currently has on each track, and exit. '
-          'Needs only --package.',
-    )
-    ..addFlag(
-      'list-listing',
-      negatable: false,
-      help:
-          'Print what Play currently holds for the store listing, and exit. '
-          'Needs only --package.',
-    )
-    ..addMultiOption(
-      'delete-locale',
-      help:
-          'BCP-47 locale to remove from the listing. Explicit because the '
-          'normal rule is that anything absent from the tree is left alone.',
-    )
-    ..addFlag('help', abbr: 'h', negatable: false);
+      help: 'Do everything except commit.',
+    );
 
-  final args = parser.parse(argv);
-  if (args.flag('help')) {
-    stdout.writeln(parser.usage);
-    return;
+  switch (cmd) {
+    case PlayCommand.upload:
+      parser
+        ..addOption('aab', help: 'Path to the signed app bundle.')
+        ..addOption(
+          'build-number',
+          help: 'Expected versionCode; verified against the bundle.',
+        )
+        ..addOption(
+          'metadata',
+          help: 'Directory of store listing text and images to publish.',
+        )
+        ..addOption(
+          'data-safety',
+          help: 'CSV of Data Safety answers, exported from the console.',
+        )
+        ..addMultiOption(
+          'delete-locale',
+          help:
+              'BCP-47 locale to remove from the listing. Explicit because the '
+              'normal rule is that anything absent from the tree is left '
+              'alone.',
+        );
+    case PlayCommand.promote:
+      parser
+        ..addOption(
+          'from',
+          defaultsTo: 'internal',
+          help:
+              'Track whose newest release is assigned to --track, with no '
+              'build and no upload. How a wider track gets what testers '
+              'already have.',
+        )
+        ..addOption(
+          'version-code',
+          help:
+              'The versionCode to promote. Defaults to the newest on the '
+              '--from track.',
+        );
+    case PlayCommand.tracks:
+    case PlayCommand.listing:
+    case PlayCommand.versionCode:
+      throw StateError('unreachable: handled above');
   }
 
-  // --package is the one argument both modes need, so it is checked before the
-  // split; the upload-only arguments are checked after, where they apply.
-  final packageName = args.option('package');
+  return parser;
+}
+
+/// Values a caller worked out from the project, used where a flag was omitted.
+///
+/// Passed in rather than read here, because knowing what a Flutter project
+/// looks like is not this package's business — it talks to Google Play.
+class PlayDefaults {
+  const PlayDefaults({
+    this.packageName,
+    this.versionName,
+    this.changelog,
+    this.metadata,
+    this.dataSafety,
+  });
+
+  /// Empty, for a caller that wants nothing inferred.
+  static const none = PlayDefaults();
+
+  final String? packageName;
+  final String? versionName;
+  final String? changelog;
+  final String? metadata;
+  final String? dataSafety;
+}
+
+/// Called once, immediately before the edit is committed, with a summary of it.
+typedef PlayConfirm = void Function(String summary);
+
+/// Runs [cmd] against Google Play.
+///
+/// [args] comes from [buildPlayParser] for the same [cmd], so an option that
+/// belongs to another subcommand is absent rather than null. Anything still
+/// missing falls back to [defaults].
+Future<void> runPlay(
+  PlayCommand cmd,
+  ArgResults args, {
+  PlayDefaults defaults = PlayDefaults.none,
+  PlayConfirm? confirm,
+}) async {
+  String? opt(String name) =>
+      args.options.contains(name) ? args.option(name) : null;
+  bool flag(String name) => args.options.contains(name) && args.flag(name);
+  List<String> multi(String name) =>
+      args.options.contains(name) ? args.multiOption(name) : const [];
+
+  final packageName = opt('package') ?? defaults.packageName;
   if (packageName == null) {
-    _fail('--package is required\n${parser.usage}');
+    _fail(
+      'no package name — none could be read from android/app/build.gradle.kts, '
+      'so pass --package',
+    );
   }
 
   // Reading needs nothing else, so it goes before the upload path's checks and
   // builds its own client.
-  if (args.flag('list-tracks') ||
-      args.flag('list-listing') ||
-      args.flag('print-version-code')) {
+  if (cmd.isRead) {
     final client = await clientViaServiceAccount(_loadCredentials(), [
       AndroidPublisherApi.androidpublisherScope,
     ]);
     final api = AndroidPublisherApi(client);
-    if (args.flag('list-tracks')) {
-      await _listTracks(api, packageName);
-    }
-    if (args.flag('list-listing')) {
-      await _listListing(api, packageName);
-    }
-    if (args.flag('print-version-code')) {
-      await _printVersionCode(api, packageName, args.option('track')!);
+    switch (cmd) {
+      case PlayCommand.tracks:
+        await _listTracks(api, packageName);
+      case PlayCommand.listing:
+        await _listListing(api, packageName);
+      case PlayCommand.versionCode:
+        await _printVersionCode(api, packageName, opt('track')!);
+      case PlayCommand.upload:
+      case PlayCommand.promote:
+        throw StateError('unreachable: guarded by cmd.isRead');
     }
     client.close();
     return;
   }
 
-  final aabPath = args.option('aab');
-  final buildNumber = args.option('build-number');
-  final metadataPath = args.option('metadata');
-  final dataSafetyPath = args.option('data-safety');
-  final deleteLocales = args.multiOption('delete-locale');
-  final promoteFrom = args.option('promote-from');
+  // Inference applies only where it makes sense. An upload publishes the
+  // listing and the data-safety declaration when the project has them; a
+  // promote touches neither, so those defaults are not offered to it.
+  final aabPath = opt('aab');
+  final buildNumber = opt('build-number');
+  final upload = cmd == PlayCommand.upload;
+  final metadataPath = upload ? (opt('metadata') ?? defaults.metadata) : null;
+  final dataSafetyPath = upload
+      ? (opt('data-safety') ?? defaults.dataSafety)
+      : null;
+  final deleteLocales = multi('delete-locale');
+
+  // Promotion is the deliberate opposite of a build: it publishes bits Play
+  // already holds, which is the whole reason a wider track can be trusted to
+  // carry exactly what testers ran. As its own subcommand it cannot be handed
+  // an artifact at all, so the check that used to reject `--promote-from --aab`
+  // is gone rather than moved.
+  //
+  // Note what promotion does *not* do: it changes no version and touches no
+  // git. The version is a property of the commit the build came from, and both
+  // stores promote that same build — so tagging and bumping is a separate,
+  // once-per-release step rather than something each store's promote repeats.
+  final promoteFrom = cmd == PlayCommand.promote ? opt('from') : null;
 
   // The jobs are independent, so any one of them alone is a valid run — a
   // listing typo should not need an artifact to fix. Requiring at least one
   // stops a no-argument invocation from opening and committing an empty edit,
   // which succeeds and does nothing.
-  if (aabPath == null &&
-      promoteFrom == null &&
+  if (cmd == PlayCommand.upload &&
+      aabPath == null &&
       metadataPath == null &&
       dataSafetyPath == null &&
       deleteLocales.isEmpty) {
     _fail(
-      'nothing to do — pass --aab, --promote-from, --metadata, --data-safety '
-      'or --delete-locale\n${parser.usage}',
+      'nothing to do — pass --aab, --metadata, --data-safety or '
+      '--delete-locale',
     );
   }
 
-  // Promotion is the deliberate opposite of a build: it publishes bits Play
-  // already holds, which is the whole reason a wider track can be trusted to
-  // carry exactly what testers ran. Handing it an artifact would mean one of
-  // the two is not what goes out.
-  if (promoteFrom != null && aabPath != null) {
-    _fail('--promote-from publishes what Play already has; drop --aab');
-  }
-  if (promoteFrom != null && promoteFrom == args.option('track')) {
-    _fail('--promote-from and --track are both "$promoteFrom"');
+  if (promoteFrom != null && promoteFrom == opt('track')) {
+    _fail('--from and --track are both "$promoteFrom"');
   }
 
   // Play models a staged rollout as a release that is still in progress, and
   // rejects a userFraction on a completed one. Setting both from the single
   // flag keeps the pair from being half-specified.
   double? userFraction;
-  if (args.option('rollout') != null) {
-    userFraction = double.tryParse(args.option('rollout')!);
+  if (opt('rollout') != null) {
+    userFraction = double.tryParse(opt('rollout')!);
     if (userFraction == null || userFraction <= 0 || userFraction >= 1) {
       _fail(
         '--rollout must be a fraction between 0 and 1 exclusive, got '
-        '"${args.option('rollout')}" — omit it to release to everyone',
+        '"${opt('rollout')}" — omit it to release to everyone',
       );
     }
   }
-  final releaseStatus = userFraction == null
-      ? args.option('status')
-      : 'inProgress';
+  final releaseStatus = userFraction == null ? opt('status') : 'inProgress';
 
   int? expectedVersionCode;
   File? aab;
   if (aabPath != null) {
     if (buildNumber == null) {
-      _fail('--aab also needs --build-number\n${parser.usage}');
+      _fail('--aab also needs --build-number');
     }
     expectedVersionCode = int.tryParse(buildNumber);
     if (expectedVersionCode == null) {
@@ -950,13 +1058,18 @@ Future<void> main(List<String> argv) async {
     }
   }
 
-  final dryRun = args.flag('dry-run');
-  final track = args.option('track')!;
-  final versionName = args.option('version-name') ?? buildNumber ?? '';
+  final dryRun = flag('dry-run');
+  final track = opt('track')!;
+  final versionName =
+      opt('version-name') ?? buildNumber ?? defaults.versionName ?? '';
 
-  final notesPath = args.option('release-notes');
-  final changelogPath = args.option('changelog');
-  if (notesPath != null && changelogPath != null) {
+  final notesPath = opt('release-notes');
+  // The changelog default applies only when no literal notes were given;
+  // offering both and then refusing the pair would be inference creating the
+  // conflict it complains about.
+  final changelogPath =
+      opt('changelog') ?? (notesPath == null ? defaults.changelog : null);
+  if (notesPath != null && opt('changelog') != null) {
     _fail('--release-notes and --changelog both supply the notes; pick one');
   }
 
@@ -1028,6 +1141,30 @@ Future<void> main(List<String> argv) async {
   // release notes in a locale the listing does not have, so this follows the
   // listing rather than being chosen separately.
   final notesLanguage = metadata?.details['defaultLanguage'] ?? 'en-US';
+
+  // Asked after every offline check and before any credential is loaded, so a
+  // typo in the listing tree is reported without the prompt in the way, and
+  // nothing has touched the network by the time the question is put.
+  //
+  // --dry-run skips it: the edit is deleted rather than committed, so nothing
+  // becomes visible and there is nothing to confirm.
+  if (confirm != null && !dryRun) {
+    confirm(
+      _summarizePlay(
+        cmd: cmd,
+        packageName: packageName,
+        track: track,
+        promoteFrom: promoteFrom,
+        versionCode: opt('version-code'),
+        aabPath: aabPath,
+        metadataPath: metadataPath,
+        dataSafetyPath: dataSafetyPath,
+        changelogPath: changelogPath,
+        deleteLocales: deleteLocales,
+        rollout: opt('rollout'),
+      ),
+    );
+  }
 
   // Built only once every local check has passed, so a 4001-character
   // description or a missing screenshot fails with no credential in scope at
@@ -1148,7 +1285,7 @@ Future<void> main(List<String> argv) async {
       // so a typo promotes nothing instead of promoting some other build.
       final TrackRelease promoting;
       final int promotedCode;
-      final requested = args.option('version-code');
+      final requested = opt('version-code');
       if (requested == null) {
         promoting = newest;
         promotedCode = _soleVersionCode(newest, promoteFrom);
@@ -1231,14 +1368,14 @@ Future<void> main(List<String> argv) async {
       stdout.writeln('==> data safety declaration updated');
     }
   } on _Abort catch (e) {
-    stderr.writeln('play_upload: ${e.message}');
+    stderr.writeln('cux_ship play: ${e.message}');
     exitCode = 1;
   } on DetailedApiRequestError catch (e) {
     // Deliberately not _fail: that calls exit(), which terminates the process
     // without unwinding, so the finally below would never run and every failed
     // upload would leave an open edit behind. Record the failure, let cleanup
     // happen, and exit with the code once main returns.
-    stderr.writeln('play_upload: Play API error ${e.status}: ${e.message}');
+    stderr.writeln('cux_ship play: Play API error ${e.status}: ${e.message}');
 
     // The resumable uploader reports only the transport status and discards
     // Play's response body, so a 403 arrives with no reason attached. Listed
@@ -1283,4 +1420,65 @@ Future<void> main(List<String> argv) async {
     }
     client.close();
   }
+}
+
+/// What is about to happen, in the terms the caller will recognise.
+///
+/// Built here rather than by the caller because only this function knows what
+/// each subcommand does with the arguments — that an absent `--version-code`
+/// means "whatever is newest on the source track" rather than nothing.
+String _summarizePlay({
+  required PlayCommand cmd,
+  required String packageName,
+  required String track,
+  required String? promoteFrom,
+  required String? versionCode,
+  required String? aabPath,
+  required String? metadataPath,
+  required String? dataSafetyPath,
+  required String? changelogPath,
+  required List<String> deleteLocales,
+  required String? rollout,
+}) {
+  final rows = <String, String?>{
+    'app': packageName,
+    'to track': track,
+    'from track': promoteFrom,
+    'versionCode': switch (cmd) {
+      PlayCommand.promote =>
+        versionCode ?? 'newest on the "$promoteFrom" track',
+      _ => versionCode,
+    },
+    'artifact': aabPath,
+    'listing': metadataPath,
+    'data safety': dataSafetyPath,
+    'notes from': changelogPath,
+    'removing': deleteLocales.isEmpty ? null : deleteLocales.join(', '),
+    'rollout': rollout == null ? null : '$rollout of users',
+  };
+
+  final heading = switch (cmd) {
+    PlayCommand.promote when track == 'production' =>
+      'About to release to production on Google Play. This is public '
+          'immediately.',
+    PlayCommand.promote =>
+      'About to widen the audience on Google Play to the "$track" track.',
+    PlayCommand.upload when track == 'production' =>
+      'About to upload and release to production on Google Play. This is '
+          'public immediately.',
+    _ => 'About to publish to the "$track" track on Google Play.',
+  };
+
+  final width = rows.entries
+      .where((e) => e.value != null)
+      .map((e) => e.key.length)
+      .fold(0, (a, b) => a > b ? a : b);
+  final buffer = StringBuffer('\n$heading\n');
+  for (final row in rows.entries) {
+    if (row.value == null) {
+      continue;
+    }
+    buffer.writeln('  ${row.key.padRight(width)}   ${row.value}');
+  }
+  return buffer.toString();
 }

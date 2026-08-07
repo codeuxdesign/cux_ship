@@ -2,10 +2,12 @@
 
 // Removes the alpha channel from store screenshots, in place.
 //
-//   dart run cux_ship_appstore:flatten_screenshots ../../store/appstore/listings
-//   dart run cux_ship_appstore:flatten_screenshots --check ../../store/appstore/listings
+//   cux_ship screenshots flatten store/appstore/listings
+//   cux_ship screenshots flatten --check store/appstore/listings
 //
-// Driven by tool/flatten-screenshots.sh, which is the command to run.
+// A top-level subcommand rather than one under `appstore`, because stripping an
+// alpha channel is an operation on an image. Apple is merely the store that
+// refuses one.
 //
 // The decision this makes lives in lib/flatten.dart and is tested there; this
 // file is the file walking and the writing. Run it after capturing screenshots
@@ -17,38 +19,29 @@
 // capture time and the uploader's check stays strict.
 import 'dart:io';
 
+import 'package:args/args.dart';
 import 'package:cux_ship_appstore/flatten.dart';
 
 /// Exit code when --check finds work to do, so CI can gate on it.
-const _needsFlatteningExit = 2;
+const needsFlatteningExit = 2;
 
-void main(List<String> argv) {
-  final paths = <String>[];
-  var check = false;
-  for (final arg in argv) {
-    switch (arg) {
-      case '--check':
-        check = true;
-      case '-h' || '--help':
-        stdout.writeln(
-          'usage: flatten_screenshots [--check] <file-or-directory>...\n'
-          '\n'
-          '  Re-encodes PNGs without their alpha channel, in place.\n'
-          '  --check reports what would change and exits '
-          '$_needsFlatteningExit if anything would.',
-        );
-        return;
-      default:
-        if (arg.startsWith('-')) {
-          stderr.writeln('flatten_screenshots: unknown option $arg');
-          exit(1);
-        }
-        paths.add(arg);
-    }
-  }
+/// The arguments `screenshots flatten` accepts. Paths arrive as positionals.
+ArgParser buildFlattenParser() => ArgParser()
+  ..addFlag(
+    'check',
+    negatable: false,
+    help:
+        'Report what would change and exit $needsFlatteningExit if anything '
+        'would, rather than rewriting. For CI.',
+  );
+
+/// Flattens every PNG under [args.rest], in place.
+void runFlatten(ArgResults args) {
+  final paths = args.rest;
+  final check = args.flag('check');
 
   if (paths.isEmpty) {
-    stderr.writeln('flatten_screenshots: nothing to do — pass a path');
+    stderr.writeln('cux_ship screenshots flatten: nothing to do — pass a path');
     exit(1);
   }
 
@@ -66,7 +59,9 @@ void main(List<String> argv) {
     }
     final file = File(path);
     if (!file.existsSync()) {
-      stderr.writeln('flatten_screenshots: no such file or directory: $path');
+      stderr.writeln(
+        'cux_ship screenshots flatten: no such file or directory: $path',
+      );
       exit(1);
     }
     files.add(file);
@@ -80,7 +75,9 @@ void main(List<String> argv) {
     try {
       result = flattenPng(file.readAsBytesSync());
     } on FlattenException catch (e) {
-      stderr.writeln('flatten_screenshots: ${file.path}: ${e.message}');
+      stderr.writeln(
+        'cux_ship screenshots flatten: ${file.path}: ${e.message}',
+      );
       exit(1);
     }
 
@@ -113,6 +110,6 @@ void main(List<String> argv) {
     '$changed ${check ? "would be flattened" : "flattened"}',
   );
   if (check && changed > 0) {
-    exit(_needsFlatteningExit);
+    exit(needsFlatteningExit);
   }
 }

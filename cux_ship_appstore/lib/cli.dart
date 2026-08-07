@@ -2,12 +2,18 @@
 
 // Publishes a signed .ipa, the App Store listing, or both, to App Store Connect.
 //
-//   dart run cux_ship_appstore:asc_upload --ipa dist/ios/x.ipa --bundle-id design.codeux.holdthewheel \
+//   cux_ship appstore upload --ipa dist/ios/x.ipa --bundle-id design.codeux.holdthewheel \
 //     --build-number 12 --version-name 1.0.0 [--dry-run]
 //
-// Invoked by tool/upload.sh, which has already checked the manifest, the
-// artifact digest and the provenance rules. This program does the API work and
-// nothing else — everything it needs arrives as an argument or, for the API
+// A library rather than an executable: the `cux_ship` package wires [AscCommand]
+// to subcommands, so there is one binary rather than one per store. What used to
+// be modes selected by flag — `--promote`, `--list-builds` — are subcommands
+// now, which is why [runAsc] takes the mode as an argument instead of reading it
+// back out of [ArgResults].
+//
+// Invoked by a project's upload script, which has already checked the manifest,
+// the artifact digest and the provenance rules. This program does the API work
+// and nothing else — everything it needs arrives as an argument or, for the API
 // key, as an environment variable. It knows nothing about SOPS or manifests.
 //
 // The Apple counterpart of cux_ship_play, and deliberately shaped like it,
@@ -23,20 +29,20 @@
 //     cannot rehearse Apple's own validation of a write. That is a weaker
 //     promise than the Play side's and is said out loud rather than implied.
 //
-// --metadata publishes the store listing from a directory tree, described in
-// store/appstore/README.md. Every argument is independent, so a listing-only
-// push needs no artifact:
+// --metadata publishes the store listing from a directory tree. Every argument
+// is independent, so a listing-only push needs no artifact:
 //
-//   dart run cux_ship_appstore:asc_upload --bundle-id design.codeux.holdthewheel \
-//     --metadata ../../store/appstore --dry-run
+//   cux_ship appstore upload --bundle-id design.codeux.holdthewheel \
+//     --metadata store/appstore --dry-run
 //
-// --promote is how the App Store is reached, and builds nothing: it points an
-// App Store version at a build TestFlight already holds and submits it for
-// review, so what ships is the identical binary testers ran rather than a
-// rebuild of the same commit. tool/promote.sh drives it.
+// `appstore promote` is how the App Store is reached, and builds nothing: it
+// points an App Store version at a build TestFlight already holds and submits it
+// for review, so what ships is the identical binary testers ran rather than a
+// rebuild of the same commit. It takes no --ipa, which is the whole point, and
+// the CLI now enforces that by construction rather than by a validation error.
 //
-// --list-builds and --list-versions are the read side, and the only way to
-// confirm a publish independently of the run that claims to have done it.
+// `appstore builds` and `appstore versions` are the read side, and the only way
+// to confirm a publish independently of the run that claims to have done it.
 //
 // What is *not* here is everything Apple has no API for: creating the app
 // record, the App Privacy questionnaire, the agreements, and pricing. None of
@@ -51,18 +57,47 @@ import 'package:cux_ship_appstore/metadata.dart';
 import 'package:cux_ship_appstore/testflight_notes.dart';
 import 'package:cux_ship_notes/release_notes.dart';
 
-Never _fail(String message) {
-  stderr.writeln('asc_upload: $message');
-  exit(1);
+/// Which App Store Connect operation [runAsc] performs.
+///
+/// These were flags on one executable — `--promote`, `--list-builds` and the
+/// rest — which meant every invocation had to be validated against every other
+/// mode's arguments, and `--promote --ipa` was a combination the parser happily
+/// accepted and the code then had to reject. As subcommands each one carries
+/// only its own arguments, so most of those checks are now impossible to fail
+/// rather than caught.
+enum AscCommand {
+  upload('upload'),
+  promote('promote'),
+  builds('builds'),
+  versions('versions'),
+  screenshotTypes('screenshot-types'),
+  buildNumber('build-number');
+
+  const AscCommand(this.name);
+
+  /// The subcommand as typed, used in diagnostics.
+  final String name;
+
+  /// True for the operations that only read, which return before any write.
+  bool get isRead => const {
+    AscCommand.builds,
+    AscCommand.versions,
+    AscCommand.screenshotTypes,
+    AscCommand.buildNumber,
+  }.contains(this);
 }
 
 /// The locale the listing is written in.
 ///
-/// Apple spells it `en-US`, matching `store/play/details/default_language.txt`
-/// rather than diverging for no reason.
+/// Apple spells it `en-US`, matching a Play listing's default language rather
+/// than diverging for no reason.
 const _defaultLocale = 'en-US';
 
-Future<void> main(List<String> argv) async {
+/// The arguments [cmd] accepts.
+///
+/// No `help` flag: `CommandRunner` adds one to every command it owns, and a
+/// second would collide.
+ArgParser buildAscParser(AscCommand cmd) {
   final parser = ArgParser()
     ..addOption('bundle-id', help: 'e.g. design.codeux.holdthewheel.')
     ..addOption(
@@ -70,24 +105,15 @@ Future<void> main(List<String> argv) async {
       defaultsTo: 'ios',
       allowed: ['ios', 'macos'],
       help: 'Which App Store platform to act on.',
-    )
-    ..addOption('ipa', help: 'Path to the signed .ipa (or .pkg for macos).')
-    ..addOption(
-      'build-number',
-      help: 'CFBundleVersion; verified against what Apple reports.',
-    )
+    );
+
+  if (cmd.isRead) {
+    return parser;
+  }
+
+  parser
     ..addOption('version-name', help: 'CFBundleShortVersionString.')
     ..addOption('locale', defaultsTo: _defaultLocale)
-    ..addOption(
-      'beta-group',
-      help:
-          'TestFlight group to give the build to. An internal group needs no '
-          'review, which is the closest thing to Play\'s internal track.',
-    )
-    ..addOption(
-      'metadata',
-      help: 'Directory of store listing text and screenshots to publish.',
-    )
     ..addOption(
       'changelog',
       help:
@@ -98,123 +124,173 @@ Future<void> main(List<String> argv) async {
       'release-notes',
       help: 'File whose contents become the notes. Alternative to --changelog.',
     )
-    ..addFlag(
-      'promote',
-      negatable: false,
-      help:
-          'Attach the newest processed build to an App Store version and '
-          'submit it for review. Builds and uploads nothing.',
-    )
-    ..addFlag(
-      'phased',
-      negatable: false,
-      help:
-          "Release over Apple's seven-day phased schedule once approved. Not a "
-          'fraction — Apple runs the schedule itself.',
-    )
-    ..addFlag(
-      'skip-waiting',
-      negatable: false,
-      help:
-          'Do not wait for Apple to finish processing the build. Leaves the '
-          'release notes unset, so it is for debugging rather than releases.',
-    )
-    ..addFlag('dry-run', negatable: false, help: 'Every read, no writes.')
-    ..addFlag('list-builds', negatable: false, help: 'Print builds and exit.')
-    ..addFlag(
-      'list-versions',
-      negatable: false,
-      help: 'Print App Store versions and exit.',
-    )
-    ..addFlag(
-      'list-screenshot-types',
-      negatable: false,
-      help:
-          'Print the ScreenshotDisplayType values this app already carries, '
-          "which is how to check a name rather than guess at it — Apple's "
-          'published enum lags the console.',
-    )
-    ..addFlag(
-      'print-build-number',
-      negatable: false,
-      help:
-          'Print the newest processed build number and nothing else, for '
-          'scripts that have to name what they are about to act on.',
-    )
-    ..addFlag('help', abbr: 'h', negatable: false);
+    ..addFlag('dry-run', negatable: false, help: 'Every read, no writes.');
 
-  final args = parser.parse(argv);
-  if (args.flag('help')) {
-    stdout.writeln(parser.usage);
-    return;
+  switch (cmd) {
+    case AscCommand.upload:
+      parser
+        ..addOption('ipa', help: 'Path to the signed .ipa (or .pkg for macos).')
+        ..addOption(
+          'build-number',
+          help: 'CFBundleVersion; verified against what Apple reports.',
+        )
+        ..addOption(
+          'beta-group',
+          help:
+              'TestFlight group to give the build to. An internal group needs '
+              "no review, which is the closest thing to Play's internal track.",
+        )
+        ..addOption(
+          'metadata',
+          help: 'Directory of store listing text and screenshots to publish.',
+        )
+        ..addFlag(
+          'skip-waiting',
+          negatable: false,
+          help:
+              'Do not wait for Apple to finish processing the build. Leaves '
+              'the release notes unset, so it is for debugging rather than '
+              'releases.',
+        );
+    case AscCommand.promote:
+      parser
+        ..addOption(
+          'build-number',
+          help:
+              'Which processed build to submit. Defaults to the newest Apple '
+              'holds.',
+        )
+        ..addFlag(
+          'phased',
+          negatable: false,
+          help:
+              "Release over Apple's seven-day phased schedule once approved. "
+              'Not a fraction — Apple runs the schedule itself.',
+        );
+    case AscCommand.builds:
+    case AscCommand.versions:
+    case AscCommand.screenshotTypes:
+    case AscCommand.buildNumber:
+      throw StateError('unreachable: handled by cmd.isRead above');
   }
 
-  final bundleId = args.option('bundle-id');
+  return parser;
+}
+
+/// Values a caller worked out from the project, used where a flag was omitted.
+///
+/// Passed in rather than read here, because knowing what a Flutter project
+/// looks like is not this package's business — it talks to App Store Connect.
+class AscDefaults {
+  const AscDefaults({
+    this.bundleId,
+    this.versionName,
+    this.changelog,
+    this.metadata,
+  });
+
+  /// Empty, for a caller that wants nothing inferred.
+  static const none = AscDefaults();
+
+  final String? bundleId;
+  final String? versionName;
+  final String? changelog;
+  final String? metadata;
+}
+
+/// Called once, immediately before the first write, with a summary of it.
+///
+/// Nothing here decides what confirmation means — it may prompt, or return at
+/// once for `--yes`. Read-only commands and `--dry-run` never reach it.
+typedef AscConfirm = void Function(String summary);
+
+/// Runs [cmd] against App Store Connect.
+///
+/// [args] comes from [buildAscParser] for the same [cmd], so an option that
+/// belongs to another subcommand is simply absent rather than null — hence the
+/// `opt`/`flag` readers below. Anything still missing falls back to [defaults].
+Future<void> runAsc(
+  AscCommand cmd,
+  ArgResults args, {
+  AscDefaults defaults = AscDefaults.none,
+  AscConfirm? confirm,
+}) async {
+  Never fail(String message) {
+    stderr.writeln('cux_ship appstore ${cmd.name}: $message');
+    exit(1);
+  }
+
+  String? opt(String name) =>
+      args.options.contains(name) ? args.option(name) : null;
+  bool flag(String name) => args.options.contains(name) && args.flag(name);
+
+  final platform = AscPlatform.byName(opt('platform')!);
+  final bundleId = opt('bundle-id') ?? defaults.bundleId;
   if (bundleId == null) {
-    _fail('--bundle-id is required\n${parser.usage}');
-  }
-
-  final platform = AscPlatform.byName(args.option('platform')!);
-  final locale = args.option('locale')!;
-  final dryRun = args.flag('dry-run');
-
-  final ipaPath = args.option('ipa');
-  final metadataPath = args.option('metadata');
-  final promote = args.flag('promote');
-  final reads =
-      args.flag('list-builds') ||
-      args.flag('list-versions') ||
-      args.flag('list-screenshot-types') ||
-      args.flag('print-build-number');
-
-  if (ipaPath == null && metadataPath == null && !promote && !reads) {
-    _fail(
-      'nothing to do — pass --ipa, --metadata, --promote or one of the '
-      '--list-* flags\n${parser.usage}',
+    fail(
+      'no bundle identifier — none could be read from the Xcode project, so '
+      'pass --bundle-id',
     );
   }
 
-  // Promotion publishes bits Apple already holds, which is the whole reason a
-  // release can be trusted to be what testers ran. Handing it an artifact
-  // would mean one of the two is not what ships.
-  if (promote && ipaPath != null) {
-    _fail('--promote submits what Apple already has; drop --ipa');
+  final locale = opt('locale') ?? _defaultLocale;
+  final dryRun = flag('dry-run');
+
+  // Inference applies only where it makes sense. An upload publishes the
+  // listing when there is one to publish; a promote never does, so the
+  // metadata default is not offered to it.
+  final ipaPath = opt('ipa');
+  final metadataPath = cmd == AscCommand.upload
+      ? (opt('metadata') ?? defaults.metadata)
+      : null;
+  final promote = cmd == AscCommand.promote;
+  final reads = cmd.isRead;
+
+  if (cmd == AscCommand.upload && ipaPath == null && metadataPath == null) {
+    fail('nothing to do — pass --ipa, --metadata, or both');
   }
 
-  final versionName = args.option('version-name');
-  final buildNumber = args.option('build-number');
+  final versionName = opt('version-name') ?? defaults.versionName;
+  final buildNumber = opt('build-number');
   File? artifact;
   if (ipaPath != null) {
     if (buildNumber == null || versionName == null) {
-      _fail('--ipa also needs --build-number and --version-name');
+      fail('--ipa also needs --build-number and --version-name');
     }
     if (int.tryParse(buildNumber) == null) {
-      _fail('--build-number must be an integer, got "$buildNumber"');
+      fail('--build-number must be an integer, got "$buildNumber"');
     }
     artifact = File(ipaPath);
     if (!artifact.existsSync()) {
-      _fail('no such file: $ipaPath');
+      fail('no such file: $ipaPath');
     }
   }
   if (promote && versionName == null) {
-    _fail('--promote needs --version-name, to know which version to submit');
+    fail(
+      'no version name — none could be read from pubspec.yaml, so pass '
+      '--version-name to say which version to submit',
+    );
   }
 
-  final notesPath = args.option('release-notes');
-  final changelogPath = args.option('changelog');
-  if (notesPath != null && changelogPath != null) {
-    _fail('--release-notes and --changelog both supply the notes; pick one');
+  final notesPath = opt('release-notes');
+  // The changelog default applies only when no literal notes were given;
+  // offering both and then refusing the pair would be inference creating the
+  // conflict it complains about.
+  final changelogPath =
+      opt('changelog') ?? (notesPath == null ? defaults.changelog : null);
+  if (notesPath != null && opt('changelog') != null) {
+    fail('--release-notes and --changelog both supply the notes; pick one');
   }
 
   String? literalNotes;
   if (notesPath != null) {
     final file = File(notesPath);
     if (!file.existsSync()) {
-      _fail('no such release notes file: $notesPath');
+      fail('no such release notes file: $notesPath');
     }
     literalNotes = file.readAsStringSync().trim();
     if (literalNotes.length > appStoreReleaseNotesLimit) {
-      _fail(
+      fail(
         'release notes are ${literalNotes.length} characters; the App Store '
         'allows $appStoreReleaseNotesLimit',
       );
@@ -230,7 +306,7 @@ Future<void> main(List<String> argv) async {
     try {
       metadata = loadMetadata(metadataPath);
     } on MetadataException catch (e) {
-      _fail(e.message);
+      fail(e.message);
     }
     stdout.writeln(
       '==> ${metadata.locales.length} locale(s), '
@@ -252,7 +328,7 @@ Future<void> main(List<String> argv) async {
     );
     switch (notes) {
       case NoSection():
-        _fail(
+        fail(
           '$changelogPath has no section for $forVersion.\n'
           '  Add one. Empty is a fine answer — it publishes the newest older\n'
           '  version that did change something here, or\n'
@@ -261,7 +337,7 @@ Future<void> main(List<String> argv) async {
         );
       case NotesText(:final text, :final fromVersion):
         if (text.length > appStoreReleaseNotesLimit) {
-          _fail(
+          fail(
             "$changelogPath's $fromVersion section is ${text.length} "
             'characters once filtered to ${platform.changelog}; the App Store '
             'allows $appStoreReleaseNotesLimit',
@@ -284,12 +360,35 @@ Future<void> main(List<String> argv) async {
     }
   }
 
+  // Asked after every offline check and before any credential is loaded, so a
+  // typo in the metadata tree is reported without the prompt in the way, and
+  // nothing has touched the network by the time the question is put.
+  //
+  // Read-only commands and --dry-run skip it: neither writes anything, and a
+  // prompt on a harmless command is how the habit of answering yes is learned.
+  if (confirm != null && !reads && !dryRun) {
+    confirm(
+      _summarizeAsc(
+        cmd: cmd,
+        bundleId: bundleId,
+        platform: platform.name,
+        versionName: versionName,
+        buildNumber: buildNumber,
+        ipaPath: ipaPath,
+        metadataPath: metadataPath,
+        changelogPath: changelogPath,
+        locale: locale,
+        phased: flag('phased'),
+      ),
+    );
+  }
+
   // Built only once every local check has passed.
   final AscCredentials credentials;
   try {
     final loaded = AscCredentials.fromEnvironment();
     if (loaded == null) {
-      _fail(
+      fail(
         'no App Store Connect credentials.\n'
         '  APPLE_API_KEY_ID, APPLE_API_ISSUER_ID and APPLE_API_PRIVATE_KEY_PATH\n'
         '  are set by tool/with-secrets.sh. Run this through it, or export them\n'
@@ -298,7 +397,7 @@ Future<void> main(List<String> argv) async {
     }
     credentials = loaded;
   } on StateError catch (e) {
-    _fail(e.message);
+    fail(e.message);
   }
 
   final client = AscClient(credentials);
@@ -315,21 +414,21 @@ Future<void> main(List<String> argv) async {
 
   try {
     final app = await store.resolveApp(bundleId);
-    if (!args.flag('print-build-number')) {
+    if (cmd != AscCommand.buildNumber) {
       stdout.writeln('==> ${app.name} ($bundleId) is app ${app.id}');
     }
 
-    if (args.flag('print-build-number')) {
+    if (cmd == AscCommand.buildNumber) {
       await store.printBuildNumber(app);
       return;
     }
-    if (args.flag('list-builds')) {
+    if (cmd == AscCommand.builds) {
       await store.listBuilds(app);
     }
-    if (args.flag('list-versions')) {
+    if (cmd == AscCommand.versions) {
       await store.listVersions(app);
     }
-    if (args.flag('list-screenshot-types')) {
+    if (cmd == AscCommand.screenshotTypes) {
       await store.listScreenshotTypes(app);
     }
     if (reads) {
@@ -368,7 +467,7 @@ Future<void> main(List<String> argv) async {
 
       if (dryRun && existing == null) {
         stdout.writeln('    would then wait for processing and set the notes');
-      } else if (args.flag('skip-waiting')) {
+      } else if (flag('skip-waiting')) {
         stdout.writeln('==> not waiting for processing, as asked');
       } else {
         build = await store.awaitProcessing(app, buildNumber);
@@ -390,7 +489,7 @@ Future<void> main(List<String> argv) async {
           }
           await store.setWhatToTest(build, locale, testFlightNotes);
         }
-        final group = args.option('beta-group');
+        final group = opt('beta-group');
         if (group != null) {
           stdout.writeln('==> beta group');
           await store.addToBetaGroup(app, build, group);
@@ -438,7 +537,7 @@ Future<void> main(List<String> argv) async {
       );
       if (needsVersion) {
         if (versionName == null) {
-          _fail(
+          fail(
             'pushing descriptions or screenshots needs --version-name, because '
             'Apple scopes them to a version rather than to the app',
           );
@@ -519,7 +618,7 @@ Future<void> main(List<String> argv) async {
           )
           .toList();
       if (usable.isEmpty) {
-        _fail('no processed, unexpired build to promote');
+        fail('no processed, unexpired build to promote');
       }
       usable.sort((a, b) {
         int number(Map<String, dynamic> x) =>
@@ -535,7 +634,7 @@ Future<void> main(List<String> argv) async {
               (b) =>
                   '${(b['attributes'] as Map<String, dynamic>?)?['version']}' ==
                   buildNumber,
-              orElse: () => _fail(
+              orElse: () => fail(
                 'build $buildNumber is not a processed build of this app',
               ),
             );
@@ -564,7 +663,7 @@ Future<void> main(List<String> argv) async {
             });
           }
         }
-        if (args.flag('phased')) {
+        if (flag('phased')) {
           stdout.writeln('==> phased release');
           await store.enablePhasedRelease(version);
         }
@@ -587,4 +686,60 @@ Future<void> main(List<String> argv) async {
   } finally {
     client.close();
   }
+}
+
+/// What is about to happen, in the terms the caller will recognise.
+///
+/// Built here rather than by the caller because only this function knows what
+/// each subcommand actually does with the arguments — that `promote` ignores a
+/// metadata tree, or that an absent `--build-number` means "whatever Apple says
+/// is newest" rather than nothing.
+String _summarizeAsc({
+  required AscCommand cmd,
+  required String bundleId,
+  required String platform,
+  required String? versionName,
+  required String? buildNumber,
+  required String? ipaPath,
+  required String? metadataPath,
+  required String? changelogPath,
+  required String locale,
+  required bool phased,
+}) {
+  final rows = <String, String?>{
+    'app': '$bundleId ($platform)',
+    'version': versionName,
+    'build': switch (cmd) {
+      AscCommand.promote => buildNumber ?? 'newest processed build Apple holds',
+      _ => buildNumber,
+    },
+    'artifact': ipaPath,
+    'listing': metadataPath,
+    'notes from': changelogPath,
+    'locale': locale,
+    'phased': phased ? 'yes — over Apple\'s seven-day schedule' : null,
+  };
+
+  final heading = switch (cmd) {
+    AscCommand.promote =>
+      'About to submit for App Store review. Once Apple approves it, this is '
+          'public.',
+    AscCommand.upload when ipaPath != null =>
+      'About to upload a build to TestFlight'
+          '${metadataPath == null ? '' : ' and publish the listing'}.',
+    _ => 'About to publish the App Store listing.',
+  };
+
+  final width = rows.entries
+      .where((e) => e.value != null)
+      .map((e) => e.key.length)
+      .fold(0, (a, b) => a > b ? a : b);
+  final buffer = StringBuffer('\n$heading\n');
+  for (final row in rows.entries) {
+    if (row.value == null) {
+      continue;
+    }
+    buffer.writeln('  ${row.key.padRight(width)}   ${row.value}');
+  }
+  return buffer.toString();
 }

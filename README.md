@@ -12,15 +12,66 @@ why a line exists.
 
 | Package | What it is |
 |---|---|
-| `cux_ship_appstore` | App Store Connect. A hand-written REST client — ES256 JWT auth, the three-step asset upload, screenshot and listing metadata, TestFlight notes, promotion. Executables: `asc_upload`, `flatten_screenshots`. |
-| `cux_ship_play` | Google Play, on `googleapis`. Uploads a bundle to a track, publishes the listing, promotes between tracks. Executable: `play_upload`. |
+| **`cux_ship`** | **The command.** The only package a consumer depends on. |
+| `cux_ship_appstore` | App Store Connect. A hand-written REST client — ES256 JWT auth, the three-step asset upload, screenshot and listing metadata, TestFlight notes, promotion. |
+| `cux_ship_play` | Google Play, on `googleapis`. Uploads a bundle to a track, publishes the listing, promotes between tracks. |
 | `cux_ship_notes` | The `CHANGELOG.md` parser both uploaders share. No dependencies at all. |
 | `cux_ship_verify` | Offline checks a consuming repository runs against **its own** changelog and store tree, from its own test suite. |
 
+## The command
+
+```
+cux_ship appstore upload            play upload            screenshots flatten
+         appstore promote           play promote           verify
+         appstore builds            play tracks
+         appstore versions          play listing
+         appstore screenshot-types  play version-code
+         appstore build-number
+```
+
+**Run it from a project root and it works out the rest.** The `applicationId`
+comes from Gradle, the bundle identifier from the Xcode project, the version
+from `pubspec.yaml`, and `CHANGELOG.md` / `store/appstore` / `store/play` from
+where they conventionally sit. Flags override; they are not requirements. So the
+normal case is a bare subcommand:
+
+```bash
+cux_ship play promote        # internal → production, newest build, notes from CHANGELOG.md
+cux_ship appstore promote    # newest processed build → App Store review
+```
+
+**Anything that becomes public asks first**, printing everything it inferred, so
+a wrong guess is visible before it is acted on rather than after:
+
+```
+About to release to production on Google Play. This is public immediately.
+  app           design.codeux.holdthewheel
+  to track      production
+  from track    internal
+  versionCode   newest on the "internal" track
+  notes from    /path/to/CHANGELOG.md
+
+Proceed? [y/N]
+```
+
+`--yes` skips the question. With no terminal and no `--yes` the command
+**refuses** rather than assuming yes, so a CI job that gained an interactive
+step fails loudly instead of releasing on a default. `--dry-run` never asks —
+it writes nothing, and a prompt there would only teach the habit of answering
+yes.
+
+### What promote deliberately does not do
+
+It changes no version and touches no git. A build number belongs to a commit;
+both stores promote that *same* build; so the version they publish is the same
+one — which only holds if promotion cannot move it. Tagging and bumping is a
+once-per-release step for whatever drives this, not something each store's
+promote repeats. Otherwise shipping one release to two stores bumps twice, and
+the two stores end up disagreeing about what version they carry.
+
 ## Consuming it
 
-Add one package to your project that depends on the uploaders, so there is a
-single place to bump the ref:
+One dependency:
 
 ```yaml
 # tool/cux_ship/pubspec.yaml
@@ -30,21 +81,19 @@ environment:
   sdk: ^3.12.2
 
 dependencies:
-  cux_ship_appstore:
+  cux_ship:
     git:
       url: https://github.com/codeuxdesign/cux_ship.git
-      path: cux_ship_appstore
-      ref: v1.0.0
-  cux_ship_play:
-    git:
-      url: https://github.com/codeuxdesign/cux_ship.git
-      path: cux_ship_play
-      ref: v1.0.0
+      path: cux_ship
+      ref: v1.1.0
 ```
 
-`cux_ship_notes` arrives transitively — the uploaders depend on it by relative
-`path:` *within* this repository, and pub resolves that correctly through a git
-dependency. Do not depend on it directly.
+Everything else arrives transitively. That is not only tidiness: pub treats a
+git dependency's ref as part of its identity and does not resolve a tag to a
+commit before comparing, so a package named both directly (at a tag) and
+transitively (at the commit a relative `path:` resolved to) is an unsolvable
+conflict. One direct dependency has no second identity to collide with, which is
+what lets you pin a readable tag instead of a SHA.
 
 Use the **HTTPS** URL rather than the SSH form. This repository is public, so
 HTTPS needs no credentials anywhere, including in CI; an SSH URL would put an
@@ -53,12 +102,14 @@ authentication step back into a pipeline that does not otherwise need one.
 Then, from `tool/cux_ship`:
 
 ```bash
-dart run cux_ship_appstore:asc_upload --help
-dart run cux_ship_play:play_upload --help
-dart run cux_ship_appstore:flatten_screenshots --help
+dart run cux_ship --help
 ```
 
-The package names carry the namespace, so the executables keep short names.
+Or install it once and drop the ceremony entirely:
+
+```bash
+dart pub global activate --source git https://github.com/codeuxdesign/cux_ship.git --git-path cux_ship
+```
 
 ### Credentials
 
@@ -75,11 +126,21 @@ rather than a requirement.
 ### Keeping the guards
 
 `cux_ship_verify` exists because two things worth checking live in the consumer,
-not here: the real `CHANGELOG.md`, and the real App Store metadata tree. Call it
-from your own tests.
+not here: the real `CHANGELOG.md`, and the real App Store metadata tree.
+
+As a command:
+
+```bash
+cux_ship verify --appstore store/appstore \
+  --require-screenshot-type APP_IPHONE_67 \
+  --require-screenshot-type APP_IPAD_PRO_3GEN_129
+```
+
+Or from your own tests, which is where it earns its keep — it then runs on every
+push rather than only at release time:
 
 ```dart
-import 'package:cux_ship_verify/cux_ship_verify.dart';
+import 'package:cux_ship/verify.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -105,12 +166,16 @@ that introduces the problem.
 
 ## Flattening screenshots
 
-`flatten_screenshots` removes the alpha channel from PNG screenshots, which
-Apple rejects outright and which every simulator and emulator capture carries
-even when every pixel is opaque; where the alpha is genuinely opaque the channel
-is dropped exactly, and where it is not the image is composited onto a
+`cux_ship screenshots flatten` removes the alpha channel from PNG screenshots,
+which Apple rejects outright and which every simulator and emulator capture
+carries even when every pixel is opaque; where the alpha is genuinely opaque the
+channel is dropped exactly, and where it is not the image is composited onto a
 background rather than having the channel discarded, because discarding it turns
 a blank capture into a solid black rectangle.
+
+It sits at the top level rather than under `appstore` because stripping an alpha
+channel is an operation on an image. Apple is merely the store that refuses one.
+`--check` reports what would change and exits 2 without rewriting, for CI.
 
 It is deliberately a separate step from publishing: `cux_ship_appstore` *refuses*
 an alpha channel rather than silently fixing one, so the corrected file is the
@@ -122,17 +187,26 @@ one committed and reviewed.
   Connect API. Screenshots are handled; videos are not. They use the same
   three-step reservation/upload/commit flow as a screenshot asset, so the shape
   is already here, but nothing has been written or tested.
+- **`cux_ship release finish`** — the once-per-release step that tags the
+  promoted commit and bumps the version. It is deliberately absent from the
+  store `promote` subcommands (see above) and does not yet exist anywhere here,
+  so for now it stays in the consuming project's own scripts.
 
 ## Development
 
 Each package is independent: `dart pub get`, `dart format`, `dart analyze
---fatal-infos`, `dart test`. CI runs all four as a matrix. Lint rules live in
+--fatal-infos`, `dart test`. CI runs all five as a matrix. Lint rules live in
 the root `analysis_options.yaml`, which every package includes;
 `package:lints` rather than `package:flutter_lints`, because none of this
 depends on Flutter.
 
 `cux_ship_play` has no tests — its logic moved into `cux_ship_notes`, and what
 is left is API calls.
+
+The store packages are libraries, not executables. Each exposes a command enum,
+a parser builder and a run function; `cux_ship/lib/runner.dart` wires them into
+the tree. So `--bundle-id` is described once, in the package that reads it,
+rather than restated by whatever presents it.
 
 ## Licence
 
