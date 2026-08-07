@@ -1,0 +1,31 @@
+name: cux_ship_verify
+description: >-
+  Checks a consuming repository's release inputs — its CHANGELOG.md and its App
+  Store metadata tree — against the limits both stores enforce only after an
+  upload. Meant to be called from the consumer's own test suite.
+publish_to: 'none'
+version: 1.0.0
+
+# The one package here that exists for the *consumer* rather than for
+# publishing. The checks it holds used to be test cases inside cux_ship_notes
+# and cux_ship_appstore, reading ../../CHANGELOG.md and ../../store/appstore —
+# which worked only while those packages lived inside the app that owned those
+# files. Extracting the packages broke that, and the fix is not to delete the
+# guards: the comments on them argue, correctly, that a guard which only ever
+# sees fixtures is worth nothing.
+#
+# So the logic lives here and the data stays in the consumer. A consumer writes
+# a handful of test cases that call these functions against its own files, and
+# gets the same coverage without vendoring a copy of anything.
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  cux_ship_appstore:
+    path: ../cux_ship_appstore
+  cux_ship_notes:
+    path: ../cux_ship_notes
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.25.0

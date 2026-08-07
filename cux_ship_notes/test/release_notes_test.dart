@@ -2,8 +2,6 @@
 // page, and several of them are invisible when they misfire: a swallowed
 // continuation line, a prefix that was not stripped, a fallback that reached
 // too far back. Each one is pinned here.
-import 'dart:io';
-
 import 'package:cux_ship_notes/release_notes.dart';
 import 'package:test/test.dart';
 
@@ -186,42 +184,13 @@ void main() {
   });
 
   // Both stores enforce their cap *after* the artifact has been uploaded, which
-  // is far too late and is why the limits exist here at all. Every section of
-  // the real changelog is checked against both, so an over-long entry is caught
-  // by CI when it is written rather than by a store when it is published.
-  group('the real CHANGELOG.md', () {
-    final markdown = File('../../CHANGELOG.md').readAsStringSync();
-    final versions = RegExp(
-      r'^##\s+\[?(\d[^\]\s]*)\]?',
-      multiLine: true,
-    ).allMatches(markdown).map((m) => m.group(1)!).toList();
-
-    test('has at least one version section', () {
-      expect(versions, isNotEmpty);
-    });
-
-    for (final limit in const {
-      'android': playReleaseNotesLimit,
-      'ios': appStoreReleaseNotesLimit,
-      'macos': appStoreReleaseNotesLimit,
-    }.entries) {
-      test('fits ${limit.key}\'s ${limit.value}-character limit', () {
-        for (final version in versions) {
-          final notes = changelogNotes(markdown, version, platform: limit.key);
-          expect(
-            notes,
-            isA<NotesText>(),
-            reason: '$version has no section, which build.sh also refuses',
-          );
-          expect(
-            (notes as NotesText).text.length,
-            lessThanOrEqualTo(limit.value),
-            reason:
-                '$version filtered to ${limit.key} is too long to publish; '
-                'shorten it in CHANGELOG.md',
-          );
-        }
-      });
-    }
-  });
+  // is far too late and is why the limits exist here at all. Every section of a
+  // real changelog is still checked against both — but not from here.
+  //
+  // That check read '../../CHANGELOG.md', which resolved only while this
+  // package sat inside the app whose changelog it was. It now lives in
+  // cux_ship_verify as checkChangelog(), and each consuming repository calls it
+  // against its own CHANGELOG.md from its own suite, so an over-long entry is
+  // still caught by CI when it is written rather than by a store when it is
+  // published.
 }
