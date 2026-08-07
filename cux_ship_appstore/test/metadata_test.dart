@@ -5,7 +5,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:asc_upload/metadata.dart';
+import 'package:cux_ship_appstore/metadata.dart';
 import 'package:test/test.dart';
 
 /// A PNG header good enough for [readImageInfo]: signature, a complete IHDR,

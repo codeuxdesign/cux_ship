@@ -6,7 +6,7 @@
 // transparency, where dropping it would reveal whatever RGB sits underneath.
 import 'dart:typed_data';
 
-import 'package:asc_upload/flatten.dart';
+import 'package:cux_ship_appstore/flatten.dart';
 import 'package:image/image.dart' as img;
 import 'package:test/test.dart';
 

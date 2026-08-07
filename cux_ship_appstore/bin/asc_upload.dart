@@ -43,11 +43,11 @@
 import 'dart:io';
 
 import 'package:args/args.dart';
-import 'package:asc_upload/app_store.dart';
-import 'package:asc_upload/asc_client.dart';
-import 'package:asc_upload/metadata.dart';
-import 'package:asc_upload/testflight_notes.dart';
-import 'package:release_notes/release_notes.dart';
+import 'package:cux_ship_appstore/app_store.dart';
+import 'package:cux_ship_appstore/asc_client.dart';
+import 'package:cux_ship_appstore/metadata.dart';
+import 'package:cux_ship_appstore/testflight_notes.dart';
+import 'package:cux_ship_notes/release_notes.dart';
 
 Never _fail(String message) {
   stderr.writeln('asc_upload: $message');

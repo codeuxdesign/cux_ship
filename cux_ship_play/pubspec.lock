@@ -41,6 +41,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.0.7"
+  cux_ship_notes:
+    dependency: "direct main"
+    description:
+      path: "../cux_ship_notes"
+      relative: true
+    source: path
+    version: "1.0.0"
   google_cloud:
     dependency: transitive
     description:
@@ -113,13 +120,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.9.1"
-  release_notes:
-    dependency: "direct main"
-    description:
-      path: "../release_notes"
-      relative: true
-    source: path
-    version: "1.0.0"
   source_span:
     dependency: transitive
     description:

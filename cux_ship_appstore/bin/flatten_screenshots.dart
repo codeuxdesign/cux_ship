@@ -15,7 +15,7 @@
 // capture time and the uploader's check stays strict.
 import 'dart:io';
 
-import 'package:asc_upload/flatten.dart';
+import 'package:cux_ship_appstore/flatten.dart';
 
 /// Exit code when --check finds work to do, so CI can gate on it.
 const _needsFlatteningExit = 2;

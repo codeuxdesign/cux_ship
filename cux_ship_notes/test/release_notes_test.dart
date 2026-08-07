@@ -4,7 +4,7 @@
 // too far back. Each one is pinned here.
 import 'dart:io';
 
-import 'package:release_notes/release_notes.dart';
+import 'package:cux_ship_notes/release_notes.dart';
 import 'package:test/test.dart';
 
 /// Shaped like the real CHANGELOG.md: prose headings first, then versions

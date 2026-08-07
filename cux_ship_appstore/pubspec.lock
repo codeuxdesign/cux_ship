@@ -97,6 +97,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.0.7"
+  cux_ship_notes:
+    dependency: "direct main"
+    description:
+      path: "../cux_ship_notes"
+      relative: true
+    source: path
+    version: "1.0.0"
   dart_jsonwebtoken:
     dependency: "direct main"
     description:
@@ -281,13 +288,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.2.0"
-  release_notes:
-    dependency: "direct main"
-    description:
-      path: "../release_notes"
-      relative: true
-    source: path
-    version: "1.0.0"
   shelf:
     dependency: transitive
     description:

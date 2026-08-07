@@ -1,4 +1,4 @@
-name: release_notes
+name: cux_ship_notes
 description: >-
   Turns CHANGELOG.md into the release notes a store shows. Shared by
   tool/play_upload and tool/asc_upload; not part of the app.

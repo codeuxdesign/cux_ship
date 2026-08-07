@@ -1,4 +1,4 @@
-name: asc_upload
+name: cux_ship_appstore
 description: >-
   Publishes a signed .ipa and the App Store listing through the App Store
   Connect API. Invoked by tool/upload.sh and tool/promote.sh; not part of the app.
@@ -22,6 +22,8 @@ dependencies:
   # MD5, which App Store Connect requires as the sourceFileChecksum when
   # committing an uploaded screenshot. Not a security choice — Apple picked it.
   crypto: ^3.0.0
+  cux_ship_notes:
+    path: ../cux_ship_notes
   # ES256 over the .p8 private key. App Store Connect accepts nothing else, and
   # package:crypto has no ECDSA, so this or pointycastle-by-hand were the
   # options.
@@ -37,8 +39,6 @@ dependencies:
   # It stays out of the app's dependency graph for the same reason googleapis
   # does — this is its own package.
   image: ^4.2.0
-  release_notes:
-    path: ../release_notes
 
 dev_dependencies:
   lints: ^6.0.0
