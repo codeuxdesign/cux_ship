@@ -35,10 +35,17 @@ class ProjectContext {
 
   /// Reads what it can from [directory], defaulting to the working directory.
   ///
+  /// Defaults to the *repository* root, not the working directory. A consumer
+  /// runs this from the package that pins it — `tool/cux_ship` — so a
+  /// working-directory default finds nothing at all, and quietly turns every
+  /// inferred value back into a required flag. Falls back to the working
+  /// directory outside a git repository, where there is nothing better to
+  /// guess.
+  ///
   /// Absent files are not an error: a project with no iOS target simply has no
   /// [iosBundleId], and only a command that needs one will complain.
   factory ProjectContext.read([String? directory]) {
-    final root = Directory(directory ?? Directory.current.path);
+    final root = Directory(directory ?? _repositoryRoot());
     String? text(String relative) {
       final file = File('${root.path}/$relative');
       return file.existsSync() ? file.readAsStringSync() : null;
@@ -138,4 +145,18 @@ class ProjectContext {
 
   static String? _firstGroup(String? text, RegExp pattern) =>
       text == null ? null : pattern.firstMatch(text)?.group(1);
+
+  /// The git toplevel above the working directory, or the working directory
+  /// when there is no repository above it.
+  static String _repositoryRoot() {
+    final result = Process.runSync('git', [
+      'rev-parse',
+      '--show-toplevel',
+    ], workingDirectory: Directory.current.path);
+    if (result.exitCode != 0) {
+      return Directory.current.path;
+    }
+    final path = (result.stdout as String).trim();
+    return path.isEmpty ? Directory.current.path : path;
+  }
 }
