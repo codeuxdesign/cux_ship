@@ -111,7 +111,7 @@ dependencies:
     git:
       url: https://github.com/codeuxdesign/cux_ship.git
       path: cux_ship
-      ref: v1.1.0
+      ref: v1.2.2
 ```
 
 Everything else arrives transitively. That is not only tidiness: pub treats a
