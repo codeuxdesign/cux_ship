@@ -1,22 +1,21 @@
 name: cux_ship_play
 description: >-
-  Uploads a signed .aab to a Google Play track. Invoked by tool/upload.sh; not
-  part of the app.
+  Uploads a signed .aab to a Google Play track. Driven by a consuming project's
+  release scripts; it is a tool, not a library an application links against.
 publish_to: 'none'
 version: 1.0.0
 
-# Its own package rather than a script under tool/ in the app. googleapis is a
-# very large generated package covering every Google API, and there is no reason
-# for it to appear in the app's lockfile or its dependency graph. Keeping it
-# separate also means this directory can be copied to another project whole.
+# Its own package rather than a script inside the app it releases. googleapis is
+# a very large generated package covering every Google API, and there is no
+# reason for it to appear in that app's lockfile or its dependency graph.
 environment:
   sdk: ^3.12.2
 
 dependencies:
   args: ^2.4.0
   # The changelog parser, which used to live here as lib/changelog.dart. Moved
-  # out when tool/asc_upload appeared and needed the same rules with a different
-  # platform — the alternative was the App Store uploader depending on the Play
+  # out when the App Store uploader appeared and needed the same rules with a
+  # different platform — the alternative was that uploader depending on this
   # one, which is not a relationship either of them has.
   cux_ship_notes:
     path: ../cux_ship_notes

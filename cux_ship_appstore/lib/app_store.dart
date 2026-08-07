@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // What the App Store Connect API can be asked to do, expressed once.
 //
 // Sits between lib/asc_client.dart, which knows about JWTs and JSON:API but
@@ -674,7 +676,7 @@ class AppStore {
 
   /// Replaces one display type's screenshots with the files in [files].
   ///
-  /// Replaces rather than adds, for the same reason tool/play_upload clears an
+  /// Replaces rather than adds, for the same reason cux_ship_play clears an
   /// image type before re-uploading it: reserving a screenshot *appends*, so
   /// without this every release would leave the listing carrying another copy
   /// of the same images, and the repository would stop being the source of

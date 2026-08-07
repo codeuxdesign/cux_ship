@@ -1,6 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Uploads a signed .aab, a store listing, or both, to Google Play.
 //
-//   dart run play_upload --aab dist/android/x.aab --package design.codeux.holdthewheel \
+//   dart run cux_ship_play:play_upload --aab dist/android/x.aab --package design.codeux.holdthewheel \
 //     --build-number 12 --version-name 1.0.0 --track internal [--dry-run]
 //
 // Invoked by tool/upload.sh, which has already checked the manifest, the
@@ -18,7 +20,7 @@
 // release and the listing that describes it go live together or not at all.
 // Every argument is independent, so listing-only pushes need no artifact:
 //
-//   dart run play_upload --package design.codeux.holdthewheel \
+//   dart run cux_ship_play:play_upload --package design.codeux.holdthewheel \
 //     --metadata ../../store/play --dry-run
 //
 // --promote-from is how a wider track is reached, and builds nothing: it points
@@ -27,14 +29,14 @@
 // come from the changelog section for whatever version that build turned out to
 // be. tool/promote.sh drives it.
 //
-//   dart run play_upload --package design.codeux.holdthewheel \
+//   dart run cux_ship_play:play_upload --package design.codeux.holdthewheel \
 //     --promote-from internal --track production --changelog ../../CHANGELOG.md
 //
 // --list-tracks is the read side, and the only way to confirm a publish
 // independently of the run that claims to have done it. It needs nothing but
 // --package, and touches none of the above:
 //
-//   dart run play_upload --list-tracks --package design.codeux.holdthewheel
+//   dart run cux_ship_play:play_upload --list-tracks --package design.codeux.holdthewheel
 //
 // What is *not* here is everything Play has no API for: the privacy policy URL,
 // the IARC content rating questionnaire, the app category, target audience, and

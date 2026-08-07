@@ -1,8 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Turns CHANGELOG.md into the release notes a store shows.
 //
 // Its own package rather than a file inside one of the uploaders, because both
 // of them need it and neither should depend on the other. That was anticipated
-// where this code used to live, in tool/play_upload/lib/changelog.dart: "an iOS
+// where this code used to live, in cux_ship_play/lib/changelog.dart: "an iOS
 // uploader will want the same parser with a different platform, which is why
 // the platform is an argument here and a constant at the call site."
 //

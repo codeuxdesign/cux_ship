@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Re-encodes a PNG without its alpha channel.
 //
 // In lib/ rather than beside the CLI because it decides something: whether an

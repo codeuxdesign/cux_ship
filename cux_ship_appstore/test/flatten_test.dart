@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Flattening is the one thing in this package that rewrites a file the
 // repository commits, so getting it wrong ships a corrupted screenshot that
 // nobody notices until it is on a store page. The distinction that matters is

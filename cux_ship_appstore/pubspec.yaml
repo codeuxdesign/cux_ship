@@ -1,13 +1,14 @@
 name: cux_ship_appstore
 description: >-
   Publishes a signed .ipa and the App Store listing through the App Store
-  Connect API. Invoked by tool/upload.sh and tool/promote.sh; not part of the app.
+  Connect API. Driven by a consuming project's release scripts; it is a tool,
+  not a library an application links against.
 publish_to: 'none'
 version: 1.0.0
 
-# Its own package, on the same reasoning as tool/play_upload: nothing here
-# belongs in the app's dependency graph, and the directory can be copied to
-# another project whole.
+# Its own package, on the same reasoning as cux_ship_play: nothing here belongs
+# in a consuming app's dependency graph, and depending on it as a git dependency
+# costs that app nothing but this package's own dependencies.
 #
 # Unlike the Play side there is no generated client to lean on — Apple publishes
 # no Dart library and no discovery document — so this talks to the REST API

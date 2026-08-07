@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Makes CHANGELOG.md's release notes acceptable to TestFlight.
 //
 // CHANGELOG.md is deliberately emoji-heavy — "Emoji are welcome and

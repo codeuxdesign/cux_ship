@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // The App Store Connect REST API, and nothing above it.
 //
 // Apple publishes no Dart client and no discovery document, so this is written
@@ -10,7 +12,7 @@
 //     and `detail` is routinely the only field that says anything useful — the
 //     HTTP status is almost always 409 or 422 regardless of cause. So the whole
 //     array is surfaced verbatim rather than summarised, the same decision
-//     tool/play_upload made when it went direct to get Play's rejection text.
+//     cux_ship_play made when it went direct to get Play's rejection text.
 //   - There is no edit transaction. Play's uploader can build a whole release
 //     and discard it; here every write lands the moment it is made. That is why
 //     callers validate everything they can offline first, and why --dry-run

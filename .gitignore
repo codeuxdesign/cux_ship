@@ -1,0 +1,9 @@
+# Resolved by `pub get` and never worth committing.
+.dart_tool/
+
+# pubspec.lock IS committed here, deliberately. These are applications rather
+# than libraries — every package is run, none is depended on from pub.dev — so
+# a lockfile is the record of what a release was actually built with. It is the
+# same convention the packages had before extraction.
+
+.DS_Store

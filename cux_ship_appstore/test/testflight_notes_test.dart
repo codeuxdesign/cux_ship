@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // TestFlight refuses emoji in "What to Test" and CHANGELOG.md is full of them
 // by design, so this runs on every iOS build. It has to remove exactly the
 // characters Apple objects to and nothing else — over-stripping would quietly

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Everything here runs with no credentials and no network, which is the
 // property that makes `asc_upload --metadata --dry-run` usable as an offline
 // lint. Each case below is a rejection Apple would otherwise deliver *after*

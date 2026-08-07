@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push supersedes the run in flight for the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # A matrix over every package here. Adding a package means adding it to this
+  # list — that is the whole wiring, and there is no second place to remember.
+  package:
+    name: ${{ matrix.package }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [cux_ship_notes, cux_ship_play, cux_ship_appstore, cux_ship_verify]
+    defaults:
+      run:
+        working-directory: ${{ matrix.package }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dart-lang/setup-dart@v1
+      - run: dart pub get
+      - run: dart format --output=none --set-exit-if-changed .
+      - run: dart analyze --fatal-infos
+
+      # Conditional because cux_ship_play has no test/ directory: its logic
+      # moved to cux_ship_notes, and what is left is API calls. The condition is
+      # on the directory existing rather than on a list of package names, so a
+      # suite added to any of them runs from the moment it is written and cannot
+      # be silently skipped.
+      - name: Test
+        if: hashFiles(format('{0}/test/**', matrix.package)) != ''
+        run: dart test --reporter expanded
+
+  # The check a consumer actually depends on: that this repository can be
+  # resolved as a git dependency, from a clean checkout, with no credentials.
+  # It is public precisely so that this needs no token.
+  #
+  # Worth its own job because the failure it catches is invisible locally —
+  # everything resolves on a machine where the sibling directories already
+  # exist, and breaks only for someone cloning fresh.
+  consume:
+    name: Resolve as a git dependency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dart-lang/setup-dart@v1
+
+      # Deliberately resolves against the commit under test rather than a tag,
+      # so a change that would break consumers fails here rather than after it
+      # has been tagged.
+      - name: Build a throwaway consumer
+        run: |
+          mkdir -p /tmp/consumer
+          cd /tmp/consumer
+          cat > pubspec.yaml <<EOF
+          name: consumer_probe
+          publish_to: 'none'
+          environment:
+            sdk: ^3.12.2
+          dependencies:
+            cux_ship_appstore:
+              git:
+                url: https://github.com/${{ github.repository }}.git
+                path: cux_ship_appstore
+                ref: ${{ github.sha }}
+            cux_ship_play:
+              git:
+                url: https://github.com/${{ github.repository }}.git
+                path: cux_ship_play
+                ref: ${{ github.sha }}
+            cux_ship_verify:
+              git:
+                url: https://github.com/${{ github.repository }}.git
+                path: cux_ship_verify
+                ref: ${{ github.sha }}
+          EOF
+          dart pub get
+
+      # The relative path: dependency between the packages is the mechanism the
+      # whole arrangement rests on. Confirm it resolved rather than assuming it.
+      - name: Confirm cux_ship_notes resolved transitively
+        run: |
+          cd /tmp/consumer
+          grep -q 'cux_ship_notes' pubspec.lock \
+            || { echo 'cux_ship_notes did not resolve transitively'; exit 1; }
+
+      - name: Confirm the executables run without credentials
+        run: |
+          cd /tmp/consumer
+          dart run cux_ship_appstore:asc_upload --help
+          dart run cux_ship_appstore:flatten_screenshots --help
+          dart run cux_ship_play:play_upload --help

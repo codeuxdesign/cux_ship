@@ -1,7 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Removes the alpha channel from store screenshots, in place.
 //
-//   dart run bin/flatten_screenshots.dart ../../store/appstore/listings
-//   dart run bin/flatten_screenshots.dart --check ../../store/appstore/listings
+//   dart run cux_ship_appstore:flatten_screenshots ../../store/appstore/listings
+//   dart run cux_ship_appstore:flatten_screenshots --check ../../store/appstore/listings
 //
 // Driven by tool/flatten-screenshots.sh, which is the command to run.
 //
@@ -9,7 +11,7 @@
 // file is the file walking and the writing. Run it after capturing screenshots
 // and before committing them.
 //
-// Deliberately a separate step from publishing: tool/asc_upload *refuses* an
+// Deliberately a separate step from publishing: cux_ship_appstore *refuses* an
 // alpha channel rather than stripping one, because the bytes Apple receives
 // have to be the bytes committed in the repository. So the fix belongs at
 // capture time and the uploader's check stays strict.

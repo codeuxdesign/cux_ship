@@ -1,7 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Loads and fully validates the store/appstore/ tree, with no network access
 // and no credentials in scope.
 //
-// That property is the point, and it is the same one tool/play_upload has: a
+// That property is the point, and it is the same one cux_ship_play has: a
 // 4001-character description costs nothing to catch here and a full upload to
 // catch at the store, so `--metadata --dry-run` is usable as an offline lint
 // that anybody can run on a laptop with no secrets at all.
@@ -496,7 +498,7 @@ int _be32(List<int> bytes, int offset) =>
 /// Dimensions and transparency of a PNG or JPEG, or null if [bytes] is neither.
 ///
 /// Hand-rolled rather than a dependency, on the same reasoning as the copy in
-/// tool/play_upload: this reads a handful of integers out of a header, and
+/// cux_ship_play: this reads a handful of integers out of a header, and
 /// `package:image` is a decoder for a dozen formats. The check it enables is
 /// worth having because Apple validates screenshots at submission — after they
 /// have already been uploaded one at a time.

@@ -1,6 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Publishes a signed .ipa, the App Store listing, or both, to App Store Connect.
 //
-//   dart run asc_upload --ipa dist/ios/x.ipa --bundle-id design.codeux.holdthewheel \
+//   dart run cux_ship_appstore:asc_upload --ipa dist/ios/x.ipa --bundle-id design.codeux.holdthewheel \
 //     --build-number 12 --version-name 1.0.0 [--dry-run]
 //
 // Invoked by tool/upload.sh, which has already checked the manifest, the
@@ -8,7 +10,7 @@
 // nothing else — everything it needs arrives as an argument or, for the API
 // key, as an environment variable. It knows nothing about SOPS or manifests.
 //
-// The Apple counterpart of tool/play_upload, and deliberately shaped like it,
+// The Apple counterpart of cux_ship_play, and deliberately shaped like it,
 // with one difference that is not cosmetic: **App Store Connect has no edit
 // transaction.** Play's uploader opens an edit, builds a whole release inside
 // it, and commits or discards it atomically. Here every write lands the moment
@@ -25,7 +27,7 @@
 // store/appstore/README.md. Every argument is independent, so a listing-only
 // push needs no artifact:
 //
-//   dart run asc_upload --bundle-id design.codeux.holdthewheel \
+//   dart run cux_ship_appstore:asc_upload --bundle-id design.codeux.holdthewheel \
 //     --metadata ../../store/appstore --dry-run
 //
 // --promote is how the App Store is reached, and builds nothing: it points an
@@ -222,7 +224,7 @@ Future<void> main(List<String> argv) async {
   // Read and validated before the credentials are even loaded. Everything that
   // can fail locally fails with no network access at all, which is what makes
   // `--metadata --dry-run` usable as an offline lint on a laptop with no
-  // secrets — the same property tool/play_upload has.
+  // secrets — the same property cux_ship_play has.
   AppStoreMetadata? metadata;
   if (metadataPath != null) {
     try {

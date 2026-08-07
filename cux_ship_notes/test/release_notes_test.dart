@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // The rules in lib/release_notes.dart decide what a stranger reads on a store
 // page, and several of them are invisible when they misfire: a swallowed
 // continuation line, a prefix that was not stripped, a fallback that reached
