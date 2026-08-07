@@ -27,6 +27,7 @@ import 'package:cux_ship_verify/cux_ship_verify.dart';
 
 import 'src/confirm.dart';
 import 'src/project.dart';
+import 'src/release.dart';
 
 /// Builds the whole command tree.
 CommandRunner<void> buildRunner() {
@@ -53,6 +54,7 @@ CommandRunner<void> buildRunner() {
   return runner
     ..addCommand(_AppstoreCommand())
     ..addCommand(_PlayCommand())
+    ..addCommand(_ReleaseCommand())
     ..addCommand(_ScreenshotsCommand())
     ..addCommand(VerifyCommand());
 }
@@ -180,6 +182,134 @@ class _PlaySubcommand extends Command<void> {
       ),
       confirm: (summary) => confirmOrExit(summary, assumeYes: _assumeYes(this)),
     );
+  }
+}
+
+// ----------------------------------------------------------------- release
+
+class _ReleaseCommand extends Command<void> {
+  _ReleaseCommand() {
+    addSubcommand(_FinishCommand());
+  }
+
+  @override
+  String get name => 'release';
+
+  @override
+  String get description =>
+      'Repository-side steps that belong to a release rather than to a store.';
+}
+
+class _FinishCommand extends Command<void> {
+  _FinishCommand() {
+    argParser
+      ..addOption(
+        'commit',
+        help:
+            'The commit that was released, and what gets tagged. Defaults to '
+            'HEAD.',
+      )
+      ..addOption(
+        'version',
+        help:
+            'The marketing version that was released. Defaults to the version '
+            "in the released commit's pubspec.yaml, which is the one the "
+            'stores were given.',
+      )
+      ..addOption(
+        'build-number',
+        help: 'Recorded in the tag message, so a tag names its build.',
+      )
+      ..addOption(
+        'destination',
+        defaultsTo: 'production',
+        help: 'Where it went, for the tag and commit messages.',
+      )
+      ..addOption(
+        'branch',
+        defaultsTo: 'main',
+        help: 'The branch the bump commit belongs on.',
+      )
+      ..addFlag('tag', defaultsTo: true, help: 'Tag the released commit.')
+      ..addFlag(
+        'bump',
+        defaultsTo: true,
+        help: 'Move the branch to the next patch version.',
+      )
+      ..addFlag(
+        'push',
+        defaultsTo: true,
+        help: 'Push the tag and the bump, when there is an origin.',
+      )
+      ..addFlag(
+        'dry-run',
+        negatable: false,
+        help: 'Say what would happen. Writes nothing and commits nothing.',
+      );
+  }
+
+  @override
+  String get name => 'finish';
+
+  @override
+  String get description =>
+      'Tag the released commit and move the branch to the next patch version. '
+      'Run once per release, after every store has been promoted — not once '
+      'per store.';
+
+  @override
+  void run() {
+    final args = argResults!;
+
+    try {
+      // The repository root, not the working directory. `dart run cux_ship` is
+      // usually invoked from the consumer package that pins it — tool/cux_ship
+      // — and pubspec.yaml and CHANGELOG.md belong to the repository, not to
+      // whichever subdirectory the command was started in.
+      final top = Process.runSync('git', [
+        'rev-parse',
+        '--show-toplevel',
+      ], workingDirectory: Directory.current.path);
+      if (top.exitCode != 0) {
+        throw ReleaseException(
+          'not inside a git repository: ${Directory.current.path}',
+        );
+      }
+      final git = Git((top.stdout as String).trim());
+
+      final commit = args.option('commit') ?? git.run(['rev-parse', 'HEAD']);
+
+      // Read off the released commit rather than the working tree: the tree
+      // may already have moved on, and the version that was published is a
+      // property of what was published.
+      final version =
+          args.option('version') ??
+          pubspecVersion(git.run(['show', '$commit:pubspec.yaml'])) ??
+          (throw ReleaseException(
+            'no version in pubspec.yaml at $commit — pass --version',
+          ));
+
+      final log = finishRelease(
+        git,
+        FinishOptions(
+          commit: commit,
+          version: version,
+          buildNumber: args.option('build-number'),
+          destination: args.option('destination')!,
+          branch: args.option('branch')!,
+          tag: args.flag('tag'),
+          bump: args.flag('bump'),
+          push: args.flag('push'),
+          dryRun: args.flag('dry-run'),
+        ),
+      );
+      for (final line in log) {
+        stdout.writeln('==> $line');
+      }
+    } on ReleaseException catch (e) {
+      stderr.writeln('cux_ship release finish: ${e.message}');
+      exitCode = 1;
+    }
   }
 }
 

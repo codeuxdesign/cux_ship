@@ -98,6 +98,7 @@ jobs:
           for c in upload promote tracks listing version-code; do
             dart run cux_ship play "$c" --help > /dev/null
           done
+          dart run cux_ship release finish --help > /dev/null
           dart run cux_ship screenshots flatten --help > /dev/null
           dart run cux_ship verify --help > /dev/null
 

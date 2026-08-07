@@ -21,9 +21,9 @@ why a line exists.
 ## The command
 
 ```
-cux_ship appstore upload            play upload            screenshots flatten
-         appstore promote           play promote           verify
-         appstore builds            play tracks
+cux_ship appstore upload            play upload            release finish
+         appstore promote           play promote           screenshots flatten
+         appstore builds            play tracks            verify
          appstore versions          play listing
          appstore screenshot-types  play version-code
          appstore build-number
@@ -60,14 +60,40 @@ step fails loudly instead of releasing on a default. `--dry-run` never asks —
 it writes nothing, and a prompt there would only teach the habit of answering
 yes.
 
-### What promote deliberately does not do
+### promote is per-store; `release finish` is per-release
 
-It changes no version and touches no git. A build number belongs to a commit;
-both stores promote that *same* build; so the version they publish is the same
-one — which only holds if promotion cannot move it. Tagging and bumping is a
-once-per-release step for whatever drives this, not something each store's
-promote repeats. Otherwise shipping one release to two stores bumps twice, and
-the two stores end up disagreeing about what version they carry.
+`appstore promote` and `play promote` change no version and touch no git. A
+build number belongs to a commit; both stores promote that *same* build; so the
+version they publish is the same one — which only holds if promotion cannot
+move it.
+
+The repository-side half is its own command, run after every store has been
+promoted:
+
+```bash
+cux_ship release finish --build-number 41
+```
+
+It tags the released commit and moves the branch to the next patch version,
+with an empty changelog section for it. That second part is not a convenience:
+a released version is public, so every later build would otherwise claim a name
+that is already in front of users, and a release build should refuse in that
+state — meaning a release would quietly break the next push. Doing it here
+means that state never exists.
+
+Always a patch bump, because it is the only choice that cannot be wrong before
+the work exists. Calling it a 1.1.0 instead is an ordinary commit afterwards.
+
+Everything about it is idempotent — an existing tag is left alone, and a branch
+already past the released version is not bumped — because a release is exactly
+the situation where something fails half way and gets run again.
+
+```
+--commit       what to tag; defaults to HEAD
+--version      what was released; defaults to that commit's pubspec.yaml
+--branch       where the bump belongs; defaults to main
+--no-tag / --no-bump / --no-push / --dry-run
+```
 
 ## Consuming it
 
@@ -187,10 +213,12 @@ one committed and reviewed.
   Connect API. Screenshots are handled; videos are not. They use the same
   three-step reservation/upload/commit flow as a screenshot asset, so the shape
   is already here, but nothing has been written or tested.
-- **`cux_ship release finish`** — the once-per-release step that tags the
-  promoted commit and bumps the version. It is deliberately absent from the
-  store `promote` subcommands (see above) and does not yet exist anywhere here,
-  so for now it stays in the consuming project's own scripts.
+- **Resolving a build number to a commit.** `release finish` takes `--commit`
+  (defaulting to HEAD) rather than working out which commit carries a given
+  store build number, because how a project allocates build numbers is its own
+  business — Hold the Wheel uses `git-buildnumber` and a notes ref. A project
+  that wants `--build-number 41` to find its own commit has to resolve it and
+  pass `--commit`.
 
 ## Development
 
