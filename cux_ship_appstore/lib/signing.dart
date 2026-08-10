@@ -82,6 +82,14 @@ class SigningAudit {
     return byType;
   }
 
+  /// How many distribution certificates the API admits to.
+  ///
+  /// A floor, not a total. `/v1/certificates` returns only certificates
+  /// created from a CSR; the ones Xcode mints itself — the portal shows them
+  /// with a "Managed" suffix — are absent, and asking for them by type is
+  /// refused rather than empty (`DISTRIBUTION_MANAGED` is a 400). So the
+  /// distance to the cap cannot be worked out from here, and anything printed
+  /// from this has to say so.
   int get distributionCertificateCount =>
       certificatesByType['DISTRIBUTION']?.length ?? 0;
 

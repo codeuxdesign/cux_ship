@@ -133,7 +133,9 @@ void _refusedNote(String what) {
 
 void _certificates(SigningAudit audit, {required bool refused}) {
   _heading(
-    'CERTIFICATES  — team wide, shared by every app, the only capped category',
+    'CERTIFICATES  — team wide, shared by every app, the only capped '
+        'category.\n                Xcode-managed ones are not listed; Apple '
+        'does not serve them.',
   );
   if (refused) {
     return _refusedNote('Certificates');
@@ -152,12 +154,16 @@ void _certificates(SigningAudit audit, {required bool refused}) {
 
   if (audit.distributionCapWorthWarningAbout) {
     stdout.writeln(
-      '\n  !! ${audit.distributionCertificateCount} distribution certificates. '
-      'The cap is small (2-3\n'
-      '     depending on who you ask) and it is team wide — if automatic\n'
-      '     signing tries to mint another, signing breaks for every app in\n'
-      '     the team. Supply the distribution certificate explicitly on CI so\n'
-      '     minting one is never its only option.',
+      '\n  !! ${audit.distributionCertificateCount} distribution certificates '
+      'visible here, usually\n'
+      '     capped around 2-3. The cap is team wide, so if automatic signing\n'
+      '     mints another, signing can break for every app in the team.\n'
+      '     Supply the distribution certificate explicitly on CI so minting\n'
+      '     one is never its only option.\n'
+      '\n'
+      '     That count is a floor, not a total: Apple does not return\n'
+      '     Xcode-managed certificates here and refuses to be asked for them,\n'
+      '     so only the portal shows how close the cap really is.',
     );
   }
 }
