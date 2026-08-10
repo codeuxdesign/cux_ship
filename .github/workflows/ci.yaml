@@ -56,6 +56,16 @@ jobs:
       # One dependency, exactly as a consumer declares it. Deliberately resolved
       # against the commit under test rather than a tag, so a change that would
       # break consumers fails here rather than after it has been tagged.
+      #
+      # On a pull request that commit is the branch head, not github.sha. The
+      # latter is the merge commit GitHub synthesises at refs/pull/N/merge,
+      # which is reachable by actions/checkout and by nothing else — a plain
+      # clone of the public url cannot see it, so pub resolves it to "fatal:
+      # bad object" and this job fails for every pull request regardless of its
+      # contents. Only ever green before because it had only ever run on push.
+      #
+      # This checks that the branch is consumable rather than that main will be
+      # after merging; the push run on main covers the latter.
       - name: Build a throwaway consumer
         run: |
           mkdir -p /tmp/consumer
@@ -70,7 +80,7 @@ jobs:
               git:
                 url: https://github.com/${{ github.repository }}.git
                 path: cux_ship
-                ref: ${{ github.sha }}
+                ref: ${{ github.event.pull_request.head.sha || github.sha }}
           EOF
           dart pub get
 
