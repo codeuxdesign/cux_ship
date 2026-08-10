@@ -27,6 +27,7 @@ cux_ship appstore upload            play upload            release finish
          appstore versions          play listing
          appstore screenshot-types  play version-code
          appstore build-number
+         appstore signing
 ```
 
 **Run it from a project root and it works out the rest.** The `applicationId`
@@ -95,6 +96,30 @@ the situation where something fails half way and gets run again.
 --no-tag / --no-bump / --no-push / --dry-run
 ```
 
+### `appstore signing` reads the account, not the app
+
+Automatic signing — `xcodebuild -allowProvisioningUpdates`, and Xcode whenever
+it signs a device build — registers App IDs, capabilities, app groups and
+profiles without mentioning it. That is mostly what you want, and it is the
+reason a project can drop match and its encrypted certificate repository
+entirely. The cost is that the account accumulates, silently, and the first
+sign of it is usually a registration refused with *"An App ID with Identifier …
+is not available"* — which means Xcode created that id months ago, often for a
+target since renamed.
+
+```bash
+cux_ship appstore signing
+```
+
+Certificates first, because they are the only capped category and the only one
+shared by every app in the team: exhaust the cap and nothing signs, for any
+app. Then App IDs, marking the ones Xcode registered (it names them
+`XC <dotted id>`) and separating this project's from the rest. Then profiles,
+with their state and expiry.
+
+It writes nothing, ever — no flag makes it destructive. Prune from the portal;
+anything automatic signing still needs, it recreates on the next build.
+
 ## Consuming it
 
 One dependency:
@@ -148,6 +173,19 @@ how they get there is the consuming project's business.
 Some error messages name the script that sets them in the project this came
 from (`tool/with-secrets.sh`). Read those as an example of the arrangement
 rather than a requirement.
+
+**One command needs a stronger key than the rest.** Uploading a build and
+editing a listing are App Store Connect operations, and an **App Manager** key
+does them. `appstore signing` reads certificates, identifiers and profiles,
+which are the developer *portal* — Apple gates that separately and only an
+**Admin** key reaches it. A key's role cannot be changed after it is created,
+so a team that wants both from one key has to create it as Admin.
+
+An App Manager key is not refused with anything that says so; it gets a 403
+naming nothing. `appstore signing` therefore fetches its three collections
+independently, reports whichever it could read, names the rest as refused, and
+only exits non-zero when all three were, which is a fact about the key rather
+than a finding about the account.
 
 ### Keeping the guards
 

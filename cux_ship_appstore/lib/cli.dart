@@ -54,6 +54,7 @@ import 'package:args/args.dart';
 import 'package:cux_ship_appstore/app_store.dart';
 import 'package:cux_ship_appstore/asc_client.dart';
 import 'package:cux_ship_appstore/metadata.dart';
+import 'package:cux_ship_appstore/signing_report.dart';
 import 'package:cux_ship_appstore/testflight_notes.dart';
 import 'package:cux_ship_notes/release_notes.dart';
 
@@ -71,7 +72,8 @@ enum AscCommand {
   builds('builds'),
   versions('versions'),
   screenshotTypes('screenshot-types'),
-  buildNumber('build-number');
+  buildNumber('build-number'),
+  signing('signing');
 
   const AscCommand(this.name);
 
@@ -84,6 +86,7 @@ enum AscCommand {
     AscCommand.versions,
     AscCommand.screenshotTypes,
     AscCommand.buildNumber,
+    AscCommand.signing,
   }.contains(this);
 }
 
@@ -171,6 +174,7 @@ ArgParser buildAscParser(AscCommand cmd) {
     case AscCommand.versions:
     case AscCommand.screenshotTypes:
     case AscCommand.buildNumber:
+    case AscCommand.signing:
       throw StateError('unreachable: handled by cmd.isRead above');
   }
 
@@ -401,6 +405,18 @@ Future<void> runAsc(
   }
 
   final client = AscClient(credentials);
+
+  // Account wide, so it returns before resolveApp: the audit is about the
+  // team's certificates and identifiers, and asking Apple to resolve an app
+  // would fail for a project that has no App Store record yet.
+  if (cmd == AscCommand.signing) {
+    final ok = await reportSigning(client, bundleId: bundleId);
+    if (!ok) {
+      exit(1);
+    }
+    return;
+  }
+
   final writer = Writer(client, dryRun: dryRun);
   final store = AppStore(client, writer, platform: platform);
 

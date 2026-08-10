@@ -106,6 +106,10 @@ class _AscSubcommand extends Command<void> {
           'published enum lags the console, so read rather than guess.',
     AscCommand.buildNumber =>
       'Print the newest processed build number and nothing else, for scripts.',
+    AscCommand.signing =>
+      'Print the certificates, App IDs and profiles the developer account '
+          'holds, so drift from automatic signing is visible. Reads only, and '
+          'needs an Admin key.',
   };
 
   @override
