@@ -82,6 +82,7 @@ class AscCredentials {
     required this.keyId,
     required this.privateKeyPem,
     this.issuerId,
+    this.keyFileName,
   });
 
   /// From the environment `tool/with-secrets.sh` sets up.
@@ -95,9 +96,9 @@ class AscCredentials {
     if (keyId == null || keyPath == null || keyId.isEmpty || keyPath.isEmpty) {
       return null;
     }
-    // Absent means an individual key. Empty means the same thing written by a
-    // shell that exported the variable without a value, which is a mistake
-    // worth treating identically rather than turning into a 401 later.
+    // Empty means the same thing as absent, written by a shell that exported
+    // the variable without a value — a mistake worth treating identically
+    // rather than turning into a 401 later.
     final issuerId = Platform.environment['APPLE_API_ISSUER_ID']?.trim();
     final file = File(keyPath);
     if (!file.existsSync()) {
@@ -109,15 +110,37 @@ class AscCredentials {
       keyId: keyId,
       issuerId: issuerId == null || issuerId.isEmpty ? null : issuerId,
       privateKeyPem: file.readAsStringSync(),
+      keyFileName: keyPath.split(Platform.pathSeparator).last,
     );
   }
 
   final String keyId;
 
-  /// Null for an individual key, which has none.
+  /// The team's issuer id.
+  ///
+  /// An individual key does not name it in its JWT, but `altool` requires it
+  /// regardless — so this may be set for either kind of key, and its presence
+  /// no longer decides which kind this is. See [isIndividual].
   final String? issuerId;
 
-  bool get isIndividual => issuerId == null;
+  /// Basename of the `.p8`, when it came from a file.
+  ///
+  /// Apple's own naming carries the distinction: `ApiKey_` for an individual
+  /// key, `AuthKey_` for a team key. `altool` relies on exactly this prefix.
+  final String? keyFileName;
+
+  /// Whether this is an individual (user-scoped) key rather than a team key.
+  ///
+  /// Decided by Apple's filename prefix when there is a filename, because an
+  /// individual key now legitimately carries an issuer id for `altool`'s sake.
+  /// Falls back to "no issuer means individual" for credentials built by hand.
+  bool get isIndividual {
+    final name = keyFileName;
+    if (name != null) {
+      return name.startsWith('ApiKey_');
+    }
+    return issuerId == null;
+  }
 
   /// The JWT claims Apple expects for this kind of key.
   ///
@@ -132,8 +155,8 @@ class AscCredentials {
   Map<String, dynamic> get tokenClaims {
     final issuer = issuerId;
     return <String, dynamic>{
-      if (issuer != null) ...{'iss': issuer},
-      if (issuer == null) ...{'sub': 'user'},
+      if (!isIndividual && issuer != null) ...{'iss': issuer},
+      if (isIndividual) ...{'sub': 'user'},
       'aud': 'appstoreconnect-v1',
     };
   }

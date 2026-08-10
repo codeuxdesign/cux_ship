@@ -1024,15 +1024,25 @@ Future<void> uploadPackage({
     versionName,
     '--apiKey',
     credentials.keyId,
-    // An individual key has no issuer to name, and altool wants the same
-    // `sub: user` claim the REST calls use — spelled --api-key-subject here.
-    // altool finds the .p8 itself, by key id, under ~/.appstoreconnect/
-    // private_keys and the other locations it documents; an individual key is
-    // the ApiKey_ prefixed file Apple hands out.
+    // altool is not the REST API and does not follow its rules. Its own help
+    // says "--api-issuer <id>  Issuer ID (required with --api-key)" — required
+    // for an individual key too, even though that key's REST JWT must not name
+    // an issuer. Omitting it fails with "Either JWT (--api-issuer and
+    // --api-key) or username and app password ... is required".
+    //
+    // --api-key-subject is the other half of the trap: altool documents it as
+    // "Set to 'user' when using non-ApiKey_ prefixed auth files", so it must
+    // NOT be passed for the ApiKey_ file Apple hands out for an individual
+    // key — altool reads that prefix itself.
+    //
+    // altool finds the .p8 by key id under ~/.appstoreconnect/private_keys and
+    // the other locations it documents.
     if (credentials.issuerId case final issuer?) ...[
       '--apiIssuer',
       issuer,
-    ] else ...[
+    ],
+    if (credentials.keyFileName case final name?
+        when !name.startsWith('ApiKey_')) ...[
       '--api-key-subject',
       'user',
     ],

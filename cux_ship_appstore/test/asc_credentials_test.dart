@@ -64,4 +64,37 @@ void main() {
       expect(_team().tokenClaims.containsKey('exp'), isFalse);
     });
   });
+
+  group('an individual key that also carries an issuer id', () {
+    // altool requires --api-issuer even for an individual key, so the issuer
+    // is now present for both kinds and cannot be what tells them apart.
+    // Apple's filename prefix does that instead.
+    AscCredentials individualWithIssuer() => AscCredentials(
+      keyId: 'ABC123',
+      issuerId: 'issuer-uuid',
+      privateKeyPem: _pem,
+      keyFileName: 'ApiKey_ABC123.p8',
+    );
+
+    test('is still individual, by its ApiKey_ prefix', () {
+      expect(individualWithIssuer().isIndividual, isTrue);
+    });
+
+    test('still says sub: user and never names an issuer', () {
+      final claims = individualWithIssuer().tokenClaims;
+      expect(claims['sub'], 'user');
+      expect(claims.containsKey('iss'), isFalse);
+    });
+
+    test('an AuthKey_ file with an issuer is a team key', () {
+      final team = AscCredentials(
+        keyId: 'ABC123',
+        issuerId: 'issuer-uuid',
+        privateKeyPem: _pem,
+        keyFileName: 'AuthKey_ABC123.p8',
+      );
+      expect(team.isIndividual, isFalse);
+      expect(team.tokenClaims['iss'], 'issuer-uuid');
+    });
+  });
 }
