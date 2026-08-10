@@ -39,6 +39,22 @@ Future<bool> reportSigning(
   String? bundleId,
   DateTime? now,
 }) async {
+  if (client.credentials.isIndividual) {
+    stderr.writeln(
+      'This is an individual API key, which cannot read the developer portal '
+      'at all —\n'
+      'certificates, identifiers and profiles are refused whatever role the '
+      'user has.\n'
+      'They are team resources and an individual key is scoped to apps.\n'
+      '\n'
+      'Use a team key with the Admin role for this command. An individual key '
+      'is the\n'
+      'right one for uploading, where scoping it to particular apps is the '
+      'whole point.',
+    );
+    return false;
+  }
+
   final certificates = await _fetch(client, '/v1/certificates', 'certificates');
   final bundleIds = await _fetch(client, '/v1/bundleIds', 'App IDs');
   final profiles = await _fetch(

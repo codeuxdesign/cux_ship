@@ -1024,8 +1024,18 @@ Future<void> uploadPackage({
     versionName,
     '--apiKey',
     credentials.keyId,
-    '--apiIssuer',
-    credentials.issuerId,
+    // An individual key has no issuer to name, and altool wants the same
+    // `sub: user` claim the REST calls use — spelled --api-key-subject here.
+    // altool finds the .p8 itself, by key id, under ~/.appstoreconnect/
+    // private_keys and the other locations it documents; an individual key is
+    // the ApiKey_ prefixed file Apple hands out.
+    if (credentials.issuerId case final issuer?) ...[
+      '--apiIssuer',
+      issuer,
+    ] else ...[
+      '--api-key-subject',
+      'user',
+    ],
   ];
 
   if (dryRun) {
