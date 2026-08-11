@@ -14,18 +14,25 @@ late Directory _root;
 late Git _git;
 
 /// A repository with one commit, a pubspec and a changelog.
-void repo({String version = '1.0.3+41'}) {
+///
+/// [appDir] puts the pubspec in a subdirectory, as a monorepo does. The
+/// changelog stays at the top either way — that is the arrangement, not an
+/// oversight.
+void repo({String version = '1.0.3+41', String appDir = ''}) {
   _git.run(['init', '-q', '-b', 'main']);
   _git.run(['config', 'user.email', 'test@example.com']);
   _git.run(['config', 'user.name', 'Test']);
-  write('pubspec.yaml', 'name: an_app\nversion: $version\n');
+  write(pubspecPathFor(appDir), 'name: an_app\nversion: $version\n');
   write('CHANGELOG.md', '# Changelog\n\n## 1.0.3\n\n- Something\n');
   _git.run(['add', '-A']);
   _git.run(['commit', '-q', '-m', 'first']);
 }
 
-void write(String name, String contents) =>
-    File('${_root.path}/$name').writeAsStringSync(contents);
+void write(String name, String contents) {
+  final file = File('${_root.path}/$name');
+  file.parent.createSync(recursive: true);
+  file.writeAsStringSync(contents);
+}
 
 String read(String name) => File('${_root.path}/$name').readAsStringSync();
 
@@ -306,6 +313,86 @@ void main() {
       expect(read('pubspec.yaml'), contains('version: 1.0.3+41'));
       expect(read('CHANGELOG.md'), isNot(contains('## 1.0.4')));
       expect(_git.run(['rev-parse', 'HEAD']), before);
+    });
+
+    test('an app in a subdirectory bumps there, and the changelog at the '
+        'top', () {
+      repo(appDir: 'app');
+      final head = _git.run(['rev-parse', 'HEAD']);
+
+      final log = finishRelease(
+        _git,
+        FinishOptions(
+          commit: head,
+          version: '1.0.3',
+          buildNumber: '41',
+          appDir: 'app',
+          push: false,
+        ),
+      );
+
+      expect(log, contains('bumped to 1.0.4'));
+      expect(read('app/pubspec.yaml'), contains('version: 1.0.4+41'));
+      expect(read('CHANGELOG.md'), contains('## 1.0.4'));
+
+      // The two paths go up in one commit, and it has to be the nested one:
+      // `git commit pubspec.yaml` in a monorepo does not match a file and git
+      // refuses, which is the loud half. The quiet half this guards is a
+      // commit that took only the changelog.
+      expect(_git.run(['status', '--porcelain']), isEmpty);
+      expect(
+        _git.run(['show', '--name-only', '--format=', 'HEAD']).split('\n'),
+        containsAll(['CHANGELOG.md', 'app/pubspec.yaml']),
+      );
+    });
+
+    test('a nested pubspec with uncommitted changes is refused', () {
+      // The dirty guard has to follow the path, or `git commit <paths>` sweeps
+      // an unrelated edit into the release commit.
+      repo(appDir: 'app');
+      write('app/pubspec.yaml', 'name: an_app\nversion: 1.0.3+41\n# edited\n');
+      expect(
+        () => finishRelease(
+          _git,
+          FinishOptions(
+            commit: _git.run(['rev-parse', 'HEAD']),
+            version: '1.0.3',
+            appDir: 'app',
+            push: false,
+          ),
+        ),
+        throwsA(
+          isA<ReleaseException>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains('app/pubspec.yaml'), contains('uncommitted')),
+          ),
+        ),
+      );
+    });
+
+    test('a wrong --app-dir names the path it looked for', () {
+      // The message is the whole diagnosis here: "no pubspec.yaml" would send
+      // somebody looking for a missing file rather than at the flag.
+      repo(appDir: 'app');
+      expect(
+        () => finishRelease(
+          _git,
+          FinishOptions(
+            commit: _git.run(['rev-parse', 'HEAD']),
+            version: '1.0.3',
+            appDir: 'apps',
+            push: false,
+          ),
+        ),
+        throwsA(
+          isA<ReleaseException>().having(
+            (e) => e.message,
+            'message',
+            contains('no apps/pubspec.yaml in'),
+          ),
+        ),
+      );
     });
 
     test('a dry run still reports a changelog that would fail', () {

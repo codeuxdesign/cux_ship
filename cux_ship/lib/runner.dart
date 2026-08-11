@@ -43,14 +43,27 @@ CommandRunner<void> buildRunner() {
         'Anything that becomes public asks first. Pass --yes to skip that, '
         'which is also required when there is no terminal.',
   );
-  runner.argParser.addFlag(
-    'yes',
-    abbr: 'y',
-    negatable: false,
-    help:
-        'Do not ask before publishing. Required in CI, where there is no '
-        'terminal to ask at.',
-  );
+  runner.argParser
+    ..addFlag(
+      'yes',
+      abbr: 'y',
+      negatable: false,
+      help:
+          'Do not ask before publishing. Required in CI, where there is no '
+          'terminal to ask at.',
+    )
+    ..addOption(
+      'app-dir',
+      help:
+          'Where the Flutter app lives when it is not the repository root — '
+          '"app" in a monorepo. pubspec.yaml, android/ and ios/ are read from '
+          'there; CHANGELOG.md and store/ stay at the repository root, because '
+          'a release describes what the repository shipped rather than what '
+          'one package did. This is a property of the repository rather than '
+          'of a command, so the usual home for it is app-dir in '
+          '.cux-ship.yaml; this flag and CUX_SHIP_APP_DIR override that, in '
+          'that order.',
+    );
   return runner
     ..addCommand(_AppstoreCommand())
     ..addCommand(_PlayCommand())
@@ -62,6 +75,33 @@ CommandRunner<void> buildRunner() {
 /// The `--yes` flag, read off the top-level results a subcommand can reach.
 bool _assumeYes(Command<void> command) =>
     command.globalResults?.flag('yes') ?? false;
+
+/// The `--app-dir` option, falling back to `CUX_SHIP_APP_DIR`.
+///
+/// The environment is what lets a wrapper script set it once rather than
+/// threading the flag through every invocation it makes. An empty value counts
+/// as unset, so `CUX_SHIP_APP_DIR=` in a shell means the same as not exporting
+/// it at all rather than naming a directory called "".
+String? _appDir(Command<void> command) {
+  final value =
+      command.globalResults?.option('app-dir') ??
+      Platform.environment['CUX_SHIP_APP_DIR'];
+  return (value == null || value.isEmpty) ? null : value;
+}
+
+/// The project, with `--app-dir` applied.
+///
+/// A bad value is a usage error rather than something to work around: inference
+/// failing quietly is exactly what the flag exists to prevent, so a directory
+/// that is missing or outside the repository has to stop the command instead of
+/// yielding a context in which nothing was found.
+ProjectContext _project(Command<void> command) {
+  try {
+    return ProjectContext.read(appDir: _appDir(command));
+  } on ProjectException catch (e) {
+    throw UsageException('--app-dir: ${e.message}', command.usage);
+  }
+}
 
 // --------------------------------------------------------------- app store
 
@@ -114,7 +154,7 @@ class _AscSubcommand extends Command<void> {
 
   @override
   Future<void> run() {
-    final project = ProjectContext.read();
+    final project = _project(this);
     final platform = argResults!.option('platform') ?? 'ios';
     return runAsc(
       cmd,
@@ -173,7 +213,7 @@ class _PlaySubcommand extends Command<void> {
 
   @override
   Future<void> run() {
-    final project = ProjectContext.read();
+    final project = _project(this);
     return runPlay(
       cmd,
       argResults!,
@@ -281,6 +321,15 @@ class _FinishCommand extends Command<void> {
       }
       final git = Git((top.stdout as String).trim());
 
+      // Resolved against the repository root, and repository-relative from
+      // here on: every use below is a git argument, and git takes none of them
+      // as an absolute path.
+      final appDir = ProjectContext.relativeAppDir(
+        git.root,
+        ProjectContext.effectiveAppDir(git.root, _appDir(this)),
+      );
+      final pubspecPath = pubspecPathFor(appDir);
+
       final commit = args.option('commit') ?? git.run(['rev-parse', 'HEAD']);
 
       // Read off the released commit rather than the working tree: the tree
@@ -288,9 +337,9 @@ class _FinishCommand extends Command<void> {
       // property of what was published.
       final version =
           args.option('version') ??
-          pubspecVersion(git.run(['show', '$commit:pubspec.yaml'])) ??
+          pubspecVersion(git.run(['show', '$commit:$pubspecPath'])) ??
           (throw ReleaseException(
-            'no version in pubspec.yaml at $commit — pass --version',
+            'no version in $pubspecPath at $commit — pass --version',
           ));
 
       final log = finishRelease(
@@ -299,6 +348,7 @@ class _FinishCommand extends Command<void> {
           commit: commit,
           version: version,
           buildNumber: args.option('build-number'),
+          appDir: appDir,
           destination: args.option('destination')!,
           branch: args.option('branch')!,
           tag: args.flag('tag'),
@@ -312,6 +362,12 @@ class _FinishCommand extends Command<void> {
       }
     } on ReleaseException catch (e) {
       stderr.writeln('cux_ship release finish: ${e.message}');
+      exitCode = 1;
+    } on ProjectException catch (e) {
+      // From --app-dir. Reported here rather than as a UsageException because
+      // by this point the repository root has been read and the message names
+      // real paths, which is more use than the usage text would be.
+      stderr.writeln('cux_ship release finish: --app-dir: ${e.message}');
       exitCode = 1;
     }
   }
@@ -403,7 +459,7 @@ class VerifyCommand extends Command<void> {
   @override
   void run() {
     final args = argResults!;
-    final project = ProjectContext.read();
+    final project = _project(this);
     final changelog = args.option('changelog') ?? project.changelog;
     final appstore = args.option('appstore') ?? project.appStoreMetadata;
 

@@ -61,6 +61,44 @@ step fails loudly instead of releasing on a default. `--dry-run` never asks —
 it writes nothing, and a prompt there would only teach the habit of answering
 yes.
 
+### When the app is not the repository root
+
+In a monorepo the Flutter app is a subdirectory and the release is still a
+property of the repository. Both halves of that matter:
+
+> The **repository** owns `CHANGELOG.md` and `store/`.
+> The **app directory** owns `pubspec.yaml`, `android/`, `ios/` and `macos/`.
+
+That is not a compromise between two conventions. A version lives in
+`pubspec.yaml` because Flutter puts it there, and platform identifiers live
+under `android/` and `ios/` for the same reason. The changelog and the store
+listing describe what *shipped* — and in a monorepo most of what a user notices
+usually changed in some package other than the app.
+
+Say it once, in `.cux-ship.yaml` at the repository root:
+
+```yaml
+app-dir: app
+```
+
+This is a property of the repository rather than of a command, which is why the
+file is the normal home for it — a shell script that drives several `cux_ship`
+invocations would otherwise repeat one constant at every call site, which is
+exactly the "keep three copies in step" that inference exists to remove.
+`--app-dir` overrides it and `CUX_SHIP_APP_DIR` sits between the two, in that
+order.
+
+**An unknown key in that file is an error**, not something skipped. It is read
+silently before every command, so a misspelt key that is quietly ignored is a
+setting that appears to be applied and is not. For the same reason an `app-dir`
+that does not exist, or is outside the repository, stops the command instead of
+being inferred past — the alternative is every inferred value turning back into
+a required flag, and the first symptom being a command asking for a `--package`
+it has always worked out for itself.
+
+Without any of this, nothing changes: a project whose app *is* its repository
+needs no file and reads exactly as it always did.
+
 ### promote is per-store; `release finish` is per-release
 
 `appstore promote` and `play promote` change no version and touch no git. A

@@ -30,6 +30,15 @@ dependencies:
     path: ../cux_ship_play
   cux_ship_verify:
     path: ../cux_ship_verify
+  # For --app-dir, which has to decide whether one directory is inside another
+  # and what its path is relative to it. String surgery gets `..`, trailing
+  # slashes and symlinks wrong, and a wrong answer there is a `git commit`
+  # naming a path that does not exist.
+  path: ^1.9.0
+  # For .cux-ship.yaml. A hand-written parser would do for one flat key, but
+  # this file is read before every command and reports its own syntax errors
+  # with a line number, which is the half that matters when it is wrong.
+  yaml: ^3.1.0
 
 dev_dependencies:
   lints: ^6.0.0

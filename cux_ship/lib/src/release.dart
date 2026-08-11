@@ -52,6 +52,16 @@ String? pubspecVersion(String pubspec) => RegExp(
   multiLine: true,
 ).firstMatch(pubspec)?.group(1);
 
+/// Where `pubspec.yaml` sits relative to the repository root, for an app in
+/// [appDir].
+///
+/// Repository-relative rather than absolute because every use of it is a git
+/// argument — `git show REV:PATH`, `git status -- PATH`, `git commit PATH` —
+/// and git takes none of those as an absolute path. The one caller that opens
+/// the file joins it onto the root itself.
+String pubspecPathFor(String appDir) =>
+    appDir.isEmpty ? 'pubspec.yaml' : '$appDir/pubspec.yaml';
+
 /// The `+build` suffix on a pubspec `version:` line, if there is one.
 String? pubspecBuildSuffix(String pubspec) => RegExp(
   r'^version:\s*\d+\.\d+\.\d+(\+\S+)',
@@ -156,6 +166,7 @@ class FinishOptions {
     required this.commit,
     required this.version,
     this.buildNumber,
+    this.appDir = '',
     this.destination = 'production',
     this.branch = 'main',
     this.tag = true,
@@ -166,6 +177,15 @@ class FinishOptions {
 
   /// The commit that was released — what gets tagged.
   final String commit;
+
+  /// Where the Flutter app lives relative to the repository root, so
+  /// `pubspec.yaml` can be found in a monorepo. Empty when the app *is* the
+  /// repository, which is the ordinary case.
+  ///
+  /// `CHANGELOG.md` is deliberately not moved by this: the changelog describes
+  /// what the repository shipped, and most of what a user notices usually
+  /// changed in some package other than the app.
+  final String appDir;
 
   /// The marketing version that was released.
   final String version;
@@ -193,6 +213,7 @@ class FinishOptions {
 List<String> finishRelease(Git git, FinishOptions options) {
   final log = <String>[];
   final tagName = 'v${options.version}';
+  final pubspecPath = pubspecPathFor(options.appDir);
 
   // Checked up front, both of them, because a half-finished release is worse
   // than one that refused to start.
@@ -209,7 +230,7 @@ List<String> finishRelease(Git git, FinishOptions options) {
     // path, so an unrelated edit sitting in either would be swept into the
     // release commit. The rest of the tree is deliberately not required to be
     // clean — that is not this command's business.
-    for (final file in const ['pubspec.yaml', 'CHANGELOG.md']) {
+    for (final file in [pubspecPath, 'CHANGELOG.md']) {
       final dirty = git.run(['status', '--porcelain', '--', file]);
       if (dirty.isNotEmpty) {
         throw ReleaseException(
@@ -255,9 +276,9 @@ List<String> finishRelease(Git git, FinishOptions options) {
     return log;
   }
 
-  final pubspecFile = File('${git.root}/pubspec.yaml');
+  final pubspecFile = File('${git.root}/$pubspecPath');
   if (!pubspecFile.existsSync()) {
-    throw ReleaseException('no pubspec.yaml in ${git.root}');
+    throw ReleaseException('no $pubspecPath in ${git.root}');
   }
   final pubspec = pubspecFile.readAsStringSync();
   final current = pubspecVersion(pubspec);
@@ -267,7 +288,7 @@ List<String> finishRelease(Git git, FinishOptions options) {
     // released. Either way the branch is already past the released version,
     // which is all this cares about — and it is what makes running this twice
     // for a two-store release harmless.
-    log.add('pubspec.yaml is already past ${options.version} — not bumping');
+    log.add('$pubspecPath is already past ${options.version} — not bumping');
     return log;
   }
 
@@ -282,7 +303,7 @@ List<String> finishRelease(Git git, FinishOptions options) {
     // fail to take says so during the rehearsal.
     bumpPubspecVersion(pubspec, next);
     insertChangelogSection(changelogFile.readAsStringSync(), next);
-    log.add('would bump pubspec.yaml to $next and add its changelog section');
+    log.add('would bump $pubspecPath to $next and add its changelog section');
     return log;
   }
 
@@ -294,7 +315,7 @@ List<String> finishRelease(Git git, FinishOptions options) {
   git.run([
     'commit',
     '-q',
-    'pubspec.yaml',
+    pubspecPath,
     'CHANGELOG.md',
     '-m',
     'Move ${options.branch} to $next, now that ${options.version} is on '
