@@ -47,7 +47,13 @@ dependencies:
   # separately for the MD5 that App Store Connect requires as a screenshot's
   # sourceFileChecksum. Not a security choice there; Apple picked it.
   crypto: ^3.0.0
-  cux_ship_verify: ^1.7.2
+  # **The oldest version that works, not the newest.** Bumping this in lockstep
+  # with cux_ship's own version makes the repository unresolvable as a git
+  # dependency for the whole window between the commit and the publish — the
+  # constraint names a version that does not exist on pub.dev yet, and CI's
+  # consumer probe goes red every release. Raise it only when something here
+  # actually needs a newer cux_ship_verify.
+  cux_ship_verify: ^1.7.1
   # ES256 over the .p8 private key. App Store Connect accepts nothing else, and
   # package:crypto has no ECDSA, so this or pointycastle-by-hand were the
   # options.

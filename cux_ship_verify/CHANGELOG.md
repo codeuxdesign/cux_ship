@@ -1,10 +1,5 @@
 # Changelog
 
-## 1.7.2
-
-No changes. Released alongside `cux_ship` 1.7.2, which the two packages move in
-step with.
-
 ## 1.7.1
 
 No changes. Released alongside `cux_ship` 1.7.1, which the two packages move in

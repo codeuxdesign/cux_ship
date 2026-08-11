@@ -24,6 +24,11 @@
   Predates the Dart port — `with-secrets.sh` renamed identically. Found by the
   AuthPass maintainers while migrating onto `secrets exec`.
 
+- `cux_ship_verify` is **not** released alongside this one. It has no changes,
+  and the dependency on it now names the oldest version that works rather than
+  the newest — bumping in lockstep made the repository unresolvable as a git
+  dependency for the whole window between a commit and its publish.
+
 ## 1.7.1
 
 From a security audit. No high-severity defects were found; these are the three
