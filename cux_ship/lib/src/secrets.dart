@@ -628,6 +628,8 @@ List<_Credential> _decrypt({
 LoadedSecrets loadSecrets({
   required String repoRoot,
   required File secretsFile,
+  String? keystore,
+  String? apiKey,
 }) {
   final values = _decrypt(repoRoot: repoRoot, secretsFile: secretsFile);
 
@@ -636,11 +638,68 @@ LoadedSecrets loadSecrets({
   // rather than the directory's mode.
   final work = Directory.systemTemp.createTempSync('cux_ship_secrets');
   try {
-    return _materialize(values, work);
+    return _materialize(values, work, keystore: keystore, apiKey: apiKey);
   } on Object {
     work.deleteSync(recursive: true);
     rethrow;
   }
+}
+
+/// Re-encrypts the working copy of a placed file back into the secrets file.
+///
+/// The other half of [place], and the reason a placed credential can be edited
+/// at all: these are working source, so somebody changes `lib/env/secrets.dart`
+/// in an editor and the encrypted copy has to be able to catch up. Without this
+/// an edit lives only in the working tree, and `place` refusing to overwrite it
+/// is the only thing standing between that and losing it.
+///
+/// Delegated to `sops set` rather than a decrypt-and-re-encrypt round trip:
+/// only the one value is rewritten, the recipients and the rest of the file are
+/// sops' business, and the new value goes over **stdin** so a private key never
+/// appears in a process listing.
+Future<PackResult> packPlaced({
+  required String repoRoot,
+  required File secretsFile,
+  required PlacedFile file,
+}) async {
+  final target = File('$repoRoot/${file.path}');
+  if (!target.existsSync()) {
+    return PackResult.absent;
+  }
+  if (file.outcomeIn(repoRoot) == PlaceOutcome.matching) {
+    return PackResult.unchanged;
+  }
+
+  final sops = findSops(repoRoot);
+  final instance = file.at.split('.').last;
+  final process = await Process.start(sops, [
+    'set',
+    secretsFile.path,
+    '["placed"]["$instance"]["base64"]',
+    '--value-stdin',
+  ]);
+  process.stdin.write(jsonEncode(base64.encode(target.readAsBytesSync())));
+  await process.stdin.close();
+  final code = await process.exitCode;
+  if (code != 0) {
+    throw ProjectException(
+      'could not write ${file.path} back into ${secretsFile.path} — '
+      'sops set exited $code',
+    );
+  }
+  return PackResult.packed;
+}
+
+/// What [packPlaced] did.
+enum PackResult {
+  /// Nothing in the working tree to pack.
+  absent,
+
+  /// The working copy already matches what is encrypted.
+  unchanged,
+
+  /// The encrypted copy now matches the working copy.
+  packed,
 }
 
 /// The files this repository expects in its working tree, decrypted.
@@ -721,7 +780,12 @@ List<_Credential> _parse(String plaintext, String path) {
 /// other. The previous shape asked `values.containsKey('keystore_base64')` and
 /// so looked straight past any credential with a name — which validated,
 /// reported nothing amiss, and set no variables at all.
-LoadedSecrets _materialize(List<_Credential> credentials, Directory work) {
+LoadedSecrets _materialize(
+  List<_Credential> credentials,
+  Directory work, {
+  String? keystore,
+  String? apiKey,
+}) {
   final environment = Map<String, String>.from(Platform.environment);
   final loaded = <String>[];
 
@@ -733,15 +797,12 @@ LoadedSecrets _materialize(List<_Credential> credentials, Directory work) {
   // One keystore fills the fixed names every consumer already reads. Instance
   // names never become variable names: uppercasing is not injective, so `dist`
   // and `dist_p12` would mint the same variable and one would silently win.
-  final keystores = under('android.keystores').toList();
-  if (keystores.length > 1) {
-    throw ProjectException(
-      'this file holds ${keystores.length} keystores — '
-      '${keystores.map((c) => c.instance).join(', ')} — so which one signs is '
-      'not something to infer.\n'
-      'Name it: secrets exec --keystore <name> -- ...',
-    );
-  }
+  final keystores = _select(
+    under('android.keystores').toList(),
+    keystore,
+    'keystore',
+    'signs',
+  );
   if (keystores.length == 1) {
     final keystore = keystores.single;
     final file = _writeBase64(
@@ -786,15 +847,7 @@ LoadedSecrets _materialize(List<_Credential> credentials, Directory work) {
     }
     environment['API_PRIVATE_KEYS_DIR'] = keys.path;
 
-    if (apiKeys.length > 1) {
-      throw ProjectException(
-        'this file holds ${apiKeys.length} App Store Connect keys — '
-        '${apiKeys.map((c) => c.instance).join(', ')} — so which one to use is '
-        'not something to infer.\n'
-        'Name it: secrets exec --api-key <name> -- ...',
-      );
-    }
-    final key = apiKeys.single;
+    final key = _select(apiKeys, apiKey, 'api-key', 'is used').single;
     environment['APPLE_API_KEY_ID'] = key.fields['id']!;
     environment['APPLE_API_PRIVATE_KEY_PATH'] =
         '${keys.path}/'
@@ -869,6 +922,40 @@ LoadedSecrets _materialize(List<_Credential> credentials, Directory work) {
   final placed = [for (final file in under('placed')) file.path];
 
   return LoadedSecrets(environment, loaded, work, placed: placed);
+}
+
+/// The one instance to use, or an error naming the alternatives.
+///
+/// Exactly one is the default because that is the case that cannot be wrong.
+/// Two or more is a choice, and a tool that picks for you picks silently — so
+/// it refuses and lists them. A name that is not there is an error too, rather
+/// than a fall back to the default: falling back would run an Admin-gated read
+/// with a scoped key and surface as a bare 403 from Apple.
+List<_Credential> _select(
+  List<_Credential> available,
+  String? chosen,
+  String flag,
+  String verb,
+) {
+  if (chosen != null) {
+    final match = available.where((c) => c.instance == chosen);
+    if (match.isEmpty) {
+      throw ProjectException(
+        'there is no $chosen in this file.\n'
+        '    it holds: ${available.map((c) => c.instance).join(', ')}',
+      );
+    }
+    return [match.single];
+  }
+  if (available.length > 1) {
+    throw ProjectException(
+      'this file holds ${available.length} of these — '
+      '${available.map((c) => c.instance).join(', ')} — so which one $verb is '
+      'not something to infer.\n'
+      'Name it: --$flag <name>',
+    );
+  }
+  return available;
 }
 
 /// Refuses a declared variable name that is malformed, or that would overwrite
@@ -952,6 +1039,8 @@ Future<int> runSecretsExec({
   required String repoRoot,
   required File secretsFile,
   required List<String> command,
+  String? keystore,
+  String? apiKey,
 }) async {
   if (command.isEmpty) {
     throw ProjectException(
@@ -960,7 +1049,12 @@ Future<int> runSecretsExec({
     );
   }
 
-  final secrets = loadSecrets(repoRoot: repoRoot, secretsFile: secretsFile);
+  final secrets = loadSecrets(
+    repoRoot: repoRoot,
+    secretsFile: secretsFile,
+    keystore: keystore,
+    apiKey: apiKey,
+  );
   try {
     // To stderr, so `cux_ship secrets exec -- env | grep …` pipes the child's
     // output and not this. What was *loaded* rather than what was asked for:

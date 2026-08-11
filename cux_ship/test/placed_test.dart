@@ -168,6 +168,76 @@ void main() {
     });
   });
 
+  group('packing', () {
+    // A sops that understands the two calls this makes: `-d` cats the file, and
+    // `set` rewrites one index from stdin. Faked because what is being tested
+    // is the index this constructs and the value it feeds — sops' encryption is
+    // sops' business, and is exercised for real by hand.
+    void fakeSops() {
+      final script = File('${_root.path}/.bin/sops');
+      script.parent.createSync(recursive: true);
+      script.writeAsStringSync(
+        '#!/bin/sh\n'
+        'if [ "\$1" = "-d" ]; then cat "\$2"; exit 0; fi\n'
+        'if [ "\$1" = "set" ]; then\n'
+        '  value=\$(cat)\n'
+        '  printf "%s\\n%s\\n" "\$3" "\$value" > "\$2.set"\n'
+        '  exit 0\n'
+        'fi\n'
+        'exit 64\n',
+      );
+      Process.runSync('chmod', ['755', script.path]);
+    }
+
+    setUp(fakeSops);
+
+    test('an edited file is written back at its own index', () async {
+      write(
+        'secrets/release.yaml',
+        'placed:\n  env_secrets:\n'
+            '    path: lib/env/secrets.dart\n    base64: YQ==\n',
+      );
+      write('lib/env/secrets.dart', 'edited');
+
+      final result = await packPlaced(
+        repoRoot: _root.path,
+        secretsFile: File('${_root.path}/secrets/release.yaml'),
+        file: PlacedFile(
+          at: 'placed.env_secrets',
+          path: 'lib/env/secrets.dart',
+          content: 'a'.codeUnits,
+        ),
+      );
+      expect(result, PackResult.packed);
+
+      final written = File(
+        '${_root.path}/secrets/release.yaml.set',
+      ).readAsStringSync().split('\n');
+      // The index names the family and the instance — if either is renamed
+      // without this following, pack would silently write to nothing.
+      expect(written.first, '["placed"]["env_secrets"]["base64"]');
+      // JSON-encoded, and the base64 of what is actually on disk.
+      expect(written[1], '"ZWRpdGVk"');
+    });
+
+    test('an unchanged file is left alone', () {
+      write('secrets/release.yaml', 'placed: {}\n');
+      write('lib/env/secrets.dart', 'a');
+      expect(
+        packPlaced(
+          repoRoot: _root.path,
+          secretsFile: File('${_root.path}/secrets/release.yaml'),
+          file: PlacedFile(
+            at: 'placed.env_secrets',
+            path: 'lib/env/secrets.dart',
+            content: 'a'.codeUnits,
+          ),
+        ),
+        completion(PackResult.unchanged),
+      );
+    });
+  });
+
   test('the schema cannot be extended into a disclosure', () {
     // `path`, `env` and `kind` are stored in cleartext so the pre-flight works
     // with no identity. A future family whose secret-bearing field took one of

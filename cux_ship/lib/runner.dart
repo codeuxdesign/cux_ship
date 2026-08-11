@@ -422,6 +422,7 @@ class _SecretsCommand extends Command<void> {
     addSubcommand(_SecretsKeysCommand());
     addSubcommand(_SecretsPlaceCommand());
     addSubcommand(_SecretsCleanCommand());
+    addSubcommand(_SecretsPackCommand());
   }
 
   @override
@@ -434,6 +435,20 @@ class _SecretsCommand extends Command<void> {
 
 class _SecretsExecCommand extends Command<void> {
   _SecretsExecCommand() {
+    argParser
+      ..addOption(
+        'keystore',
+        help:
+            'Which Android signing key to use, when the file holds more than '
+            'one. With exactly one it is the default and this is not needed.',
+      )
+      ..addOption(
+        'api-key',
+        help:
+            'Which App Store Connect key to use, when the file holds more '
+            'than one — an upload key is scoped to one app, while reading the '
+            'developer portal needs an Admin key.',
+      );
     argParser.addOption(
       'file',
       help:
@@ -469,6 +484,8 @@ class _SecretsExecCommand extends Command<void> {
         // Everything after `--`. Kept as rest rather than parsed, so a flag
         // meant for the child is never read as one of ours.
         command: argResults!.rest,
+        keystore: argResults!.option('keystore'),
+        apiKey: argResults!.option('api-key'),
       );
     } on ProjectException catch (e) {
       stderr.writeln('cux_ship secrets exec: ${e.message}');
@@ -526,7 +543,7 @@ class _SecretsPlaceCommand extends _PlacedCommand {
               '${file.path} differs from the encrypted copy.\n'
               'It has been edited since it was placed, and overwriting it '
               'would lose that.\n'
-              '    keep it:     re-encrypt it into ${file.at}\n'
+              '    keep it:     cux_ship secrets pack\n'
               '    discard it:  cux_ship secrets clean --discard-local, then '
               'place again',
             );
@@ -541,6 +558,50 @@ class _SecretsPlaceCommand extends _PlacedCommand {
       }
     } on ProjectException catch (e) {
       stderr.writeln('cux_ship secrets place: ${e.message}');
+      exitCode = 1;
+    }
+  }
+}
+
+class _SecretsPackCommand extends _PlacedCommand {
+  @override
+  String get name => 'pack';
+
+  @override
+  String get description =>
+      'Re-encrypt an edited working copy back into the secrets file. The other '
+      'half of `place`: these are source files somebody edits, so the '
+      'encrypted copy has to be able to catch up.';
+
+  @override
+  Future<void> run() async {
+    final project = _project(this);
+    final option = argResults!.option('file')!;
+    final secretsFile = File(
+      p.isAbsolute(option) ? option : p.join(project.root, option),
+    );
+    try {
+      var packed = 0;
+      for (final file in _files(project)) {
+        switch (await packPlaced(
+          repoRoot: project.root,
+          secretsFile: secretsFile,
+          file: file,
+        )) {
+          case PackResult.absent:
+            stdout.writeln('  not here   ${file.path}');
+          case PackResult.unchanged:
+            stdout.writeln('  unchanged  ${file.path}');
+          case PackResult.packed:
+            stdout.writeln('  packed     ${file.path}');
+            packed++;
+        }
+      }
+      if (packed == 0) {
+        stdout.writeln('nothing to pack.');
+      }
+    } on ProjectException catch (e) {
+      stderr.writeln('cux_ship secrets pack: ${e.message}');
       exitCode = 1;
     }
   }
