@@ -29,7 +29,7 @@ binaries, and the Apple and Play behavior each command works around.
 
 ## For agents
 
-[`skills/cux-ship`](cux_ship/skills/cux-ship/SKILL.md) is a skill for an AI agent setting
+[`skills/cux-ship-releasing`](cux_ship/skills/cux-ship-releasing/SKILL.md) is a skill for an AI agent setting
 up or operating releases with this tooling — the ordering and the irreversible
 steps, pointing at the READMEs for everything else. See
 [`skills/README.md`](cux_ship/skills/README.md) to install it.

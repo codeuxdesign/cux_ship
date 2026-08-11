@@ -1,5 +1,5 @@
 ---
-name: cux-ship
+name: cux-ship-releasing
 description: Set up or operate releases to the App Store and Google Play with cux_ship. Use when wiring a project up to ship for the first time, adding store metadata or a signing key, uploading or promoting a build, handling sops-encrypted release credentials, or debugging a store rejection. Also use when a project has a tool/cux_ship directory, a .cux-ship.yaml, a store/ tree, or secrets/release.yaml.
 ---
 
