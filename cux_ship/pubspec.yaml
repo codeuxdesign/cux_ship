@@ -24,6 +24,10 @@ environment:
 
 dependencies:
   args: ^2.4.0
+  # For `deps install`, which verifies a download against a pinned hash before
+  # it is moved into place and made executable. That check is the difference
+  # between pinning "some build of 3.13.3" and pinning a specific one.
+  crypto: ^3.0.0
   cux_ship_appstore:
     path: ../cux_ship_appstore
   cux_ship_play:

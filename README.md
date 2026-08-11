@@ -24,10 +24,10 @@ why a line exists.
 cux_ship appstore upload            play upload            release finish
          appstore promote           play promote           screenshots flatten
          appstore builds            play tracks            verify
-         appstore versions          play listing
-         appstore screenshot-types  play version-code
-         appstore build-number
-         appstore signing
+         appstore versions          play listing           secrets exec
+         appstore screenshot-types  play version-code      deps install
+         appstore build-number                             deps check
+         appstore signing                                  deps update
 ```
 
 **Run it from a project root and it works out the rest.** The `applicationId`
@@ -202,15 +202,86 @@ dart pub global activate --source git https://github.com/codeuxdesign/cux_ship.g
 
 ### Credentials
 
-Nothing here reads a secrets file or knows what a keychain is. Every credential
-arrives as an environment variable —
-`GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` for Play, and `APPLE_API_KEY_ID`,
-`APPLE_API_ISSUER_ID` and `APPLE_API_PRIVATE_KEY_PATH` for the App Store — and
-how they get there is the consuming project's business.
+**No uploader reads a secrets file or knows what a keychain is.** Every
+credential arrives as an environment variable — `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`
+for Play, and `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID` and
+`APPLE_API_PRIVATE_KEY_PATH` for the App Store — so they work unchanged if those
+ever come from Vault, another CI's secret store, or a shell you exported by
+hand.
 
-Some error messages name the script that sets them in the project this came
-from (`tool/with-secrets.sh`). Read those as an example of the arrangement
-rather than a requirement.
+`secrets exec` is how they get there when you have nothing better, and it is
+deliberately a *separate command* rather than something the uploaders do: there
+is exactly one place that creates plaintext and one that destroys it, and the
+encryption choice stays swappable because of that split.
+
+```bash
+cux_ship secrets exec -- tool/build.sh --release android
+cux_ship secrets exec -- cux_ship play upload
+```
+
+It decrypts `secrets/release.yaml` with [sops](https://getsops.io), puts the
+credentials in the child's environment, and materializes the three that a tool
+can only open as a file — the Android keystore, the App Store Connect `.p8` and
+the distribution certificate — into a private temp directory it removes however
+the run ends, including on Ctrl-C. The child runs with the repository root as
+its working directory.
+
+```yaml
+# secrets/release.yaml, before sops encrypts the values
+keystore_p12_base64:              # the Android upload key, and its
+keystore_password:                # password and alias. All three or none
+key_alias:
+key_password:                     # only for a keystore whose key password differs
+
+play_service_account_json_base64:
+
+api_key_id:                       # App Store Connect. Both, or neither
+api_private_key_base64:
+api_issuer_id:                    # team keys only — see below
+
+distribution_p12_base64:          # only a machine with an empty keychain
+distribution_p12_password:        # needs these. Both, or neither
+```
+
+Three things stop the command rather than being worked around, and each is a
+failure that is otherwise **silent**:
+
+- **An unrecognized key.** A misspelt `keystore_pasword` means the credential
+  never arrives, Gradle falls through to the debug key, and Play rejects the
+  artifact after a full upload.
+- **A half-configured group.** Same outcome, from the other direction — which is
+  why the groups above are marked "all or none".
+- **A missing identity.** Locally that is `~/.config/sops/age/keys.txt`; in CI
+  it is the single `SOPS_AGE_KEY` secret, so changing CI provider means moving
+  one value.
+
+It reports what it *loaded* rather than what it was asked for, so a credential
+that quietly is not in the file is visible before the command runs instead of
+three minutes into one.
+
+### `deps` — sops and age, pinned by hash
+
+`secrets exec` needs a `sops` binary. `deps install` fetches it, and `age`
+alongside it, into `.bin/` at the repository root:
+
+```bash
+cux_ship deps install     # whatever is pinned and .bin/ lacks
+cux_ship deps check       # report only; non-zero if anything is missing
+```
+
+Project-local rather than system-wide, so a laptop and a CI runner run the same
+bytes and neither needs a package manager. Both are single static Go binaries
+with no runtime of their own, which is most of why they were chosen.
+
+**The checksums are not ceremony**: these files are downloaded and then
+executed, and a version pin alone only means "some build of 3.13.3". A download
+lands in `<name>.part` and is moved into place only once its hash matches, so an
+interrupted or tampered fetch is never picked up as installed.
+
+The pins live in this repository, not in yours — bumping them is a `cux_ship`
+release rather than an edit in every project. `deps update` re-pins to the
+latest upstream releases and rewrites `deps_pins.dart`, so it only works inside
+a cux_ship checkout; a consumer gets new pins by moving the ref it depends on.
 
 **`APPLE_API_ISSUER_ID` is optional, and leaving it out means something.** A
 **team** key — Users and Access > Integrations > Team Keys — has an issuer id

@@ -24,10 +24,13 @@ import 'package:cux_ship_appstore/cli.dart';
 import 'package:cux_ship_appstore/flatten_cli.dart';
 import 'package:cux_ship_play/cli.dart';
 import 'package:cux_ship_verify/cux_ship_verify.dart';
+import 'package:path/path.dart' as p;
 
 import 'src/confirm.dart';
+import 'src/deps.dart';
 import 'src/project.dart';
 import 'src/release.dart';
+import 'src/secrets.dart';
 
 /// Builds the whole command tree.
 CommandRunner<void> buildRunner() {
@@ -69,6 +72,8 @@ CommandRunner<void> buildRunner() {
     ..addCommand(_PlayCommand())
     ..addCommand(_ReleaseCommand())
     ..addCommand(_ScreenshotsCommand())
+    ..addCommand(_SecretsCommand())
+    ..addCommand(_DepsCommand())
     ..addCommand(VerifyCommand());
 }
 
@@ -406,6 +411,123 @@ class _FlattenCommand extends Command<void> {
 
   @override
   void run() => runFlatten(argResults!);
+}
+
+// ----------------------------------------------------------------- secrets
+
+class _SecretsCommand extends Command<void> {
+  _SecretsCommand() {
+    addSubcommand(_SecretsExecCommand());
+  }
+
+  @override
+  String get name => 'secrets';
+
+  @override
+  String get description =>
+      'Credentials, and the only part of cux_ship that knows sops exists.';
+}
+
+class _SecretsExecCommand extends Command<void> {
+  _SecretsExecCommand() {
+    argParser.addOption(
+      'file',
+      help:
+          'The sops-encrypted file to decrypt. Relative paths resolve against '
+          'the repository root.',
+      defaultsTo: 'secrets/release.yaml',
+    );
+  }
+
+  @override
+  String get name => 'exec';
+
+  @override
+  String get description =>
+      'Decrypt the secrets file and run a command with the credentials in its '
+      'environment. Nothing else here reads that file: every uploader takes '
+      'plain environment variables, so the encryption choice stays swappable.';
+
+  @override
+  String get invocation =>
+      'cux_ship secrets exec [--file PATH] -- <command> [args...]';
+
+  @override
+  Future<void> run() async {
+    final project = _project(this);
+    final file = argResults!.option('file')!;
+    try {
+      exitCode = await runSecretsExec(
+        repoRoot: project.root,
+        secretsFile: File(
+          p.isAbsolute(file) ? file : p.join(project.root, file),
+        ),
+        // Everything after `--`. Kept as rest rather than parsed, so a flag
+        // meant for the child is never read as one of ours.
+        command: argResults!.rest,
+      );
+    } on ProjectException catch (e) {
+      stderr.writeln('cux_ship secrets exec: ${e.message}');
+      exitCode = 1;
+    }
+  }
+}
+
+// -------------------------------------------------------------------- deps
+
+class _DepsCommand extends Command<void> {
+  _DepsCommand() {
+    for (final cmd in DepsCommand.values) {
+      addSubcommand(_DepsSubcommand(cmd));
+    }
+  }
+
+  @override
+  String get name => 'deps';
+
+  @override
+  String get description =>
+      'The sops and age binaries the secrets path needs, pinned by hash and '
+      'installed into .bin/ at the repository root.';
+}
+
+class _DepsSubcommand extends Command<void> {
+  _DepsSubcommand(this.cmd) {
+    argParser.addOption(
+      'bin-dir',
+      help:
+          'Where to install. Defaults to .bin at the repository root, which is '
+          'where `secrets exec` looks first.',
+    );
+  }
+
+  final DepsCommand cmd;
+
+  @override
+  String get name => cmd.name;
+
+  @override
+  String get description => switch (cmd) {
+    DepsCommand.install => 'Install whatever is pinned and .bin/ lacks.',
+    DepsCommand.check =>
+      'Report what is installed, and exit non-zero if anything is missing.',
+    DepsCommand.update =>
+      "Re-pin to the latest upstream releases. Rewrites cux_ship's own "
+          'deps_pins.dart, so it only works inside a cux_ship checkout — a '
+          'project that consumes cux_ship gets new pins by moving its ref.',
+  };
+
+  @override
+  Future<void> run() async {
+    try {
+      final binDir =
+          argResults!.option('bin-dir') ?? p.join(_project(this).root, '.bin');
+      exitCode = await runDeps(cmd, binDir: binDir);
+    } on ProjectException catch (e) {
+      stderr.writeln('cux_ship deps ${cmd.name}: ${e.message}');
+      exitCode = 1;
+    }
+  }
 }
 
 // ------------------------------------------------------------------ verify
