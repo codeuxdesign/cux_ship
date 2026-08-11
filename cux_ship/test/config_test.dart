@@ -54,6 +54,33 @@ void main() {
       config('# nothing set yet\n');
       expect(read().appDir, isNull);
     });
+
+    test('signing defaults to automatic', () {
+      // The default has to be the one needing no configuration: a project that
+      // says nothing about signing is the common case.
+      config('app-dir: app\n');
+      expect(read().signing, AppleSigning.automatic);
+    });
+
+    test('manual signing is a repo-level choice, and only that', () {
+      // Which profiles exist is the secrets file's answer, not this one — a
+      // second declaration of the same fact is a second thing that can drift.
+      config('apple:\n  signing: manual\n');
+      expect(read().signing, AppleSigning.manual);
+    });
+  });
+
+  group('apple signing', () {
+    test('an unknown key under apple names the known ones', () {
+      config('apple:\n  signng: manual\n');
+      expect(read, throwsSaying('unknown key: signng'));
+      expect(read, throwsSaying('known keys: signing'));
+    });
+
+    test('a signing mode that is neither is refused', () {
+      config('apple:\n  signing: sometimes\n');
+      expect(read, throwsSaying('must be automatic or manual'));
+    });
   });
 
   group('refusing', () {

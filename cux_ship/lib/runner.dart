@@ -27,6 +27,7 @@ import 'src/appstore/cli.dart';
 import 'src/appstore/flatten_cli.dart';
 import 'src/confirm.dart';
 import 'src/deps.dart';
+import 'src/placed.dart';
 import 'src/play/cli.dart';
 import 'src/project.dart';
 import 'src/release.dart';
@@ -419,6 +420,9 @@ class _SecretsCommand extends Command<void> {
   _SecretsCommand() {
     addSubcommand(_SecretsExecCommand());
     addSubcommand(_SecretsKeysCommand());
+    addSubcommand(_SecretsPlaceCommand());
+    addSubcommand(_SecretsCleanCommand());
+    addSubcommand(_SecretsPackCommand());
   }
 
   @override
@@ -431,6 +435,20 @@ class _SecretsCommand extends Command<void> {
 
 class _SecretsExecCommand extends Command<void> {
   _SecretsExecCommand() {
+    argParser
+      ..addOption(
+        'keystore',
+        help:
+            'Which Android signing key to use, when the file holds more than '
+            'one. With exactly one it is the default and this is not needed.',
+      )
+      ..addOption(
+        'api-key',
+        help:
+            'Which App Store Connect key to use, when the file holds more '
+            'than one — an upload key is scoped to one app, while reading the '
+            'developer portal needs an Admin key.',
+      );
     argParser.addOption(
       'file',
       help:
@@ -466,9 +484,179 @@ class _SecretsExecCommand extends Command<void> {
         // Everything after `--`. Kept as rest rather than parsed, so a flag
         // meant for the child is never read as one of ours.
         command: argResults!.rest,
+        keystore: argResults!.option('keystore'),
+        apiKey: argResults!.option('api-key'),
       );
     } on ProjectException catch (e) {
       stderr.writeln('cux_ship secrets exec: ${e.message}');
+      exitCode = 1;
+    }
+  }
+}
+
+/// Shared by `place` and `clean`: both read the same file and neither
+/// materializes anything.
+abstract class _PlacedCommand extends Command<void> {
+  _PlacedCommand() {
+    argParser.addOption(
+      'file',
+      help:
+          'The sops-encrypted file to decrypt. Relative paths resolve against '
+          'the repository root.',
+      defaultsTo: 'secrets/release.yaml',
+    );
+  }
+
+  List<PlacedFile> _files(ProjectContext project) {
+    final file = argResults!.option('file')!;
+    return placedFiles(
+      repoRoot: project.root,
+      secretsFile: File(p.isAbsolute(file) ? file : p.join(project.root, file)),
+    );
+  }
+}
+
+class _SecretsPlaceCommand extends _PlacedCommand {
+  @override
+  String get name => 'place';
+
+  @override
+  String get description =>
+      'Write the files the build reads from the working tree. Unlike `exec`, '
+      'these stay until `clean` removes them — the compiler and the analyzer '
+      'read them from fixed paths, so they cannot live for one command.';
+
+  @override
+  void run() {
+    final project = _project(this);
+    try {
+      var wrote = 0;
+      for (final file in _files(project)) {
+        // Every declared target, before the outcome is consulted. The guard is
+        // about the *target*, not about this particular write: a file that
+        // already matches is the steady state after a normal place, and is
+        // exactly when somebody may have `git add -f`ed it. Checking only on
+        // the write path means the one state that needs the check never gets
+        // it.
+        checkPlaceable(project.root, file.at, file.path);
+        switch (file.outcomeIn(project.root)) {
+          case PlaceOutcome.matching:
+            stdout.writeln('  unchanged  ${file.path}');
+          case PlaceOutcome.differing:
+            // Refused rather than overwritten. These are working source files —
+            // somebody edits them in an editor — and the encrypted copy is not
+            // automatically the newer one.
+            throw ProjectException(
+              '${file.path} differs from the encrypted copy.\n'
+              'It has been edited since it was placed, and overwriting it '
+              'would lose that.\n'
+              '    keep it:     cux_ship secrets pack\n'
+              '    discard it:  cux_ship secrets clean --discard-local, then '
+              'place again',
+            );
+          case PlaceOutcome.absent:
+            place(project.root, file);
+            stdout.writeln('  wrote      ${file.path}');
+            wrote++;
+        }
+      }
+      if (wrote == 0) {
+        stdout.writeln('nothing to write.');
+      }
+    } on ProjectException catch (e) {
+      stderr.writeln('cux_ship secrets place: ${e.message}');
+      exitCode = 1;
+    }
+  }
+}
+
+class _SecretsPackCommand extends _PlacedCommand {
+  @override
+  String get name => 'pack';
+
+  @override
+  String get description =>
+      'Re-encrypt an edited working copy back into the secrets file. The other '
+      'half of `place`: these are source files somebody edits, so the '
+      'encrypted copy has to be able to catch up.';
+
+  @override
+  Future<void> run() async {
+    final project = _project(this);
+    final option = argResults!.option('file')!;
+    final secretsFile = File(
+      p.isAbsolute(option) ? option : p.join(project.root, option),
+    );
+    try {
+      var packed = 0;
+      for (final file in _files(project)) {
+        switch (await packPlaced(
+          repoRoot: project.root,
+          secretsFile: secretsFile,
+          file: file,
+        )) {
+          case PackResult.absent:
+            stdout.writeln('  not here   ${file.path}');
+          case PackResult.unchanged:
+            stdout.writeln('  unchanged  ${file.path}');
+          case PackResult.packed:
+            stdout.writeln('  packed     ${file.path}');
+            packed++;
+        }
+      }
+      if (packed == 0) {
+        stdout.writeln('nothing to pack.');
+      }
+    } on ProjectException catch (e) {
+      stderr.writeln('cux_ship secrets pack: ${e.message}');
+      exitCode = 1;
+    }
+  }
+}
+
+class _SecretsCleanCommand extends _PlacedCommand {
+  _SecretsCleanCommand() {
+    argParser.addFlag(
+      'discard-local',
+      negatable: false,
+      help:
+          'Remove a placed file even when it has been edited since. Named for '
+          'what it destroys rather than --force, because that is the only '
+          'thing worth knowing before running it.',
+    );
+  }
+
+  @override
+  String get name => 'clean';
+
+  @override
+  String get description =>
+      'Remove the files `place` wrote. Only removes what still matches the '
+      'encrypted copy, so an edit made since is refused rather than lost.';
+
+  @override
+  void run() {
+    final project = _project(this);
+    final discard = argResults!.flag('discard-local');
+    try {
+      var removed = 0;
+      for (final file in _files(project)) {
+        if (discard && file.outcomeIn(project.root) == PlaceOutcome.differing) {
+          File(p.join(project.root, file.path)).deleteSync();
+          stdout.writeln('  discarded  ${file.path}');
+          removed++;
+          continue;
+        }
+        if (clean(project.root, file)) {
+          stdout.writeln('  removed    ${file.path}');
+          removed++;
+        }
+      }
+      if (removed == 0) {
+        stdout.writeln('nothing to remove.');
+      }
+    } on ProjectException catch (e) {
+      stderr.writeln('cux_ship secrets clean: ${e.message}');
       exitCode = 1;
     }
   }
@@ -505,22 +693,40 @@ class _SecretsKeysCommand extends Command<void> {
       // Named before the verdict, so a file with nothing wrong still shows what
       // it holds — the question this answers is usually "what is in here", and
       // only sometimes "is anything broken".
-      for (final key in keys) {
-        final where = key.group == null ? '' : '  (under ${key.group})';
-        stdout.writeln('${key.recognized ? '  ' : '! '}${key.name}$where');
+      //
+      // Per credential rather than per value: the credential is the thing that
+      // is complete or not, and a keystore missing its password is one broken
+      // thing rather than three fine values and an absent one.
+      for (final credential in keys.credentials) {
+        final missing = credential.missing.isEmpty
+            ? ''
+            : '  — missing ${credential.missing.join(', ')}';
+        stdout.writeln(
+          '${credential.missing.isEmpty ? '  ' : '! '}${credential.path}'
+          '  ${credential.fields.join(', ')}$missing',
+        );
       }
-      final unknown = keys.where((k) => !k.recognized).toList();
-      if (unknown.isEmpty) {
-        stdout.writeln('\n${keys.length} credentials, all recognized.');
+      for (final problem in keys.problems) {
+        stdout.writeln('! $problem');
+      }
+
+      // Half configured counts as broken here, and can: a missing field is a
+      // missing *name*, so it is visible without decrypting anything — which
+      // makes this the whole pre-flight rather than half of one.
+      final broken =
+          keys.problems.length +
+          keys.credentials.where((c) => c.missing.isNotEmpty).length;
+      if (broken == 0) {
+        stdout.writeln(
+          '\n${keys.credentials.length} credentials, all understood.',
+        );
         return;
       }
-      // An unrecognized name is what `secrets exec` refuses outright, so
-      // reporting it here is the whole point: this runs before a release rather
-      // than during one.
+      // This is what `secrets exec` refuses outright, so reporting it here is
+      // the whole point: it runs before a release rather than during one.
       stderr.writeln(
-        '\n${unknown.length} unrecognized, marked ! above — `secrets exec` '
-        'will refuse this file.\n'
-        'known keys: ${knownSecretKeys().join(', ')}',
+        '\n$broken marked ! above — `secrets exec` will refuse this file.\n'
+        'known: ${knownSecretKeys().join('\n       ')}',
       );
       exitCode = 1;
     } on ProjectException catch (e) {

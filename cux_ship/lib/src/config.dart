@@ -32,11 +32,35 @@ const cuxShipConfigFile = '.cux-ship.yaml';
 
 /// Keys this version understands. Anything else stops the command and is
 /// reported against this list.
-const _knownKeys = {'app-dir'};
+const _knownKeys = {'app-dir', 'apple'};
+
+/// Keys understood inside `apple:`.
+const _knownAppleKeys = {'signing'};
+
+/// How provisioning profiles are come by, which decides more than it sounds
+/// like it does.
+///
+/// `-allowProvisioningUpdates` is a portal *write*, and an individual App Store
+/// Connect key cannot even read the portal — certificates, identifiers and
+/// profiles are team resources, refused whatever role the user holds. So
+/// automatic signing requires a team Admin key, and a team Admin key reaches
+/// every app in the team.
+///
+/// Manual signing is therefore what buys a scoped CI credential: the stored
+/// profiles are the price of a key that cannot touch anything but this app.
+/// That is a reason to choose it on a new project, not merely a legacy state to
+/// migrate away from.
+enum AppleSigning {
+  /// Xcode creates and renews profiles. Needs a team key.
+  automatic,
+
+  /// Profiles are supplied, from `apple.profiles` in the secrets file.
+  manual,
+}
 
 /// What `.cux-ship.yaml` said, if a repository has one.
 class ProjectConfig {
-  const ProjectConfig({this.appDir});
+  const ProjectConfig({this.appDir, this.signing = AppleSigning.automatic});
 
   /// Reads `<repoRoot>/.cux-ship.yaml`.
   ///
@@ -88,13 +112,65 @@ class ProjectConfig {
       );
     }
 
-    return ProjectConfig(appDir: _string(document, 'app-dir'));
+    return ProjectConfig(
+      appDir: _string(document, 'app-dir'),
+      signing: _apple(document),
+    );
   }
 
   /// Where the Flutter app lives, when it is not the repository root.
   ///
   /// The same value `--app-dir` takes, and overridden by it.
   final String? appDir;
+
+  /// How Apple provisioning profiles are come by. See [AppleSigning].
+  final AppleSigning signing;
+
+  /// Reads and cross-checks the `apple:` block.
+  ///
+  /// Both checks live here, in plaintext, on purpose: they are the half of the
+  /// design that can be evaluated with no identity and on any platform.
+  /// Everything about a profile *blob* — whether it parses, which platform it
+  /// is for — needs `security cms -D` and therefore a Mac, so a Linux run must
+  /// still be able to tell a consumer that its configuration disagrees with
+  /// itself.
+  static AppleSigning _apple(YamlMap document) {
+    final apple = document['apple'];
+    if (apple == null) {
+      return AppleSigning.automatic;
+    }
+    if (apple is! YamlMap) {
+      throw ProjectException(
+        '$cuxShipConfigFile: apple must be a mapping, and is a '
+        '${apple.runtimeType}',
+      );
+    }
+
+    final unknown =
+        apple.keys
+            .map((k) => '$k')
+            .where((k) => !_knownAppleKeys.contains(k))
+            .toList()
+          ..sort();
+    if (unknown.isNotEmpty) {
+      throw ProjectException(
+        '$cuxShipConfigFile: apple has '
+        '${unknown.length == 1 ? 'an unknown key' : 'unknown keys'}: '
+        '${unknown.join(', ')}\n'
+        '    known keys: ${(_knownAppleKeys.toList()..sort()).join(', ')}',
+      );
+    }
+
+    final signing = switch (_string(apple, 'signing')) {
+      null || 'automatic' => AppleSigning.automatic,
+      'manual' => AppleSigning.manual,
+      final other => throw ProjectException(
+        '$cuxShipConfigFile: apple.signing must be automatic or manual, '
+        'and is $other',
+      ),
+    };
+    return signing;
+  }
 
   static String? _string(YamlMap map, String key) {
     final value = map[key];
