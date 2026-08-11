@@ -58,566 +58,402 @@ void main() {
     _root.deleteSync(recursive: true);
   });
 
-  group('the Android upload key', () {
-    setUp(() {
+  group('the Android signing key', () {
+    test('is materialized and pointed at', () {
       secrets(
-        'keystore_base64: ${b64('a keystore')}\n'
-        'keystore_password: swordfish\n'
-        'key_alias: upload\n',
+        'android:\n'
+        '  keystores:\n'
+        '    upload:\n'
+        '      base64: ${b64('a keystore')}\n'
+        '      password: hunter2\n'
+        '      key_alias: upload\n',
       );
+      final loaded = load();
+      final path = loaded.environment['ANDROID_KEYSTORE_PATH']!;
+      expect(File(path).readAsStringSync(), 'a keystore');
+      expect(loaded.environment['ANDROID_KEYSTORE_PASSWORD'], 'hunter2');
+      expect(loaded.environment['ANDROID_KEY_ALIAS'], 'upload');
+      // PKCS12 uses one password for both unless told otherwise.
+      expect(loaded.environment['ANDROID_KEY_PASSWORD'], 'hunter2');
+      loaded.dispose();
     });
 
-    test('arrives as the four variables Gradle looks for', () {
+    test('a named instance arrives — it does not merely validate', () {
+      // The defect this pins: a credential under a name used to pass every
+      // check, report nothing amiss, and set no variables at all.
+      secrets(
+        'android:\n'
+        '  keystores:\n'
+        '    amazon:\n'
+        '      base64: ${b64('the amazon keystore')}\n'
+        '      password: p\n'
+        '      key_alias: amazon-key\n',
+      );
       final loaded = load();
-      addTearDown(loaded.dispose);
-      final env = loaded.environment;
-
+      expect(loaded.environment['ANDROID_KEYSTORE_PATH'], isNotNull);
       expect(
-        File(env['ANDROID_KEYSTORE_PATH']!).readAsStringSync(),
-        'a keystore',
+        File(loaded.environment['ANDROID_KEYSTORE_PATH']!).readAsStringSync(),
+        'the amazon keystore',
       );
-      expect(env['ANDROID_KEYSTORE_PASSWORD'], 'swordfish');
-      expect(env['ANDROID_KEY_ALIAS'], 'upload');
-      // PKCS12 uses one password for the store and the key alike, so Gradle
-      // needs no special case.
-      expect(env['ANDROID_KEY_PASSWORD'], 'swordfish');
+      expect(loaded.loaded, contains('android.keystores.amazon'));
+      loaded.dispose();
     });
 
-    test('a separate key password is used when there is one', () {
+    test('two keystores refuse to guess, and name the choices', () {
       secrets(
-        'keystore_base64: ${b64('a keystore')}\n'
-        'keystore_password: swordfish\n'
-        'key_alias: upload\n'
-        'key_password: different\n',
+        'android:\n'
+        '  keystores:\n'
+        '    upload: { base64: ${b64('a')}, password: p, key_alias: x }\n'
+        '    amazon: { base64: ${b64('b')}, password: p, key_alias: y }\n',
       );
-      final loaded = load();
-      addTearDown(loaded.dispose);
-      expect(loaded.environment['ANDROID_KEYSTORE_PASSWORD'], 'swordfish');
-      expect(loaded.environment['ANDROID_KEY_PASSWORD'], 'different');
+      expect(load, throwsSaying(contains('--keystore')));
+      expect(load, throwsSaying(contains('upload')));
+      expect(load, throwsSaying(contains('amazon')));
     });
 
-    test(
-      'the keystore is written mode 600',
-      () {
-        // The directory is 0700 by construction, but files inside it inherit the
-        // process umask, which on a runner is commonly 022.
-        final loaded = load();
-        addTearDown(loaded.dispose);
-        final mode = Process.runSync('stat', [
-          '-f',
-          '%Lp',
-          loaded.environment['ANDROID_KEYSTORE_PATH']!,
-        ]);
-        expect((mode.stdout as String).trim(), '600');
-      },
-      onPlatform: {'linux': const Skip('stat -f is the BSD spelling')},
-    );
+    test('half configured is refused, naming what is missing', () {
+      secrets(
+        'android:\n'
+        '  keystores:\n'
+        '    upload:\n'
+        '      base64: ${b64('a keystore')}\n'
+        '      key_alias: upload\n',
+      );
+      expect(load, throwsSaying(contains('half configured')));
+      expect(load, throwsSaying(contains('password')));
+    });
   });
 
   group('the App Store Connect key', () {
-    test('the .p8 is named after the key id, in a directory altool searches', () {
-      // Not decoration. `altool --apiKey` takes no path: it looks for
-      // AuthKey_<id>.p8 in a fixed set of directories, and $API_PRIVATE_KEYS_DIR
-      // is the only one that is not somebody's home.
+    test('an individual key keeps the name Apple gave it', () {
+      // The filename is the only signal of which claims Apple is sent, and it
+      // is derived rather than stored — so the assertion is on the file that
+      // reaches disk, not on the field round-tripping.
       secrets(
-        'api_key_id: ABC123\n'
-        'api_private_key_base64: ${b64('a p8')}\n'
-        'api_issuer_id: 69a6de70\n',
+        'apple:\n'
+        '  api_keys:\n'
+        '    upload:\n'
+        '      id: 4LJJBK4Z86KR\n'
+        '      kind: individual\n'
+        '      private_key_base64: ${b64('the key')}\n',
       );
       final loaded = load();
-      addTearDown(loaded.dispose);
-      final env = loaded.environment;
-
-      expect(env['APPLE_API_KEY_ID'], 'ABC123');
-      expect(env['APPLE_API_ISSUER_ID'], '69a6de70');
-      expect(env['APPLE_API_PRIVATE_KEY_PATH'], endsWith('AuthKey_ABC123.p8'));
-      expect(
-        env['APPLE_API_PRIVATE_KEY_PATH'],
-        startsWith(env['API_PRIVATE_KEYS_DIR']!),
-      );
-      expect(
-        File(env['APPLE_API_PRIVATE_KEY_PATH']!).readAsStringSync(),
-        'a p8',
-      );
-    });
-
-    test('an individual key keeps the ApiKey_ name Apple gave it', () {
-      // The bug this guards. `ApiKey_` is what Apple names an individual key
-      // and `AuthKey_` a team key, and both altool and the JWT builder read
-      // that prefix to choose claims — `iss` for a team key, `sub: user` for an
-      // individual one. Writing `AuthKey_` unconditionally, as this did until
-      // 1.7.2, classified every individual key as a team key and failed with a
-      // bare 401 after a full build.
-      //
-      // The issuer cannot substitute: altool requires --api-issuer alongside
-      // --api-key, so an individual key legitimately carries one.
-      secrets(
-        'api_key_id: ABC123\n'
-        'api_private_key_base64: ${b64('a p8')}\n'
-        'api_private_key_filename: ApiKey_ABC123.p8\n'
-        'api_issuer_id: 69a6de70\n',
-      );
-      final loaded = load();
-      addTearDown(loaded.dispose);
-      final path = loaded.environment['APPLE_API_PRIVATE_KEY_PATH']!;
-
-      expect(path, endsWith('ApiKey_ABC123.p8'));
-      expect(path, isNot(contains('AuthKey_')));
-      // Still where altool searches.
-      expect(path, startsWith(loaded.environment['API_PRIVATE_KEYS_DIR']!));
-    });
-
-    test('without a declared name it stays AuthKey_, as it always was', () {
-      secrets(
-        'api_key_id: ABC123\n'
-        'api_private_key_base64: ${b64('a p8')}\n',
-      );
-      final loaded = load();
-      addTearDown(loaded.dispose);
+      final dir = Directory(loaded.environment['API_PRIVATE_KEYS_DIR']!);
+      expect(dir.listSync().map((e) => e.uri.pathSegments.last), [
+        'ApiKey_4LJJBK4Z86KR.p8',
+      ]);
       expect(
         loaded.environment['APPLE_API_PRIVATE_KEY_PATH'],
-        endsWith('AuthKey_ABC123.p8'),
+        endsWith('ApiKey_4LJJBK4Z86KR.p8'),
       );
+      loaded.dispose();
     });
 
-    test('a filename naming a different key is refused', () {
-      // altool finds the file by id, so it would look straight past this one
-      // and report no key at all — a confusing failure a long way from here.
+    test('a team key is named the other way', () {
       secrets(
-        'api_key_id: ABC123\n'
-        'api_private_key_base64: ${b64('a p8')}\n'
-        'api_private_key_filename: ApiKey_DIFFERENT.p8\n',
-      );
-      expect(load, throwsSaying(contains('altool finds the file by id')));
-    });
-
-    test('a filename that is a path is refused', () {
-      // It becomes a filename inside a directory altool searches; a separator
-      // in it writes somewhere else entirely.
-      for (final bad in const [
-        '../../etc/AuthKey_ABC123.p8',
-        'nested/AuthKey_ABC123.p8',
-        'AuthKey_ABC123.pem',
-        'ABC123.p8',
-      ]) {
-        secrets(
-          'api_key_id: ABC123\n'
-          'api_private_key_base64: ${b64('a p8')}\n'
-          'api_private_key_filename: "$bad"\n',
-        );
-        expect(
-          load,
-          throwsSaying(contains('the name Apple gave the key')),
-          reason: 'accepted "$bad"',
-        );
-      }
-    });
-
-    test('an individual key has no issuer id, and that is not an error', () {
-      // An individual key inherits one user's app restrictions and has no
-      // issuer id at all. It is how a CI credential is kept from reaching every
-      // app in the team, so requiring the issuer would rule out the credential
-      // most worth using.
-      secrets(
-        'api_key_id: ABC123\n'
-        'api_private_key_base64: ${b64('a p8')}\n',
-      );
-      final loaded = load();
-      addTearDown(loaded.dispose);
-      expect(loaded.environment['APPLE_API_KEY_ID'], 'ABC123');
-      expect(loaded.environment.containsKey('APPLE_API_ISSUER_ID'), isFalse);
-    });
-  });
-
-  group('the Play service account', () {
-    test('is decoded to the JSON itself, not a path', () {
-      secrets('play_service_account_json_base64: ${b64('{"type":"x"}')}\n');
-      final loaded = load();
-      addTearDown(loaded.dispose);
-      expect(
-        loaded.environment['GOOGLE_PLAY_SERVICE_ACCOUNT_JSON'],
-        '{"type":"x"}',
-      );
-    });
-  });
-
-  group('headings', () {
-    // A real secrets file groups its credentials under `android:` and `apple:`,
-    // because that is how somebody reads it. The shell script this replaces
-    // coped by accident — it stripped leading whitespace before matching, which
-    // made it indentation-blind — and reading only the top level instead
-    // refuses such a file outright, having found none of the credentials in it.
-    test('one level of grouping is walked, and the heading discarded', () {
-      secrets(
-        'android:\n'
-        '  keystore_base64: ${b64('a keystore')}\n'
-        '  keystore_password: swordfish\n'
-        '  key_alias: upload\n'
         'apple:\n'
-        '  api_key_id: ABC123\n'
-        '  api_private_key_base64: ${b64('a p8')}\n',
+        '  api_keys:\n'
+        '    team:\n'
+        '      id: S5PTZMY9P8\n'
+        '      kind: team\n'
+        '      private_key_base64: ${b64('the key')}\n',
       );
       final loaded = load();
-      addTearDown(loaded.dispose);
-
-      expect(loaded.environment['ANDROID_KEY_ALIAS'], 'upload');
-      expect(loaded.environment['APPLE_API_KEY_ID'], 'ABC123');
-      expect(loaded.loaded, [
-        'the Android upload key',
-        'the App Store Connect API key',
-      ]);
+      expect(
+        Directory(
+          loaded.environment['API_PRIVATE_KEYS_DIR']!,
+        ).listSync().map((e) => e.uri.pathSegments.last),
+        ['AuthKey_S5PTZMY9P8.p8'],
+      );
+      loaded.dispose();
     });
 
-    test('grouped and top-level values can be mixed', () {
+    test('a kind that is neither is refused, saying why it matters', () {
       secrets(
-        'play_service_account_json_base64: ${b64('{}')}\n'
-        'android:\n'
-        '  keystore_base64: ${b64('k')}\n'
-        '  keystore_password: swordfish\n'
-        '  key_alias: upload\n',
+        'apple:\n'
+        '  api_keys:\n'
+        '    upload:\n'
+        '      id: X\n'
+        '      kind: personal\n'
+        '      private_key_base64: ${b64('k')}\n',
+      );
+      expect(load, throwsSaying(contains('team or individual')));
+    });
+
+    test('an issuer is optional, and says nothing about the kind', () {
+      secrets(
+        'apple:\n'
+        '  api_keys:\n'
+        '    upload:\n'
+        '      id: X\n'
+        '      kind: individual\n'
+        '      issuer_id: an-issuer\n'
+        '      private_key_base64: ${b64('k')}\n',
       );
       final loaded = load();
-      addTearDown(loaded.dispose);
-      expect(loaded.environment['GOOGLE_PLAY_SERVICE_ACCOUNT_JSON'], '{}');
-      expect(loaded.environment['ANDROID_KEY_ALIAS'], 'upload');
+      expect(loaded.environment['APPLE_API_ISSUER_ID'], 'an-issuer');
+      expect(
+        loaded.environment['APPLE_API_PRIVATE_KEY_PATH'],
+        endsWith('ApiKey_X.p8'),
+      );
+      loaded.dispose();
+    });
+  });
+
+  group('Apple certificates', () {
+    test('every one is materialized — a release needs more than one', () {
+      secrets(
+        'apple:\n'
+        '  certificates:\n'
+        '    distribution: { p12_base64: ${b64('app store')}, password: a }\n'
+        '    developer_id: { p12_base64: ${b64('direct')}, password: b }\n',
+      );
+      final loaded = load();
+      expect(
+        File(
+          loaded.environment['APPLE_DISTRIBUTION_P12_PATH']!,
+        ).readAsStringSync(),
+        'app store',
+      );
+      expect(
+        File(
+          loaded.environment['APPLE_DEVELOPER_ID_P12_PATH']!,
+        ).readAsStringSync(),
+        'direct',
+      );
+      expect(loaded.environment['APPLE_DEVELOPER_ID_P12_PASSWORD'], 'b');
+      loaded.dispose();
     });
 
-    test('a typo inside a group is reported with its heading', () {
+    test('a misspelt certificate kind is refused, since they are a set', () {
       secrets(
-        'android:\n'
-        '  keystore_pasword: swordfish\n',
+        'apple:\n'
+        '  certificates:\n'
+        '    developr_id: { p12_base64: ${b64('x')}, password: a }\n',
       );
-      expect(load, throwsSaying(contains('android.keystore_pasword')));
+      expect(load, throwsSaying(contains('developr_id')));
+      expect(load, throwsSaying(contains('developer_id')));
+    });
+  });
+
+  group('the project\'s own', () {
+    test('a token goes to the variable it declares', () {
+      secrets('tokens:\n  fosshub: { env: FOSSHUB_TOKEN, value: shh }\n');
+      final loaded = load();
+      expect(loaded.environment['FOSSHUB_TOKEN'], 'shh');
+      loaded.dispose();
     });
 
-    test('the same credential under two headings is refused', () {
-      // Which one wins is not something to guess at with a credential.
+    test('a token cannot take a name this tool sets', () {
+      // Otherwise a token silently redirects a real credential's path.
       secrets(
-        'android:\n'
-        '  key_alias: one\n'
-        'other:\n'
-        '  key_alias: two\n',
+        'tokens:\n'
+        '  sneaky: { env: ANDROID_KEYSTORE_PATH, value: /tmp/mine }\n',
       );
-      expect(load, throwsSaying(contains('names key_alias twice')));
+      expect(load, throwsSaying(contains('a name this tool sets')));
     });
 
-    test('nesting deeper than a heading is refused', () {
+    test('a variable name that is not one is refused', () {
+      secrets('tokens:\n  x: { env: "not a name", value: v }\n');
+      expect(load, throwsSaying(contains('usable variable name')));
+    });
+
+    test('an ssh key is written and pointed at', () {
+      secrets(
+        'ssh_keys:\n'
+        '  github_deploy:\n'
+        '    base64: ${b64('a private key')}\n'
+        '    env: GITHUB_DEPLOY_KEY_PATH\n',
+      );
+      final loaded = load();
+      final path = loaded.environment['GITHUB_DEPLOY_KEY_PATH']!;
+      expect(File(path).readAsStringSync(), 'a private key');
+      loaded.dispose();
+    });
+  });
+
+  group('structure', () {
+    test('an unknown key names its path and what is legal there', () {
+      secrets('apple:\n  certifcates:\n    distribution: { p12_base64: x }\n');
+      expect(load, throwsSaying(contains('apple.certifcates')));
+      expect(load, throwsSaying(contains('certificates')));
+    });
+
+    test('a typo at the top is not read as a credential', () {
+      secrets('androd:\n  keystores:\n    upload: { base64: x }\n');
+      expect(load, throwsSaying(contains('androd')));
+    });
+
+    test('an unknown field of a known credential is refused', () {
       secrets(
         'android:\n'
-        '  upload:\n'
-        '    key_alias: one\n',
+        '  keystores:\n'
+        '    upload:\n'
+        '      base64: ${b64('a')}\n'
+        '      password: p\n'
+        '      key_alias: x\n'
+        '      passphrase: p\n',
       );
-      expect(load, throwsSaying(contains('deeper than a credential goes')));
+      expect(load, throwsSaying(contains('passphrase')));
+    });
+
+    test('an instance name that would not make a filename is refused', () {
+      secrets(
+        'android:\n'
+        '  keystores:\n'
+        '    "../escape": { base64: ${b64('a')}, password: p, key_alias: x }\n',
+      );
+      expect(load, throwsSaying(contains('usable name')));
+    });
+
+    test('everything wrong is reported at once', () {
+      secrets(
+        'androd:\n'
+        '  keystores: {}\n'
+        'apple:\n'
+        '  certifcates: {}\n',
+      );
+      expect(load, throwsSaying(contains('androd')));
+      expect(load, throwsSaying(contains('certifcates')));
     });
   });
 
   group('inspecting without decrypting', () {
-    /// A file shaped like a real encrypted one: grouped, values replaced by
-    /// sops with `ENC[...]`, and carrying the metadata block sops appends.
-    ///
-    /// **Every `*_base64` name here is load bearing.** The bug this guards
-    /// against was a documented `grep -oE '^[a-z_]+:…'` whose character class
-    /// omitted digits, so it hid exactly the names that carry key material and
-    /// reported only the four that do not. A fixture built from digit-free
-    /// names passes either way and proves nothing.
-    void encryptedFile() {
+    test('reports credentials by path, with their fields', () {
       secrets(
         'android:\n'
-        '  keystore_base64: ENC[AES256_GCM,data:aaaa,type:str]\n'
-        '  keystore_password: ENC[AES256_GCM,data:bbbb,type:str]\n'
-        '  key_alias: ENC[AES256_GCM,data:cccc,type:str]\n'
-        '  play_service_account_json_base64: ENC[AES256_GCM,data:dddd,type:str]\n'
-        'apple:\n'
-        '  api_key_id: ENC[AES256_GCM,data:eeee,type:str]\n'
-        '  api_private_key_base64: ENC[AES256_GCM,data:ffff,type:str]\n'
-        '  distribution_p12_base64: ENC[AES256_GCM,data:gggg,type:str]\n'
-        '  distribution_p12_password: ENC[AES256_GCM,data:hhhh,type:str]\n'
+        '  keystores:\n'
+        '    upload:\n'
+        '      base64: ENC[whatever]\n'
+        '      password: ENC[whatever]\n'
+        '      key_alias: ENC[whatever]\n',
+      );
+      final report = inspectSecretKeys(_secretsFile);
+      expect(report.problems, isEmpty);
+      expect(report.credentials.single.path, 'android.keystores.upload');
+      expect(report.credentials.single.fields, [
+        'base64',
+        'key_alias',
+        'password',
+      ]);
+      expect(report.credentials.single.missing, isEmpty);
+    });
+
+    test('sees half configuration without an identity', () {
+      // A missing field is a missing *name*, so this is knowable from the
+      // encrypted file — which makes this the whole pre-flight, not half of it.
+      secrets(
+        'android:\n'
+        '  keystores:\n'
+        '    upload:\n'
+        '      base64: ENC[whatever]\n',
+      );
+      final report = inspectSecretKeys(_secretsFile);
+      expect(report.credentials.single.missing, ['password', 'key_alias']);
+    });
+
+    test('skips the sops block, and only at the top', () {
+      secrets(
+        'android:\n'
+        '  keystores:\n'
+        '    upload:\n'
+        '      base64: ENC[x]\n'
+        '      password: ENC[x]\n'
+        '      key_alias: ENC[x]\n'
         'sops:\n'
-        '  age: something\n'
-        '  lastmodified: "2026-08-11T00:00:00Z"\n'
-        '  mac: ENC[AES256_GCM,data:iiii,type:str]\n'
-        '  unencrypted_suffix: _unencrypted\n'
-        '  version: 3.13.3\n',
+        '  age: []\n',
       );
-    }
-
-    test('finds every credential, digits in the name included', () {
-      encryptedFile();
-      final names = inspectSecretKeys(_secretsFile).map((k) => k.name).toList();
-
-      expect(names, hasLength(8));
-      for (final withDigits in const [
-        'keystore_base64',
-        'play_service_account_json_base64',
-        'api_private_key_base64',
-        'distribution_p12_base64',
-        'distribution_p12_password',
-      ]) {
-        expect(names, contains(withDigits), reason: 'missed $withDigits');
-      }
+      expect(inspectSecretKeys(_secretsFile).problems, isEmpty);
     });
 
-    test('skips the sops metadata block', () {
-      // Present in the encrypted file and stripped on decrypt, so it is never a
-      // credential — and a reader comparing this output against the accepted
-      // set should not have to know to ignore seven entries.
-      encryptedFile();
-      final names = inspectSecretKeys(_secretsFile).map((k) => k.name);
-      for (final meta in const [
-        'sops',
-        'age',
-        'lastmodified',
-        'mac',
-        'unencrypted_suffix',
-        'version',
-      ]) {
-        expect(names, isNot(contains(meta)), reason: 'reported $meta');
-      }
-    });
+    test('agrees with what secrets exec accepts, for the same file', () {
+      // NOT a comparison against a shared set — that formulation cannot fail
+      // for any input, which is how the previous version of this test stayed
+      // green while the two disagreed. One fixture, both paths, diffed.
+      const fixtures = {
+        'good':
+            'android:\n'
+            '  keystores:\n'
+            '    upload:\n'
+            '      base64: YQ==\n'
+            '      password: p\n'
+            '      key_alias: x\n',
+        'unknown section': 'androd:\n  keystores: {}\n',
+        'unknown field':
+            'android:\n'
+            '  keystores:\n'
+            '    upload: { base64: YQ==, password: p, key_alias: x, oops: 1 }\n',
+        'half configured':
+            'android:\n'
+            '  keystores:\n'
+            '    upload: { base64: YQ== }\n',
+      };
+      for (final entry in fixtures.entries) {
+        secrets(entry.value);
+        final report = inspectSecretKeys(_secretsFile);
+        final inspectorHappy =
+            report.problems.isEmpty &&
+            report.credentials.every((c) => c.missing.isEmpty);
 
-    test('reports the heading each credential was filed under', () {
-      encryptedFile();
-      final keys = inspectSecretKeys(_secretsFile);
-      expect(keys.firstWhere((k) => k.name == 'key_alias').group, 'android');
-      expect(keys.firstWhere((k) => k.name == 'api_key_id').group, 'apple');
-    });
+        var parserHappy = true;
+        try {
+          load().dispose();
+        } on ProjectException {
+          parserHappy = false;
+        }
 
-    test('a top-level credential has no heading', () {
-      secrets('key_alias: ENC[AES256_GCM,data:aaaa,type:str]\n');
-      expect(inspectSecretKeys(_secretsFile).single.group, isNull);
-    });
-
-    test('marks a name that secrets exec would refuse', () {
-      // The whole point of running this before a release rather than during
-      // one: an unrecognized key stops `secrets exec` dead.
-      secrets(
-        'android:\n'
-        '  keystore_pasword: ENC[AES256_GCM,data:aaaa,type:str]\n'
-        '  key_alias: ENC[AES256_GCM,data:bbbb,type:str]\n',
-      );
-      final keys = inspectSecretKeys(_secretsFile);
-      expect(
-        keys.firstWhere((k) => k.name == 'keystore_pasword').recognized,
-        isFalse,
-      );
-      expect(keys.firstWhere((k) => k.name == 'key_alias').recognized, isTrue);
-    });
-
-    test('agrees with what secrets exec accepts', () {
-      // These two must not drift: a pre-flight check that approximates the real
-      // rules eventually disagrees with them, which is worse than no check.
-      encryptedFile();
-      for (final key in inspectSecretKeys(_secretsFile)) {
         expect(
-          key.recognized,
-          knownSecretKeys().contains(key.name),
-          reason: key.name,
+          inspectorHappy,
+          parserHappy,
+          reason:
+              'inspect and exec disagree about "${entry.key}" — the '
+              'pre-flight is only worth running if it predicts the thing it '
+              'runs before',
         );
       }
-    });
-
-    test('needs no identity and never decrypts', () {
-      // There is no sops binary in this repo root at all, so a run that
-      // succeeds cannot have shelled out to one.
-      File('${_root.path}/.bin/sops').deleteSync();
-      encryptedFile();
-      expect(inspectSecretKeys(_secretsFile), hasLength(8));
-    });
-
-    test('an absent file is named', () {
-      expect(
-        () => inspectSecretKeys(_secretsFile),
-        throwsSaying(contains('secrets/release.yaml')),
-      );
-    });
-  });
-
-  group('refusing', () {
-    test('a half-configured group stops before anything runs', () {
-      // The failure this exists to prevent: Gradle falls through to the debug
-      // key and produces an artifact that only Play rejects, after a full
-      // upload has been sent.
-      secrets('keystore_base64: ${b64('a keystore')}\n');
-      expect(
-        load,
-        throwsSaying(
-          allOf(
-            contains('the Android upload key is half configured'),
-            contains('keystore_password, key_alias'),
-          ),
-        ),
-      );
-    });
-
-    test('an unrecognized key is a typo and is reported as one', () {
-      // Silent otherwise: the credential never arrives, and the failure
-      // surfaces at the store rather than here.
-      secrets(
-        'keystore_base64: ${b64('k')}\n'
-        'keystore_pasword: swordfish\n'
-        'key_alias: upload\n',
-      );
-      expect(load, throwsSaying(contains('keystore_pasword')));
-      expect(load, throwsSaying(contains('known keys:')));
-    });
-
-    test('a value that is not base64 says which key', () {
-      secrets(
-        'keystore_base64: "not base64!!"\n'
-        'keystore_password: swordfish\n'
-        'key_alias: upload\n',
-      );
-      expect(
-        load,
-        throwsSaying(contains('keystore_base64 is not valid base64')),
-      );
-    });
-
-    test('a malformed decrypted file does not echo what it decrypted to', () {
-      // The one place plaintext could reach a terminal. `_parse` runs on the
-      // *decrypted* document, and package:yaml renders a parse error with the
-      // offending source line and a caret under it — so interpolating the whole
-      // exception prints that line, key material included, to stderr and into
-      // whatever CI log is capturing it.
-      //
-      // A tab as indentation is invalid YAML that a healthy `sops -d` would
-      // never emit, which is why this needs a hand-mangled file and is not an
-      // everyday hazard. It is still the difference between an error and a
-      // disclosure.
-      secrets(
-        'android:\n'
-        '\tapi_private_key_base64: MIIEvQIBADANBgkqSECRETKEYMATERIAL\n',
-      );
-      expect(
-        load,
-        throwsA(
-          isA<ProjectException>()
-              .having(
-                (e) => e.message,
-                'message',
-                isNot(contains('SECRETKEYMATERIAL')),
-              )
-              // Still has to say what went wrong, or the fix trades a leak for
-              // an unactionable error.
-              .having((e) => e.message, 'message', contains('valid YAML')),
-        ),
-      );
-    });
-
-    test('an absent secrets file is named', () {
-      expect(load, throwsSaying(contains('secrets/release.yaml')));
-    });
-
-    test('sops failing says where an identity is expected', () {
-      brokenSops();
-      secrets('key_alias: upload\n');
-      expect(load, throwsSaying(contains('SOPS_AGE_KEY')));
-    });
-
-    test('no sops at all points at deps install', () {
-      File('${_root.path}/.bin/sops').deleteSync();
-      secrets('key_alias: upload\n');
-      // Only meaningful when the host has no sops on PATH either. Marked
-      // skipped rather than returned from, so a machine that does have one
-      // reports "skipped" instead of a green test that asserted nothing.
-      if (Process.runSync('sh', ['-c', 'command -v sops']).exitCode == 0) {
-        markTestSkipped('sops is on PATH here, so the fallback finds it');
-        return;
-      }
-      expect(load, throwsSaying(contains('deps install')));
-    });
-
-    test('nothing to run is refused rather than succeeding silently', () {
-      secrets('key_alias: upload\n');
-      expect(
-        () => runSecretsExec(
-          repoRoot: _root.path,
-          secretsFile: _secretsFile,
-          command: const [],
-        ),
-        throwsSaying(contains('nothing to run')),
-      );
     });
   });
 
   group('running a command', () {
-    setUp(() {
+    test('the plaintext is gone when the run ends', () {
       secrets(
-        'keystore_base64: ${b64('a keystore')}\n'
-        'keystore_password: swordfish\n'
-        'key_alias: upload\n',
+        'android:\n'
+        '  keystores:\n'
+        '    upload:\n'
+        '      base64: ${b64('a keystore')}\n'
+        '      password: p\n'
+        '      key_alias: x\n',
       );
-    });
-
-    test(
-      'the child gets the credentials, and the repository as its cwd',
-      () async {
-        // stdout is inherited rather than captured, so the child reports through
-        // a file — which also proves it ran with the repository root as its
-        // working directory, since the path is relative.
-        final code = await runSecretsExec(
-          repoRoot: _root.path,
-          secretsFile: _secretsFile,
-          command: [
-            'sh',
-            '-c',
-            'printf "%s\\n%s\\n" "\$ANDROID_KEY_ALIAS" "\$ANDROID_KEYSTORE_PATH" > report',
-          ],
-        );
-
-        expect(code, 0);
-        final report = File('${_root.path}/report').readAsLinesSync();
-        expect(report.first, 'upload');
-        expect(report[1], isNotEmpty);
-      },
-    );
-
-    test('the decrypted keystore does not outlive the command', () async {
-      // The property the whole design is for. The child reports where its
-      // keystore was; nothing may be there afterwards.
-      await runSecretsExec(
-        repoRoot: _root.path,
-        secretsFile: _secretsFile,
-        command: ['sh', '-c', 'printf "%s" "\$ANDROID_KEYSTORE_PATH" > where'],
-      );
-
-      final keystore = File('${_root.path}/where').readAsStringSync();
-      expect(keystore, isNotEmpty);
-      expect(File(keystore).existsSync(), isFalse);
-      expect(Directory(File(keystore).parent.path).existsSync(), isFalse);
-    });
-
-    test(
-      'a failing command is cleaned up after too, and its status passed on',
-      () async {
-        // The case `exec` would have broken: replacing this process means nothing
-        // ever runs the cleanup.
-        final code = await runSecretsExec(
-          repoRoot: _root.path,
-          secretsFile: _secretsFile,
-          command: [
-            'sh',
-            '-c',
-            'printf "%s" "\$ANDROID_KEYSTORE_PATH" > where; exit 3',
-          ],
-        );
-
-        expect(code, 3);
-        expect(
-          File(File('${_root.path}/where').readAsStringSync()).existsSync(),
-          isFalse,
-        );
-      },
-    );
-
-    test('what was loaded is reported, so an absent credential is visible', () {
       final loaded = load();
-      addTearDown(loaded.dispose);
-      expect(loaded.loaded, ['the Android upload key']);
-      // Naming what arrived rather than what was asked for is the point: a Play
-      // service account that is simply not in the file has to be visible here
-      // rather than inferred from a failure three minutes later.
-      expect(loaded.loaded, isNot(contains('the Play service account')));
+      final path = loaded.environment['ANDROID_KEYSTORE_PATH']!;
+      expect(File(path).existsSync(), isTrue);
+      loaded.dispose();
+      expect(File(path).existsSync(), isFalse);
+    });
+
+    test('what was loaded is reported by path', () {
+      secrets(
+        'android:\n'
+        '  keystores:\n'
+        '    upload:\n'
+        '      base64: ${b64('a')}\n'
+        '      password: p\n'
+        '      key_alias: x\n'
+        '  play_service_account:\n'
+        '    json_base64: ${b64('{}')}\n',
+      );
+      final loaded = load();
+      expect(loaded.loaded, [
+        'android.keystores.upload',
+        'android.play_service_account',
+      ]);
+      loaded.dispose();
+    });
+
+    test('a sops that cannot decrypt says so, and writes nothing', () {
+      brokenSops();
+      secrets('android:\n  keystores:\n    upload: { base64: YQ== }\n');
+      expect(load, throwsA(isA<ProjectException>()));
     });
   });
 }

@@ -29,141 +29,341 @@ import 'package:yaml/yaml.dart';
 
 import 'project.dart';
 
-/// A credential group: some keys only make sense together.
+/// What the file may contain, declared once.
 ///
-/// Modeled rather than checked ad hoc because a *partial* group is the
-/// dangerous state. A keystore path with no password does not fail as "you
-/// forgot the password" — Gradle falls through to the debug key and produces an
-/// artifact that only Play rejects, after a full upload. The same shape as the
-/// "all four or none" rule in the consuming build.gradle.kts, and for the same
-/// reason.
-/// A family may appear more than once, distinguished by a `<name>_` prefix.
-///
-/// One signing identity was the assumption, and it does not survive a real
-/// consumer: an app that ships to the App Store, notarizes a direct download
-/// and signs a `.pkg` has three Apple certificates, and one that keeps a
-/// scoped upload key alongside an Admin key for reading the portal has two API
-/// keys of *different kinds*. Enumerating those as separate names would make
-/// the vocabulary a function of one consumer's distribution channels.
-///
-/// The prefix goes in the leaf name rather than in a nested mapping, because
-/// [_walkLeaves] deliberately refuses to look deeper than a heading — a
-/// credential does not become a different credential because of where it was
-/// filed. So `distribution_p12_base64` is this family with the name
-/// `distribution`, and the unprefixed form every existing file uses is the same
-/// template with an empty name. One shape, not two code paths that have to
-/// agree.
-class _Group {
-  const _Group(this.name, {required this.required, this.optional = const []});
+/// The shape is the schema and the schema is data. Everything that used to
+/// recover structure from a name — which credential a key belongs to, which
+/// instance, whether it is recognized at all — is now a position in this tree,
+/// so the recovery cannot be reimplemented slightly differently by each caller.
+/// That is not a tidiness argument: every defect this file has had was one
+/// consumer's idea of "recognized" drifting from another's.
+sealed class _Node {
+  const _Node();
+}
 
-  /// What this is, for error messages: "the Android upload key".
+/// Fixed keys, enumerated here. An unknown child is fatal.
+///
+/// This is what keeps a typo'd structural node loud: at `apple.` the only legal
+/// keys are the ones named below, and "a credential" is not among the options —
+/// so `certifcates:` cannot be quietly read as something's name.
+class _Section extends _Node {
+  const _Section(this.children);
+
+  final Map<String, _Node> children;
+}
+
+/// A credential that may exist more than once, each under a name of its own.
+///
+/// [instances] closes the set where the names mean something — Apple's
+/// certificate types are an enum, so `developr_id` is a typo and can be refused.
+/// Left null the names are the project's to choose, which is right for keystores
+/// and profiles, and the level no schema can police.
+class _Family extends _Node {
+  const _Family(this.what, {required this.fields, this.instances});
+
+  final String what;
+  final List<_Field> fields;
+  final Set<String>? instances;
+}
+
+/// A credential with no instance level, because there is only ever one.
+class _Singleton extends _Node {
+  const _Singleton(this.what, {required this.fields});
+
+  final String what;
+  final List<_Field> fields;
+}
+
+/// One value of one credential.
+///
+/// Required is the default: a half-configured credential is the dangerous state,
+/// since a keystore with no password does not fail as "you forgot the password"
+/// — Gradle falls through to the debug key and produces an artifact only Play
+/// rejects, after a full upload.
+class _Field {
+  const _Field(this.name, {this.required = true});
+
   final String name;
-
-  /// Leaf names for the unprefixed instance, and suffixes for every other.
-  final List<String> required;
-  final List<String> optional;
-
-  List<String> get keys => [...required, ...optional];
+  final bool required;
 }
 
-const _groups = [
-  _Group(
-    'the Android upload key',
-    required: ['keystore_base64', 'keystore_password', 'key_alias'],
-    // PKCS12 uses one password for the store and the key alike, so this is
-    // almost never set — but a keystore with a genuinely separate key password
-    // slots straight in, and Gradle needs no special case either way.
-    optional: ['key_password'],
+const _schema = _Section({
+  'android': _Section({
+    'keystores': _Family(
+      'an Android signing key',
+      fields: [
+        _Field('base64'),
+        _Field('password'),
+        _Field('key_alias'),
+        // PKCS12 uses one password for the store and the key alike, so this is
+        // almost never set — but a keystore with a genuinely separate key
+        // password slots straight in, and Gradle needs no special case.
+        _Field('key_password', required: false),
+      ],
+    ),
+    'play_service_account': _Singleton(
+      'the Play service account',
+      fields: [_Field('json_base64')],
+    ),
+  }),
+  'apple': _Section({
+    'api_keys': _Family(
+      'an App Store Connect API key',
+      fields: [
+        _Field('id'),
+        _Field('private_key_base64'),
+        // Declared, not inferred. altool and this tool's JWT builder both read
+        // the *filename* to decide which claims to send, and materialization
+        // writes that filename — so inferring the kind from a name we chose
+        // ourselves is circular, and got an individual key sent `iss` and a
+        // bare 401 after a full build. The filename is derived from this and
+        // the id; see _apiKeyFileName.
+        _Field('kind'),
+        // Optional because altool documents --api-issuer as required alongside
+        // --api-key even for an individual key, while the REST JWT must not
+        // carry `iss`. Having one says nothing about which kind this is.
+        _Field('issuer_id', required: false),
+      ],
+    ),
+    'certificates': _Family(
+      'an Apple signing certificate',
+      instances: {'distribution', 'developer_id', 'mac_installer'},
+      fields: [_Field('p12_base64'), _Field('password')],
+    ),
+    'profiles': _Family('a provisioning profile', fields: [_Field('base64')]),
+  }),
+  // The escape hatch, and deliberately a narrow one. A project has credentials
+  // this tool will never understand — an artifact host, a mirror — and the
+  // alternative to holding them here is the project keeping a second secret
+  // mechanism forever.
+  //
+  // `env` is declared rather than minted, so nothing has to invent a variable
+  // name from an instance name, and a typo is still a typo rather than a
+  // silently absent credential.
+  'tokens': _Family(
+    'a project token',
+    fields: [_Field('env'), _Field('value')],
   ),
-  _Group(
-    'the Play service account',
-    required: ['play_service_account_json_base64'],
-  ),
-  _Group(
-    'the App Store Connect API key',
-    required: ['api_key_id', 'api_private_key_base64'],
-    // `api_issuer_id` is optional because an *individual* key — generated by
-    // one App Store Connect user, inheriting that user's app restrictions — is
-    // the credential worth having in CI, and requiring an issuer would rule it
-    // out. Note it is *not* a reliable signal of key kind: altool documents
-    // `--api-issuer` as required alongside `--api-key`, so an individual key
-    // carries one too. Only the filename says which kind it is.
-    //
-    // `api_private_key_filename` is how that filename survives. Absent, the key
-    // is written as `AuthKey_<id>.p8` — a team key's name, and what this always
-    // did. An individual key must set it to `ApiKey_<id>.p8` or it is sent the
-    // wrong JWT claims.
-    optional: ['api_issuer_id', 'api_private_key_filename'],
-  ),
-  _Group(
-    'the Apple distribution certificate',
-    required: ['distribution_p12_base64', 'distribution_p12_password'],
-  ),
-];
+  // A key something wants as a *file* but has no opinion about where — ssh
+  // takes `-i <path>`. Same shape as a p12, and a different shape from a
+  // credential the build reads at a path it does not choose, which is the one
+  // question that decides where anything in here belongs.
+  'ssh_keys': _Family('an ssh key', fields: [_Field('base64'), _Field('env')]),
+});
 
-/// Every key any group names. Anything else in the file is an error.
-final _knownKeys = {for (final g in _groups) ...g.keys};
-
-/// One leaf of one instance of one family: `upload_keystore_base64` is the
-/// `keystore_base64` leaf of the Android family, named `upload`.
-class _Leaf {
-  const _Leaf(this.group, this.instance, this.suffix);
-
-  final _Group group;
-
-  /// `''` for the unprefixed instance every existing file uses.
-  final String instance;
-  final String suffix;
-
-  /// How this leaf is written, which is what error messages must say back.
-  String get key => instance.isEmpty ? suffix : '${instance}_$suffix';
-}
-
-/// Instance names mint environment variable names, so they have to survive
-/// uppercasing into something legal and unambiguous.
+/// Instance names become filenames — `<instance>.p12` in the temp directory,
+/// and one profile per name — so the grammar is a path-traversal guard as much
+/// as a spelling rule. No dots, no separators, nothing that leaves the
+/// directory it is written into.
 final _instanceName = RegExp(r'^[a-z][a-z0-9]*(_[a-z0-9]+)*$');
 
-/// Which family and instance a leaf belongs to, or null if it belongs to none.
-///
-/// Longest suffix wins, so a family whose suffix is a tail of another's cannot
-/// silently capture it — `distribution_p12_password` is the Apple certificate's
-/// `p12_password`, never some family's bare `password` under the name
-/// `distribution_p12`. The suffixes are chosen to make that unambiguous; this
-/// only enforces it.
-_Leaf? _classify(String key) {
-  _Leaf? best;
-  for (final group in _groups) {
-    for (final suffix in group.keys) {
-      if (key == suffix) {
-        if (best == null || suffix.length > best.suffix.length) {
-          best = _Leaf(group, '', suffix);
-        }
-        continue;
-      }
-      if (!key.endsWith('_$suffix')) {
-        continue;
-      }
-      final instance = key.substring(0, key.length - suffix.length - 1);
-      if (!_instanceName.hasMatch(instance)) {
-        continue;
-      }
-      if (best == null || suffix.length > best.suffix.length) {
-        best = _Leaf(group, instance, suffix);
-      }
+/// One credential found in the file: where it is, what it is, and its values.
+class _Credential {
+  const _Credential({
+    required this.path,
+    required this.what,
+    required this.instance,
+    required this.fields,
+  });
+
+  /// `android.keystores.upload`, and what every message about it says.
+  final String path;
+  final String what;
+
+  /// The instance name, or `''` for a singleton.
+  final String instance;
+
+  /// Field name to value. Values are ciphertext when the file has not been
+  /// decrypted, which is why the walk never looks at them.
+  final Map<String, String> fields;
+
+  bool get isComplete => missing.isEmpty;
+
+  List<String> get missing => [
+    for (final field in _fieldsOf(what, path))
+      if (field.required && !fields.containsKey(field.name)) field.name,
+  ];
+}
+
+/// The declared fields of whatever sits at [path]. Only used for reporting, so
+/// it re-descends rather than being threaded through.
+List<_Field> _fieldsOf(String what, String path) {
+  final parts = path.split('.');
+  _Node? node = _schema;
+  for (final part in parts) {
+    if (node is _Section) {
+      node = node.children[part];
+    } else if (node is _Family) {
+      break;
     }
   }
-  return best;
+  return switch (node) {
+    _Family(:final fields) => fields,
+    _Singleton(:final fields) => fields,
+    _ => const [],
+  };
 }
 
 /// The block sops writes to record its own recipients and MAC.
 ///
-/// Present in the encrypted file and stripped by `sops -d`, so it is skipped
-/// when reading a file that has not been decrypted and never appears in one
-/// that has.
+/// Stripped by `sops -d`, so it is only seen when reading a file that has not
+/// been decrypted — and only ever at the top level. A `sops` key anywhere else
+/// is an unknown key and stays fatal.
 const _sopsMetadataKey = 'sops';
 
-/// One credential name found in a secrets file, and whether it is accepted.
-typedef SecretKey = ({String name, String? group, bool recognized});
+/// Every credential in [document], or an error naming the path of the first
+/// thing that is not one.
+///
+/// **This is the only reader.** `secrets keys` calls it and ignores the values;
+/// the parser calls it and keeps them. Recognition is reaching a leaf without an
+/// error, so there is nowhere for a second opinion about what counts as
+/// recognized to live.
+({List<_Credential> credentials, List<String> problems}) _walk(
+  YamlMap document,
+  String path,
+) {
+  final found = <_Credential>[];
+  final problems = <String>[];
+  _descend(_schema, document, '', path, found, problems);
+  found.sort((a, b) => a.path.compareTo(b.path));
+  return (credentials: found, problems: problems);
+}
+
+void _descend(
+  _Node node,
+  YamlMap map,
+  String at,
+  String path,
+  List<_Credential> found,
+  List<String> problems,
+) {
+  final where = at.isEmpty ? '' : '$at.';
+  switch (node) {
+    case _Section(:final children):
+      for (final entry in map.entries) {
+        final key = '${entry.key}';
+        // Only at the top level, and only this one name.
+        if (at.isEmpty && key == _sopsMetadataKey) {
+          continue;
+        }
+        final child = children[key];
+        if (child == null) {
+          problems.add(
+            '$where$key is not something this understands — known here: '
+            '${(children.keys.toList()..sort()).join(', ')}',
+          );
+          continue;
+        }
+        final value = entry.value;
+        if (value is! YamlMap) {
+          problems.add(
+            '$where$key must be a mapping, and is a ${value.runtimeType}',
+          );
+          continue;
+        }
+        _descend(child, value, '$where$key', path, found, problems);
+      }
+
+    case _Family(:final what, :final fields, :final instances):
+      for (final entry in map.entries) {
+        final instance = '${entry.key}';
+        if (instances != null && !instances.contains(instance)) {
+          problems.add(
+            '$where$instance is not one of the kinds there are — known here: '
+            '${(instances.toList()..sort()).join(', ')}',
+          );
+          continue;
+        }
+        if (!_instanceName.hasMatch(instance)) {
+          problems.add(
+            '$where$instance is not a usable name — it becomes a filename, so '
+            'it must be lowercase letters, digits and underscores, starting '
+            'with a letter',
+          );
+          continue;
+        }
+        final value = entry.value;
+        if (value is! YamlMap) {
+          problems.add(
+            '$where$instance must be a mapping of '
+            '${fields.map((f) => f.name).join(', ')}, and is a '
+            '${value.runtimeType}',
+          );
+          continue;
+        }
+        found.add(
+          _Credential(
+            path: '$where$instance',
+            what: what,
+            instance: instance,
+            fields: _leaves(value, fields, '$where$instance', problems),
+          ),
+        );
+      }
+
+    case _Singleton(:final what, :final fields):
+      found.add(
+        _Credential(
+          path: at,
+          what: what,
+          instance: '',
+          fields: _leaves(map, fields, at, problems),
+        ),
+      );
+  }
+}
+
+/// The declared fields of one credential, refusing anything else.
+Map<String, String> _leaves(
+  YamlMap map,
+  List<_Field> fields,
+  String at,
+  List<String> problems,
+) {
+  final known = {for (final f in fields) f.name};
+  final values = <String, String>{};
+  for (final entry in map.entries) {
+    final key = '${entry.key}';
+    if (!known.contains(key)) {
+      problems.add(
+        '$at.$key is not a field of this credential — known here: '
+        '${(known.toList()..sort()).join(', ')}',
+      );
+      continue;
+    }
+    final value = entry.value;
+    if (value is YamlMap || value is YamlList) {
+      problems.add('$at.$key must be a value, and is a ${value.runtimeType}');
+      continue;
+    }
+    if (value == null) {
+      continue;
+    }
+    // Scalars are stringified rather than type-checked: a key alias that is all
+    // digits parses as an int, and refusing it would be pedantry.
+    values[key] = '$value';
+  }
+  return values;
+}
+
+/// One credential found in a secrets file: where it is, and what it holds.
+///
+/// Per credential rather than per value, because the credential is the unit
+/// that is complete or not — a keystore missing its password is one broken
+/// thing, not three fine values and one absent one.
+typedef SecretKey = ({
+  String path,
+  String what,
+  List<String> fields,
+  List<String> missing,
+});
+
+/// What is wrong with a secrets file, if anything.
+///
+/// Separate from the credentials rather than thrown, so one run reports
+/// everything wrong at once — a file with three typos should not need three
+/// attempts to fix.
+typedef SecretsReport = ({List<SecretKey> credentials, List<String> problems});
 
 /// The credential names in [secretsFile], **without decrypting it**.
 ///
@@ -172,14 +372,22 @@ typedef SecretKey = ({String name, String? group, bool recognized});
 /// secret reaching a terminal — which makes this the check to run *before*
 /// adopting a new version, since an unrecognized key stops `secrets exec` dead.
 ///
-/// **It shares [_walkLeaves] with the parser that enforces this**, which is the
-/// only reason it can be trusted: a pre-flight check that approximates the real
-/// rules is a pre-flight check that eventually disagrees with them. This
-/// replaced a `grep` recommended in the skill, whose character class omitted
-/// digits and so hid `keystore_p12_base64`, `api_private_key_base64` and every
-/// other name carrying actual key material — reporting the four that mattered
-/// least and reading as a clean bill of health.
-List<SecretKey> inspectSecretKeys(File secretsFile) {
+/// **It calls [_walk], the same and only reader the parser calls**, which is the
+/// only reason it can be trusted: a pre-flight that approximates the real rules
+/// is a pre-flight that eventually disagrees with them. Sharing a *walker* was
+/// not enough the last time — "is this recognized" was computed in a second
+/// place, and the two answers drifted while a test that compared one to itself
+/// stayed green. Here recognition is reaching a leaf without a problem, so
+/// there is no second answer to hold.
+///
+/// It also replaced a `grep` recommended in the skill, whose character class
+/// omitted digits and so hid every name carrying actual key material —
+/// reporting the few that mattered least and reading as a clean bill of health.
+///
+/// Completeness is reported too, and can be: a missing field is a missing
+/// *name*, so half-configuration is now visible from the encrypted file rather
+/// than only after decryption.
+SecretsReport inspectSecretKeys(File secretsFile) {
   if (!secretsFile.existsSync()) {
     throw ProjectException('no ${secretsFile.path}');
   }
@@ -203,63 +411,43 @@ List<SecretKey> inspectSecretKeys(File secretsFile) {
     );
   }
 
-  final found = <SecretKey>[];
-  _walkLeaves(
-    document,
-    secretsFile.path,
-    skipMetadata: true,
-    onLeaf: (key, _, group) => found.add((
-      name: key,
-      group: group.isEmpty ? null : group,
-      recognized: _knownKeys.contains(key),
-    )),
+  final walked = _walk(document, secretsFile.path);
+  return (
+    credentials: [
+      for (final credential in walked.credentials)
+        (
+          path: credential.path,
+          what: credential.what,
+          fields: credential.fields.keys.toList()..sort(),
+          missing: credential.missing,
+        ),
+    ],
+    problems: walked.problems,
   );
-  found.sort((a, b) => a.name.compareTo(b.name));
-  return found;
 }
 
-/// Every credential name `secrets exec` accepts, sorted.
-List<String> knownSecretKeys() => _knownKeys.toList()..sort();
-
-/// Calls [onLeaf] for every credential in [document], walking exactly one level
-/// of grouping.
+/// Every credential this understands, as paths, sorted.
 ///
-/// **Headings are allowed and carry no meaning.** A real file groups its
-/// credentials — `android:` and `apple:` — because that is how somebody reads
-/// it, and the shell script this replaces coped by stripping leading whitespace
-/// before matching, which made it indentation-blind by accident. Reading only
-/// the top level instead would refuse every such file, having found none of the
-/// credentials in it.
-///
-/// So the heading is discarded. The names that matter are the leaves, which is
-/// what the credential groups are declared in terms of — a credential does not
-/// become a different credential because of the heading it was filed under.
-void _walkLeaves(
-  YamlMap document,
-  String path, {
-  required void Function(String key, Object? value, String group) onLeaf,
-  bool skipMetadata = false,
-}) {
-  for (final entry in document.entries) {
-    final key = '${entry.key}';
-    final value = entry.value;
-    if (skipMetadata && key == _sopsMetadataKey) {
-      continue;
-    }
-    if (value is YamlMap) {
-      for (final child in value.entries) {
-        if (child.value is YamlMap || child.value is YamlList) {
-          throw ProjectException(
-            '$path nests $key.${child.key} deeper than a credential goes — '
-            'headings may group values, but only one level down',
-          );
+/// Describes the schema rather than a list kept beside it, so it cannot fall
+/// behind what is actually accepted.
+List<String> knownSecretKeys() {
+  final paths = <String>[];
+  void walk(_Node node, String at) {
+    final where = at.isEmpty ? '' : '$at.';
+    switch (node) {
+      case _Section(:final children):
+        for (final entry in children.entries) {
+          walk(entry.value, '$where${entry.key}');
         }
-        onLeaf('${child.key}', child.value, key);
-      }
-    } else {
-      onLeaf(key, value, '');
+      case _Family(:final fields):
+        paths.add('$at.<name>.{${fields.map((f) => f.name).join(', ')}}');
+      case _Singleton(:final fields):
+        paths.add('$at.{${fields.map((f) => f.name).join(', ')}}');
     }
   }
+
+  walk(_schema, '');
+  return paths..sort();
 }
 
 /// What was decrypted, and where the files it had to write went.
@@ -354,7 +542,7 @@ LoadedSecrets loadSecrets({
   }
 }
 
-Map<String, String> _parse(String plaintext, String path) {
+List<_Credential> _parse(String plaintext, String path) {
   final dynamic document;
   try {
     document = loadYaml(plaintext);
@@ -370,199 +558,240 @@ Map<String, String> _parse(String plaintext, String path) {
     throw ProjectException('$path must be a mapping of credentials');
   }
 
-  final values = <String, String>{};
-  final unknown = <String>[];
-  final seenUnder = <String, String>{};
+  final walked = _walk(document, path);
 
-  void leaf(String rawKey, Object? value, String group) {
-    final where = group.isEmpty ? rawKey : '$group.$rawKey';
-    final classified = _classify(rawKey);
-    if (classified == null) {
-      unknown.add(where);
-      return;
-    }
-    // The classified name rather than the written one, so `upload_keystore_base64`
-    // under `android:` and the same leaf at the top level are recognized as one
-    // credential named twice rather than two that happen to look alike.
-    final key = classified.key;
-    final clash = seenUnder[key];
-    if (clash != null) {
-      throw ProjectException(
-        '$path names $key twice, under $clash and $group — which '
-        'one wins is not something to guess at with a credential',
-      );
-    }
-    if (value == null) {
-      return;
-    }
-    // Scalars are stringified rather than type-checked: a key alias that is
-    // all digits parses as an int, and refusing it would be pedantry.
-    values[key] = '$value';
-    seenUnder[key] = group.isEmpty ? '(top level)' : group;
-  }
-
-  // Shared with `inspectSecretKeys`, deliberately: what counts as a credential
-  // name has to be one answer, or the check somebody runs before adopting a
-  // version disagrees with the parser that refuses them.
-  //
-  // No metadata to skip here — `sops -d` strips its own block, so a decrypted
-  // file never carries one, and a `sops:` key in a plaintext file is an
-  // unrecognized name worth reporting rather than ignoring.
-  _walkLeaves(document, path, onLeaf: leaf);
-
-  // An unrecognized key is a typo, and a typo here is silent: the credential
-  // simply never arrives, the build falls back to a debug key or an anonymous
-  // API call, and the failure surfaces at the store.
-  if (unknown.isNotEmpty) {
-    unknown.sort();
+  // Everything wrong at once. A file with three typos should take one attempt
+  // to fix, not three — and an unrecognized name is a typo whose consequence is
+  // silent: the credential never arrives, the build falls back to a debug key
+  // or an anonymous API call, and the failure surfaces at the store.
+  if (walked.problems.isNotEmpty) {
     throw ProjectException(
-      '$path has ${unknown.length == 1 ? 'an unrecognized key' : 'unrecognized keys'}: '
-      '${unknown.join(', ')}\n'
-      '    known keys: ${(_knownKeys.toList()..sort()).join(', ')}',
+      '$path does not describe credentials this understands:\n'
+      '${walked.problems.map((p) => '    $p').join('\n')}',
     );
   }
-  return values;
+
+  // Half-configured is the dangerous state, so it is refused here rather than
+  // discovered downstream — per credential, because that is the unit that is
+  // complete or not.
+  for (final credential in walked.credentials) {
+    if (credential.isComplete) {
+      continue;
+    }
+    throw ProjectException(
+      '$path: ${credential.path} is half configured — '
+      '${credential.missing.join(', ')} '
+      '${credential.missing.length == 1 ? 'is' : 'are'} missing.\n'
+      'Set all of a credential or none of it: a partial set fails at the '
+      'store rather than here.',
+    );
+  }
+
+  return walked.credentials;
 }
 
-LoadedSecrets _materialize(Map<String, String> values, Directory work) {
+/// Turns credentials into the environment a child sees.
+///
+/// **Every family's materializer is reached from the same list the parser
+/// validated**, so a credential cannot be checked by one and forgotten by the
+/// other. The previous shape asked `values.containsKey('keystore_base64')` and
+/// so looked straight past any credential with a name — which validated,
+/// reported nothing amiss, and set no variables at all.
+LoadedSecrets _materialize(List<_Credential> credentials, Directory work) {
   final environment = Map<String, String>.from(Platform.environment);
   final loaded = <String>[];
 
-  for (final group in _groups) {
-    final present = group.keys.where(values.containsKey).toList();
-    if (present.isEmpty) {
-      continue;
+  Iterable<_Credential> under(String family) =>
+      credentials.where((c) => c.path.startsWith('$family.'));
+
+  // --- Android ---------------------------------------------------------------
+
+  // One keystore fills the fixed names every consumer already reads. Instance
+  // names never become variable names: uppercasing is not injective, so `dist`
+  // and `dist_p12` would mint the same variable and one would silently win.
+  final keystores = under('android.keystores').toList();
+  if (keystores.length > 1) {
+    throw ProjectException(
+      'this file holds ${keystores.length} keystores — '
+      '${keystores.map((c) => c.instance).join(', ')} — so which one signs is '
+      'not something to infer.\n'
+      'Name it: secrets exec --keystore <name> -- ...',
+    );
+  }
+  if (keystores.length == 1) {
+    final keystore = keystores.single;
+    final file = _writeBase64(
+      work,
+      '${keystore.instance}.p12',
+      keystore.fields['base64']!,
+      '${keystore.path}.base64',
+    );
+    environment['ANDROID_KEYSTORE_PATH'] = file.path;
+    environment['ANDROID_KEYSTORE_PASSWORD'] = keystore.fields['password']!;
+    environment['ANDROID_KEY_ALIAS'] = keystore.fields['key_alias']!;
+    environment['ANDROID_KEY_PASSWORD'] =
+        keystore.fields['key_password'] ?? keystore.fields['password']!;
+    loaded.add(keystore.path);
+  }
+
+  for (final account in credentials.where(
+    (c) => c.path == 'android.play_service_account',
+  )) {
+    environment['GOOGLE_PLAY_SERVICE_ACCOUNT_JSON'] = utf8.decode(
+      _decode(account.fields['json_base64']!, '${account.path}.json_base64'),
+    );
+    loaded.add(account.path);
+  }
+
+  // --- Apple -----------------------------------------------------------------
+
+  // Every key goes into one directory, because altool finds a key by its id
+  // inside $API_PRIVATE_KEYS_DIR rather than by a path. The selected one also
+  // fills the singular names, for xcodebuild and for AscCredentials.
+  final apiKeys = under('apple.api_keys').toList();
+  if (apiKeys.isNotEmpty) {
+    final keys = Directory('${work.path}/private_keys')..createSync();
+    for (final key in apiKeys) {
+      _writeBase64(
+        keys,
+        _apiKeyFileName(key.fields['kind']!, key.fields['id']!, key.path),
+        key.fields['private_key_base64']!,
+        '${key.path}.private_key_base64',
+      );
+      loaded.add(key.path);
     }
-    final missing = group.required.where((k) => !values.containsKey(k));
-    if (missing.isNotEmpty) {
+    environment['API_PRIVATE_KEYS_DIR'] = keys.path;
+
+    if (apiKeys.length > 1) {
       throw ProjectException(
-        '${group.name} is half configured — ${missing.join(', ')} '
-        '${missing.length == 1 ? 'is' : 'are'} missing.\n'
-        'Set all of ${group.required.join(', ')}, or none of them: a partial '
-        'set fails at the store rather than here.',
+        'this file holds ${apiKeys.length} App Store Connect keys — '
+        '${apiKeys.map((c) => c.instance).join(', ')} — so which one to use is '
+        'not something to infer.\n'
+        'Name it: secrets exec --api-key <name> -- ...',
       );
     }
-    loaded.add(group.name);
-  }
-
-  if (values.containsKey('keystore_base64')) {
-    final keystore = _writeBase64(
-      work,
-      'upload.p12',
-      values['keystore_base64']!,
-      'keystore_base64',
-    );
-    environment['ANDROID_KEYSTORE_PATH'] = keystore.path;
-    environment['ANDROID_KEYSTORE_PASSWORD'] = values['keystore_password']!;
-    environment['ANDROID_KEY_ALIAS'] = values['key_alias']!;
-    environment['ANDROID_KEY_PASSWORD'] =
-        values['key_password'] ?? values['keystore_password']!;
-  }
-
-  if (values.containsKey('play_service_account_json_base64')) {
-    // Stored base64-encoded because the service account is itself JSON, and
-    // nesting raw JSON inside a YAML scalar invites quoting bugs for no
-    // benefit. It goes to the child as the JSON itself.
-    environment['GOOGLE_PLAY_SERVICE_ACCOUNT_JSON'] = utf8.decode(
-      _decode(
-        values['play_service_account_json_base64']!,
-        'play_service_account_json_base64',
-      ),
-    );
-  }
-
-  if (values.containsKey('api_key_id')) {
-    final keyId = values['api_key_id']!;
-    // The directory name is not decoration. `altool --apiKey` does not take a
-    // path: it looks for AuthKey_<id>.p8 in ./private_keys, ~/private_keys,
-    // ~/.private_keys, ~/.appstoreconnect/private_keys, or
-    // $API_PRIVATE_KEYS_DIR. So the file has to be named after the key and live
-    // in a directory altool will search, and the last of those is the only one
-    // that is not a fixed location in somebody's home.
-    // **And the prefix is not decoration either.** `ApiKey_` is what Apple
-    // names an individual key and `AuthKey_` a team key, and both altool and
-    // this tool's own JWT builder read that prefix to decide which claims to
-    // send — `iss` for a team key, `sub: user` for an individual one. Sending
-    // the wrong set is a 401 that names nothing.
-    //
-    // So writing `AuthKey_` unconditionally, as this did until 1.7.2, destroys
-    // the only signal the classification has. An individual key came out
-    // classified as a team key and failed after a full build. The issuer cannot
-    // stand in for it: altool documents `--api-issuer` as required alongside
-    // `--api-key`, so an individual key legitimately carries one too.
-    //
-    // Hence the name travels with the key rather than being invented here.
-    // Inferring a fact from a filename is sound when Apple chose the filename;
-    // it is circular when we did.
-    final keys = Directory('${work.path}/private_keys')..createSync();
-    final fileName = _apiKeyFileName(values['api_private_key_filename'], keyId);
-    final p8 = _writeBase64(
-      keys,
-      fileName,
-      values['api_private_key_base64']!,
-      'api_private_key_base64',
-    );
-    environment['APPLE_API_KEY_ID'] = keyId;
-    // For cux_ship_appstore and for `xcodebuild -authenticationKeyPath`, both
-    // of which do take a path.
-    environment['APPLE_API_PRIVATE_KEY_PATH'] = p8.path;
-    environment['API_PRIVATE_KEYS_DIR'] = keys.path;
-    final issuer = values['api_issuer_id'];
+    final key = apiKeys.single;
+    environment['APPLE_API_KEY_ID'] = key.fields['id']!;
+    environment['APPLE_API_PRIVATE_KEY_PATH'] =
+        '${keys.path}/'
+        '${_apiKeyFileName(key.fields['kind']!, key.fields['id']!, key.path)}';
+    final issuer = key.fields['issuer_id'];
     if (issuer != null) {
       environment['APPLE_API_ISSUER_ID'] = issuer;
     }
   }
 
-  if (values.containsKey('distribution_p12_base64')) {
-    final cert = _writeBase64(
+  // All of them, not one: a release run legitimately signs with the App Store
+  // certificate, notarizes with Developer ID and signs a .pkg with the
+  // installer certificate. The names are a closed set, so they are enumerable
+  // and collision-free by construction rather than by rule.
+  for (final certificate in under('apple.certificates')) {
+    final file = _writeBase64(
       work,
-      'distribution.p12',
-      values['distribution_p12_base64']!,
-      'distribution_p12_base64',
+      '${certificate.instance}.p12',
+      certificate.fields['p12_base64']!,
+      '${certificate.path}.p12_base64',
     );
-    environment['APPLE_DISTRIBUTION_P12_PATH'] = cert.path;
-    environment['APPLE_DISTRIBUTION_P12_PASSWORD'] =
-        values['distribution_p12_password']!;
+    final prefix = 'APPLE_${certificate.instance.toUpperCase()}_P12';
+    environment['${prefix}_PATH'] = file.path;
+    environment['${prefix}_PASSWORD'] = certificate.fields['password']!;
+    loaded.add(certificate.path);
+  }
+
+  for (final profile in under('apple.profiles')) {
+    // Extension deliberately not derived from the name: a macOS profile is a
+    // .provisionprofile and an iOS one a .mobileprovision, and Xcode will not
+    // match one filed under the other. Reading which it is needs `security cms`
+    // and therefore a Mac, so installation is a separate, platform-gated step —
+    // this only puts the bytes somewhere it can find them.
+    final file = _writeBase64(
+      work,
+      '${profile.instance}.profile',
+      profile.fields['base64']!,
+      '${profile.path}.base64',
+    );
+    environment['APPLE_PROFILE_${profile.instance.toUpperCase()}_PATH'] =
+        file.path;
+    loaded.add(profile.path);
+  }
+
+  // --- The project's own -----------------------------------------------------
+
+  // Declared rather than minted, so nothing invents a variable name from an
+  // instance name, and a name this tool already exports cannot be quietly
+  // overwritten by a token that happens to share it.
+  for (final token in under('tokens')) {
+    final name = token.fields['env']!;
+    _checkExportable(name, token.path, environment);
+    environment[name] = token.fields['value']!;
+    loaded.add(token.path);
+  }
+
+  for (final key in under('ssh_keys')) {
+    final name = key.fields['env']!;
+    _checkExportable(name, key.path, environment);
+    final file = _writeBase64(
+      work,
+      '${key.instance}.key',
+      key.fields['base64']!,
+      '${key.path}.base64',
+    );
+    environment[name] = file.path;
+    loaded.add(key.path);
   }
 
   return LoadedSecrets(environment, loaded, work);
 }
 
-/// The name to materialize the App Store Connect key under.
+/// Refuses a declared variable name that is malformed, or that would overwrite
+/// something this tool exports.
 ///
-/// Defaults to `AuthKey_<id>.p8`, which is what this always wrote and what a
-/// team key is called — so a project that does not set the name keeps exactly
-/// the behavior it had.
-///
-/// **An individual key must set it**, because Apple names those `ApiKey_<id>.p8`
-/// and that prefix is what decides the JWT claims. The check below is
-/// deliberately strict rather than permissive: this string becomes a filename
-/// in a directory `altool` searches, so a value with a path separator in it
-/// would write outside that directory, and a value with the wrong id in it
-/// would produce a file `altool` looks straight past.
-String _apiKeyFileName(String? declared, String keyId) {
-  if (declared == null) {
-    return 'AuthKey_$keyId.p8';
-  }
-  final match = RegExp(
-    r'^(ApiKey|AuthKey)_([A-Za-z0-9]+)\.p8$',
-  ).firstMatch(declared);
-  if (match == null) {
+/// A token quietly taking `ANDROID_KEYSTORE_PATH` would redirect a real
+/// credential, and the file's own author would be unlikely to notice.
+void _checkExportable(String name, String at, Map<String, String> environment) {
+  if (!RegExp(r'^[A-Z][A-Z0-9_]*$').hasMatch(name)) {
     throw ProjectException(
-      'api_private_key_filename must be the name Apple gave the key — '
-      'ApiKey_<id>.p8 for an individual key, AuthKey_<id>.p8 for a team one. '
-      'Got "$declared".',
+      '$at.env is $name, which is not a usable variable name — '
+      'capitals, digits and underscores, starting with a letter',
     );
   }
-  if (match.group(2) != keyId) {
+  if (_reservedNames.contains(name)) {
     throw ProjectException(
-      'api_private_key_filename says the key is ${match.group(2)} and '
-      'api_key_id says $keyId. altool finds the file by id, so it would look '
-      'past this one and report no key at all.',
+      '$at.env is $name, which is a name this tool sets itself — '
+      'a credential would be overwritten and nothing would say so',
     );
   }
-  return declared;
 }
+
+/// The names materialization sets. Enumerated once, so the collision check
+/// above cannot fall behind what is actually exported.
+const _reservedNames = {
+  'ANDROID_KEYSTORE_PATH',
+  'ANDROID_KEYSTORE_PASSWORD',
+  'ANDROID_KEY_ALIAS',
+  'ANDROID_KEY_PASSWORD',
+  'GOOGLE_PLAY_SERVICE_ACCOUNT_JSON',
+  'APPLE_API_KEY_ID',
+  'APPLE_API_PRIVATE_KEY_PATH',
+  'APPLE_API_ISSUER_ID',
+  'API_PRIVATE_KEYS_DIR',
+};
+
+/// What Apple named the key, derived from what kind it is.
+///
+/// Not stored: the filename carries exactly the id and the kind, and both are
+/// declared fields, so a stored name is a third copy that can disagree with the
+/// other two. altool and this tool's JWT builder both read the prefix to decide
+/// which claims to send, which is why getting it wrong is a bare 401 after a
+/// full build rather than a parse error.
+String _apiKeyFileName(String kind, String keyId, String at) => switch (kind) {
+  'individual' => 'ApiKey_$keyId.p8',
+  'team' => 'AuthKey_$keyId.p8',
+  _ => throw ProjectException(
+    '$at.kind is $kind — it must be team or individual, and it decides '
+    'which claims Apple is sent',
+  ),
+};
 
 List<int> _decode(String value, String key) {
   try {

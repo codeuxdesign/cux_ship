@@ -176,11 +176,10 @@ class ProjectConfig {
     final signing = switch (_string(apple, 'signing')) {
       null || 'automatic' => AppleSigning.automatic,
       'manual' => AppleSigning.manual,
-      final other =>
-        throw ProjectException(
-          '$cuxShipConfigFile: apple.signing must be automatic or manual, '
-          'and is $other',
-        ),
+      final other => throw ProjectException(
+        '$cuxShipConfigFile: apple.signing must be automatic or manual, '
+        'and is $other',
+      ),
     };
     final profiles = _stringList(apple, 'profiles');
 

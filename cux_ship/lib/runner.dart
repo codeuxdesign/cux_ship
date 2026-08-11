@@ -505,22 +505,40 @@ class _SecretsKeysCommand extends Command<void> {
       // Named before the verdict, so a file with nothing wrong still shows what
       // it holds — the question this answers is usually "what is in here", and
       // only sometimes "is anything broken".
-      for (final key in keys) {
-        final where = key.group == null ? '' : '  (under ${key.group})';
-        stdout.writeln('${key.recognized ? '  ' : '! '}${key.name}$where');
+      //
+      // Per credential rather than per value: the credential is the thing that
+      // is complete or not, and a keystore missing its password is one broken
+      // thing rather than three fine values and an absent one.
+      for (final credential in keys.credentials) {
+        final missing = credential.missing.isEmpty
+            ? ''
+            : '  — missing ${credential.missing.join(', ')}';
+        stdout.writeln(
+          '${credential.missing.isEmpty ? '  ' : '! '}${credential.path}'
+          '  ${credential.fields.join(', ')}$missing',
+        );
       }
-      final unknown = keys.where((k) => !k.recognized).toList();
-      if (unknown.isEmpty) {
-        stdout.writeln('\n${keys.length} credentials, all recognized.');
+      for (final problem in keys.problems) {
+        stdout.writeln('! $problem');
+      }
+
+      // Half configured counts as broken here, and can: a missing field is a
+      // missing *name*, so it is visible without decrypting anything — which
+      // makes this the whole pre-flight rather than half of one.
+      final broken =
+          keys.problems.length +
+          keys.credentials.where((c) => c.missing.isNotEmpty).length;
+      if (broken == 0) {
+        stdout.writeln(
+          '\n${keys.credentials.length} credentials, all understood.',
+        );
         return;
       }
-      // An unrecognized name is what `secrets exec` refuses outright, so
-      // reporting it here is the whole point: this runs before a release rather
-      // than during one.
+      // This is what `secrets exec` refuses outright, so reporting it here is
+      // the whole point: it runs before a release rather than during one.
       stderr.writeln(
-        '\n${unknown.length} unrecognized, marked ! above — `secrets exec` '
-        'will refuse this file.\n'
-        'known keys: ${knownSecretKeys().join(', ')}',
+        '\n$broken marked ! above — `secrets exec` will refuse this file.\n'
+        'known: ${knownSecretKeys().join('\n       ')}',
       );
       exitCode = 1;
     } on ProjectException catch (e) {
