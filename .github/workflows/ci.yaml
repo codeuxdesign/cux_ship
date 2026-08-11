@@ -92,29 +92,19 @@ jobs:
                 url: https://github.com/${{ github.repository }}.git
                 path: cux_ship
                 ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          dependency_overrides:
-            cux_ship_verify:
-              git:
-                url: https://github.com/${{ github.repository }}.git
-                path: cux_ship_verify
-                ref: ${{ github.event.pull_request.head.sha || github.sha }}
           EOF
           dart pub get
 
-      # DELETE THE OVERRIDE ABOVE the day cux_ship_verify is on pub.dev, and
-      # this job goes back to being what a consumer actually writes.
+      # `cux_ship` names `cux_ship_verify` as a *hosted* constraint, because a
+      # published package may not carry a path dependency. So a git consumer of
+      # this repository resolves the CLI from the commit under test and its
+      # sibling from pub.dev — which is worth asserting rather than assuming,
+      # since it is the one edge a workspace hides: everything resolves locally
+      # here whether or not that package was ever published.
       #
-      # Until then it is load bearing and says something true: cux_ship now
-      # depends on cux_ship_verify as a *hosted* constraint, because a published
-      # package may not carry a path dependency. So this repository is not
-      # consumable as a git dependency at all until that package exists on
-      # pub.dev — the override is what stands in for it, pinned to the same
-      # commit so nothing resolves against a different tree.
-      #
-      # The consequence worth stating plainly: **main must not move to this
-      # arrangement before cux_ship_verify is published.** Existing consumers
-      # pin old tags and are unaffected, but anyone tracking a branch would find
-      # an unresolvable dependency.
+      # This job carried a dependency_override until 11 August 2026, standing in
+      # for the sibling while it was unpublished. Both are on pub.dev now and the
+      # override is gone.
       - name: Confirm the other package resolved
         run: |
           cd /tmp/consumer
