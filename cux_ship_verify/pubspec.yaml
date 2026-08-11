@@ -1,10 +1,16 @@
 name: cux_ship_verify
 description: >-
-  The offline half of shipping to the App Store and Google Play: the CHANGELOG
-  parser, the App Store metadata tree, and the checks that catch what either
-  store would otherwise reject only after an upload.
+  Offline checks for App Store and Google Play release inputs: release-note
+  length, screenshot sizes and transparency, required locales. No dependencies.
 repository: https://github.com/codeuxdesign/cux_ship
+issue_tracker: https://github.com/codeuxdesign/cux_ship/issues
 version: 1.6.0
+
+topics:
+  - app-store
+  - google-play
+  - release
+  - ci
 
 # **No dependencies, and that is the design.** This is the package a consuming
 # project puts in its own dev_dependencies so the checks run in its test suite

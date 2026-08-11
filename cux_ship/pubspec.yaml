@@ -1,10 +1,21 @@
 name: cux_ship
 description: >-
   One command for shipping to the App Store and Google Play: upload an artifact,
-  publish a listing, promote a build a store already holds, and check the
-  release inputs a store would otherwise reject after the upload.
+  publish the store listing, and promote a build a store already holds.
 repository: https://github.com/codeuxdesign/cux_ship
+issue_tracker: https://github.com/codeuxdesign/cux_ship/issues
 version: 1.6.0
+
+topics:
+  - app-store
+  - google-play
+  - release
+  - ci
+
+# Declared rather than left to pub's inference from bin/, so `dart pub global
+# activate cux_ship` plainly gives a `cux_ship` command and pub.dev says so.
+executables:
+  cux_ship:
 
 # The command, and everything behind it. The App Store and Play clients are
 # `lib/src/appstore/` and `lib/src/play/` — libraries this wires together, which
