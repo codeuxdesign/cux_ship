@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.7.0
+
+No changes. Released alongside `cux_ship` 1.7.0, which the two packages move in
+step with.
+
 ## 1.6.0
 
 First release on pub.dev, and the first version of this package that is worth

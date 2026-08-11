@@ -126,7 +126,9 @@ jobs:
           done
           dart run cux_ship release finish --help > /dev/null
           dart run cux_ship screenshots flatten --help > /dev/null
-          dart run cux_ship secrets exec --help > /dev/null
+          for c in exec keys; do
+            dart run cux_ship secrets "$c" --help > /dev/null
+          done
           for c in install check update; do
             dart run cux_ship deps "$c" --help > /dev/null
           done

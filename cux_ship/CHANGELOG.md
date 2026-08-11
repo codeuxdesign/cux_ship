@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.7.0
+
+- **`cux_ship secrets keys`** — lists the credential names in a secrets file
+  without decrypting it, says which heading each sits under, marks any name
+  `secrets exec` would refuse, and ignores the `sops:` metadata block. Worth
+  running before adopting a new version, since an unrecognized key stops
+  `secrets exec` outright.
+- **Fixes a wrong command in the bundled skill**, which is why this exists. It
+  recommended `grep -oE '^[a-z_]+:|^[[:space:]]+[a-z_]+:'` for the same job, and
+  that character class omits digits — so against a real file with nine
+  credentials it reported four and hid five, including the entire Android
+  keystore, the Play service account and the App Store private key. Every name
+  it hid was one carrying key material, and the output read as a clean bill of
+  health.
+
+  The command replaces the advice rather than correcting it: it shares the
+  key-walking with the parser that enforces the rules, so the two cannot drift.
+  Reported by a consumer migrating from 1.5.1.
+
 ## 1.6.0
 
 First release on pub.dev. Versions before this one were consumed as git refs;

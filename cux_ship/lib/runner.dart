@@ -418,6 +418,7 @@ class _FlattenCommand extends Command<void> {
 class _SecretsCommand extends Command<void> {
   _SecretsCommand() {
     addSubcommand(_SecretsExecCommand());
+    addSubcommand(_SecretsKeysCommand());
   }
 
   @override
@@ -468,6 +469,62 @@ class _SecretsExecCommand extends Command<void> {
       );
     } on ProjectException catch (e) {
       stderr.writeln('cux_ship secrets exec: ${e.message}');
+      exitCode = 1;
+    }
+  }
+}
+
+class _SecretsKeysCommand extends Command<void> {
+  _SecretsKeysCommand() {
+    argParser.addOption(
+      'file',
+      help:
+          'The sops-encrypted file to read. Relative paths resolve against the '
+          'repository root.',
+      defaultsTo: 'secrets/release.yaml',
+    );
+  }
+
+  @override
+  String get name => 'keys';
+
+  @override
+  String get description =>
+      'List the credential names in the secrets file, and say which are '
+      'recognized. Decrypts nothing and needs no identity — a sops file keeps '
+      'its keys in cleartext and encrypts only the values.';
+
+  @override
+  void run() {
+    final project = _project(this);
+    final file = argResults!.option('file')!;
+    try {
+      final keys = inspectSecretKeys(
+        File(p.isAbsolute(file) ? file : p.join(project.root, file)),
+      );
+      // Named before the verdict, so a file with nothing wrong still shows what
+      // it holds — the question this answers is usually "what is in here", and
+      // only sometimes "is anything broken".
+      for (final key in keys) {
+        final where = key.group == null ? '' : '  (under ${key.group})';
+        stdout.writeln('${key.recognized ? '  ' : '! '}${key.name}$where');
+      }
+      final unknown = keys.where((k) => !k.recognized).toList();
+      if (unknown.isEmpty) {
+        stdout.writeln('\n${keys.length} credentials, all recognized.');
+        return;
+      }
+      // An unrecognized name is what `secrets exec` refuses outright, so
+      // reporting it here is the whole point: this runs before a release rather
+      // than during one.
+      stderr.writeln(
+        '\n${unknown.length} unrecognized, marked ! above — `secrets exec` '
+        'will refuse this file.\n'
+        'known keys: ${knownSecretKeys().join(', ')}',
+      );
+      exitCode = 1;
+    } on ProjectException catch (e) {
+      stderr.writeln('cux_ship secrets keys: ${e.message}');
       exitCode = 1;
     }
   }

@@ -67,9 +67,25 @@ way, decrypting a sops file and removing the plaintext however the run ends.
 
 Three rules, and the second one has already leaked a key once:
 
-- **Never decrypt a secrets file to look at it.** Its key names are cleartext by
-  design, so `grep -oE '^[a-z_]+:|^[[:space:]]+[a-z_]+:' secrets/release.yaml`
-  answers most questions about its shape without decrypting anything.
+- **Never decrypt a secrets file to look at it.** A sops file keeps its key
+  names in cleartext and encrypts only the values, so its shape can be read with
+  no identity and no risk of a secret reaching a terminal:
+
+  ```bash
+  cux_ship secrets keys
+  ```
+
+  It lists every credential, says which heading each sits under, marks any name
+  `secrets exec` would refuse, and ignores the `sops:` block — recipients, MAC,
+  version — which is metadata, is stripped on decrypt, and is never a
+  credential. **Run it before adopting a new version**: an unrecognized key
+  stops `secrets exec` dead, and this is the check that finds one first.
+
+  Do not hand-roll a `grep` for this. A version of this skill did, with
+  `'^[a-z_]+:…'` — a character class that omits digits, so it silently hid
+  `keystore_p12_base64`, `api_private_key_base64` and every other name carrying
+  actual key material, reported the four that mattered least, and read as a
+  clean bill of health.
 - **Never list credential names with `cut -d= -f1`.** It prints any line
   containing no `=` *in full*, and a service-account JSON is multi-line — so it
   emits the `"private_key"` line verbatim. Use an anchored form:

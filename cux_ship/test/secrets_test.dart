@@ -239,6 +239,127 @@ void main() {
     });
   });
 
+  group('inspecting without decrypting', () {
+    /// A file shaped like a real encrypted one: grouped, values replaced by
+    /// sops with `ENC[...]`, and carrying the metadata block sops appends.
+    ///
+    /// **Every `*_base64` name here is load bearing.** The bug this guards
+    /// against was a documented `grep -oE '^[a-z_]+:…'` whose character class
+    /// omitted digits, so it hid exactly the names that carry key material and
+    /// reported only the four that do not. A fixture built from digit-free
+    /// names passes either way and proves nothing.
+    void encryptedFile() {
+      secrets(
+        'android:\n'
+        '  keystore_p12_base64: ENC[AES256_GCM,data:aaaa,type:str]\n'
+        '  keystore_password: ENC[AES256_GCM,data:bbbb,type:str]\n'
+        '  key_alias: ENC[AES256_GCM,data:cccc,type:str]\n'
+        '  play_service_account_json_base64: ENC[AES256_GCM,data:dddd,type:str]\n'
+        'apple:\n'
+        '  api_key_id: ENC[AES256_GCM,data:eeee,type:str]\n'
+        '  api_private_key_base64: ENC[AES256_GCM,data:ffff,type:str]\n'
+        '  distribution_p12_base64: ENC[AES256_GCM,data:gggg,type:str]\n'
+        '  distribution_p12_password: ENC[AES256_GCM,data:hhhh,type:str]\n'
+        'sops:\n'
+        '  age: something\n'
+        '  lastmodified: "2026-08-11T00:00:00Z"\n'
+        '  mac: ENC[AES256_GCM,data:iiii,type:str]\n'
+        '  unencrypted_suffix: _unencrypted\n'
+        '  version: 3.13.3\n',
+      );
+    }
+
+    test('finds every credential, digits in the name included', () {
+      encryptedFile();
+      final names = inspectSecretKeys(_secretsFile).map((k) => k.name).toList();
+
+      expect(names, hasLength(8));
+      for (final withDigits in const [
+        'keystore_p12_base64',
+        'play_service_account_json_base64',
+        'api_private_key_base64',
+        'distribution_p12_base64',
+        'distribution_p12_password',
+      ]) {
+        expect(names, contains(withDigits), reason: 'missed $withDigits');
+      }
+    });
+
+    test('skips the sops metadata block', () {
+      // Present in the encrypted file and stripped on decrypt, so it is never a
+      // credential — and a reader comparing this output against the accepted
+      // set should not have to know to ignore seven entries.
+      encryptedFile();
+      final names = inspectSecretKeys(_secretsFile).map((k) => k.name);
+      for (final meta in const [
+        'sops',
+        'age',
+        'lastmodified',
+        'mac',
+        'unencrypted_suffix',
+        'version',
+      ]) {
+        expect(names, isNot(contains(meta)), reason: 'reported $meta');
+      }
+    });
+
+    test('reports the heading each credential was filed under', () {
+      encryptedFile();
+      final keys = inspectSecretKeys(_secretsFile);
+      expect(keys.firstWhere((k) => k.name == 'key_alias').group, 'android');
+      expect(keys.firstWhere((k) => k.name == 'api_key_id').group, 'apple');
+    });
+
+    test('a top-level credential has no heading', () {
+      secrets('key_alias: ENC[AES256_GCM,data:aaaa,type:str]\n');
+      expect(inspectSecretKeys(_secretsFile).single.group, isNull);
+    });
+
+    test('marks a name that secrets exec would refuse', () {
+      // The whole point of running this before a release rather than during
+      // one: an unrecognized key stops `secrets exec` dead.
+      secrets(
+        'android:\n'
+        '  keystore_pasword: ENC[AES256_GCM,data:aaaa,type:str]\n'
+        '  key_alias: ENC[AES256_GCM,data:bbbb,type:str]\n',
+      );
+      final keys = inspectSecretKeys(_secretsFile);
+      expect(
+        keys.firstWhere((k) => k.name == 'keystore_pasword').recognized,
+        isFalse,
+      );
+      expect(keys.firstWhere((k) => k.name == 'key_alias').recognized, isTrue);
+    });
+
+    test('agrees with what secrets exec accepts', () {
+      // These two must not drift: a pre-flight check that approximates the real
+      // rules eventually disagrees with them, which is worse than no check.
+      encryptedFile();
+      for (final key in inspectSecretKeys(_secretsFile)) {
+        expect(
+          key.recognized,
+          knownSecretKeys().contains(key.name),
+          reason: key.name,
+        );
+      }
+    });
+
+    test('needs no identity and never decrypts', () {
+      // There is no sops binary in this repo root at all, so a run that
+      // succeeds cannot have shelled out to one.
+      File('${_root.path}/.bin/sops').deleteSync();
+      encryptedFile();
+      expect(inspectSecretKeys(_secretsFile), hasLength(8));
+    });
+
+    test('an absent file is named', () {
+      expect(
+        () => inspectSecretKeys(_secretsFile),
+        throwsSaying(contains('secrets/release.yaml')),
+      );
+    });
+  });
+
   group('refusing', () {
     test('a half-configured group stops before anything runs', () {
       // The failure this exists to prevent: Gradle falls through to the debug

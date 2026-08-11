@@ -35,9 +35,10 @@ cux_ship appstore upload            play upload            release finish
          appstore promote           play promote           screenshots flatten
          appstore builds            play tracks            verify
          appstore versions          play listing           secrets exec
-         appstore screenshot-types  play version-code      deps install
-         appstore build-number                             deps check
-         appstore signing                                  deps update
+         appstore screenshot-types  play version-code      secrets keys
+         appstore build-number                             deps install
+         appstore signing                                  deps check
+                                                           deps update
 ```
 
 **Run it from a project root and it works out the rest.** The `applicationId`
@@ -266,6 +267,24 @@ A credential does not become a different credential because of the heading it
 was filed under, so the names that matter are the leaves. The same leaf under
 two headings is refused rather than resolved — which one wins is not something
 to guess at with a credential.
+
+### Reading a secrets file without decrypting it
+
+```bash
+cux_ship secrets keys
+```
+
+sops keeps key names in cleartext and encrypts only the values, so the shape of
+a file can be read with **no identity and no decryption** — nothing secret can
+reach a terminal or a transcript. It lists every credential, names the heading
+each sits under, marks any name `secrets exec` would refuse, and ignores the
+`sops:` metadata block.
+
+Worth running **before adopting a new version**, since an unrecognized key stops
+`secrets exec` outright. It shares its notion of "a credential name" with the
+parser that enforces that, which is the only reason it can be trusted: a
+pre-flight check that approximates the real rules is one that eventually
+disagrees with them.
 
 Three things stop the command rather than being worked around, and each is a
 failure that is otherwise **silent**:

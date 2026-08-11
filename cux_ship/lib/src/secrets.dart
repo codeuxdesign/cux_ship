@@ -79,6 +79,105 @@ const _groups = [
 /// Every key any group names. Anything else in the file is an error.
 final _knownKeys = {for (final g in _groups) ...g.keys};
 
+/// The block sops writes to record its own recipients and MAC.
+///
+/// Present in the encrypted file and stripped by `sops -d`, so it is skipped
+/// when reading a file that has not been decrypted and never appears in one
+/// that has.
+const _sopsMetadataKey = 'sops';
+
+/// One credential name found in a secrets file, and whether it is accepted.
+typedef SecretKey = ({String name, String? group, bool recognized});
+
+/// The credential names in [secretsFile], **without decrypting it**.
+///
+/// A sops-encrypted file keeps its keys in cleartext and encrypts only the
+/// values, so the shape of one can be read with no identity and no risk of a
+/// secret reaching a terminal — which makes this the check to run *before*
+/// adopting a new version, since an unrecognized key stops `secrets exec` dead.
+///
+/// **It shares [_walkLeaves] with the parser that enforces this**, which is the
+/// only reason it can be trusted: a pre-flight check that approximates the real
+/// rules is a pre-flight check that eventually disagrees with them. This
+/// replaced a `grep` recommended in the skill, whose character class omitted
+/// digits and so hid `keystore_p12_base64`, `api_private_key_base64` and every
+/// other name carrying actual key material — reporting the four that mattered
+/// least and reading as a clean bill of health.
+List<SecretKey> inspectSecretKeys(File secretsFile) {
+  if (!secretsFile.existsSync()) {
+    throw ProjectException('no ${secretsFile.path}');
+  }
+  final dynamic document;
+  try {
+    document = loadYaml(secretsFile.readAsStringSync());
+  } on YamlException catch (e) {
+    throw ProjectException('${secretsFile.path} is not valid YAML: $e');
+  }
+  if (document is! YamlMap) {
+    throw ProjectException(
+      '${secretsFile.path} must be a mapping of credentials',
+    );
+  }
+
+  final found = <SecretKey>[];
+  _walkLeaves(
+    document,
+    secretsFile.path,
+    skipMetadata: true,
+    onLeaf: (key, _, group) => found.add((
+      name: key,
+      group: group.isEmpty ? null : group,
+      recognized: _knownKeys.contains(key),
+    )),
+  );
+  found.sort((a, b) => a.name.compareTo(b.name));
+  return found;
+}
+
+/// Every credential name `secrets exec` accepts, sorted.
+List<String> knownSecretKeys() => _knownKeys.toList()..sort();
+
+/// Calls [onLeaf] for every credential in [document], walking exactly one level
+/// of grouping.
+///
+/// **Headings are allowed and carry no meaning.** A real file groups its
+/// credentials — `android:` and `apple:` — because that is how somebody reads
+/// it, and the shell script this replaces coped by stripping leading whitespace
+/// before matching, which made it indentation-blind by accident. Reading only
+/// the top level instead would refuse every such file, having found none of the
+/// credentials in it.
+///
+/// So the heading is discarded. The names that matter are the leaves, which is
+/// what the credential groups are declared in terms of — a credential does not
+/// become a different credential because of the heading it was filed under.
+void _walkLeaves(
+  YamlMap document,
+  String path, {
+  required void Function(String key, Object? value, String group) onLeaf,
+  bool skipMetadata = false,
+}) {
+  for (final entry in document.entries) {
+    final key = '${entry.key}';
+    final value = entry.value;
+    if (skipMetadata && key == _sopsMetadataKey) {
+      continue;
+    }
+    if (value is YamlMap) {
+      for (final child in value.entries) {
+        if (child.value is YamlMap || child.value is YamlList) {
+          throw ProjectException(
+            '$path nests $key.${child.key} deeper than a credential goes — '
+            'headings may group values, but only one level down',
+          );
+        }
+        onLeaf('${child.key}', child.value, key);
+      }
+    } else {
+      onLeaf(key, value, '');
+    }
+  }
+}
+
 /// What was decrypted, and where the files it had to write went.
 class LoadedSecrets {
   LoadedSecrets(this.environment, this.loaded, this._work);
@@ -207,34 +306,14 @@ Map<String, String> _parse(String plaintext, String path) {
     seenUnder[key] = group.isEmpty ? '(top level)' : group;
   }
 
-  // **Headings are allowed and carry no meaning.** A real file groups its
-  // credentials — `android:` and `apple:` — because that is how somebody reads
-  // it, and the shell script this replaces coped by stripping leading
-  // whitespace before matching, which made it indentation-blind by accident.
-  // Reading only the top level instead would refuse every such file, having
-  // found none of the credentials in it.
+  // Shared with `inspectSecretKeys`, deliberately: what counts as a credential
+  // name has to be one answer, or the check somebody runs before adopting a
+  // version disagrees with the parser that refuses them.
   //
-  // So one level of nesting is walked and the heading is discarded. The names
-  // that matter are the leaves, which is what the groups above are declared in
-  // terms of — a credential does not become a different credential because of
-  // the heading it was filed under.
-  for (final entry in document.entries) {
-    final key = '${entry.key}';
-    final value = entry.value;
-    if (value is YamlMap) {
-      for (final child in value.entries) {
-        if (child.value is YamlMap || child.value is YamlList) {
-          throw ProjectException(
-            '$path nests $key.${child.key} deeper than a credential goes — '
-            'headings may group values, but only one level down',
-          );
-        }
-        leaf('${child.key}', child.value, key);
-      }
-    } else {
-      leaf(key, value, '');
-    }
-  }
+  // No metadata to skip here — `sops -d` strips its own block, so a decrypted
+  // file never carries one, and a `sops:` key in a plaintext file is an
+  // unrecognized name worth reporting rather than ignoring.
+  _walkLeaves(document, path, onLeaf: leaf);
 
   // An unrecognized key is a typo, and a typo here is silent: the credential
   // simply never arrives, the build falls back to a debug key or an anonymous
