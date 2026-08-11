@@ -85,13 +85,36 @@ Environment variables are unchanged, so **nothing that consumes credentials
 needs editing** — `build.sh`, `upload.sh` and Gradle keep reading the same
 names.
 
-1. Add to `.sops.yaml`, under the rule that matches your secrets file:
+**The tool and the file have to move together, and no order avoids a window
+where they disagree.** Both directions fail loudly, and the message says which
+way round you are: an older version reading a new file complains that something
+*"nests deeper than a credential goes"*, while this version reading an old file
+reports unrecognized keys. Neither can mistake the other's file for a valid one,
+so the window is an inconvenience rather than a hazard — but do these in one
+sitting.
+
+1. **Raise the constraint and upgrade.** A minor bump does not compel this the
+   way a major one would: `^1.7.1` already permits 1.8.0, so a resolved
+   `pubspec.lock` stays where it is and `dart pub get` alone will not move you
+   onto the version that can read the new shape.
+
+   ```sh
+   dart pub upgrade cux_ship     # or raise the constraint to ^1.8.0
+   ```
+
+2. Add to `.sops.yaml`, under the rule that matches your secrets file:
 
    ```yaml
    unencrypted_regex: '^(path|env|kind)$'
    ```
 
-2. Restructure the file. Needs the age identity, because sops binds each value
+   Inert until the file holds a `placed:`, `tokens:`, `ssh_keys:` or
+   `apple.api_keys` entry, so a project with only a keystore and a service
+   account needs nothing from it yet. Add it anyway: otherwise its absence
+   surfaces months later, from a file that had been working, the first time
+   somebody adds one of those.
+
+3. Restructure the file. Needs the age identity, because sops binds each value
    to its key path — a textual rename fails authentication. Plaintext never
    touches disk:
 
@@ -110,7 +133,7 @@ names.
    | `api_private_key_filename` | `apple.api_keys.<name>.kind: team \| individual` |
    | `distribution_p12_base64`, `distribution_p12_password` | `apple.certificates.distribution.{p12_base64, password}` |
 
-3. Run `cux_ship secrets keys`. It needs no identity, reports every credential
+4. Run `cux_ship secrets keys`. It needs no identity, reports every credential
    by path, and names anything half configured — so it will tell you whether the
    result is right before you try to build with it.
 
