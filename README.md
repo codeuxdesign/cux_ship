@@ -27,6 +27,13 @@ history: `git blame` is usually the only way to recover why a line exists.
 command tree, monorepo layouts, credentials and sops, pinned `sops`/`age`
 binaries, and the Apple and Play behavior each command works around.
 
+## For agents
+
+[`skills/cux-ship`](skills/cux-ship/SKILL.md) is a skill for an AI agent setting
+up or operating releases with this tooling — the ordering and the irreversible
+steps, pointing at the READMEs for everything else. See
+[`skills/README.md`](skills/README.md) to install it.
+
 ## Development
 
 A pub workspace. `dart pub get` at the root resolves both packages against one
