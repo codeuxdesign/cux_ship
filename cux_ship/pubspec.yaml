@@ -4,7 +4,7 @@ description: >-
   publish the store listing, and promote a build a store already holds.
 repository: https://github.com/codeuxdesign/cux_ship
 issue_tracker: https://github.com/codeuxdesign/cux_ship/issues
-version: 1.7.1
+version: 1.7.2
 
 topics:
   - app-store
@@ -47,7 +47,7 @@ dependencies:
   # separately for the MD5 that App Store Connect requires as a screenshot's
   # sourceFileChecksum. Not a security choice there; Apple picked it.
   crypto: ^3.0.0
-  cux_ship_verify: ^1.7.1
+  cux_ship_verify: ^1.7.2
   # ES256 over the .p8 private key. App Store Connect accepts nothing else, and
   # package:crypto has no ECDSA, so this or pointycastle-by-hand were the
   # options.

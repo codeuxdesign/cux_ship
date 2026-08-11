@@ -141,6 +141,78 @@ void main() {
       );
     });
 
+    test('an individual key keeps the ApiKey_ name Apple gave it', () {
+      // The bug this guards. `ApiKey_` is what Apple names an individual key
+      // and `AuthKey_` a team key, and both altool and the JWT builder read
+      // that prefix to choose claims — `iss` for a team key, `sub: user` for an
+      // individual one. Writing `AuthKey_` unconditionally, as this did until
+      // 1.7.2, classified every individual key as a team key and failed with a
+      // bare 401 after a full build.
+      //
+      // The issuer cannot substitute: altool requires --api-issuer alongside
+      // --api-key, so an individual key legitimately carries one.
+      secrets(
+        'api_key_id: ABC123\n'
+        'api_private_key_base64: ${b64('a p8')}\n'
+        'api_private_key_filename: ApiKey_ABC123.p8\n'
+        'api_issuer_id: 69a6de70\n',
+      );
+      final loaded = load();
+      addTearDown(loaded.dispose);
+      final path = loaded.environment['APPLE_API_PRIVATE_KEY_PATH']!;
+
+      expect(path, endsWith('ApiKey_ABC123.p8'));
+      expect(path, isNot(contains('AuthKey_')));
+      // Still where altool searches.
+      expect(path, startsWith(loaded.environment['API_PRIVATE_KEYS_DIR']!));
+    });
+
+    test('without a declared name it stays AuthKey_, as it always was', () {
+      secrets(
+        'api_key_id: ABC123\n'
+        'api_private_key_base64: ${b64('a p8')}\n',
+      );
+      final loaded = load();
+      addTearDown(loaded.dispose);
+      expect(
+        loaded.environment['APPLE_API_PRIVATE_KEY_PATH'],
+        endsWith('AuthKey_ABC123.p8'),
+      );
+    });
+
+    test('a filename naming a different key is refused', () {
+      // altool finds the file by id, so it would look straight past this one
+      // and report no key at all — a confusing failure a long way from here.
+      secrets(
+        'api_key_id: ABC123\n'
+        'api_private_key_base64: ${b64('a p8')}\n'
+        'api_private_key_filename: ApiKey_DIFFERENT.p8\n',
+      );
+      expect(load, throwsSaying(contains('altool finds the file by id')));
+    });
+
+    test('a filename that is a path is refused', () {
+      // It becomes a filename inside a directory altool searches; a separator
+      // in it writes somewhere else entirely.
+      for (final bad in const [
+        '../../etc/AuthKey_ABC123.p8',
+        'nested/AuthKey_ABC123.p8',
+        'AuthKey_ABC123.pem',
+        'ABC123.p8',
+      ]) {
+        secrets(
+          'api_key_id: ABC123\n'
+          'api_private_key_base64: ${b64('a p8')}\n'
+          'api_private_key_filename: "$bad"\n',
+        );
+        expect(
+          load,
+          throwsSaying(contains('the name Apple gave the key')),
+          reason: 'accepted "$bad"',
+        );
+      }
+    });
+
     test('an individual key has no issuer id, and that is not an error', () {
       // An individual key inherits one user's app restrictions and has no
       // issuer id at all. It is how a CI credential is kept from reaching every

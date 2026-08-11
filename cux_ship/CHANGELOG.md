@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.7.2
+
+- **An individual App Store Connect key was classified as a team key.**
+  `secrets exec` materialized every key as `AuthKey_<id>.p8`, and both `altool`
+  and this tool's JWT builder read that prefix to decide which claims to send —
+  Apple names an individual key `ApiKey_<id>.p8` and a team key `AuthKey_<id>.p8`.
+  So an individual key routed through `secrets exec` was sent `iss` instead of
+  `sub: user` and got a bare 401, after a full build.
+
+  The issuer id cannot stand in for the prefix: `altool` documents
+  `--api-issuer` as required alongside `--api-key`, so an individual key
+  legitimately carries one too. The filename is the only signal, which is why
+  inventing it destroyed the distinction.
+
+  New optional `api_private_key_filename` carries the name Apple gave the key.
+  **Absent, the behavior is exactly as before** — `AuthKey_<id>.p8` — so a
+  project with a team key needs no change. A project with an individual key
+  must now set it. The value is checked against `(ApiKey|AuthKey)_<id>.p8` and
+  against `api_key_id`, because it becomes a filename in a directory `altool`
+  searches, and a mismatched id produces a file `altool` looks straight past.
+
+  Predates the Dart port — `with-secrets.sh` renamed identically. Found by the
+  AuthPass maintainers while migrating onto `secrets exec`.
+
 ## 1.7.1
 
 From a security audit. No high-severity defects were found; these are the three
