@@ -381,15 +381,9 @@ Map<String, String> _parse(String plaintext, String path) {
       unknown.add(where);
       return;
     }
-    // Stored as written, so anything said back names a key that is actually in
-    // the file — `keystore_p12_base64 is not valid base64` is actionable where
-    // its canonical spelling would send someone looking for a line they never
-    // wrote.
-    //
-    // Collisions are detected on the canonical name regardless, because
-    // `keystore_p12_base64` and `keystore_base64` are one credential spelled
-    // two ways: a file carrying both must fail here rather than let iteration
-    // order decide which reaches the build.
+    // The classified name rather than the written one, so `upload_keystore_base64`
+    // under `android:` and the same leaf at the top level are recognized as one
+    // credential named twice rather than two that happen to look alike.
     final key = classified.key;
     final clash = seenUnder[key];
     if (clash != null) {

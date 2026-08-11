@@ -235,7 +235,7 @@ its working directory.
 
 ```yaml
 # secrets/release.yaml, before sops encrypts the values
-keystore_p12_base64:              # the Android upload key, and its
+keystore_base64:              # the Android upload key, and its
 keystore_password:                # password and alias. All three or none
 key_alias:
 key_password:                     # only for a keystore whose key password differs
@@ -255,7 +255,7 @@ best — one level deep, and the heading is discarded:
 
 ```yaml
 android:
-  keystore_p12_base64:
+  keystore_base64:
   keystore_password:
   key_alias:
 apple:
