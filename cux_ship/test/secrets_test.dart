@@ -61,7 +61,7 @@ void main() {
   group('the Android upload key', () {
     setUp(() {
       secrets(
-        'keystore_p12_base64: ${b64('a keystore')}\n'
+        'keystore_base64: ${b64('a keystore')}\n'
         'keystore_password: swordfish\n'
         'key_alias: upload\n',
       );
@@ -85,7 +85,7 @@ void main() {
 
     test('a separate key password is used when there is one', () {
       secrets(
-        'keystore_p12_base64: ${b64('a keystore')}\n'
+        'keystore_base64: ${b64('a keystore')}\n'
         'keystore_password: swordfish\n'
         'key_alias: upload\n'
         'key_password: different\n',
@@ -250,7 +250,7 @@ void main() {
     test('one level of grouping is walked, and the heading discarded', () {
       secrets(
         'android:\n'
-        '  keystore_p12_base64: ${b64('a keystore')}\n'
+        '  keystore_base64: ${b64('a keystore')}\n'
         '  keystore_password: swordfish\n'
         '  key_alias: upload\n'
         'apple:\n'
@@ -272,7 +272,7 @@ void main() {
       secrets(
         'play_service_account_json_base64: ${b64('{}')}\n'
         'android:\n'
-        '  keystore_p12_base64: ${b64('k')}\n'
+        '  keystore_base64: ${b64('k')}\n'
         '  keystore_password: swordfish\n'
         '  key_alias: upload\n',
       );
@@ -323,7 +323,7 @@ void main() {
     void encryptedFile() {
       secrets(
         'android:\n'
-        '  keystore_p12_base64: ENC[AES256_GCM,data:aaaa,type:str]\n'
+        '  keystore_base64: ENC[AES256_GCM,data:aaaa,type:str]\n'
         '  keystore_password: ENC[AES256_GCM,data:bbbb,type:str]\n'
         '  key_alias: ENC[AES256_GCM,data:cccc,type:str]\n'
         '  play_service_account_json_base64: ENC[AES256_GCM,data:dddd,type:str]\n'
@@ -347,7 +347,7 @@ void main() {
 
       expect(names, hasLength(8));
       for (final withDigits in const [
-        'keystore_p12_base64',
+        'keystore_base64',
         'play_service_account_json_base64',
         'api_private_key_base64',
         'distribution_p12_base64',
@@ -437,7 +437,7 @@ void main() {
       // The failure this exists to prevent: Gradle falls through to the debug
       // key and produces an artifact that only Play rejects, after a full
       // upload has been sent.
-      secrets('keystore_p12_base64: ${b64('a keystore')}\n');
+      secrets('keystore_base64: ${b64('a keystore')}\n');
       expect(
         load,
         throwsSaying(
@@ -453,7 +453,7 @@ void main() {
       // Silent otherwise: the credential never arrives, and the failure
       // surfaces at the store rather than here.
       secrets(
-        'keystore_p12_base64: ${b64('k')}\n'
+        'keystore_base64: ${b64('k')}\n'
         'keystore_pasword: swordfish\n'
         'key_alias: upload\n',
       );
@@ -463,13 +463,13 @@ void main() {
 
     test('a value that is not base64 says which key', () {
       secrets(
-        'keystore_p12_base64: "not base64!!"\n'
+        'keystore_base64: "not base64!!"\n'
         'keystore_password: swordfish\n'
         'key_alias: upload\n',
       );
       expect(
         load,
-        throwsSaying(contains('keystore_p12_base64 is not valid base64')),
+        throwsSaying(contains('keystore_base64 is not valid base64')),
       );
     });
 
@@ -543,7 +543,7 @@ void main() {
   group('running a command', () {
     setUp(() {
       secrets(
-        'keystore_p12_base64: ${b64('a keystore')}\n'
+        'keystore_base64: ${b64('a keystore')}\n'
         'keystore_password: swordfish\n'
         'key_alias: upload\n',
       );

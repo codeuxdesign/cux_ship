@@ -37,10 +37,29 @@ import 'project.dart';
 /// artifact that only Play rejects, after a full upload. The same shape as the
 /// "all four or none" rule in the consuming build.gradle.kts, and for the same
 /// reason.
+/// A family may appear more than once, distinguished by a `<name>_` prefix.
+///
+/// One signing identity was the assumption, and it does not survive a real
+/// consumer: an app that ships to the App Store, notarizes a direct download
+/// and signs a `.pkg` has three Apple certificates, and one that keeps a
+/// scoped upload key alongside an Admin key for reading the portal has two API
+/// keys of *different kinds*. Enumerating those as separate names would make
+/// the vocabulary a function of one consumer's distribution channels.
+///
+/// The prefix goes in the leaf name rather than in a nested mapping, because
+/// [_walkLeaves] deliberately refuses to look deeper than a heading — a
+/// credential does not become a different credential because of where it was
+/// filed. So `distribution_p12_base64` is this family with the name
+/// `distribution`, and the unprefixed form every existing file uses is the same
+/// template with an empty name. One shape, not two code paths that have to
+/// agree.
 class _Group {
   const _Group(this.name, {required this.required, this.optional = const []});
 
+  /// What this is, for error messages: "the Android upload key".
   final String name;
+
+  /// Leaf names for the unprefixed instance, and suffixes for every other.
   final List<String> required;
   final List<String> optional;
 
@@ -50,7 +69,7 @@ class _Group {
 const _groups = [
   _Group(
     'the Android upload key',
-    required: ['keystore_p12_base64', 'keystore_password', 'key_alias'],
+    required: ['keystore_base64', 'keystore_password', 'key_alias'],
     // PKCS12 uses one password for the store and the key alike, so this is
     // almost never set — but a keystore with a genuinely separate key password
     // slots straight in, and Gradle needs no special case either way.
@@ -84,6 +103,57 @@ const _groups = [
 
 /// Every key any group names. Anything else in the file is an error.
 final _knownKeys = {for (final g in _groups) ...g.keys};
+
+/// One leaf of one instance of one family: `upload_keystore_base64` is the
+/// `keystore_base64` leaf of the Android family, named `upload`.
+class _Leaf {
+  const _Leaf(this.group, this.instance, this.suffix);
+
+  final _Group group;
+
+  /// `''` for the unprefixed instance every existing file uses.
+  final String instance;
+  final String suffix;
+
+  /// How this leaf is written, which is what error messages must say back.
+  String get key => instance.isEmpty ? suffix : '${instance}_$suffix';
+}
+
+/// Instance names mint environment variable names, so they have to survive
+/// uppercasing into something legal and unambiguous.
+final _instanceName = RegExp(r'^[a-z][a-z0-9]*(_[a-z0-9]+)*$');
+
+/// Which family and instance a leaf belongs to, or null if it belongs to none.
+///
+/// Longest suffix wins, so a family whose suffix is a tail of another's cannot
+/// silently capture it — `distribution_p12_password` is the Apple certificate's
+/// `p12_password`, never some family's bare `password` under the name
+/// `distribution_p12`. The suffixes are chosen to make that unambiguous; this
+/// only enforces it.
+_Leaf? _classify(String key) {
+  _Leaf? best;
+  for (final group in _groups) {
+    for (final suffix in group.keys) {
+      if (key == suffix) {
+        if (best == null || suffix.length > best.suffix.length) {
+          best = _Leaf(group, '', suffix);
+        }
+        continue;
+      }
+      if (!key.endsWith('_$suffix')) {
+        continue;
+      }
+      final instance = key.substring(0, key.length - suffix.length - 1);
+      if (!_instanceName.hasMatch(instance)) {
+        continue;
+      }
+      if (best == null || suffix.length > best.suffix.length) {
+        best = _Leaf(group, instance, suffix);
+      }
+    }
+  }
+  return best;
+}
 
 /// The block sops writes to record its own recipients and MAC.
 ///
@@ -304,15 +374,27 @@ Map<String, String> _parse(String plaintext, String path) {
   final unknown = <String>[];
   final seenUnder = <String, String>{};
 
-  void leaf(String key, Object? value, String group) {
-    final where = group.isEmpty ? key : '$group.$key';
-    if (!_knownKeys.contains(key)) {
+  void leaf(String rawKey, Object? value, String group) {
+    final where = group.isEmpty ? rawKey : '$group.$rawKey';
+    final classified = _classify(rawKey);
+    if (classified == null) {
       unknown.add(where);
       return;
     }
-    if (seenUnder.containsKey(key)) {
+    // Stored as written, so anything said back names a key that is actually in
+    // the file — `keystore_p12_base64 is not valid base64` is actionable where
+    // its canonical spelling would send someone looking for a line they never
+    // wrote.
+    //
+    // Collisions are detected on the canonical name regardless, because
+    // `keystore_p12_base64` and `keystore_base64` are one credential spelled
+    // two ways: a file carrying both must fail here rather than let iteration
+    // order decide which reaches the build.
+    final key = classified.key;
+    final clash = seenUnder[key];
+    if (clash != null) {
       throw ProjectException(
-        '$path names $key twice, under ${seenUnder[key]} and $group — which '
+        '$path names $key twice, under $clash and $group — which '
         'one wins is not something to guess at with a credential',
       );
     }
@@ -369,12 +451,12 @@ LoadedSecrets _materialize(Map<String, String> values, Directory work) {
     loaded.add(group.name);
   }
 
-  if (values.containsKey('keystore_p12_base64')) {
+  if (values.containsKey('keystore_base64')) {
     final keystore = _writeBase64(
       work,
       'upload.p12',
-      values['keystore_p12_base64']!,
-      'keystore_p12_base64',
+      values['keystore_base64']!,
+      'keystore_base64',
     );
     environment['ANDROID_KEYSTORE_PATH'] = keystore.path;
     environment['ANDROID_KEYSTORE_PASSWORD'] = values['keystore_password']!;
