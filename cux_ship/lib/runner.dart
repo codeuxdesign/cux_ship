@@ -532,6 +532,13 @@ class _SecretsPlaceCommand extends _PlacedCommand {
     try {
       var wrote = 0;
       for (final file in _files(project)) {
+        // Every declared target, before the outcome is consulted. The guard is
+        // about the *target*, not about this particular write: a file that
+        // already matches is the steady state after a normal place, and is
+        // exactly when somebody may have `git add -f`ed it. Checking only on
+        // the write path means the one state that needs the check never gets
+        // it.
+        checkPlaceable(project.root, file.at, file.path);
         switch (file.outcomeIn(project.root)) {
           case PlaceOutcome.matching:
             stdout.writeln('  unchanged  ${file.path}');

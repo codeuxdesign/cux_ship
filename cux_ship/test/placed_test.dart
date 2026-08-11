@@ -73,6 +73,22 @@ void main() {
     });
   });
 
+  test('a tracked target is refused even when it already matches', () {
+    // The state, not the transition. After a normal place the file exists and
+    // matches, so a guard that only runs on the write path never runs again —
+    // and this is precisely when somebody may have `git add -f`ed it, after
+    // which the next `git commit -a` publishes the plaintext.
+    final f = file('placed/thing');
+    place(_root.path, f);
+    run(['add', '-f', 'placed/thing']);
+
+    expect(f.outcomeIn(_root.path), PlaceOutcome.matching);
+    expect(
+      () => checkPlaceable(_root.path, f.at, f.path),
+      throwsSaying(contains('already tracks')),
+    );
+  });
+
   group('refusing a target outside the repository', () {
     test('an absolute path', () {
       expect(
