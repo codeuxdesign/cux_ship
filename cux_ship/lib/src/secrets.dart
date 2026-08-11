@@ -967,9 +967,20 @@ Future<int> runSecretsExec({
     // a credential that silently did not arrive has to be visible here rather
     // than inferred from a failure three minutes later.
     stderr.writeln(
-      '==> loaded ${secrets.loaded.isEmpty ? 'nothing' : secrets.loaded.join(', ')}\n'
-      '==> running ${command.join(' ')} in $repoRoot',
+      '==> loaded ${secrets.loaded.isEmpty ? 'nothing' : secrets.loaded.join(', ')}',
     );
+    // Named, not written, and not an error either: a command that needs none of
+    // them is legitimate — promoting a build has no business failing because a
+    // Dart source file is not on disk. But a family that could be silently
+    // absent is exactly the defect this file has already had once, so it says
+    // so rather than leaving it to be discovered as a missing import.
+    if (secrets.placed.isNotEmpty) {
+      stderr.writeln(
+        '==> not written by exec: ${secrets.placed.join(', ')}'
+        ' — cux_ship secrets place',
+      );
+    }
+    stderr.writeln('==> running ${command.join(' ')} in $repoRoot');
 
     final process = await Process.start(
       command.first,

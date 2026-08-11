@@ -55,50 +55,31 @@ void main() {
       expect(read().appDir, isNull);
     });
 
-    test('signing defaults to automatic, and names no profiles', () {
+    test('signing defaults to automatic', () {
       // The default has to be the one needing no configuration: a project that
       // says nothing about signing is the common case.
       config('app-dir: app\n');
       expect(read().signing, AppleSigning.automatic);
-      expect(read().profiles, isEmpty);
     });
 
-    test('manual signing carries the profiles it will use', () {
-      config('apple:\n  signing: manual\n  profiles:\n    - ios_appstore\n');
+    test('manual signing is a repo-level choice, and only that', () {
+      // Which profiles exist is the secrets file's answer, not this one — a
+      // second declaration of the same fact is a second thing that can drift.
+      config('apple:\n  signing: manual\n');
       expect(read().signing, AppleSigning.manual);
-      expect(read().profiles, ['ios_appstore']);
     });
   });
 
   group('apple signing', () {
-    test('manual with no profiles is refused, not defaulted', () {
-      // Nothing to sign against. Xcode would say so well into an archive.
-      config('apple:\n  signing: manual\n');
-      expect(read, throwsSaying('no profiles are named'));
-    });
-
-    test('profiles under automatic signing are refused as contradictory', () {
-      // Which mode is in force must not be inferred from a list being
-      // non-empty — that is how a project signs with something it did not
-      // mean to.
-      config('apple:\n  profiles:\n    - ios_appstore\n');
-      expect(read, throwsSaying('apple.signing is automatic'));
-    });
-
     test('an unknown key under apple names the known ones', () {
       config('apple:\n  signng: manual\n');
       expect(read, throwsSaying('unknown key: signng'));
-      expect(read, throwsSaying('known keys: profiles, signing'));
+      expect(read, throwsSaying('known keys: signing'));
     });
 
     test('a signing mode that is neither is refused', () {
       config('apple:\n  signing: sometimes\n');
       expect(read, throwsSaying('must be automatic or manual'));
-    });
-
-    test('profiles must be a list of names', () {
-      config('apple:\n  signing: manual\n  profiles: ios_appstore\n');
-      expect(read, throwsSaying('apple.profiles must be a list'));
     });
   });
 
