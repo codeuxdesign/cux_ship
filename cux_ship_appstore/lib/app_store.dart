@@ -1037,10 +1037,7 @@ Future<void> uploadPackage({
     //
     // altool finds the .p8 by key id under ~/.appstoreconnect/private_keys and
     // the other locations it documents.
-    if (credentials.issuerId case final issuer?) ...[
-      '--apiIssuer',
-      issuer,
-    ],
+    if (credentials.issuerId case final issuer?) ...['--apiIssuer', issuer],
     if (credentials.keyFileName case final name?
         when !name.startsWith('ApiKey_')) ...[
       '--api-key-subject',

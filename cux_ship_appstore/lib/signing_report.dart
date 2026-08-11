@@ -134,8 +134,8 @@ void _refusedNote(String what) {
 void _certificates(SigningAudit audit, {required bool refused}) {
   _heading(
     'CERTIFICATES  — team wide, shared by every app, the only capped '
-        'category.\n                Xcode-managed ones are not listed; Apple '
-        'does not serve them.',
+    'category.\n                Xcode-managed ones are not listed; Apple '
+    'does not serve them.',
   );
   if (refused) {
     return _refusedNote('Certificates');
