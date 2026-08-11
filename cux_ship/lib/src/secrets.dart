@@ -27,6 +27,7 @@ import 'dart:io';
 
 import 'package:yaml/yaml.dart';
 
+import 'placed.dart';
 import 'project.dart';
 
 /// What the file may contain, declared once.
@@ -578,7 +579,12 @@ String findSops(String repoRoot) {
 ///
 /// Nothing is written outside the temp directory held by the result, and the
 /// caller must [LoadedSecrets.dispose] it.
-LoadedSecrets loadSecrets({
+/// The credentials in [secretsFile], decrypted.
+///
+/// Split out so `place` and `clean` can read the file without materializing
+/// anything: they write into the working tree rather than a temp directory, and
+/// have no business creating one.
+List<_Credential> _decrypt({
   required String repoRoot,
   required File secretsFile,
 }) {
@@ -615,7 +621,15 @@ LoadedSecrets loadSecrets({
     );
   }
 
-  final values = _parse(result.stdout as String, secretsFile.path);
+  return _parse(result.stdout as String, secretsFile.path);
+}
+
+/// Decrypts, materializes, and hands back the environment a child should see.
+LoadedSecrets loadSecrets({
+  required String repoRoot,
+  required File secretsFile,
+}) {
+  final values = _decrypt(repoRoot: repoRoot, secretsFile: secretsFile);
 
   // 0700 by construction — createTempSync uses mkdtemp. The files below are
   // narrowed explicitly anyway, because they inherit this process's umask
@@ -628,6 +642,29 @@ LoadedSecrets loadSecrets({
     rethrow;
   }
 }
+
+/// The files this repository expects in its working tree, decrypted.
+///
+/// Nothing is written and no temp directory is created — deciding what to do
+/// with them is [place] and [clean]'s business, and both refuse before writing.
+List<PlacedFile> placedFiles({
+  required String repoRoot,
+  required File secretsFile,
+}) => [
+  for (final credential in _decrypt(
+    repoRoot: repoRoot,
+    secretsFile: secretsFile,
+  ))
+    if (credential.path.startsWith('placed.'))
+      PlacedFile(
+        at: credential.path,
+        path: credential.fields['path']!,
+        content: _decode(
+          credential.fields['base64']!,
+          '${credential.path}.base64',
+        ),
+      ),
+];
 
 List<_Credential> _parse(String plaintext, String path) {
   final dynamic document;

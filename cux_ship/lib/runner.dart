@@ -27,6 +27,7 @@ import 'src/appstore/cli.dart';
 import 'src/appstore/flatten_cli.dart';
 import 'src/confirm.dart';
 import 'src/deps.dart';
+import 'src/placed.dart';
 import 'src/play/cli.dart';
 import 'src/project.dart';
 import 'src/release.dart';
@@ -419,6 +420,8 @@ class _SecretsCommand extends Command<void> {
   _SecretsCommand() {
     addSubcommand(_SecretsExecCommand());
     addSubcommand(_SecretsKeysCommand());
+    addSubcommand(_SecretsPlaceCommand());
+    addSubcommand(_SecretsCleanCommand());
   }
 
   @override
@@ -469,6 +472,123 @@ class _SecretsExecCommand extends Command<void> {
       );
     } on ProjectException catch (e) {
       stderr.writeln('cux_ship secrets exec: ${e.message}');
+      exitCode = 1;
+    }
+  }
+}
+
+/// Shared by `place` and `clean`: both read the same file and neither
+/// materializes anything.
+abstract class _PlacedCommand extends Command<void> {
+  _PlacedCommand() {
+    argParser.addOption(
+      'file',
+      help:
+          'The sops-encrypted file to decrypt. Relative paths resolve against '
+          'the repository root.',
+      defaultsTo: 'secrets/release.yaml',
+    );
+  }
+
+  List<PlacedFile> _files(ProjectContext project) {
+    final file = argResults!.option('file')!;
+    return placedFiles(
+      repoRoot: project.root,
+      secretsFile: File(p.isAbsolute(file) ? file : p.join(project.root, file)),
+    );
+  }
+}
+
+class _SecretsPlaceCommand extends _PlacedCommand {
+  @override
+  String get name => 'place';
+
+  @override
+  String get description =>
+      'Write the files the build reads from the working tree. Unlike `exec`, '
+      'these stay until `clean` removes them — the compiler and the analyzer '
+      'read them from fixed paths, so they cannot live for one command.';
+
+  @override
+  void run() {
+    final project = _project(this);
+    try {
+      var wrote = 0;
+      for (final file in _files(project)) {
+        switch (file.outcomeIn(project.root)) {
+          case PlaceOutcome.matching:
+            stdout.writeln('  unchanged  ${file.path}');
+          case PlaceOutcome.differing:
+            // Refused rather than overwritten. These are working source files —
+            // somebody edits them in an editor — and the encrypted copy is not
+            // automatically the newer one.
+            throw ProjectException(
+              '${file.path} differs from the encrypted copy.\n'
+              'It has been edited since it was placed, and overwriting it '
+              'would lose that.\n'
+              '    keep it:     re-encrypt it into ${file.at}\n'
+              '    discard it:  cux_ship secrets clean --discard-local, then '
+              'place again',
+            );
+          case PlaceOutcome.absent:
+            place(project.root, file);
+            stdout.writeln('  wrote      ${file.path}');
+            wrote++;
+        }
+      }
+      if (wrote == 0) {
+        stdout.writeln('nothing to write.');
+      }
+    } on ProjectException catch (e) {
+      stderr.writeln('cux_ship secrets place: ${e.message}');
+      exitCode = 1;
+    }
+  }
+}
+
+class _SecretsCleanCommand extends _PlacedCommand {
+  _SecretsCleanCommand() {
+    argParser.addFlag(
+      'discard-local',
+      negatable: false,
+      help:
+          'Remove a placed file even when it has been edited since. Named for '
+          'what it destroys rather than --force, because that is the only '
+          'thing worth knowing before running it.',
+    );
+  }
+
+  @override
+  String get name => 'clean';
+
+  @override
+  String get description =>
+      'Remove the files `place` wrote. Only removes what still matches the '
+      'encrypted copy, so an edit made since is refused rather than lost.';
+
+  @override
+  void run() {
+    final project = _project(this);
+    final discard = argResults!.flag('discard-local');
+    try {
+      var removed = 0;
+      for (final file in _files(project)) {
+        if (discard && file.outcomeIn(project.root) == PlaceOutcome.differing) {
+          File(p.join(project.root, file.path)).deleteSync();
+          stdout.writeln('  discarded  ${file.path}');
+          removed++;
+          continue;
+        }
+        if (clean(project.root, file)) {
+          stdout.writeln('  removed    ${file.path}');
+          removed++;
+        }
+      }
+      if (removed == 0) {
+        stdout.writeln('nothing to remove.');
+      }
+    } on ProjectException catch (e) {
+      stderr.writeln('cux_ship secrets clean: ${e.message}');
       exitCode = 1;
     }
   }
