@@ -1,5 +1,119 @@
 # Changelog
 
+## 1.8.0
+
+**A minor version that changes the secrets file's shape.** The number is
+deliberate rather than an oversight: three projects use this, all owned by one
+person and all checked out side by side, and none of them had a reason to
+depend on 1.x meaning anything yet. A 2.0.0 two days after 1.0.0 would have
+claimed a stability that never existed. Read this section as the breaking one it
+is — the migration is at the end and takes about ten minutes per project.
+
+- **The file's shape is now a schema, not a naming convention.** Credentials
+  live at a position in a declared tree rather than being recognized by their
+  name, and one walker reads that tree. `secrets keys` and `secrets exec` call
+  it and differ only in whether they keep the values, so "is this recognized"
+  has exactly one answer.
+
+  This replaced six defects with one cause — three consumers each recovering
+  structure from a string, slightly differently. Among them: a complete Android
+  keystore that validated, reported nothing amiss, and **set no environment
+  variables at all**; and `secrets keys` reporting a file as refused that
+  `secrets exec` accepted, with the test meant to pin them comparing one set to
+  itself and therefore unable to fail for any input.
+
+- **Any credential can appear more than once, under a name.** An app that ships
+  to the App Store, notarizes a direct download and signs a `.pkg` has three
+  Apple certificates; one that keeps a scoped upload key alongside an Admin key
+  for reading the portal has two API keys of different kinds. Previously the
+  vocabulary could express one of each.
+
+  Instance names never become variable names — uppercasing is not injective, so
+  `dist` and `dist_p12` would mint the same variable. Selection fills the fixed
+  names instead: exactly one instance is the default, two or more must be named
+  with `--keystore` or `--api-key`, and a name that is not in the file is an
+  error listing what is, rather than a fall back that would run an Admin-gated
+  read with a scoped key.
+
+- **Certificate kinds are a closed set** — `distribution`, `developer_id`,
+  `mac_installer` — so `developr_id` is refused. Keystore, profile, token and
+  ssh key names are the project's own, which is the one level no schema can
+  police.
+
+- **`api_private_key_filename` is replaced by `kind: team | individual`**, and
+  the filename is derived from it and the id. The filename is the only signal of
+  which claims Apple is sent; storing it as well meant a third copy that could
+  disagree with the other two, which is why 1.7.2 had to cross-check them.
+
+- **`tokens:` and `ssh_keys:`** hold what this tool will never understand — an
+  artifact host, a deploy key. Each declares the variable it exports, validated
+  as `[A-Z][A-Z0-9_]*` and refused if it collides with a name materialization
+  sets, so a token cannot quietly redirect `ANDROID_KEYSTORE_PATH`.
+
+- **`placed:` holds files the build reads from the working tree**, with
+  `secrets place`, `secrets clean` and `secrets pack`. Some credentials are
+  source — a compiler and an analyzer read them from fixed paths — so they
+  cannot live in a temp directory and cannot vanish when a command exits.
+
+  Their guarantee is a different one and weaker, and it is stated rather than
+  implied: not *plaintext never outlives the run* but **plaintext never enters
+  history**. A target is refused if it is not ignored, if git already tracks it
+  (`.gitignore` does not apply to tracked files, so one `git add -f` makes a
+  path publishable forever), if it crosses into a submodule, if it leaves the
+  repository once symlinks are resolved, or if it is a symlink or a directory.
+  All three verbs compare content: `place` refuses to overwrite an edited file,
+  `clean` removes only what still matches, and `pack` re-encrypts an edit back.
+
+- **`apple.profiles` is gone from `.cux-ship.yaml`.** The secrets file names the
+  profiles; a second declaration of one fact is a second thing that can drift.
+  `apple.signing: manual | automatic` stays, because it is a repository-level
+  choice and not derivable from which blobs happen to be present — and it
+  decides more than it sounds like: `-allowProvisioningUpdates` is a portal
+  write and an individual key cannot read the portal at all, so automatic
+  signing requires a team key that reaches every app in the team.
+
+- **`path`, `env` and `kind` are stored in cleartext**, so `secrets keys` and
+  the placement pre-flight work with no identity. That is a real disclosure — a
+  path tells a reader where a project keeps things — and it buys a pre-flight
+  that needs no key. Enforced both ways: the walker refuses an encrypted value
+  in those fields and names the `unencrypted_regex` to add, and a schema whose
+  secret-bearing field took one of those names fails the test suite.
+
+### Migrating a project
+
+Environment variables are unchanged, so **nothing that consumes credentials
+needs editing** — `build.sh`, `upload.sh` and Gradle keep reading the same
+names.
+
+1. Add to `.sops.yaml`, under the rule that matches your secrets file:
+
+   ```yaml
+   unencrypted_regex: '^(path|env|kind)$'
+   ```
+
+2. Restructure the file. Needs the age identity, because sops binds each value
+   to its key path — a textual rename fails authentication. Plaintext never
+   touches disk:
+
+   ```sh
+   sops -d secrets/release.yaml \
+     | <your restructuring> \
+     | sops -e --filename-override secrets/release.yaml /dev/stdin \
+     > secrets/release.yaml.new && mv secrets/release.yaml.new secrets/release.yaml
+   ```
+
+   | 1.7.x | 1.8.0 |
+   | --- | --- |
+   | `keystore_p12_base64`, `keystore_password`, `key_alias` | `android.keystores.<name>.{base64, password, key_alias}` |
+   | `play_service_account_json_base64` | `android.play_service_account.json_base64` |
+   | `api_key_id`, `api_private_key_base64`, `api_issuer_id` | `apple.api_keys.<name>.{id, private_key_base64, issuer_id}` |
+   | `api_private_key_filename` | `apple.api_keys.<name>.kind: team \| individual` |
+   | `distribution_p12_base64`, `distribution_p12_password` | `apple.certificates.distribution.{p12_base64, password}` |
+
+3. Run `cux_ship secrets keys`. It needs no identity, reports every credential
+   by path, and names anything half configured — so it will tell you whether the
+   result is right before you try to build with it.
+
 ## 1.7.2
 
 - **An individual App Store Connect key was classified as a team key.**
