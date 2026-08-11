@@ -184,16 +184,55 @@ Map<String, String> _parse(String plaintext, String path) {
 
   final values = <String, String>{};
   final unknown = <String>[];
-  for (final entry in document.entries) {
-    final key = '${entry.key}';
+  final seenUnder = <String, String>{};
+
+  void leaf(String key, Object? value, String group) {
+    final where = group.isEmpty ? key : '$group.$key';
     if (!_knownKeys.contains(key)) {
-      unknown.add(key);
-      continue;
+      unknown.add(where);
+      return;
+    }
+    if (seenUnder.containsKey(key)) {
+      throw ProjectException(
+        '$path names $key twice, under ${seenUnder[key]} and $group — which '
+        'one wins is not something to guess at with a credential',
+      );
+    }
+    if (value == null) {
+      return;
     }
     // Scalars are stringified rather than type-checked: a key alias that is
     // all digits parses as an int, and refusing it would be pedantry.
-    if (entry.value != null) {
-      values[key] = '${entry.value}';
+    values[key] = '$value';
+    seenUnder[key] = group.isEmpty ? '(top level)' : group;
+  }
+
+  // **Headings are allowed and carry no meaning.** A real file groups its
+  // credentials — `android:` and `apple:` — because that is how somebody reads
+  // it, and the shell script this replaces coped by stripping leading
+  // whitespace before matching, which made it indentation-blind by accident.
+  // Reading only the top level instead would refuse every such file, having
+  // found none of the credentials in it.
+  //
+  // So one level of nesting is walked and the heading is discarded. The names
+  // that matter are the leaves, which is what the groups above are declared in
+  // terms of — a credential does not become a different credential because of
+  // the heading it was filed under.
+  for (final entry in document.entries) {
+    final key = '${entry.key}';
+    final value = entry.value;
+    if (value is YamlMap) {
+      for (final child in value.entries) {
+        if (child.value is YamlMap || child.value is YamlList) {
+          throw ProjectException(
+            '$path nests $key.${child.key} deeper than a credential goes — '
+            'headings may group values, but only one level down',
+          );
+        }
+        leaf('${child.key}', child.value, key);
+      }
+    } else {
+      leaf(key, value, '');
     }
   }
 

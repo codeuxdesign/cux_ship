@@ -243,6 +243,24 @@ distribution_p12_base64:          # only a machine with an empty keychain
 distribution_p12_password:        # needs these. Both, or neither
 ```
 
+**Headings are allowed and mean nothing.** Group them however the file reads
+best — one level deep, and the heading is discarded:
+
+```yaml
+android:
+  keystore_p12_base64:
+  keystore_password:
+  key_alias:
+apple:
+  api_key_id:
+  api_private_key_base64:
+```
+
+A credential does not become a different credential because of the heading it
+was filed under, so the names that matter are the leaves. The same leaf under
+two headings is refused rather than resolved — which one wins is not something
+to guess at with a credential.
+
 Three things stop the command rather than being worked around, and each is a
 failure that is otherwise **silent**:
 

@@ -169,6 +169,76 @@ void main() {
     });
   });
 
+  group('headings', () {
+    // A real secrets file groups its credentials under `android:` and `apple:`,
+    // because that is how somebody reads it. The shell script this replaces
+    // coped by accident — it stripped leading whitespace before matching, which
+    // made it indentation-blind — and reading only the top level instead
+    // refuses such a file outright, having found none of the credentials in it.
+    test('one level of grouping is walked, and the heading discarded', () {
+      secrets(
+        'android:\n'
+        '  keystore_p12_base64: ${b64('a keystore')}\n'
+        '  keystore_password: swordfish\n'
+        '  key_alias: upload\n'
+        'apple:\n'
+        '  api_key_id: ABC123\n'
+        '  api_private_key_base64: ${b64('a p8')}\n',
+      );
+      final loaded = load();
+      addTearDown(loaded.dispose);
+
+      expect(loaded.environment['ANDROID_KEY_ALIAS'], 'upload');
+      expect(loaded.environment['APPLE_API_KEY_ID'], 'ABC123');
+      expect(loaded.loaded, [
+        'the Android upload key',
+        'the App Store Connect API key',
+      ]);
+    });
+
+    test('grouped and top-level values can be mixed', () {
+      secrets(
+        'play_service_account_json_base64: ${b64('{}')}\n'
+        'android:\n'
+        '  keystore_p12_base64: ${b64('k')}\n'
+        '  keystore_password: swordfish\n'
+        '  key_alias: upload\n',
+      );
+      final loaded = load();
+      addTearDown(loaded.dispose);
+      expect(loaded.environment['GOOGLE_PLAY_SERVICE_ACCOUNT_JSON'], '{}');
+      expect(loaded.environment['ANDROID_KEY_ALIAS'], 'upload');
+    });
+
+    test('a typo inside a group is reported with its heading', () {
+      secrets(
+        'android:\n'
+        '  keystore_pasword: swordfish\n',
+      );
+      expect(load, throwsSaying(contains('android.keystore_pasword')));
+    });
+
+    test('the same credential under two headings is refused', () {
+      // Which one wins is not something to guess at with a credential.
+      secrets(
+        'android:\n'
+        '  key_alias: one\n'
+        'other:\n'
+        '  key_alias: two\n',
+      );
+      expect(load, throwsSaying(contains('names key_alias twice')));
+    });
+
+    test('nesting deeper than a heading is refused', () {
+      secrets(
+        'android:\n'
+        '  upload:\n'
+        '    key_alias: one\n',
+      );
+      expect(load, throwsSaying(contains('deeper than a credential goes')));
+    });
+  });
+
   group('refusing', () {
     test('a half-configured group stops before anything runs', () {
       // The failure this exists to prevent: Gradle falls through to the debug
