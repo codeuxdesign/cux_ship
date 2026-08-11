@@ -135,12 +135,10 @@ void main() {
       final target = File('${_root.path}/lib/env/secrets.dart');
       expect(target.readAsStringSync(), 'a secret');
       if (!Platform.isWindows) {
-        final mode = Process.runSync('stat', [
-          '-f',
-          '%Lp',
-          target.path,
-        ]).stdout.toString().trim();
-        expect(mode, '600');
+        // Dart's own stat rather than shelling out: `stat -f '%Lp'` is BSD and
+        // Linux wants `-c '%a'`, so the shell version passed on a Mac and
+        // failed on CI.
+        expect(target.statSync().modeString(), 'rw-------');
       }
     });
 
