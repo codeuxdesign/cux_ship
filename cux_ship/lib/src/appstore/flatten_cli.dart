@@ -20,7 +20,8 @@
 import 'dart:io';
 
 import 'package:args/args.dart';
-import 'package:cux_ship_appstore/flatten.dart';
+
+import 'flatten.dart';
 
 /// Exit code when --check finds work to do, so CI can gate on it.
 const needsFlatteningExit = 2;

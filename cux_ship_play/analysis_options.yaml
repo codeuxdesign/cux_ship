@@ -1,2 +1,0 @@
-# The rules live at the repository root, shared by all four packages.
-include: ../analysis_options.yaml

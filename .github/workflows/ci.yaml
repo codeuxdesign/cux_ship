@@ -12,32 +12,43 @@ concurrency:
 
 jobs:
   # A matrix over every package here. Adding a package means adding it to this
-  # list — that is the whole wiring, and there is no second place to remember.
+  # list *and* to the root pubspec's `workspace:` — two places, and pub fails
+  # loudly on the second, which is what keeps them in step.
   package:
     name: ${{ matrix.package }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        package: [cux_ship_notes, cux_ship_play, cux_ship_appstore, cux_ship_verify, cux_ship]
-    defaults:
-      run:
-        working-directory: ${{ matrix.package }}
+        package: [cux_ship_verify, cux_ship]
     steps:
       - uses: actions/checkout@v5
       - uses: dart-lang/setup-dart@v1
-      - run: dart pub get
-      - run: dart format --output=none --set-exit-if-changed .
-      - run: dart analyze --fatal-infos
 
-      # Conditional because cux_ship_play has no test/ directory: its logic
-      # moved to cux_ship_notes, and what is left is API calls. The condition is
-      # on the directory existing rather than on a list of package names, so a
-      # suite added to any of them runs from the moment it is written and cannot
-      # be silently skipped.
+      # From the workspace root, because that is where the single lockfile is.
+      # `pub get` inside a member refuses with "is part of a workspace" rather
+      # than resolving something subtly different, which is the right failure.
+      - run: dart pub get
+
+      - run: dart format --output=none --set-exit-if-changed .
+        working-directory: ${{ matrix.package }}
+      - run: dart analyze --fatal-infos
+        working-directory: ${{ matrix.package }}
+
+      # The condition is on the directory existing rather than on a list of
+      # package names, so a suite added to either one runs from the moment it is
+      # written and cannot be silently skipped.
       - name: Test
         if: hashFiles(format('{0}/test/**', matrix.package)) != ''
         run: dart test --reporter expanded
+        working-directory: ${{ matrix.package }}
+
+      # Publishing is permanent — a retraction is a seven-day window, not an
+      # undo — so the metadata that gates it is checked on every push rather
+      # than discovered at release time. --dry-run needs no credentials.
+      - name: Would publish
+        run: dart pub publish --dry-run
+        working-directory: ${{ matrix.package }}
 
   # The check a consumer actually depends on: that this repository can be
   # resolved as a git dependency, from a clean checkout, with no credentials.
@@ -81,19 +92,34 @@ jobs:
                 url: https://github.com/${{ github.repository }}.git
                 path: cux_ship
                 ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          dependency_overrides:
+            cux_ship_verify:
+              git:
+                url: https://github.com/${{ github.repository }}.git
+                path: cux_ship_verify
+                ref: ${{ github.event.pull_request.head.sha || github.sha }}
           EOF
           dart pub get
 
-      # The relative path: dependencies between the packages are the mechanism
-      # the whole arrangement rests on: one direct dependency has to pull the
-      # other four. Confirm rather than assume.
-      - name: Confirm the rest resolved transitively
+      # DELETE THE OVERRIDE ABOVE the day cux_ship_verify is on pub.dev, and
+      # this job goes back to being what a consumer actually writes.
+      #
+      # Until then it is load bearing and says something true: cux_ship now
+      # depends on cux_ship_verify as a *hosted* constraint, because a published
+      # package may not carry a path dependency. So this repository is not
+      # consumable as a git dependency at all until that package exists on
+      # pub.dev — the override is what stands in for it, pinned to the same
+      # commit so nothing resolves against a different tree.
+      #
+      # The consequence worth stating plainly: **main must not move to this
+      # arrangement before cux_ship_verify is published.** Existing consumers
+      # pin old tags and are unaffected, but anyone tracking a branch would find
+      # an unresolvable dependency.
+      - name: Confirm the other package resolved
         run: |
           cd /tmp/consumer
-          for p in cux_ship_notes cux_ship_verify cux_ship_appstore cux_ship_play; do
-            grep -q "$p" pubspec.lock \
-              || { echo "$p did not resolve transitively"; exit 1; }
-          done
+          grep -q cux_ship_verify pubspec.lock \
+            || { echo "cux_ship_verify did not resolve"; exit 1; }
 
       # Every leaf of the tree renders its help without authenticating. This is
       # also the check that each subcommand's parser is constructible: a

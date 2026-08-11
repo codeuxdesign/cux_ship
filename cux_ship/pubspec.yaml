@@ -3,45 +3,65 @@ description: >-
   One command for shipping to the App Store and Google Play: upload an artifact,
   publish a listing, promote a build a store already holds, and check the
   release inputs a store would otherwise reject after the upload.
-publish_to: 'none'
-version: 1.1.0
+repository: https://github.com/codeuxdesign/cux_ship
+version: 1.6.0
 
-# The single entry point. Everything else here is a library it wires together,
-# which is what makes `cux_ship appstore upload` possible where there used to be
-# one executable per package and an invocation that named the package twice.
+# The command, and everything behind it. The App Store and Play clients are
+# `lib/src/appstore/` and `lib/src/play/` — libraries this wires together, which
+# is what makes `cux_ship appstore upload` possible where there used to be one
+# executable per package and an invocation that named the package twice.
 #
-# It is also the only package a consumer needs to depend on. That is not just
-# convenience: pub treats a git dependency's ref as part of its identity without
-# resolving a tag first, so a package that is both a direct dependency (at a
-# tag) and a transitive one (at the commit a relative path: resolved to) is an
-# unsolvable conflict. One direct dependency has no second identity to collide
-# with, which is why consumers can pin a readable tag again.
+# **Two packages, and the split is about what a consumer's lockfile gets.**
+# Everything heavy is here: googleapis for the Play resumable upload, an image
+# codec for the alpha channel Apple refuses, an HTTP client and a JWT signer.
+# A project's *release tooling* wants all of it. A project's *test suite* wants
+# none of it, and only wants to know whether its changelog and store tree would
+# be accepted — so those checks, and the two pure models they are built on, are
+# in cux_ship_verify, which has no dependencies at all.
 #
-# lib/verify.dart re-exports cux_ship_verify for the same reason: a consumer's
-# tests can import it without naming a second package here.
+# lib/verify.dart re-exports cux_ship_verify so an existing consumer keeps
+# working, but a test suite should depend on cux_ship_verify directly: reaching
+# the checks through this package is what puts googleapis in the lockfile of
+# somebody who wanted to count characters in a release note.
 environment:
   sdk: ^3.12.2
+
+resolution: workspace
 
 dependencies:
   args: ^2.4.0
   # For `deps install`, which verifies a download against a pinned hash before
   # it is moved into place and made executable. That check is the difference
-  # between pinning "some build of 3.13.3" and pinning a specific one.
+  # between pinning "some build of 3.13.3" and pinning a specific one — and
+  # separately for the MD5 that App Store Connect requires as a screenshot's
+  # sourceFileChecksum. Not a security choice there; Apple picked it.
   crypto: ^3.0.0
-  cux_ship_appstore:
-    path: ../cux_ship_appstore
-  cux_ship_play:
-    path: ../cux_ship_play
-  cux_ship_verify:
-    path: ../cux_ship_verify
+  cux_ship_verify: ^1.6.0
+  # ES256 over the .p8 private key. App Store Connect accepts nothing else, and
+  # package:crypto has no ECDSA, so this or pointycastle-by-hand were the
+  # options.
+  dart_jsonwebtoken: ^3.0.0
+  # androidpublisher_v3 is the Play Developer Publishing API, generated from
+  # Google's discovery document. Worth the size: it handles the resumable media
+  # upload for a 45 MB bundle, which is the one genuinely fiddly part of this.
+  googleapis: ^16.0.0
+  googleapis_auth: ^2.0.0
+  http: ^1.2.0
+  # Only `screenshots flatten` uses this, and only to re-encode a PNG without
+  # its alpha channel — which every screen capture has and Apple rejects. It
+  # earns a dependency because the alternative was asking everyone who captures
+  # a screenshot to install ImageMagick: `sips` cannot do it while staying PNG,
+  # and this is pure Dart.
+  image: ^4.2.0
   # For --app-dir, which has to decide whether one directory is inside another
   # and what its path is relative to it. String surgery gets `..`, trailing
   # slashes and symlinks wrong, and a wrong answer there is a `git commit`
   # naming a path that does not exist.
   path: ^1.9.0
-  # For .cux-ship.yaml. A hand-written parser would do for one flat key, but
-  # this file is read before every command and reports its own syntax errors
-  # with a line number, which is the half that matters when it is wrong.
+  # For .cux-ship.yaml and for the decrypted secrets file. A hand-written parser
+  # would do for one flat key, but both are read before a command does anything
+  # and both report their own syntax errors with a line number, which is the
+  # half that matters when they are wrong.
   yaml: ^3.1.0
 
 dev_dependencies:

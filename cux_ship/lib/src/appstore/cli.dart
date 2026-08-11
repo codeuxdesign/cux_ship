@@ -51,12 +51,13 @@
 import 'dart:io';
 
 import 'package:args/args.dart';
-import 'package:cux_ship_appstore/app_store.dart';
-import 'package:cux_ship_appstore/asc_client.dart';
-import 'package:cux_ship_appstore/metadata.dart';
-import 'package:cux_ship_appstore/signing_report.dart';
-import 'package:cux_ship_appstore/testflight_notes.dart';
-import 'package:cux_ship_notes/release_notes.dart';
+import 'package:cux_ship_verify/metadata.dart';
+import 'package:cux_ship_verify/release_notes.dart';
+
+import 'app_store.dart';
+import 'asc_client.dart';
+import 'signing_report.dart';
+import 'testflight_notes.dart';
 
 /// Which App Store Connect operation [runAsc] performs.
 ///

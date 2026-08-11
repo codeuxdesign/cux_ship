@@ -60,7 +60,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:args/args.dart';
-import 'package:cux_ship_notes/release_notes.dart';
+import 'package:cux_ship_verify/release_notes.dart';
 import 'package:googleapis/androidpublisher/v3.dart';
 import 'package:googleapis_auth/auth_io.dart';
 

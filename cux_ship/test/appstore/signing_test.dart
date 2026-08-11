@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import 'package:cux_ship_appstore/signing.dart';
+import 'package:cux_ship/src/appstore/signing.dart';
 import 'package:test/test.dart';
 
 /// `now` is fixed so the expiry arithmetic is not a function of when the suite

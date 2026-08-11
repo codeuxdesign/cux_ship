@@ -16,9 +16,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:cux_ship_verify/metadata.dart';
 
 import 'asc_client.dart';
-import 'metadata.dart';
 
 /// The `platform` App Store Connect wants, which is not spelled the way the
 /// rest of this repository spells platforms.

@@ -20,14 +20,14 @@ import 'dart:io';
 
 import 'package:args/args.dart';
 import 'package:args/command_runner.dart';
-import 'package:cux_ship_appstore/cli.dart';
-import 'package:cux_ship_appstore/flatten_cli.dart';
-import 'package:cux_ship_play/cli.dart';
 import 'package:cux_ship_verify/cux_ship_verify.dart';
 import 'package:path/path.dart' as p;
 
+import 'src/appstore/cli.dart';
+import 'src/appstore/flatten_cli.dart';
 import 'src/confirm.dart';
 import 'src/deps.dart';
+import 'src/play/cli.dart';
 import 'src/project.dart';
 import 'src/release.dart';
 import 'src/secrets.dart';

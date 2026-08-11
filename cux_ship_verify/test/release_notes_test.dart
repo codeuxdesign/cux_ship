@@ -4,7 +4,7 @@
 // page, and several of them are invisible when they misfire: a swallowed
 // continuation line, a prefix that was not stripped, a fallback that reached
 // too far back. Each one is pinned here.
-import 'package:cux_ship_notes/release_notes.dart';
+import 'package:cux_ship_verify/release_notes.dart';
 import 'package:test/test.dart';
 
 /// Shaped like the real CHANGELOG.md: prose headings first, then versions

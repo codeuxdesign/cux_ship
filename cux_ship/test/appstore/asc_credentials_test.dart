@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import 'package:cux_ship_appstore/asc_client.dart';
+import 'package:cux_ship/src/appstore/asc_client.dart';
 import 'package:test/test.dart';
 
 /// Not a real key — the claim selection is pure, so none of this signs

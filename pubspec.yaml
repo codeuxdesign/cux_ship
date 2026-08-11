@@ -1,0 +1,24 @@
+name: _cux_ship_workspace
+publish_to: 'none'
+version: 0.0.0
+
+# Not a package — the root of a pub workspace, and the only thing it does is
+# name its members.
+#
+# What it buys: one `pub get` and **one lockfile** for the whole repository,
+# while each member still declares its dependencies as ordinary hosted
+# constraints. That last part is what makes publishing possible without a
+# release dance. Before workspaces, a repository like this either committed a
+# lockfile per package and resolved them separately, or reached for melos to
+# rewrite `path:` overrides around a publish. Neither is needed: workspaces are
+# native to pub, and `cux_ship: dependencies: cux_ship_verify: ^1.6.0` resolves
+# to the copy on disk here and to pub.dev everywhere else, with no file
+# rewriting in between.
+#
+# Members are published; this file is not.
+environment:
+  sdk: ^3.12.2
+
+workspace:
+  - cux_ship
+  - cux_ship_verify

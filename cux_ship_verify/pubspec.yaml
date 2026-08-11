@@ -1,30 +1,34 @@
 name: cux_ship_verify
 description: >-
-  Checks a consuming repository's release inputs — its CHANGELOG.md and its App
-  Store metadata tree — against the limits both stores enforce only after an
-  upload. Meant to be called from the consumer's own test suite.
-publish_to: 'none'
-version: 1.0.0
+  The offline half of shipping to the App Store and Google Play: the CHANGELOG
+  parser, the App Store metadata tree, and the checks that catch what either
+  store would otherwise reject only after an upload.
+repository: https://github.com/codeuxdesign/cux_ship
+version: 1.6.0
 
-# The one package here that exists for the *consumer* rather than for
-# publishing. The checks it holds used to be test cases inside cux_ship_notes
-# and cux_ship_appstore, reading ../../CHANGELOG.md and ../../store/appstore —
-# which worked only while those packages lived inside the app that owned those
-# files. Extracting the packages broke that, and the fix is not to delete the
-# guards: the comments on them argue, correctly, that a guard which only ever
-# sees fixtures is worth nothing.
+# **No dependencies, and that is the design.** This is the package a consuming
+# project puts in its own dev_dependencies so the checks run in its test suite
+# on every push — so what it drags into a contributor's lockfile matters. It
+# drags nothing.
 #
-# So the logic lives here and the data stays in the consumer. A consumer writes
-# a handful of test cases that call these functions against its own files, and
-# gets the same coverage without vendoring a copy of anything.
+# That is why the changelog parser and the App Store metadata loader live here
+# rather than beside the uploaders that also use them. Both are pure `dart:io`
+# and `dart:convert`, both are the *model* of a store input rather than a client
+# for one, and putting them here is what lets `package:cux_ship` depend on this
+# instead of the other way round. The alternative — a consumer reaching the
+# checks through the CLI package — puts googleapis and an image codec in the
+# lockfile of anyone who wanted to know whether a release note is too long.
+#
+# The checks it holds used to be test cases inside the uploader packages,
+# reading ../../CHANGELOG.md and ../../store/appstore — which worked only while
+# those packages lived inside the app that owned those files. Extracting them
+# broke that, and the fix was not to delete the guards: a guard that only ever
+# sees fixtures is worth nothing. So the logic lives here and the data stays in
+# the consumer.
 environment:
   sdk: ^3.12.2
 
-dependencies:
-  cux_ship_appstore:
-    path: ../cux_ship_appstore
-  cux_ship_notes:
-    path: ../cux_ship_notes
+resolution: workspace
 
 dev_dependencies:
   lints: ^6.0.0

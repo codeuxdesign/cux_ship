@@ -5,7 +5,7 @@
 // characters Apple objects to and nothing else — over-stripping would quietly
 // mangle the prose, and under-stripping fails the upload after the .ipa has
 // already been transferred and processed.
-import 'package:cux_ship_appstore/testflight_notes.dart';
+import 'package:cux_ship/src/appstore/testflight_notes.dart';
 import 'package:test/test.dart';
 
 void main() {

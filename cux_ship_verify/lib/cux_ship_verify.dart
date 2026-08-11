@@ -20,8 +20,8 @@
 // code that will publish them.
 import 'dart:io';
 
-import 'package:cux_ship_appstore/metadata.dart';
-import 'package:cux_ship_notes/release_notes.dart';
+import 'metadata.dart';
+import 'release_notes.dart';
 
 /// One thing wrong with a repository's release inputs.
 ///
