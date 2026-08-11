@@ -591,6 +591,22 @@ List<_Credential> _decrypt({
   if (!secretsFile.existsSync()) {
     throw ProjectException('no ${secretsFile.path}');
   }
+
+  // The *encrypted* file, before anything decrypts it. After `sops -d` a `path`
+  // that sops encrypted is indistinguishable from one it left alone, so this is
+  // the only moment the difference is visible — and without it only `secrets
+  // keys` would notice, while exec, place and clean carried on. That would
+  // quietly cost the property the cleartext fields exist for: that the
+  // pre-flight works with no identity, on any platform. A file readable only by
+  // someone holding a key has already lost it.
+  final shape = inspectSecretKeys(secretsFile);
+  if (shape.problems.isNotEmpty) {
+    throw ProjectException(
+      '${secretsFile.path} does not describe credentials this understands:\n'
+      '${shape.problems.map((p) => '    $p').join('\n')}',
+    );
+  }
+
   final sops = findSops(repoRoot);
 
   // sops looks for an identity in SOPS_AGE_KEY, SOPS_AGE_KEY_FILE and a
