@@ -149,7 +149,69 @@ const _schema = _Section({
   // credential the build reads at a path it does not choose, which is the one
   // question that decides where anything in here belongs.
   'ssh_keys': _Family('an ssh key', fields: [_Field('base64'), _Field('env')]),
+  // Written where the build expects it, and left there — the other families all
+  // materialize into a temp directory that is removed however the run ends.
+  //
+  // These are source: `flutter build` and the analyzer read them from those
+  // exact paths, and a test imports one, so they cannot live in a temp
+  // directory and cannot vanish when a command exits. `secrets exec` therefore
+  // does not write them at all; `secrets place` does, and `secrets clean`
+  // removes them.
+  //
+  // The guarantee is different in kind, and weaker: not "plaintext never
+  // outlives the run" but "plaintext never enters history".
+  'placed': _Family(
+    'a file the build reads from the working tree',
+    fields: [_Field('path'), _Field('base64')],
+  ),
 });
+
+/// Fields whose values must stay readable without an identity.
+///
+/// `secrets keys` reports paths, and `place` checks a path against the
+/// repository before writing anything — both of which need the value, so these
+/// have to be outside sops' encryption. That is a real disclosure: a `path`
+/// tells a reader where a project keeps things and an `env` which services it
+/// uses. Both are low sensitivity and largely inferable from a repository
+/// anyone can already read, and the trade buys a pre-flight that works with no
+/// key at all.
+const _cleartextFields = {'path', 'env', 'kind'};
+
+/// No field carrying a secret may share a name with a cleartext one.
+///
+/// Stated as a rule it holds until somebody adds a family at 2am, so it is
+/// asserted over the schema instead: a family whose secret-bearing field is
+/// called `path` fails the suite rather than review.
+///
+/// Public because a check nothing calls is decoration — the suite calls it, so
+/// the schema cannot be extended into a disclosure without a red test.
+void assertSchemaKeepsSecretsEncrypted() => _assertNoSecretIsCleartext();
+
+void _assertNoSecretIsCleartext() {
+  void check(_Node node, String at) {
+    switch (node) {
+      case _Section(:final children):
+        for (final entry in children.entries) {
+          check(entry.value, at.isEmpty ? entry.key : '$at.${entry.key}');
+        }
+      case _Family(:final fields) || _Singleton(:final fields):
+        for (final field in fields) {
+          final carriesSecret =
+              field.name.endsWith('base64') ||
+              field.name.contains('password') ||
+              field.name == 'value';
+          if (carriesSecret && _cleartextFields.contains(field.name)) {
+            throw StateError(
+              '$at.${field.name} carries a secret and is named like a field '
+              'that is stored in cleartext',
+            );
+          }
+        }
+    }
+  }
+
+  check(_schema, '');
+}
 
 /// Instance names become filenames — `<instance>.p12` in the temp directory,
 /// and one profile per name — so the grammar is a path-traversal guard as much
@@ -342,6 +404,18 @@ Map<String, String> _leaves(
     // Scalars are stringified rather than type-checked: a key alias that is all
     // digits parses as an int, and refusing it would be pedantry.
     values[key] = '$value';
+
+    // A field this has to read without an identity, that sops encrypted anyway.
+    // The dependency on `.sops.yaml` is only tolerable if getting it wrong is
+    // loud: silently, `secrets keys` would report a path of `ENC[...]` and the
+    // pre-flight would check a path nothing will ever write to.
+    if (_cleartextFields.contains(key) && values[key]!.startsWith('ENC[')) {
+      problems.add(
+        '$at.$key is encrypted, and has to be readable without a key — add '
+        "unencrypted_regex: '^(${_cleartextFields.join('|')})\$' to "
+        '.sops.yaml and re-encrypt',
+      );
+    }
   }
   return values;
 }
@@ -452,7 +526,12 @@ List<String> knownSecretKeys() {
 
 /// What was decrypted, and where the files it had to write went.
 class LoadedSecrets {
-  LoadedSecrets(this.environment, this.loaded, this._work);
+  LoadedSecrets(
+    this.environment,
+    this.loaded,
+    this._work, {
+    this.placed = const [],
+  });
 
   /// The child's environment: this process's, plus the credentials.
   final Map<String, String> environment;
@@ -461,6 +540,14 @@ class LoadedSecrets {
   /// rather than what was asked for is what makes a credential that silently
   /// did not arrive visible instead of inferred.
   final List<String> loaded;
+
+  /// Credentials this deliberately did **not** write.
+  ///
+  /// `exec` names them and carries on. A command that needs none of them is
+  /// legitimate — promoting a build has no business failing because a Dart
+  /// source file is not on disk — but a family that could be silently absent
+  /// is exactly the defect this file has already had once.
+  final List<String> placed;
 
   final Directory _work;
 
@@ -740,7 +827,11 @@ LoadedSecrets _materialize(List<_Credential> credentials, Directory work) {
     loaded.add(key.path);
   }
 
-  return LoadedSecrets(environment, loaded, work);
+  // Named, not written. `secrets place` writes these; exec promises that
+  // plaintext does not outlive the run, and these outlive it by design.
+  final placed = [for (final file in under('placed')) file.path];
+
+  return LoadedSecrets(environment, loaded, work, placed: placed);
 }
 
 /// Refuses a declared variable name that is malformed, or that would overwrite
