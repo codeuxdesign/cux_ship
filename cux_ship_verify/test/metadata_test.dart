@@ -79,7 +79,7 @@ void writeValidTree() {
   write('listings/en-US/keywords.txt', 'cycling,physics,drafting');
   write(
     'listings/en-US/privacy_policy_url.txt',
-    'https://holdthewheel.codeux.design/privacy.html',
+    'https://holdthewheel.app/privacy.html',
   );
   writeBytes(
     'listings/en-US/screenshots/APP_IPHONE_67/01-ride.png',
@@ -176,7 +176,7 @@ void main() {
 
     test('a non-URL is refused', () {
       writeValidTree();
-      write('listings/en-US/support_url.txt', 'holdthewheel.codeux.design');
+      write('listings/en-US/support_url.txt', 'holdthewheel.app');
       expect(load, throwsMetadata(contains('https')));
     });
 

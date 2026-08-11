@@ -4,7 +4,7 @@ Release tooling for shipping a Flutter or Dart app to the App Store and Google
 Play: upload an artifact, publish the store listing, promote a build that is
 already up, and turn a `CHANGELOG.md` into the notes each store shows.
 
-Extracted from [Hold the Wheel](https://holdthewheel.codeux.design) with its
+Extracted from [Hold the Wheel](https://holdthewheel.app/) with its
 history intact — `git log --follow` on any file here reaches back past the
 extraction. Most comments in this code record a specific incident, and that is
 the point of keeping the history: `git blame` is usually the only way to recover

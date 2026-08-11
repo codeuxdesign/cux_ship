@@ -17,7 +17,7 @@ upload, so the checks want to run in your own test suite on every push — and
 reaching them through the CLI would put googleapis in the lockfile of everyone
 who only wanted to know whether a release note is too long.
 
-Extracted from [Hold the Wheel](https://holdthewheel.codeux.design) with its
+Extracted from [Hold the Wheel](https://holdthewheel.app/) with its
 history intact — `git log --follow` on any file here reaches back past both the
 extraction and the later merge from five packages into two. Most comments in
 this code record a specific incident, and that is the point of keeping the
