@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.7.1
+
+From a security audit. No high-severity defects were found; these are the three
+worth acting on.
+
+- **A malformed decrypted secrets file could print its own contents.**
+  `package:yaml` renders a parse error with the offending source line and a
+  caret under it, and the whole exception was being interpolated into a message
+  that goes to stderr — so a decrypted private key could land in a terminal or a
+  CI log. It needs a hand-mangled file that still decrypts, which is why it is
+  not higher, but it is the difference between an error and a disclosure. Both
+  YAML error paths now print the bare reason and no source.
+- **`deps update` now validates what it writes.** The version and hash come from
+  GitHub over the network and were interpolated into generated Dart source
+  inside single quotes, so a value carrying a quote could inject code that runs
+  on the next analyze. Maintainer-only and behind a reviewed diff; two regexes
+  are cheaper than relying on the review.
+- **Pagination cannot carry the bearer token off-origin.** `getAll` followed
+  `links.next` to whatever host it named, with the Authorization header
+  attached. Reaching it would require Apple's own TLS response to be
+  attacker-controlled — but "the token only goes to Apple" should be a property
+  of this code rather than of Apple's response.
+
 ## 1.7.0
 
 - **`cux_ship secrets keys`** — lists the credential names in a secrets file

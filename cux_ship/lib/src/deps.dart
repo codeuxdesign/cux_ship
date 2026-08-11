@@ -354,6 +354,21 @@ File _pinsFile() {
   );
 }
 
+/// Refuses a pin field that does not look like what it claims to be.
+///
+/// Deliberately not an escape: a version or a hash that needs escaping is not
+/// a version or a hash, and writing it out safely would only record upstream
+/// having sent something inexplicable.
+void _checkPinField(String field, String value, RegExp shape) {
+  if (!shape.hasMatch(value)) {
+    throw ProjectException(
+      'refusing to write a pin whose $field does not look like one: "$value"\n'
+      'It came from a GitHub release, so this means upstream published '
+      'something unexpected. Do not hand-edit it in — find out why.',
+    );
+  }
+}
+
 /// Replaces the `depsPins` list, leaving the file's header comment alone —
 /// that text explains where the hashes come from and is not regenerated.
 String _renderPins(String existing, List<ToolPin> pins) {
@@ -366,6 +381,23 @@ String _renderPins(String existing, List<ToolPin> pins) {
   final buffer = StringBuffer(existing.substring(0, marker))
     ..writeln('const depsPins = <ToolPin>[');
   for (final pin in pins) {
+    // Checked before being written into source, because both values arrive
+    // from the network — the version from GitHub's `tag_name`, the hash from a
+    // published checksums.txt — and land inside single quotes in a .dart file
+    // that the next `analyze` or `build` compiles. A value carrying a quote
+    // would close the literal and inject code.
+    //
+    // The path is narrow: `deps update` is a maintainer command, run in a
+    // cux_ship checkout, over TLS, and the diff is meant to be reviewed. It
+    // needs an upstream release-asset compromise *and* a reviewer who misses
+    // it. Two regexes are cheaper than relying on the second half of that.
+    _checkPinField('version', pin.version, RegExp(r'^[0-9][0-9A-Za-z.+-]*$'));
+    _checkPinField('sha256', pin.sha256, RegExp(r'^[0-9a-f]{64}$'));
+    _checkPinField(
+      'platform',
+      pin.platform,
+      RegExp(r'^[a-z0-9]+[.-][a-z0-9]+$'),
+    );
     buffer
       ..writeln('  (')
       ..writeln("    tool: '${pin.tool}',")

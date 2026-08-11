@@ -401,6 +401,37 @@ void main() {
       );
     });
 
+    test('a malformed decrypted file does not echo what it decrypted to', () {
+      // The one place plaintext could reach a terminal. `_parse` runs on the
+      // *decrypted* document, and package:yaml renders a parse error with the
+      // offending source line and a caret under it — so interpolating the whole
+      // exception prints that line, key material included, to stderr and into
+      // whatever CI log is capturing it.
+      //
+      // A tab as indentation is invalid YAML that a healthy `sops -d` would
+      // never emit, which is why this needs a hand-mangled file and is not an
+      // everyday hazard. It is still the difference between an error and a
+      // disclosure.
+      secrets(
+        'android:\n'
+        '\tapi_private_key_base64: MIIEvQIBADANBgkqSECRETKEYMATERIAL\n',
+      );
+      expect(
+        load,
+        throwsA(
+          isA<ProjectException>()
+              .having(
+                (e) => e.message,
+                'message',
+                isNot(contains('SECRETKEYMATERIAL')),
+              )
+              // Still has to say what went wrong, or the fix trades a leak for
+              // an unactionable error.
+              .having((e) => e.message, 'message', contains('valid YAML')),
+        ),
+      );
+    });
+
     test('an absent secrets file is named', () {
       expect(load, throwsSaying(contains('secrets/release.yaml')));
     });

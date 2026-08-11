@@ -111,7 +111,15 @@ List<SecretKey> inspectSecretKeys(File secretsFile) {
   try {
     document = loadYaml(secretsFile.readAsStringSync());
   } on YamlException catch (e) {
-    throw ProjectException('${secretsFile.path} is not valid YAML: $e');
+    // `e.message` for the same reason as the decrypting parser below, even
+    // though this one reads the *encrypted* file and would normally echo
+    // nothing but ciphertext. The case it covers is a file that has been
+    // written and not yet encrypted — checking its shape before running `sops
+    // -e` is exactly what somebody would do — where the source line a parse
+    // error quotes is plaintext.
+    throw ProjectException(
+      '${secretsFile.path} is not valid YAML: ${e.message}',
+    );
   }
   if (document is! YamlMap) {
     throw ProjectException(
@@ -275,7 +283,12 @@ Map<String, String> _parse(String plaintext, String path) {
   try {
     document = loadYaml(plaintext);
   } on YamlException catch (e) {
-    throw ProjectException('$path did not decrypt to valid YAML: $e');
+    // `e.message` and not `$e`. A YamlException stringifies with the offending
+    // source line and a caret under it — and what this parses is the
+    // *decrypted* document, so the whole exception puts key material on stderr
+    // and into whatever log is capturing it. The bare reason says as much about
+    // what to fix and discloses nothing.
+    throw ProjectException('$path did not decrypt to valid YAML: ${e.message}');
   }
   if (document is! YamlMap) {
     throw ProjectException('$path must be a mapping of credentials');

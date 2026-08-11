@@ -242,7 +242,20 @@ class AscClient {
       if (next is! String || next.isEmpty) {
         return results;
       }
-      uri = Uri.parse(next);
+      final following = Uri.parse(next);
+      // The bearer token goes on whatever this names, so it does not get to
+      // name another host. Reaching this would already mean Apple's own TLS
+      // response was attacker-controlled — but "the token only ever goes to
+      // Apple" should be a property of this code rather than a property of
+      // Apple's response, and the check is one line.
+      //
+      // `uploadOperation` below is the deliberate opposite: it PUTs to an
+      // arbitrary URL Apple hands over, and attaches no Authorization header
+      // for exactly this reason.
+      if (following.origin != Uri.parse(_baseUrl).origin) {
+        throw StateError('pagination left App Store Connect: $next');
+      }
+      uri = following;
     }
   }
 
