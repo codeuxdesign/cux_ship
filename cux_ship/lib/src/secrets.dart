@@ -650,15 +650,40 @@ List<_Credential> _decrypt({
 }
 
 /// Decrypts, materializes, and hands back the environment a child should see.
+/// The variables each withholdable family sets, so a caller can *remove* them
+/// as well as decline to add them.
+///
+/// **Declining to add is not enough on its own, and the difference is subtle
+/// enough to have nearly shipped.** `secrets exec -- keychain exec -- build`
+/// is a documented composition, and in it the outer command has already put
+/// every credential in the environment before the inner one runs. The inner
+/// withholding then achieves exactly nothing while looking correct at every
+/// line — the build inherits the key regardless.
+///
+/// So withholding a family means the variables are absent from the child's
+/// environment however they got there, not merely that this process declined
+/// to set them.
+const familyVariables = {
+  'android.keystores': {
+    'ANDROID_KEYSTORE_PATH',
+    'ANDROID_KEYSTORE_PASSWORD',
+    'ANDROID_KEY_ALIAS',
+    'ANDROID_KEY_PASSWORD',
+  },
+  'android.play_service_account': {'GOOGLE_PLAY_SERVICE_ACCOUNT_JSON'},
+  'apple.api_keys': {
+    'APPLE_API_KEY_ID',
+    'APPLE_API_PRIVATE_KEY_PATH',
+    'APPLE_API_ISSUER_ID',
+    'API_PRIVATE_KEYS_DIR',
+  },
+};
+
 /// Credential families a caller may declare it does not consume.
 ///
 /// Enumerated so a typo in [loadSecrets]'s `withhold` is refused rather than
 /// silently withholding nothing.
-const withholdableFamilies = {
-  'android.keystores',
-  'android.play_service_account',
-  'apple.api_keys',
-};
+final withholdableFamilies = familyVariables.keys.toSet();
 
 /// [withhold] is what a caller that knows its child's platform turns off.
 ///
@@ -1053,6 +1078,18 @@ LoadedSecrets _materialize(
     loaded.add(key.path);
   }
 
+  // **Removed, not merely not-added** — and this is the half that is easy to
+  // leave out. The environment above starts as a copy of this process's own, so
+  // under `secrets exec -- keychain exec -- build` every credential is already
+  // present before the inner command decides to withhold anything. Declining to
+  // set a variable that is already set achieves nothing while reading as
+  // correct.
+  for (final family in withhold) {
+    for (final name in familyVariables[family]!) {
+      environment.remove(name);
+    }
+  }
+
   // Named, not written. `secrets place` writes these; exec promises that
   // plaintext does not outlive the run, and these outlive it by design.
   final placed = [for (final file in under('placed')) file.path];
@@ -1120,19 +1157,14 @@ void _checkExportable(String name, String at, Map<String, String> environment) {
   }
 }
 
-/// The names materialization sets. Enumerated once, so the collision check
-/// above cannot fall behind what is actually exported.
-const _reservedNames = {
-  'ANDROID_KEYSTORE_PATH',
-  'ANDROID_KEYSTORE_PASSWORD',
-  'ANDROID_KEY_ALIAS',
-  'ANDROID_KEY_PASSWORD',
-  'GOOGLE_PLAY_SERVICE_ACCOUNT_JSON',
-  'APPLE_API_KEY_ID',
-  'APPLE_API_PRIVATE_KEY_PATH',
-  'APPLE_API_ISSUER_ID',
-  'API_PRIVATE_KEYS_DIR',
-};
+/// The names materialization sets, so a token cannot quietly take one.
+///
+/// Derived from [familyVariables] rather than listed beside it. The two were
+/// the same nine names written twice, and the failure mode of letting them
+/// drift is silent in both directions: a name missing here lets a token
+/// overwrite a real credential, and one missing there leaves a secret in a
+/// child's environment that the caller believes it withheld.
+final _reservedNames = {for (final names in familyVariables.values) ...names};
 
 /// What Apple named the key, derived from what kind it is.
 ///

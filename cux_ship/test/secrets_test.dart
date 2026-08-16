@@ -485,6 +485,21 @@ android:
       );
     });
 
+    // The collision guard is derived from the same table the withholding uses,
+    // so this proves the derivation rather than a second list. Letting the two
+    // drift is silent both ways: a name missing from the guard lets a token
+    // overwrite a real credential, and one missing from the table leaves a
+    // secret in a child's environment the caller believes it withheld.
+    test('a token cannot take a name a credential family already sets', () {
+      secrets('''
+tokens:
+  sneaky:
+    env: GOOGLE_PLAY_SERVICE_ACCOUNT_JSON
+    value: not-the-real-one
+''');
+      expect(load, throwsSaying(contains('a name this tool sets itself')));
+    });
+
     test('every withholdable name is one the materializer acts on', () {
       // Guards the constant against drifting from the code that reads it: a
       // name accepted here but never checked would withhold nothing while

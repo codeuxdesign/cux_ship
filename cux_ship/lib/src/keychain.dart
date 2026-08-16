@@ -714,6 +714,19 @@ Future<int> runKeychainExec({
   // shapes work: `keychain exec -- …` on its own, and `secrets exec -- keychain
   // exec -- …` when something else already loaded them. Which one happened is
   // printed rather than inferred.
+  // Decided once, and applied to the child's environment whichever way that
+  // environment was built. **This is the part that is easy to get wrong**: in
+  // `secrets exec -- keychain exec -- build` the outer command has already put
+  // every credential in place, and this command then takes the
+  // certificates-already-present path and never calls `loadSecrets` at all. A
+  // withholding that only happened during loading would achieve nothing there
+  // while every line of it read as correct.
+  final withheld = {
+    'android.keystores',
+    'android.play_service_account',
+    if (apiKey == null) 'apple.api_keys',
+  };
+
   LoadedSecrets? secrets;
   var environment = Map<String, String>.from(Platform.environment);
   var source = 'the environment';
@@ -741,17 +754,29 @@ Future<int> runKeychainExec({
       //   apple.api_keys             signing needs no App Store key, and a
       //                              build step may deliberately hold none.
       //                              --api-key asks for it.
-      withhold: {
-        'android.keystores',
-        'android.play_service_account',
-        if (apiKey == null) 'apple.api_keys',
-      },
+      withhold: withheld,
     );
     environment = secrets.environment;
     source = secretsFile.path;
     for (final note in secrets.unresolved) {
       stderr.writeln('==> not chosen: $note');
     }
+  }
+
+  // Whatever built it, the withheld variables leave. Reported when one was
+  // actually there, because a credential removed from a child's environment is
+  // a thing the operator should see rather than deduce — and because seeing it
+  // is what tells them the outer wrapper was handing it over.
+  final removed = <String>[];
+  for (final family in withheld) {
+    for (final name in familyVariables[family]!) {
+      if (environment.remove(name) != null) {
+        removed.add(name);
+      }
+    }
+  }
+  if (removed.isNotEmpty) {
+    stderr.writeln('==> removed from the environment: ${removed.join(', ')}');
   }
 
   try {
@@ -795,6 +820,20 @@ Future<int> runKeychainExec({
         command.first,
         command.skip(1).toList(),
         environment: environment,
+        // **Without this the removals above do nothing.** `Process.start`
+        // merges the map into the parent's environment by default, so a
+        // variable deleted from the map is restored from this process's own —
+        // which is precisely the case that matters, since under `secrets exec
+        // -- keychain exec` the parent is the one holding the credential.
+        //
+        // Safe because [environment] began as a full copy of this process's
+        // environment rather than an empty map, so PATH and the rest are in it.
+        //
+        // This was caught by reading the child's environment. The line above
+        // saying `removed from the environment` printed correctly throughout,
+        // because it reports what this process did to a map rather than what
+        // the child received.
+        includeParentEnvironment: false,
         workingDirectory: repoRoot,
         mode: ProcessStartMode.inheritStdio,
       );
