@@ -57,6 +57,7 @@ class ProjectContext {
     this.androidPackage,
     this.iosBundleId,
     this.macosBundleId,
+    this.developmentTeam,
     this.versionName,
     this.buildNumber,
     this.changelog,
@@ -131,6 +132,13 @@ class ProjectContext {
       macosBundleId: _bundleId(
         text(appPath, 'macos/Runner.xcodeproj/project.pbxproj'),
       ),
+      developmentTeam:
+          _developmentTeam(
+            text(appPath, 'ios/Runner.xcodeproj/project.pbxproj'),
+          ) ??
+          _developmentTeam(
+            text(appPath, 'macos/Runner.xcodeproj/project.pbxproj'),
+          ),
       versionName: versionName,
       buildNumber: buildNumber,
       changelog: path(rootPath, 'CHANGELOG.md'),
@@ -216,6 +224,15 @@ class ProjectContext {
   /// `PRODUCT_BUNDLE_IDENTIFIER` from the macOS Xcode project.
   final String? macosBundleId;
 
+  /// `DEVELOPMENT_TEAM` from whichever Xcode project has one.
+  ///
+  /// The team a signing certificate must belong to, which is what makes
+  /// "imported a certificate" and "imported the *right* certificate" different
+  /// checks. A certificate from another developer account imports perfectly and
+  /// then fails much later with a profile mismatch that never mentions
+  /// certificates.
+  final String? developmentTeam;
+
   /// The marketing version from `pubspec.yaml`, e.g. `1.0.3`.
   final String? versionName;
 
@@ -249,6 +266,25 @@ class ProjectContext {
     ).allMatches(pbxproj)) {
       final value = match.group(1)!.trim().replaceAll('"', '');
       if (value.contains('RunnerTests') || value.endsWith('.RunnerTests')) {
+        continue;
+      }
+      return value;
+    }
+    return null;
+  }
+
+  /// The team id, ignoring the empty assignment Xcode writes for a target that
+  /// has none — `DEVELOPMENT_TEAM = "";` is how a project says *unset*, and
+  /// reading it as a team would make every certificate belong to the wrong one.
+  static String? _developmentTeam(String? pbxproj) {
+    if (pbxproj == null) {
+      return null;
+    }
+    for (final match in RegExp(
+      r'DEVELOPMENT_TEAM\s*=\s*([^;]+);',
+    ).allMatches(pbxproj)) {
+      final value = match.group(1)!.trim().replaceAll('"', '');
+      if (value.isEmpty) {
         continue;
       }
       return value;

@@ -27,6 +27,7 @@ import 'src/appstore/cli.dart';
 import 'src/appstore/flatten_cli.dart';
 import 'src/confirm.dart';
 import 'src/deps.dart';
+import 'src/keychain.dart';
 import 'src/placed.dart';
 import 'src/play/cli.dart';
 import 'src/project.dart';
@@ -74,6 +75,7 @@ CommandRunner<void> buildRunner() {
     ..addCommand(_ReleaseCommand())
     ..addCommand(_ScreenshotsCommand())
     ..addCommand(_SecretsCommand())
+    ..addCommand(_KeychainCommand())
     ..addCommand(_DepsCommand())
     ..addCommand(VerifyCommand());
 }
@@ -731,6 +733,89 @@ class _SecretsKeysCommand extends Command<void> {
       exitCode = 1;
     } on ProjectException catch (e) {
       stderr.writeln('cux_ship secrets keys: ${e.message}');
+      exitCode = 1;
+    }
+  }
+}
+
+// ---------------------------------------------------------------- keychain
+
+class _KeychainCommand extends Command<void> {
+  _KeychainCommand() {
+    addSubcommand(_KeychainExecCommand());
+  }
+
+  @override
+  String get name => 'keychain';
+
+  @override
+  String get description =>
+      'Apple code signing from a keychain that lives for one command. macOS '
+      'only.';
+}
+
+class _KeychainExecCommand extends Command<void> {
+  _KeychainExecCommand() {
+    argParser
+      ..addOption(
+        'file',
+        help:
+            'The sops-encrypted file to read the certificate from, when it is '
+            'not already in the environment. Relative paths resolve against '
+            'the repository root.',
+        defaultsTo: 'secrets/release.yaml',
+      )
+      ..addOption(
+        'team',
+        help:
+            'The Apple team the signing identity must belong to. Defaults to '
+            'DEVELOPMENT_TEAM from the Xcode project, so a certificate '
+            'belonging to another account is refused here rather than '
+            'surfacing later as a profile mismatch.',
+      )
+      ..addFlag(
+        'strict-expiry',
+        negatable: false,
+        help:
+            'Refuse a provisioning profile that expires within 30 days. An '
+            'already-expired profile is always refused; this is for a release '
+            'run, which should not be the thing that discovers a renewal is '
+            'due.',
+      );
+  }
+
+  @override
+  String get name => 'exec';
+
+  @override
+  String get description =>
+      'Import the signing certificate into a temporary keychain, run a '
+      'command with APPLE_KEYCHAIN set, and destroy the keychain however it '
+      'ends. The login keychain is never read, so the build signs with the '
+      'certificate in the secrets file or it does not build.';
+
+  @override
+  String get invocation =>
+      'cux_ship keychain exec [--team ID] -- <command> [args...]';
+
+  @override
+  Future<void> run() async {
+    final project = _project(this);
+    final file = argResults!.option('file')!;
+    try {
+      exitCode = await runKeychainExec(
+        repoRoot: project.root,
+        secretsFile: File(
+          p.isAbsolute(file) ? file : p.join(project.root, file),
+        ),
+        // Everything after `--`, kept as rest so a flag meant for the child is
+        // never read as one of ours.
+        command: argResults!.rest,
+        expectTeam: argResults!.option('team') ?? project.developmentTeam,
+        strictExpiry: argResults!.flag('strict-expiry'),
+      );
+    } on ProjectException catch (e) {
+      stderr.writeln('cux_ship keychain exec: ${e.message}');
       exitCode = 1;
     }
   }

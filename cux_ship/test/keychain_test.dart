@@ -1,0 +1,293 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The half of `keychain exec` that can be tested without a Mac, a keychain or a
+// real certificate. What is left over — the `security` calls themselves — is
+// verified by signing something with a generated certificate, which is a
+// different kind of check and does not belong in a unit suite that mutates
+// nothing.
+
+import 'package:cux_ship/src/keychain.dart';
+import 'package:cux_ship/src/project.dart';
+import 'package:test/test.dart';
+
+void main() {
+  group('profileFactsFrom', () {
+    test('reads an iOS profile', () {
+      final facts = profileFactsFrom({
+        'UUID': 'D2E7A1B4-0000-4E5F-9A3C-112233445566',
+        'Name': 'How It Went App Store',
+        'Platform': 'iOS',
+        'ExpirationDate': '2026-11-04T09:12:33Z',
+      }, 'ios.mobileprovision');
+
+      expect(facts.uuid, 'D2E7A1B4-0000-4E5F-9A3C-112233445566');
+      expect(facts.name, 'How It Went App Store');
+      expect(facts.platform, ProfilePlatform.ios);
+      expect(facts.expires, DateTime.utc(2026, 11, 4, 9, 12, 33));
+    });
+
+    // The whole reason the platform is read from the profile rather than taken
+    // from its filename: Xcode looks in two different directories and will not
+    // match one filed under the other.
+    test('reads a macOS profile, which says OSX', () {
+      final facts = profileFactsFrom({
+        'UUID': 'ABC-123',
+        'Platform': 'OSX',
+      }, 'macos.provisionprofile');
+
+      expect(facts.platform, ProfilePlatform.macos);
+      expect(facts.platform.extension, 'provisionprofile');
+      expect(
+        facts.platform.directory,
+        'Library/MobileDevice/Provisioning Profiles',
+      );
+    });
+
+    test('the two platforms disagree about where and what', () {
+      expect(ProfilePlatform.ios.extension, 'mobileprovision');
+      expect(
+        ProfilePlatform.ios.directory,
+        'Library/Developer/Xcode/UserData/Provisioning Profiles',
+      );
+    });
+
+    // Refused rather than defaulted to iOS. Guessing files a macOS profile
+    // where Xcode does not look, and the build then fails inside codesign
+    // saying no profile matched — which never mentions the filing.
+    test('refuses a platform it does not know instead of guessing', () {
+      expect(
+        () => profileFactsFrom({
+          'UUID': 'ABC-123',
+          'Platform': 'watchOS',
+        }, 'odd.mobileprovision'),
+        throwsA(
+          isA<ProjectException>().having(
+            (e) => e.message,
+            'message',
+            contains('watchos'),
+          ),
+        ),
+      );
+    });
+
+    test('refuses a profile with no Platform at all', () {
+      expect(
+        () => profileFactsFrom({'UUID': 'ABC-123'}, 'bare.mobileprovision'),
+        throwsA(isA<ProjectException>()),
+      );
+    });
+
+    test('refuses one with no UUID, since the UUID is the filename', () {
+      expect(
+        () => profileFactsFrom({'Platform': 'iOS'}, 'x.mobileprovision'),
+        throwsA(isA<ProjectException>()),
+      );
+    });
+
+    // The UUID comes out of a file and becomes a path inside a directory of
+    // Xcode's, so the grammar is a traversal guard rather than a spelling rule.
+    test('refuses a UUID that would escape the directory', () {
+      expect(
+        () => profileFactsFrom({
+          'UUID': '../../../../etc/rc',
+          'Platform': 'iOS',
+        }, 'evil.mobileprovision'),
+        throwsA(isA<ProjectException>()),
+      );
+    });
+
+    test('a missing name falls back to the uuid rather than being blank', () {
+      final facts = profileFactsFrom({
+        'UUID': 'ABC-123',
+        'Platform': 'iOS',
+      }, 'x');
+      expect(facts.name, 'ABC-123');
+    });
+
+    test('daysLeft is negative once past', () {
+      final facts = profileFactsFrom({
+        'UUID': 'ABC-123',
+        'Platform': 'iOS',
+        'ExpirationDate': '2026-01-01T00:00:00Z',
+      }, 'x');
+      expect(facts.daysLeft(DateTime.utc(2026, 1, 31)), -30);
+      expect(facts.daysLeft(DateTime.utc(2025, 12, 2)), 30);
+    });
+
+    test('an absent expiry is null rather than an error', () {
+      final facts = profileFactsFrom({
+        'UUID': 'ABC-123',
+        'Platform': 'iOS',
+      }, 'x');
+      expect(facts.expires, isNull);
+      expect(facts.daysLeft(DateTime.utc(2026)), isNull);
+    });
+  });
+
+  group('parseIdentities', () {
+    // Verbatim from `security find-identity -p codesigning` against a keychain
+    // holding one self-signed certificate. The note is the whole reason this is
+    // parsed rather than grepped: `-v` renders this same identity as an empty
+    // list with no reason attached, and "no private key" and "does not chain"
+    // need opposite fixes.
+    const untrusted = '''
+Policy: Code Signing
+  Matching identities
+  1) 56CD0E47ABBE60C7F98FD15DECAE64C7C7688D4D "Apple Distribution: Test Only (TESTTEAM99)" (CSSMERR_TP_NOT_TRUSTED)
+     1 identities found
+
+  Valid identities only
+     0 valid identities found
+''';
+
+    test('reads the name and the reason it is unusable', () {
+      final found = parseIdentities(untrusted);
+      expect(found, hasLength(1));
+      expect(found.single.name, 'Apple Distribution: Test Only (TESTTEAM99)');
+      expect(found.single.hash, '56CD0E47ABBE60C7F98FD15DECAE64C7C7688D4D');
+      expect(found.single.note, 'CSSMERR_TP_NOT_TRUSTED');
+    });
+
+    test('a usable identity carries no note', () {
+      final found = parseIdentities(
+        '  1) ABC123 "Apple Distribution: Someone (64ZPC769JY)"\n'
+        '     1 identities found\n',
+      );
+      expect(found.single.note, isNull);
+      expect(found.single.name, contains('64ZPC769JY'));
+    });
+
+    test('an empty listing is empty rather than one blank identity', () {
+      expect(parseIdentities('     0 valid identities found\n'), isEmpty);
+    });
+
+    test('reads more than one', () {
+      final found = parseIdentities(
+        '  1) AAA "Apple Distribution: X (T1)"\n'
+        '  2) BBB "3rd Party Mac Developer Installer: X (T1)"\n',
+      );
+      expect(found.map((i) => i.name), [
+        'Apple Distribution: X (T1)',
+        '3rd Party Mac Developer Installer: X (T1)',
+      ]);
+    });
+  });
+
+  group('parseSearchList', () {
+    test('strips the quotes security writes', () {
+      expect(
+        parseSearchList(
+          '    "/Users/x/Library/Keychains/login.keychain-db"\n'
+          '    "/Library/Keychains/System.keychain"\n',
+        ),
+        [
+          '/Users/x/Library/Keychains/login.keychain-db',
+          '/Library/Keychains/System.keychain',
+        ],
+      );
+    });
+
+    // The reason for parsing rather than `tr -d '"'`, which is what both of the
+    // implementations this replaces do: the output is quote-delimited precisely
+    // so a path may contain spaces, and stripping quotes globally corrupts the
+    // search list of anyone whose home directory has one.
+    test('keeps a path containing spaces intact', () {
+      expect(parseSearchList('    "/Users/a b/Library/Keychains/login.db"\n'), [
+        '/Users/a b/Library/Keychains/login.db',
+      ]);
+    });
+
+    test('ignores blank lines', () {
+      expect(parseSearchList('\n  "/a"\n\n   \n  "/b"\n'), ['/a', '/b']);
+    });
+
+    test('takes an unquoted line as it stands', () {
+      expect(parseSearchList('  /a/b.keychain-db\n'), ['/a/b.keychain-db']);
+    });
+  });
+
+  group('pidOfKeychain', () {
+    test('reads back the pid this tool encoded', () {
+      expect(
+        pidOfKeychain(
+          '/Users/x/Library/Keychains/cux_ship-build-4711.keychain-db',
+        ),
+        4711,
+      );
+    });
+
+    test('is null for a keychain that is not ours', () {
+      expect(
+        pidOfKeychain('/Users/x/Library/Keychains/login.keychain-db'),
+        null,
+      );
+      expect(
+        pidOfKeychain('/Users/x/Library/Keychains/authpass-build-9.db'),
+        null,
+      );
+    });
+
+    test('is null when the pid is not a number', () {
+      expect(pidOfKeychain('/k/cux_ship-build-nope.keychain-db'), null);
+    });
+  });
+
+  group('collectStaleKeychains', () {
+    // What the pid in the name is for. A trap covers a failed build, a Ctrl-C
+    // and a SIGTERM; it covers neither SIGKILL nor the power going out, and
+    // what survives those holds a distribution private key.
+    test('collects one left by a process that is gone', () {
+      expect(
+        collectStaleKeychains(
+          [
+            '/k/cux_ship-build-100.keychain-db',
+            '/k/cux_ship-build-200.keychain-db',
+          ],
+          alive: (pid) => pid == 200,
+          selfPid: 999,
+        ),
+        ['/k/cux_ship-build-100.keychain-db'],
+      );
+    });
+
+    test('never collects our own, whatever the liveness check says', () {
+      expect(
+        collectStaleKeychains(
+          ['/k/cux_ship-build-999.keychain-db'],
+          alive: (pid) => false,
+          selfPid: 999,
+        ),
+        isEmpty,
+      );
+    });
+
+    test('leaves keychains belonging to anything else alone', () {
+      expect(
+        collectStaleKeychains(
+          [
+            '/k/login.keychain-db',
+            '/k/authpass-build-1.keychain-db',
+            '/k/cux_ship-build-1.keychain-db',
+          ],
+          alive: (pid) => false,
+          selfPid: 999,
+        ),
+        ['/k/cux_ship-build-1.keychain-db'],
+      );
+    });
+  });
+
+  group('the constants carry the decisions', () {
+    // Named so a change to either is a visible diff rather than a silent
+    // regression to the value that was wrong. Six hours is the larger of the
+    // two implementations, whose shorter timeout relocked partway through a
+    // long archive.
+    test('the lock timeout is the six hours a long archive needs', () {
+      expect(keychainLockTimeoutSeconds, 21600);
+    });
+
+    test('the partition list carries apple:, which is the one that works', () {
+      expect(keychainPartitionList, contains('apple:'));
+    });
+  });
+}
