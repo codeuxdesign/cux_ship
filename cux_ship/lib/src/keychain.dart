@@ -56,11 +56,28 @@ const keychainLockTimeoutSeconds = 21600;
 
 /// Which tools may use the imported key without a GUI prompt.
 ///
-/// `apple:` is the token doing the work — it matches Apple-signed code, and
-/// `/usr/bin/codesign` is Apple-signed. `codesign:` is inherited from fastlane's
-/// importer by way of one of the implementations this replaces; it is kept
-/// because an unmatched partition id costs nothing, but it is not the fix and
-/// should not be believed to be.
+/// **`apple:` is the whole load-bearing token, and this is measured rather than
+/// argued.** Six fresh keychains, a real distribution identity, one
+/// non-interactive `codesign` each, anything still alive after 8s counted as
+/// blocked — because a block here is a GUI prompt, which on CI is a hang rather
+/// than an error:
+///
+///     apple-tool:,apple:,codesign:   signed
+///     apple:                         signed
+///     apple-tool:,apple:             signed
+///     codesign:                      BLOCKED
+///     apple-tool:                    BLOCKED
+///     (unset)                        BLOCKED
+///
+/// So `codesign:` does nothing on its own and adds nothing to `apple:`; it is
+/// inherited from fastlane's importer. It is kept because an unmatched partition
+/// id costs nothing, but it is not the fix and should not be believed to be —
+/// the fix is calling this at all, plus [_security] making a failure loud.
+///
+/// One trap in reproducing that experiment: `codesign` resolves an identity
+/// through the *search list*, not through `--keychain` alone, so a run that has
+/// not prepended the keychain first fails every variant with "no identity found"
+/// and measures nothing.
 const keychainPartitionList = 'apple-tool:,apple:,codesign:';
 
 /// Names every keychain this tool creates, so [collectStaleKeychains] can find
@@ -204,6 +221,38 @@ List<Identity> parseIdentities(String output) {
     ));
   }
   return found;
+}
+
+/// What to do about one provisioning profile, given how close it is to expiry.
+enum ProfileDecision { install, skipExpired, failExpired, failExpiringSoon }
+
+/// Whether an expired profile stops the build or is merely skipped.
+///
+/// **The rule turns on [named], and getting this wrong is worse than not
+/// checking at all.** The secrets file holds every profile a project has, and
+/// `secrets exec` materializes all of them; this command has no way to know
+/// which one the wrapped build is about to use. So failing on any expired
+/// profile means letting a Developer ID profile lapse breaks every App Store
+/// release, with an error naming a profile that build never touches — the same
+/// unhelpful failure the expiry check exists to prevent, pointed the wrong way.
+///
+/// Naming a profile with `--profile` is the caller saying this build needs it.
+/// Then, and only then, is expiry fatal.
+ProfileDecision decideProfile({
+  required int? daysLeft,
+  required bool named,
+  required bool strictExpiry,
+}) {
+  if (daysLeft == null) {
+    return ProfileDecision.install;
+  }
+  if (daysLeft < 0) {
+    return named ? ProfileDecision.failExpired : ProfileDecision.skipExpired;
+  }
+  if (named && strictExpiry && daysLeft <= _soonInDays) {
+    return ProfileDecision.failExpiringSoon;
+  }
+  return ProfileDecision.install;
 }
 
 /// The keychain paths in `security list-keychains` output.
@@ -414,6 +463,30 @@ _Session _create({
     ], 'add $path to the search list');
 
     _verifyIdentity(path, expectTeam);
+
+    // The installer certificate is checked separately because `find-identity
+    // -p codesigning` does not list it at all — it signs a .pkg rather than
+    // code. Without this, a Mac App Store run whose installer certificate
+    // failed to import gets a clean bill of health here and fails in
+    // productbuild at the end of the build.
+    if (certificates.any((c) => c.name.contains('installer'))) {
+      final installers =
+          _security([
+                'find-identity',
+                '-v',
+                path,
+              ], 'list the installer identities in $path').stdout
+              as String;
+      if (!installers.contains('Installer')) {
+        throw ProjectException(
+          'an installer certificate was imported but yielded no installer '
+          'identity.\n'
+          'A Mac App Store .pkg is signed by "3rd Party Mac Developer '
+          'Installer", which is a different certificate from "Developer ID '
+          'Installer" and from the one that signs the app.',
+        );
+      }
+    }
     return session;
   } on Object {
     session.dispose();
@@ -546,6 +619,7 @@ Future<int> runKeychainExec({
   required List<String> command,
   String? expectTeam,
   bool strictExpiry = false,
+  Set<String>? profiles,
 }) async {
   if (command.isEmpty) {
     throw ProjectException(
@@ -605,7 +679,13 @@ Future<int> runKeychainExec({
       expectTeam: expectTeam,
     );
     try {
-      _installProfiles(session, home, environment, strictExpiry: strictExpiry);
+      _installProfiles(
+        session,
+        home,
+        environment,
+        strictExpiry: strictExpiry,
+        selected: profiles,
+      );
 
       environment['APPLE_KEYCHAIN'] = session.path;
       stderr.writeln('==> APPLE_KEYCHAIN=${session.path}');
@@ -679,7 +759,14 @@ void _collect(String home) {
   }
   final stale = collectStaleKeychains(
     directory.listSync().map((e) => e.path),
-    alive: (pid) => Process.runSync('kill', ['-0', '$pid']).exitCode == 0,
+    // `ps -p`, not `kill -0`. `kill -0` fails for a process owned by another
+    // user as loudly as for one that does not exist, so it reads EPERM as dead
+    // — and the consequence of getting that wrong is deleting a live build's
+    // signing keychain out from under it, which surfaces as a signing key
+    // vanishing mid-archive. `ps` answers the question actually being asked:
+    // is there a process with this id.
+    alive: (pid) =>
+        Process.runSync('ps', ['-p', '$pid', '-o', 'pid=']).exitCode == 0,
     selfPid: pid,
   );
   for (final path in stale) {
@@ -693,42 +780,78 @@ void _collect(String home) {
 }
 
 /// Files every `APPLE_PROFILE_<name>_PATH` where Xcode looks for it.
+///
+/// **[selected] is what decides whether an expired profile is fatal**, and the
+/// distinction matters more than it looks. `secrets exec` materializes *every*
+/// profile the file holds, by design — a project legitimately carries an App
+/// Store profile and a Developer ID one, and this command cannot tell which the
+/// wrapped build is about to use. Failing on any expired one would mean letting
+/// a Developer ID profile lapse breaks every App Store release, naming a
+/// profile that build never touches. That is the same class of unhelpful error
+/// this expiry check exists to prevent, pointed the wrong way.
+///
+/// So: a profile the caller *named* is one this build needs, and an expired one
+/// is fatal. A profile that merely turned up is warned about and skipped —
+/// skipped rather than installed, because an expired profile is of no use to
+/// anything and leaving it out keeps the failure, if there is one, about the
+/// profile that is actually missing.
 void _installProfiles(
   _Session session,
   String home,
   Map<String, String> environment, {
   required bool strictExpiry,
+  required Set<String>? selected,
 }) {
-  final pattern = RegExp(r'^APPLE_PROFILE_[A-Z0-9_]+_PATH$');
+  final pattern = RegExp(r'^APPLE_PROFILE_([A-Z0-9_]+)_PATH$');
   final now = DateTime.now();
+  final seen = <String>{};
 
   for (final key in environment.keys.toList()..sort()) {
-    if (!pattern.hasMatch(key)) {
+    final match = pattern.firstMatch(key);
+    if (match == null) {
+      continue;
+    }
+    final instance = match.group(1)!.toLowerCase();
+    seen.add(instance);
+    if (selected != null && !selected.contains(instance)) {
       continue;
     }
     final source = environment[key]!;
     final facts = _readProfile(source);
 
+    // Reported at the cheapest possible moment either way. An expired profile
+    // fails inside codesign with an error that does not contain the word
+    // expired, and this is the difference between a sentence and an afternoon.
     final days = facts.daysLeft(now);
-    if (days != null && days < 0) {
-      // Fatal, and at the cheapest possible moment. An expired profile fails
-      // inside codesign with an error that does not contain the word expired,
-      // and this is the difference between a sentence and an afternoon.
-      throw ProjectException(
-        '${facts.name} expired ${-days} days ago — renew it and re-encrypt it '
-        'into the secrets file',
-      );
-    }
-    if (days != null && days <= _soonInDays) {
-      final note = '${facts.name} expires in $days days';
-      // Whether "soon" should stop a build is the caller's call: this command
-      // has no idea whether it is inside a release or a local experiment.
-      // Carrying profiles in secrets is what makes this worth saying at all —
-      // automatic signing was the thing quietly renewing them.
-      if (strictExpiry) {
-        throw ProjectException('$note, and --strict-expiry was given');
-      }
-      stderr.writeln('==> $note');
+    switch (decideProfile(
+      daysLeft: days,
+      named: selected != null,
+      strictExpiry: strictExpiry,
+    )) {
+      case ProfileDecision.failExpired:
+        throw ProjectException(
+          '${facts.name} expired ${-days!} days ago — renew it and re-encrypt '
+          'it into the secrets file',
+        );
+      case ProfileDecision.skipExpired:
+        // Skipped rather than installed: an expired profile is of no use to
+        // anything, and leaving it out keeps any resulting failure about the
+        // profile that is actually missing.
+        stderr.writeln(
+          '==> ${facts.name} expired ${-days!} days ago — skipped. Name it '
+          'with --profile $instance if this build needs it.',
+        );
+        continue;
+      case ProfileDecision.failExpiringSoon:
+        throw ProjectException(
+          '${facts.name} expires in $days days, and --strict-expiry was given',
+        );
+      case ProfileDecision.install:
+        // Carrying profiles in secrets is what makes this worth saying at all —
+        // automatic signing was the thing quietly renewing them.
+        if (days != null && days <= _soonInDays) {
+          stderr.writeln('==> ${facts.name} expires in $days days');
+        }
     }
 
     final directory = Directory('$home/${facts.platform.directory}')
@@ -747,5 +870,17 @@ void _installProfiles(
     File(source).copySync(target);
     session.installedProfiles.add(target);
     stderr.writeln('==> ${facts.name} -> ${facts.uuid}');
+  }
+
+  // A named profile that is not there is refused rather than ignored. Carrying
+  // on would install nothing and let the build discover it as "no profile
+  // matched", which names neither the profile nor the typo.
+  final missing = selected?.difference(seen) ?? const <String>{};
+  if (missing.isNotEmpty) {
+    throw ProjectException(
+      '--profile named ${missing.join(', ')}, which '
+      '${missing.length == 1 ? 'is' : 'are'} not in the secrets file.\n'
+      '    it holds: ${seen.isEmpty ? 'no profiles at all' : (seen.toList()..sort()).join(', ')}',
+    );
   }
 }

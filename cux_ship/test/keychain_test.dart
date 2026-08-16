@@ -124,6 +124,78 @@ void main() {
     });
   });
 
+  group('decideProfile', () {
+    // The rule a peer session caught being wrong. The secrets file holds every
+    // profile a project has and `secrets exec` materializes all of them, so
+    // failing on any expired one means an unused Developer ID profile lapsing
+    // breaks every App Store release — naming a profile that build never
+    // touches, which is the unhelpful failure the check exists to prevent.
+    test('an expired profile nobody named is skipped, not fatal', () {
+      expect(
+        decideProfile(daysLeft: -5, named: false, strictExpiry: false),
+        ProfileDecision.skipExpired,
+      );
+    });
+
+    test('an expired profile the caller named is fatal', () {
+      expect(
+        decideProfile(daysLeft: -5, named: true, strictExpiry: false),
+        ProfileDecision.failExpired,
+      );
+    });
+
+    test('expiring soon is fatal only when named and strict', () {
+      expect(
+        decideProfile(daysLeft: 10, named: true, strictExpiry: true),
+        ProfileDecision.failExpiringSoon,
+      );
+      expect(
+        decideProfile(daysLeft: 10, named: true, strictExpiry: false),
+        ProfileDecision.install,
+      );
+      // --strict-expiry cannot make an unnamed profile fatal, or the whole
+      // distinction above collapses the first time somebody passes it.
+      expect(
+        decideProfile(daysLeft: 10, named: false, strictExpiry: true),
+        ProfileDecision.install,
+      );
+    });
+
+    test('a healthy profile installs whatever the flags say', () {
+      for (final named in [true, false]) {
+        for (final strict in [true, false]) {
+          expect(
+            decideProfile(daysLeft: 200, named: named, strictExpiry: strict),
+            ProfileDecision.install,
+            reason: 'named=$named strict=$strict',
+          );
+        }
+      }
+    });
+
+    test('the boundary day counts as soon, and zero is not yet expired', () {
+      expect(
+        decideProfile(daysLeft: 30, named: true, strictExpiry: true),
+        ProfileDecision.failExpiringSoon,
+      );
+      expect(
+        decideProfile(daysLeft: 31, named: true, strictExpiry: true),
+        ProfileDecision.install,
+      );
+      expect(
+        decideProfile(daysLeft: 0, named: true, strictExpiry: false),
+        ProfileDecision.install,
+      );
+    });
+
+    test('an unknown expiry installs rather than blocking', () {
+      expect(
+        decideProfile(daysLeft: null, named: true, strictExpiry: true),
+        ProfileDecision.install,
+      );
+    });
+  });
+
   group('parseIdentities', () {
     // Verbatim from `security find-identity -p codesigning` against a keychain
     // holding one self-signed certificate. The note is the whole reason this is

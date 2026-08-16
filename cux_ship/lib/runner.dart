@@ -773,12 +773,25 @@ class _KeychainExecCommand extends Command<void> {
             'belonging to another account is refused here rather than '
             'surfacing later as a profile mismatch.',
       )
+      ..addMultiOption(
+        'profile',
+        help:
+            'A provisioning profile this build needs, by its name in the '
+            'secrets file. Repeatable. The secrets file holds every profile '
+            'the project has — an App Store one and a Developer ID one, say — '
+            'and this command cannot tell which the build is about to use. So '
+            'naming them says these matter: a named profile that has expired '
+            'stops the build, while one that merely turned up is warned about '
+            'and skipped. Without this, nothing is fatal, because failing a '
+            'release over a profile it never touches is the error this is '
+            'trying to prevent.',
+      )
       ..addFlag(
         'strict-expiry',
         negatable: false,
         help:
-            'Refuse a provisioning profile that expires within 30 days. An '
-            'already-expired profile is always refused; this is for a release '
+            'Also refuse a named profile that expires within 30 days. Needs '
+            '--profile to have any effect, for the reason above. For a release '
             'run, which should not be the thing that discovers a renewal is '
             'due.',
       );
@@ -813,6 +826,12 @@ class _KeychainExecCommand extends Command<void> {
         command: argResults!.rest,
         expectTeam: argResults!.option('team') ?? project.developmentTeam,
         strictExpiry: argResults!.flag('strict-expiry'),
+        // Null rather than an empty set when none were named: "install
+        // everything, fail on nothing" and "install exactly these" are
+        // different instructions, and an empty set is the first.
+        profiles: argResults!.multiOption('profile').isEmpty
+            ? null
+            : argResults!.multiOption('profile').toSet(),
       );
     } on ProjectException catch (e) {
       stderr.writeln('cux_ship keychain exec: ${e.message}');
