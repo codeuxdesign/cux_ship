@@ -1,5 +1,58 @@
 # Changelog
 
+## 2.0.0
+
+**The Play service account is passed as a path, not as JSON.** `secrets exec`
+now writes the account to a file and exports
+`GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_PATH`. `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` is
+**gone** — not deprecated, not exported alongside.
+
+### Why
+
+A Google private key reached four public CI logs. An xcode script build phase
+writes its whole environment into the build log, and a public repository's
+action logs are public, so a variable holding a key printed the key. It was the
+only credential this package passed by value; every other one was already a
+path, and no other one leaked. That is not a coincidence, and it is the rule
+this release makes universal:
+
+> A secret passed as a value can escape through anything that echoes its
+> environment. A secret passed as a path cannot.
+
+1.9.0 and 1.9.1 mitigated it by letting a caller withhold the credential from
+commands that cannot need it. That was worth having and it is still here, but it
+was never the fix: withholding is not compositional. Each layer can speak for its
+own child and no further, so a `secrets exec` nested inside a `keychain exec`
+reintroduced the value for its own subtree — and "build under `keychain exec`,
+upload under `secrets exec`" is the natural shape, so the mitigation failed
+exactly where the pattern was most idiomatic. A path cannot be reintroduced in a
+form that matters, because what comes back is a filename in a temp directory
+that has already been removed.
+
+### Migrating
+
+One line per consumer. Read the file instead of the variable:
+
+```diff
+- echo "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON" > /tmp/sa.json
+- supply --json_key /tmp/sa.json
++ supply --json_key "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_PATH"
+```
+
+**There is deliberately no window in which both are exported.** A window is the
+only variant in which something can quietly keep using the by-value path: the
+key stays in every consumer's environment for its whole duration while the
+release notes claim it was removed, which converts a known problem into a
+believed-solved one. It is less safe than either alternative, not a middle
+course between them.
+
+Not migrating is loud rather than silent. An unmigrated consumer finds the
+variable unset and dies on its first line naming the cause — which is the
+criterion this package already applies elsewhere, and the reason the new name is
+`…_PATH` rather than the old name with new meaning. A consumer reading a path
+from a variable still called `…_JSON` would post a filename to Google and fail
+at the API, describing neither the file nor the script.
+
 ## 1.9.1
 
 **Withholding did not survive being nested, which is the composition 1.9.0's own

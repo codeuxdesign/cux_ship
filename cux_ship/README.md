@@ -210,11 +210,15 @@ included — into the lockfile of every contributor.
 ### Credentials
 
 **No uploader reads a secrets file or knows what a keychain is.** Every
-credential arrives as an environment variable — `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`
+credential arrives as an environment variable — `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_PATH`
 for Play, and `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID` and
 `APPLE_API_PRIVATE_KEY_PATH` for the App Store — so they work unchanged if those
 ever come from Vault, another CI's secret store, or a shell you exported by
 hand.
+
+Every one of those is a *path*, and that is deliberate: a variable holding a
+filename is safe to print, and things print environments. See 2.0.0 in the
+changelog for the incident that settled it.
 
 `secrets exec` is how they get there when you have nothing better, and it is
 deliberately a *separate command* rather than something the uploaders do: there

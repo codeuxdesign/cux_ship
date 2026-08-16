@@ -430,16 +430,33 @@ android:
   play_service_account:
     json_base64: ${b64('{"private_key":"-----BEGIN PRIVATE KEY-----"}')}
 ''');
+      final loaded = load().environment;
       expect(
-        load().environment,
-        contains('GOOGLE_PLAY_SERVICE_ACCOUNT_JSON'),
-        reason: 'still the default, so nothing existing changes',
+        loaded,
+        contains('GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_PATH'),
+        reason: 'a path, since 2.0.0',
+      );
+      expect(
+        loaded,
+        isNot(contains('GOOGLE_PLAY_SERVICE_ACCOUNT_JSON')),
+        reason: 'the by-value name is gone rather than deprecated',
+      );
+      // The point of the whole change: what a process echoing its environment
+      // would print is a filename, not the key.
+      expect(
+        loaded.values.where((v) => v.contains('BEGIN PRIVATE KEY')),
+        isEmpty,
+      );
+      expect(
+        File(loaded['GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_PATH']!).readAsStringSync(),
+        contains('BEGIN PRIVATE KEY'),
+        reason: 'the file still holds what the caller needs',
       );
 
       final held = load(withhold: {'android.play_service_account'});
       expect(
         held.environment,
-        isNot(contains('GOOGLE_PLAY_SERVICE_ACCOUNT_JSON')),
+        isNot(contains('GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_PATH')),
       );
       // Announced rather than silently absent, the same as every other
       // credential that does not arrive.
@@ -494,7 +511,7 @@ android:
       secrets('''
 tokens:
   sneaky:
-    env: GOOGLE_PLAY_SERVICE_ACCOUNT_JSON
+    env: GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_PATH
     value: not-the-real-one
 ''');
       expect(load, throwsSaying(contains('a name this tool sets itself')));

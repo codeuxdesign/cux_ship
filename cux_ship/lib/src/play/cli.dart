@@ -64,7 +64,7 @@ import 'package:cux_ship_verify/release_notes.dart';
 import 'package:googleapis/androidpublisher/v3.dart';
 import 'package:googleapis_auth/auth_io.dart';
 
-const _serviceAccountVar = 'GOOGLE_PLAY_SERVICE_ACCOUNT_JSON';
+const _serviceAccountVar = 'GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_PATH';
 
 Never _fail(String message) {
   stderr.writeln('cux_ship play: $message');
@@ -83,23 +83,34 @@ class _Abort implements Exception {
   final String message;
 }
 
-/// Passed as JSON in the environment rather than a path, because that is what
-/// tool/with-secrets.sh can supply without writing a credential to disk.
+/// Passed as a *path* to the service account JSON, never as the JSON itself.
+///
+/// The value used to travel in the environment, which is how a Google private
+/// key ended up in public CI logs: anything that echoes its environment — an
+/// xcode script build phase, for one — prints whatever a variable holds. A
+/// filename in a temp directory that has already been removed is not worth
+/// printing.
 ServiceAccountCredentials _loadCredentials() {
-  final raw = Platform.environment[_serviceAccountVar];
-  if (raw == null || raw.trim().isEmpty) {
+  final path = Platform.environment[_serviceAccountVar];
+  if (path == null || path.trim().isEmpty) {
     _fail(
       '$_serviceAccountVar is not set.\n'
-      '  It holds the Google Play service account JSON. Run this through\n'
-      '  tool/with-secrets.sh, or export it yourself.',
+      '  It holds the path to the Google Play service account JSON. Run this\n'
+      '  through `cux_ship secrets exec`, which writes the file and sets it.\n'
+      '  Before 2.0.0 this was GOOGLE_PLAY_SERVICE_ACCOUNT_JSON, holding the\n'
+      '  JSON itself; that variable is gone rather than deprecated.',
     );
+  }
+  final file = File(path);
+  if (!file.existsSync()) {
+    _fail('$_serviceAccountVar points at $path, which does not exist.');
   }
   try {
     return ServiceAccountCredentials.fromJson(
-      jsonDecode(raw) as Map<String, dynamic>,
+      jsonDecode(file.readAsStringSync()) as Map<String, dynamic>,
     );
   } on FormatException catch (e) {
-    _fail('$_serviceAccountVar is not valid JSON: ${e.message}');
+    _fail('the file at $path is not valid JSON: ${e.message}');
   }
 }
 

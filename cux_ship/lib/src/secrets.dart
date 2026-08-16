@@ -670,7 +670,7 @@ const familyVariables = {
     'ANDROID_KEY_ALIAS',
     'ANDROID_KEY_PASSWORD',
   },
-  'android.play_service_account': {'GOOGLE_PLAY_SERVICE_ACCOUNT_JSON'},
+  'android.play_service_account': {'GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_PATH'},
   'apple.api_keys': {
     'APPLE_API_KEY_ID',
     'APPLE_API_PRIVATE_KEY_PATH',
@@ -951,19 +951,32 @@ LoadedSecrets _materialize(
   // key into a file people paste around — and into public CI logs, which is
   // where it was found.
   //
-  // Withholding is a mitigation rather than the fix. The fix is to write it to
-  // a file and export a path like everything else, which changes the contract
-  // and so belongs to a major version.
+  // Written to a file, like every other credential, and exported as a path.
+  //
+  // It used to be exported by value, and that is how a Google private key
+  // reached four public CI logs: an xcode script phase echoes its whole
+  // environment into the build log, and a variable holding a key therefore
+  // prints the key. A variable holding a *filename* prints a filename, in a
+  // temp directory this process removes on the way out.
+  //
+  // That is the whole reason for the major version. Withholding, which 1.9.x
+  // added, only ever mitigated it — each layer can speak for its own child and
+  // no further, so an inner `secrets exec` reintroduced the value for its own
+  // subtree. A path cannot be reintroduced in a form that matters.
   if (!held(
     'android.play_service_account',
-    'it is passed by value, and this command does not publish to Play',
+    'this command does not publish to Play',
   )) {
     for (final account in credentials.where(
       (c) => c.path == 'android.play_service_account',
     )) {
-      environment['GOOGLE_PLAY_SERVICE_ACCOUNT_JSON'] = utf8.decode(
-        _decode(account.fields['json_base64']!, '${account.path}.json_base64'),
+      final file = _writeBase64(
+        work,
+        'play_service_account.json',
+        account.fields['json_base64']!,
+        '${account.path}.json_base64',
       );
+      environment['GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_PATH'] = file.path;
       loaded.add(account.path);
     }
   }
