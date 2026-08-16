@@ -867,16 +867,21 @@ LoadedSecrets _materialize(
     if (!withhold.contains(family)) {
       return false;
     }
-    final names = credentials
+    final held = credentials
         .where((c) => c.path == family || c.path.startsWith('$family.'))
-        .map((c) => c.instance.isEmpty ? c.path : c.instance);
-    if (names.isEmpty) {
+        .toList();
+    if (held.isEmpty) {
       return true;
     }
+    // The parenthetical names *which* instances were skipped, so it earns its
+    // place for a family that has them and reads as a stutter for a singleton
+    // that does not — `android.play_service_account (android.play_service_account)`.
+    final names = held.map((c) => c.instance).where((i) => i.isNotEmpty);
+    final which = names.isEmpty ? '' : ' (${names.join(', ')})';
     // Named rather than skipped quietly. The caller says it does not need this,
     // and it is still the case that a credential which did not arrive has to be
     // visible rather than inferred from a failure three minutes later.
-    unresolved.add('$family (${names.join(', ')}) — $because');
+    unresolved.add('$family$which — $because');
     return true;
   }
 
