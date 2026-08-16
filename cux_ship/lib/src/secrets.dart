@@ -940,24 +940,17 @@ LoadedSecrets _materialize(
     loaded.add(keystore.path);
   }
 
-  // **The only credential here passed by value rather than by path, and that
-  // makes it the only one that can escape through a log.**
-  //
-  // Everything else is a filename in a temp directory that no longer exists by
-  // the time anyone reads the output — `ANDROID_KEYSTORE_PATH`,
-  // `APPLE_*_P12_PATH`, `APPLE_PROFILE_*_PATH`. This one is the private key
-  // itself. An Xcode script build phase writes its entire environment into the
-  // build log, so an Apple build carrying this variable prints a Google private
-  // key into a file people paste around — and into public CI logs, which is
-  // where it was found.
-  //
   // Written to a file, like every other credential, and exported as a path.
   //
-  // It used to be exported by value, and that is how a Google private key
-  // reached four public CI logs: an xcode script phase echoes its whole
-  // environment into the build log, and a variable holding a key therefore
-  // prints the key. A variable holding a *filename* prints a filename, in a
-  // temp directory this process removes on the way out.
+  // Until 2.0.0 this was the one credential exported *by value*, and it was the
+  // one whose private key reached four public CI logs. An xcode script build
+  // phase writes its entire environment into the build log, and a public
+  // repository's action logs are public — so a variable holding a key printed
+  // the key, while `ANDROID_KEYSTORE_PATH` and the `APPLE_*_PATH` family
+  // printed a filename in a temp directory that no longer existed. That is the
+  // rule this now follows: a secret passed as a value can escape through
+  // anything that echoes its environment, and a secret passed as a path
+  // cannot.
   //
   // That is the whole reason for the major version. Withholding, which 1.9.x
   // added, only ever mitigated it — each layer can speak for its own child and

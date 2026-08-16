@@ -430,7 +430,8 @@ android:
   play_service_account:
     json_base64: ${b64('{"private_key":"-----BEGIN PRIVATE KEY-----"}')}
 ''');
-      final loaded = load().environment;
+      final result = load();
+      final loaded = result.environment;
       expect(
         loaded,
         contains('GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_PATH'),
@@ -452,6 +453,8 @@ android:
         contains('BEGIN PRIVATE KEY'),
         reason: 'the file still holds what the caller needs',
       );
+      // After the file has been read: dispose takes the directory with it.
+      result.dispose();
 
       final held = load(withhold: {'android.play_service_account'});
       expect(
@@ -461,6 +464,7 @@ android:
       // Announced rather than silently absent, the same as every other
       // credential that does not arrive.
       expect(held.unresolved, isNotEmpty);
+      held.dispose();
     });
 
     test('an Apple-only caller gets no Android keystore', () {
