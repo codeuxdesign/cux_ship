@@ -650,7 +650,17 @@ List<_Credential> _decrypt({
 }
 
 /// Decrypts, materializes, and hands back the environment a child should see.
-/// [resolveAndroidKeystore] is what an Apple-only caller turns off.
+/// Credential families a caller may declare it does not consume.
+///
+/// Enumerated so a typo in [loadSecrets]'s `withhold` is refused rather than
+/// silently withholding nothing.
+const withholdableFamilies = {
+  'android.keystores',
+  'android.play_service_account',
+  'apple.api_keys',
+};
+
+/// [withhold] is what a caller that knows its child's platform turns off.
 ///
 /// Ambiguity is normally fatal here, and rightly: `secrets exec` hands the
 /// environment to a child it knows nothing about, so it cannot tell whether the
@@ -670,9 +680,19 @@ LoadedSecrets loadSecrets({
   required File secretsFile,
   String? keystore,
   String? apiKey,
-  bool resolveAndroidKeystore = true,
-  bool resolveApiKey = true,
+  Set<String> withhold = const {},
 }) {
+  // A name that withholds nothing because it is misspelled would put a
+  // credential in the environment that the caller believes it excluded — and
+  // for `android.play_service_account` that credential is a private key. So an
+  // unknown name is refused rather than ignored.
+  final unknown = withhold.difference(withholdableFamilies);
+  if (unknown.isNotEmpty) {
+    throw ProjectException(
+      'cannot withhold ${unknown.join(', ')} — no such credential family.\n'
+      '    there is: ${(withholdableFamilies.toList()..sort()).join(', ')}',
+    );
+  }
   final values = _decrypt(repoRoot: repoRoot, secretsFile: secretsFile);
 
   // 0700 by construction — createTempSync uses mkdtemp. The files below are
@@ -685,8 +705,7 @@ LoadedSecrets loadSecrets({
       work,
       keystore: keystore,
       apiKey: apiKey,
-      resolveAndroidKeystore: resolveAndroidKeystore,
-      resolveApiKey: resolveApiKey,
+      withhold: withhold,
     );
   } on Object {
     work.deleteSync(recursive: true);
@@ -834,8 +853,7 @@ LoadedSecrets _materialize(
   Directory work, {
   String? keystore,
   String? apiKey,
-  bool resolveAndroidKeystore = true,
-  bool resolveApiKey = true,
+  Set<String> withhold = const {},
 }) {
   final environment = Map<String, String>.from(Platform.environment);
   final loaded = <String>[];
@@ -844,26 +862,38 @@ LoadedSecrets _materialize(
   Iterable<_Credential> under(String family) =>
       credentials.where((c) => c.path.startsWith('$family.'));
 
+  /// Whether [family] was withheld, recording why for the caller to print.
+  bool held(String family, String because) {
+    if (!withhold.contains(family)) {
+      return false;
+    }
+    final names = credentials
+        .where((c) => c.path == family || c.path.startsWith('$family.'))
+        .map((c) => c.instance.isEmpty ? c.path : c.instance);
+    if (names.isEmpty) {
+      return true;
+    }
+    // Named rather than skipped quietly. The caller says it does not need this,
+    // and it is still the case that a credential which did not arrive has to be
+    // visible rather than inferred from a failure three minutes later.
+    unresolved.add('$family (${names.join(', ')}) — $because');
+    return true;
+  }
+
   // --- Android ---------------------------------------------------------------
 
   // One keystore fills the fixed names every consumer already reads. Instance
   // names never become variable names: uppercasing is not injective, so `dist`
   // and `dist_p12` would mint the same variable and one would silently win.
-  final available = under('android.keystores').toList();
-  final ambiguous =
-      !resolveAndroidKeystore && keystore == null && available.length > 1;
-  // Named rather than skipped quietly. The caller says it does not need this,
-  // and it is still the case that a credential which did not arrive has to be
-  // visible rather than inferred from a failure three minutes later.
-  if (ambiguous) {
-    unresolved.add(
-      'android.keystores (${available.map((c) => c.instance).join(', ')}) '
-      '— none named, and this command does not sign Android artifacts',
-    );
-  }
-  final keystores = ambiguous
+  final keystores =
+      held('android.keystores', 'this command does not sign Android artifacts')
       ? const <_Credential>[]
-      : _select(available, keystore, 'keystore', 'signs');
+      : _select(
+          under('android.keystores').toList(),
+          keystore,
+          'keystore',
+          'signs',
+        );
   if (keystores.length == 1) {
     final keystore = keystores.single;
     final file = _writeBase64(
@@ -880,13 +910,32 @@ LoadedSecrets _materialize(
     loaded.add(keystore.path);
   }
 
-  for (final account in credentials.where(
-    (c) => c.path == 'android.play_service_account',
+  // **The only credential here passed by value rather than by path, and that
+  // makes it the only one that can escape through a log.**
+  //
+  // Everything else is a filename in a temp directory that no longer exists by
+  // the time anyone reads the output — `ANDROID_KEYSTORE_PATH`,
+  // `APPLE_*_P12_PATH`, `APPLE_PROFILE_*_PATH`. This one is the private key
+  // itself. An Xcode script build phase writes its entire environment into the
+  // build log, so an Apple build carrying this variable prints a Google private
+  // key into a file people paste around — and into public CI logs, which is
+  // where it was found.
+  //
+  // Withholding is a mitigation rather than the fix. The fix is to write it to
+  // a file and export a path like everything else, which changes the contract
+  // and so belongs to a major version.
+  if (!held(
+    'android.play_service_account',
+    'it is passed by value, and this command does not publish to Play',
   )) {
-    environment['GOOGLE_PLAY_SERVICE_ACCOUNT_JSON'] = utf8.decode(
-      _decode(account.fields['json_base64']!, '${account.path}.json_base64'),
-    );
-    loaded.add(account.path);
+    for (final account in credentials.where(
+      (c) => c.path == 'android.play_service_account',
+    )) {
+      environment['GOOGLE_PLAY_SERVICE_ACCOUNT_JSON'] = utf8.decode(
+        _decode(account.fields['json_base64']!, '${account.path}.json_base64'),
+      );
+      loaded.add(account.path);
+    }
   }
 
   // --- Apple -----------------------------------------------------------------
@@ -910,14 +959,13 @@ LoadedSecrets _materialize(
   // create or revoke signing material — and forcing a key into that step to get
   // a keychain gives away exactly the property it was built for.
   final apiKeys = under('apple.api_keys').toList();
-  final withheld = !resolveApiKey && apiKey == null && apiKeys.isNotEmpty;
-  if (withheld) {
-    unresolved.add(
-      'apple.api_keys (${apiKeys.map((c) => c.instance).join(', ')}) '
-      '— none named, so no App Store credential is placed in the environment',
-    );
-  }
-  if (apiKeys.isNotEmpty && !withheld) {
+  final withheldKeys =
+      apiKey == null &&
+      held(
+        'apple.api_keys',
+        'none named, so no App Store credential is placed in the environment',
+      );
+  if (apiKeys.isNotEmpty && !withheldKeys) {
     final keys = Directory('${work.path}/private_keys')..createSync();
     for (final key in apiKeys) {
       _writeBase64(

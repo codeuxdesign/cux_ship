@@ -722,17 +722,30 @@ Future<int> runKeychainExec({
       repoRoot: repoRoot,
       secretsFile: secretsFile,
       apiKey: apiKey,
-      // This command is macOS-gated and signs Apple builds, so the child
-      // provably never reads ANDROID_KEYSTORE_*. Without this, a project whose
-      // secrets file holds two Android keystores cannot run an Apple signing
-      // command at all — which is exactly what the first consumer hit, on the
-      // first run.
-      resolveAndroidKeystore: false,
-      // Likewise, and for a different reason: an absent App Store key fails
-      // loudly in its consumer's first line, so withholding one costs nothing —
-      // while forcing one in would inject a credential into a build step that
-      // may deliberately hold none. Pass --api-key to ask for it.
-      resolveApiKey: false,
+      // This command is macOS-gated and exists to sign Apple builds, so its
+      // child is an Apple build and nothing else. Each of these is withheld for
+      // its own reason:
+      //
+      //   android.keystores          the child cannot sign an Android artifact,
+      //                              and requiring --keystore to pick between
+      //                              two locked the first consumer out of an
+      //                              Apple command entirely.
+      //   android.play_service_account  it is the one credential passed by
+      //                              *value* rather than as a path, so it is
+      //                              the one that can escape through anything
+      //                              that echoes its environment — and an Xcode
+      //                              script build phase writes its whole
+      //                              environment into the build log. It has
+      //                              already reached a public CI log this way,
+      //                              in a sibling project.
+      //   apple.api_keys             signing needs no App Store key, and a
+      //                              build step may deliberately hold none.
+      //                              --api-key asks for it.
+      withhold: {
+        'android.keystores',
+        'android.play_service_account',
+        if (apiKey == null) 'apple.api_keys',
+      },
     );
     environment = secrets.environment;
     source = secretsFile.path;

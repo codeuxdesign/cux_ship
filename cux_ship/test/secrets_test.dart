@@ -39,8 +39,11 @@ void secrets(String contents) => write('secrets/release.yaml', contents);
 
 File get _secretsFile => File('${_root.path}/secrets/release.yaml');
 
-LoadedSecrets load() =>
-    loadSecrets(repoRoot: _root.path, secretsFile: _secretsFile);
+LoadedSecrets load({Set<String> withhold = const {}}) => loadSecrets(
+  repoRoot: _root.path,
+  secretsFile: _secretsFile,
+  withhold: withhold,
+);
 
 String b64(String value) => base64.encode(utf8.encode(value));
 
@@ -411,6 +414,86 @@ void main() {
               'runs before',
         );
       }
+    });
+  });
+
+  group('withholding a family the caller does not consume', () {
+    // The Play service account is the only credential passed by *value* rather
+    // than as a path to a temp file that is gone by the time anyone reads the
+    // output. So it is the only one that can escape through something that
+    // echoes its environment — and an Xcode script build phase writes its whole
+    // environment into the build log. This exact variable reached a public CI
+    // log in a sibling project that way.
+    test('the Play private key can be kept out of the environment', () {
+      secrets('''
+android:
+  play_service_account:
+    json_base64: ${b64('{"private_key":"-----BEGIN PRIVATE KEY-----"}')}
+''');
+      expect(
+        load().environment,
+        contains('GOOGLE_PLAY_SERVICE_ACCOUNT_JSON'),
+        reason: 'still the default, so nothing existing changes',
+      );
+
+      final held = load(withhold: {'android.play_service_account'});
+      expect(
+        held.environment,
+        isNot(contains('GOOGLE_PLAY_SERVICE_ACCOUNT_JSON')),
+      );
+      // Announced rather than silently absent, the same as every other
+      // credential that does not arrive.
+      expect(held.unresolved, isNotEmpty);
+    });
+
+    test('an Apple-only caller gets no Android keystore', () {
+      secrets('''
+android:
+  keystores:
+    upload:
+      base64: ${b64('keystore')}
+      password: pw
+      key_alias: upload
+''');
+      expect(load().environment, contains('ANDROID_KEYSTORE_PATH'));
+      expect(
+        load(withhold: {'android.keystores'}).environment,
+        isNot(contains('ANDROID_KEYSTORE_PATH')),
+      );
+    });
+
+    // A name that withholds nothing because it is misspelled would put a
+    // credential in the environment the caller believes it excluded, and for
+    // the Play account that credential is a private key. Silence is the one
+    // response this must not have.
+    test('a misspelled family is refused rather than ignored', () {
+      secrets('''
+android:
+  keystores:
+    upload:
+      base64: ${b64('keystore')}
+      password: pw
+      key_alias: upload
+''');
+      expect(
+        () => load(withhold: {'android.play_service_accounts'}),
+        throwsSaying(contains('no such credential family')),
+      );
+      expect(
+        () => load(withhold: {'android.keystores', 'apple.certificates'}),
+        throwsSaying(contains('apple.certificates')),
+      );
+    });
+
+    test('every withholdable name is one the materializer acts on', () {
+      // Guards the constant against drifting from the code that reads it: a
+      // name accepted here but never checked would withhold nothing while
+      // reporting success.
+      expect(withholdableFamilies, {
+        'android.keystores',
+        'android.play_service_account',
+        'apple.api_keys',
+      });
     });
   });
 
