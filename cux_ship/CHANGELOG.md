@@ -1,5 +1,65 @@
 # Changelog
 
+## 1.9.0
+
+**Purely additive.** Nothing in the 1.8.0 secrets contract moves, and a project
+that does not sign Apple builds sees no difference.
+
+- **`cux_ship keychain exec -- <command>`** runs a command with the project's
+  Apple signing identity in a keychain that is created for it and destroyed
+  however the run ends. macOS only, and it refuses rather than continuing
+  anywhere else — a build that carries on without the keychain signs with
+  whatever the machine happens to hold, and exits zero.
+
+  **The login keychain is never read.** That is the point rather than a side
+  effect: a signing identity that comes from installed machine state makes the
+  same commit sign differently on two laptops, with nothing saying so.
+
+  It consumes the 1.8.0 schema rather than extending it — `apple.certificates.*`
+  and `apple.profiles.*` as `secrets exec` already materializes them. Reads them
+  from the environment when they are already there, so `secrets exec -- keychain
+  exec -- …` composes, and otherwise decrypts the file itself. Which of the two
+  happened is printed, not inferred.
+
+  The wrapped command gets `APPLE_KEYCHAIN`, and is expected to pass
+  `OTHER_CODE_SIGN_FLAGS="--keychain $APPLE_KEYCHAIN"` to xcodebuild. Not
+  optional: the login keychain cannot be removed from the search list — that
+  would drop Apple's intermediates and leave the leaf chaining to nothing — so
+  pinning is the only thing that makes *signed with the certificate we imported*
+  true rather than likely. A stale identity of the same name in the login
+  keychain is not hypothetical; there was one on the author's machine, three
+  months old, while this was being written.
+
+  It consolidates two implementations that had each found a different subset of
+  this platform's sharp edges, and adds four things neither had:
+
+  - **Garbage collection of keychains left by a killed run.** A trap covers a
+    failed build, Ctrl-C and SIGTERM. It covers neither SIGKILL nor the power
+    going out, and what survives those is a distribution private key in a
+    keychain that stays unlocked for the rest of its timeout. The pid in the
+    filename is what makes staleness checkable, and nothing was checking it.
+  - **A refusal when a named provisioning profile has expired**, at import
+    rather than inside codesign, which reports it without using the word. Only
+    when named with `--profile`: the secrets file holds every profile a project
+    has, so failing on any expired one would mean an unused Developer ID profile
+    lapsing breaks every App Store release, naming a profile that build never
+    touches.
+  - **Quote-aware parsing of the keychain search list.** Both sources strip
+    quotes with `tr` or `sed`, which corrupts the list for anyone whose home
+    directory contains a space — the output is quote-delimited precisely to
+    permit that.
+  - **A diagnosis rather than an assertion** when there is no usable identity.
+    `find-identity -v` alone cannot separate "the .p12 had no private key" from
+    "the key is here and the certificate does not chain", and those need
+    opposite fixes.
+
+- **`ProjectContext.developmentTeam`** reads `DEVELOPMENT_TEAM` from whichever
+  Xcode project has one, ignoring the empty assignment Xcode writes for a target
+  without a team. It is what lets the identity check ask whether the certificate
+  belongs to the account this project builds for — a certificate from another
+  account imports perfectly and fails much later as a profile mismatch that
+  never mentions certificates.
+
 ## 1.8.0
 
 **A minor version that changes the secrets file's shape.** The number is
