@@ -53,6 +53,47 @@ that does not sign Apple builds sees no difference.
     "the key is here and the certificate does not chain", and those need
     opposite fixes.
 
+- **`loadSecrets` takes `withhold`**, naming credential families the caller
+  declares it does not consume. Additive: the default withholds nothing, so
+  `secrets exec` is unchanged.
+
+  It exists because a caller that knows its child's platform knows more than
+  this file can. `keychain exec` withholds all three it can, each for its own
+  reason, and says so rather than going quiet:
+
+  - **`android.keystores`** — an Apple signing command's child cannot sign an
+    Android artifact. Refusing to start because the file held two keystores
+    locked the first consumer out of the command entirely.
+  - **`android.play_service_account`** — **the one credential this tool passes
+    by value rather than as a path**, and therefore the one that can escape
+    through anything that echoes its environment. An Xcode script build phase
+    writes its whole environment into the build log; this variable reached a
+    *public* CI log that way, in full, in a project that ships from one.
+
+    Every other credential is a filename in a temp directory that no longer
+    exists by the time anyone reads the log. **Withholding it here is a
+    mitigation, not the fix** — the fix is to write it to a file and export a
+    path like everything else, which changes the contract and so belongs to the
+    next major version. A consumer still running an Apple build under plain
+    `secrets exec` should unset the variable before invoking xcodebuild.
+  - **`apple.api_keys`** — signing needs no App Store key. Nothing is placed
+    unless `--api-key` names one: not the singular variables and not
+    `API_PRIVATE_KEYS_DIR`, so the `.p8` is never written. A build step can
+    deliberately hold no App Store credential — which is what lets CI sign
+    without holding anything able to create or revoke signing material — and
+    requiring a key to obtain a keychain would give that property away.
+
+    The asymmetry with the keystore above is the argument, and it is worth
+    keeping: a keystore that fails to arrive is *silent*, because Gradle falls
+    through to the debug config and Play rejects the artifact after a full
+    upload. An App Store key that fails to arrive is *loud*, because its
+    consumer dies on the first line naming the cause.
+
+  An unrecognized family name is refused rather than ignored, since one
+  misspelled withholds nothing while reporting success — and for the Play
+  account that means a private key in an environment the caller believes it
+  excluded.
+
 - **`ProjectContext.developmentTeam`** reads `DEVELOPMENT_TEAM` from whichever
   Xcode project has one, ignoring the empty assignment Xcode writes for a target
   without a team. It is what lets the identity check ask whether the certificate
