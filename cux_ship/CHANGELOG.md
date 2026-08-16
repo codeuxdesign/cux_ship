@@ -1,5 +1,59 @@
 # Changelog
 
+## 1.9.1
+
+**Withholding did not survive being nested, which is the composition 1.9.0's own
+notes recommend.** `cux_ship secrets exec -- cux_ship keychain exec -- build`
+gave the build every credential the file holds, including the Play service
+account private key by value — the exposure `keychain exec` was added to close,
+reintroduced by the documented way of using it. Upgrade if you nest them. A
+project with `keychain exec` outermost was never affected.
+
+Two causes, and the second is the instructive one:
+
+- Declining to *add* a variable does nothing when it is already there. The
+  environment begins as a copy of this process's own, so under nesting the outer
+  command has already placed every credential. Withheld families are now
+  **removed**, however they arrived.
+- Removing them from the map did not remove them from the child.
+  `Process.start` merges the map into the parent's environment unless
+  `includeParentEnvironment` is false, so every deletion was restored from this
+  process's own environment — exactly the case that matters, since under nesting
+  the parent is what holds the credential.
+
+The second was invisible from inside: the `removed from the environment` line
+printed the correct full list throughout, because it reports what this process
+did to a map rather than what the child received. Only reading the child's own
+environment showed otherwise.
+
+### A limitation this does not fix
+
+**Withholding does not propagate downward through a second `secrets exec`.** The
+natural shape —
+
+```
+cux_ship keychain exec -- sh -c 'build && cux_ship secrets exec --api-key k -- upload'
+```
+
+— builds without a Play credential and then, for the duration of the upload
+child, has one again: the inner call loads the file fresh and withholds nothing.
+That is correct for an uploader that needs it, and it means the by-value private
+key is present at exactly the moment most likely to be wrapped in CI logging.
+
+This is not fixable by adding more withholding, and the attempt would be worse
+than the disease — a `secrets exec` that withheld the Play account by default
+would break every Android upload that does not know to ask, which is all of
+them. **The fix is to stop passing it by value at all**, exporting a path like
+every other credential here, and that changes the contract and belongs to the
+next major version. Until then, an Apple build should not be wrapped around a
+Play upload in a job whose log is public.
+
+- The reserved-name collision guard is derived from the withholding table rather
+  than listed beside it. They were the same nine names written twice, and drift
+  is silent in both directions: a name missing from the guard lets a project
+  token overwrite a real credential, and one missing from the table leaves a
+  secret in a child's environment the caller believes it withheld.
+
 ## 1.9.0
 
 **Purely additive.** Nothing in the 1.8.0 secrets contract moves, and a project
