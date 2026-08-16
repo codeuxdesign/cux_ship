@@ -490,7 +490,15 @@ _Session _create({
       ...current.where((k) => k != path),
     ], 'add $path to the search list');
 
-    _verifyIdentity(path, expectTeam);
+    // Only when something was imported that should yield one. An installer
+    // certificate signs a .pkg rather than code and never appears under the
+    // codesigning policy, so a keychain holding nothing else would otherwise be
+    // told "no signing identity at all — that is what a .p12 exported without
+    // its private key does", which is a confident wrong answer about a
+    // certificate that is perfectly fine.
+    if (certificates.any((c) => !c.name.contains('installer'))) {
+      _verifyIdentity(path, expectTeam);
+    }
 
     // The installer certificate is checked separately because `find-identity
     // -p codesigning` does not list it at all — it signs a .pkg rather than
@@ -517,6 +525,16 @@ _Session _create({
           'A Mac App Store .pkg is signed by "3rd Party Mac Developer '
           'Installer", which is a different certificate from "Developer ID '
           'Installer" and from the one that signs the app.',
+        );
+      }
+      // The team check applies here too, so it is not lost when an installer
+      // certificate is the only thing imported and the codesigning check above
+      // was skipped.
+      if (expectTeam != null &&
+          !installers.any((i) => i.name.contains(expectTeam))) {
+        throw ProjectException(
+          'the installer certificate does not belong to team $expectTeam.\n'
+          '${installers.map((i) => '    ${i.name}').join('\n')}',
         );
       }
       // Named rather than counted, because the two kinds are not
