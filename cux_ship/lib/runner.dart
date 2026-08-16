@@ -773,6 +773,16 @@ class _KeychainExecCommand extends Command<void> {
             'belonging to another account is refused here rather than '
             'surfacing later as a profile mismatch.',
       )
+      ..addOption(
+        'api-key',
+        help:
+            'Which App Store Connect key to put in the environment, when the '
+            'file holds more than one. An Apple flag rather than noise: a '
+            'build script may need one, and unlike an Android keystore this '
+            'command cannot rule that out. Android keystores are never chosen '
+            'between here, because an Apple signing command cannot sign an '
+            'Android artifact.',
+      )
       ..addMultiOption(
         'profile',
         help:
@@ -832,6 +842,7 @@ class _KeychainExecCommand extends Command<void> {
         profiles: argResults!.multiOption('profile').isEmpty
             ? null
             : argResults!.multiOption('profile').toSet(),
+        apiKey: argResults!.option('api-key'),
       );
     } on ProjectException catch (e) {
       stderr.writeln('cux_ship keychain exec: ${e.message}');

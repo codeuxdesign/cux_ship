@@ -163,11 +163,7 @@ ProfileFacts profileFactsFrom(Map<String, String> extracted, String at) {
     throw ProjectException('$at has a UUID that is not one: $uuid');
   }
 
-  final platforms = (extracted['Platform'] ?? '')
-      .split(RegExp(r'\s+'))
-      .where((p) => p.isNotEmpty)
-      .map((p) => p.toLowerCase())
-      .toSet();
+  final platforms = _platformsFrom(extracted['Platform'], at);
 
   // Refused rather than defaulted. Guessing iOS would file a macOS profile
   // where Xcode does not look, and the build then fails inside codesign saying
@@ -253,6 +249,38 @@ ProfileDecision decideProfile({
     return ProfileDecision.failExpiringSoon;
   }
   return ProfileDecision.install;
+}
+
+/// The platforms named by a profile's `Platform` key, lowercased.
+///
+/// **`Platform` is a set, not a scalar, and it is extracted as json for a
+/// reason worth stating.** `plutil -extract Platform raw` prints an array's
+/// *element count* — a modern iOS profile says `[iOS, xrOS, visionOS]` and so
+/// prints `3`, while a macOS one says `[OSX]` and prints `1`. Neither is a
+/// platform name, and a first version of this read those numbers and refused
+/// every real profile on both platforms.
+///
+/// So a value that is not a list is refused with the reason, rather than being
+/// split on whitespace and quietly yielding a set containing "3".
+Set<String> _platformsFrom(String? value, String at) {
+  final text = value?.trim() ?? '';
+  if (text.isEmpty) {
+    return const {};
+  }
+  Object? decoded;
+  try {
+    decoded = jsonDecode(text);
+  } on FormatException {
+    decoded = null;
+  }
+  if (decoded is! List) {
+    throw ProjectException(
+      '$at: Platform came back as "$text" rather than a list.\n'
+      "`plutil -extract Platform raw` prints an array's element count rather "
+      'than its contents, so it has to be extracted as json.',
+    );
+  }
+  return {for (final entry in decoded) '$entry'.toLowerCase()};
 }
 
 /// The keychain paths in `security list-keychains` output.
@@ -601,18 +629,28 @@ ProfileFacts _readProfile(String path) {
     // JSON: `plutil -convert json` refuses any plist containing a date, and
     // every real profile carries ExpirationDate. A fixture written without one
     // would have passed.
+    // `raw` for the scalars, `json` for `Platform` — because `raw` on an array
+    // prints its element count. json works here and not on the whole payload
+    // because the extracted subtree is a list of strings; converting the entire
+    // profile would hit ExpirationDate and be refused.
+    const format = {
+      'UUID': 'raw',
+      'Name': 'raw',
+      'Platform': 'json',
+      'ExpirationDate': 'raw',
+    };
     final extracted = <String, String>{};
-    for (final key in ['UUID', 'Name', 'Platform', 'ExpirationDate']) {
+    for (final entry in format.entries) {
       final result = Process.runSync('plutil', [
         '-extract',
-        key,
-        'raw',
+        entry.key,
+        entry.value,
         '-o',
         '-',
         plist.path,
       ]);
       if (result.exitCode == 0) {
-        extracted[key] = (result.stdout as String).trim();
+        extracted[entry.key] = (result.stdout as String).trim();
       }
     }
     return profileFactsFrom(extracted, path);
@@ -632,6 +670,7 @@ Future<int> runKeychainExec({
   String? expectTeam,
   bool strictExpiry = false,
   Set<String>? profiles,
+  String? apiKey,
 }) async {
   if (command.isEmpty) {
     throw ProjectException(
@@ -661,9 +700,22 @@ Future<int> runKeychainExec({
   var environment = Map<String, String>.from(Platform.environment);
   var source = 'the environment';
   if (_certificatesIn(environment).isEmpty) {
-    secrets = loadSecrets(repoRoot: repoRoot, secretsFile: secretsFile);
+    secrets = loadSecrets(
+      repoRoot: repoRoot,
+      secretsFile: secretsFile,
+      apiKey: apiKey,
+      // This command is macOS-gated and signs Apple builds, so the child
+      // provably never reads ANDROID_KEYSTORE_*. Without this, a project whose
+      // secrets file holds two Android keystores cannot run an Apple signing
+      // command at all — which is exactly what the first consumer hit, on the
+      // first run.
+      resolveAndroidKeystore: false,
+    );
     environment = secrets.environment;
     source = secretsFile.path;
+    for (final note in secrets.unresolved) {
+      stderr.writeln('==> not chosen: $note');
+    }
   }
 
   try {

@@ -532,6 +532,7 @@ class LoadedSecrets {
     this.loaded,
     this._work, {
     this.placed = const [],
+    this.unresolved = const [],
   });
 
   /// The child's environment: this process's, plus the credentials.
@@ -549,6 +550,14 @@ class LoadedSecrets {
   /// source file is not on disk — but a family that could be silently absent
   /// is exactly the defect this file has already had once.
   final List<String> placed;
+
+  /// Families this deliberately did not choose between, because the caller said
+  /// it does not read them.
+  ///
+  /// Reported for the same reason [placed] is: the alternative to naming it is
+  /// a credential that is absent for a good reason being indistinguishable from
+  /// one that is absent for a bad one.
+  final List<String> unresolved;
 
   final Directory _work;
 
@@ -641,11 +650,27 @@ List<_Credential> _decrypt({
 }
 
 /// Decrypts, materializes, and hands back the environment a child should see.
+/// [resolveAndroidKeystore] is what an Apple-only caller turns off.
+///
+/// Ambiguity is normally fatal here, and rightly: `secrets exec` hands the
+/// environment to a child it knows nothing about, so it cannot tell whether the
+/// keystore it failed to pick was needed, and a keystore that silently does not
+/// arrive makes Gradle fall through to the debug key and produces an artifact
+/// only Play rejects.
+///
+/// That reasoning does not survive the caller being `keychain exec`, which is
+/// macOS-gated and signs Apple builds. There the child provably never reads
+/// `ANDROID_KEYSTORE_*`, and refusing to start because the file holds two
+/// Android keystores locks a project out of a command that does not touch them
+/// — which is what happened to the first consumer, on the first run.
+///
+/// So the choice is the caller's, and stays fatal by default.
 LoadedSecrets loadSecrets({
   required String repoRoot,
   required File secretsFile,
   String? keystore,
   String? apiKey,
+  bool resolveAndroidKeystore = true,
 }) {
   final values = _decrypt(repoRoot: repoRoot, secretsFile: secretsFile);
 
@@ -654,7 +679,13 @@ LoadedSecrets loadSecrets({
   // rather than the directory's mode.
   final work = Directory.systemTemp.createTempSync('cux_ship_secrets');
   try {
-    return _materialize(values, work, keystore: keystore, apiKey: apiKey);
+    return _materialize(
+      values,
+      work,
+      keystore: keystore,
+      apiKey: apiKey,
+      resolveAndroidKeystore: resolveAndroidKeystore,
+    );
   } on Object {
     work.deleteSync(recursive: true);
     rethrow;
@@ -801,9 +832,11 @@ LoadedSecrets _materialize(
   Directory work, {
   String? keystore,
   String? apiKey,
+  bool resolveAndroidKeystore = true,
 }) {
   final environment = Map<String, String>.from(Platform.environment);
   final loaded = <String>[];
+  final unresolved = <String>[];
 
   Iterable<_Credential> under(String family) =>
       credentials.where((c) => c.path.startsWith('$family.'));
@@ -813,12 +846,21 @@ LoadedSecrets _materialize(
   // One keystore fills the fixed names every consumer already reads. Instance
   // names never become variable names: uppercasing is not injective, so `dist`
   // and `dist_p12` would mint the same variable and one would silently win.
-  final keystores = _select(
-    under('android.keystores').toList(),
-    keystore,
-    'keystore',
-    'signs',
-  );
+  final available = under('android.keystores').toList();
+  final ambiguous =
+      !resolveAndroidKeystore && keystore == null && available.length > 1;
+  // Named rather than skipped quietly. The caller says it does not need this,
+  // and it is still the case that a credential which did not arrive has to be
+  // visible rather than inferred from a failure three minutes later.
+  if (ambiguous) {
+    unresolved.add(
+      'android.keystores (${available.map((c) => c.instance).join(', ')}) '
+      '— none named, and this command does not sign Android artifacts',
+    );
+  }
+  final keystores = ambiguous
+      ? const <_Credential>[]
+      : _select(available, keystore, 'keystore', 'signs');
   if (keystores.length == 1) {
     final keystore = keystores.single;
     final file = _writeBase64(
@@ -937,7 +979,13 @@ LoadedSecrets _materialize(
   // plaintext does not outlive the run, and these outlive it by design.
   final placed = [for (final file in under('placed')) file.path];
 
-  return LoadedSecrets(environment, loaded, work, placed: placed);
+  return LoadedSecrets(
+    environment,
+    loaded,
+    work,
+    placed: placed,
+    unresolved: unresolved,
+  );
 }
 
 /// The one instance to use, or an error naming the alternatives.

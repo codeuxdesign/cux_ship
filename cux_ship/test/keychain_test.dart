@@ -16,7 +16,7 @@ void main() {
       final facts = profileFactsFrom({
         'UUID': 'D2E7A1B4-0000-4E5F-9A3C-112233445566',
         'Name': 'How It Went App Store',
-        'Platform': 'iOS',
+        'Platform': '["iOS"]',
         'ExpirationDate': '2026-11-04T09:12:33Z',
       }, 'ios.mobileprovision');
 
@@ -32,7 +32,7 @@ void main() {
     test('reads a macOS profile, which says OSX', () {
       final facts = profileFactsFrom({
         'UUID': 'ABC-123',
-        'Platform': 'OSX',
+        'Platform': '["OSX"]',
       }, 'macos.provisionprofile');
 
       expect(facts.platform, ProfilePlatform.macos);
@@ -58,7 +58,7 @@ void main() {
       expect(
         () => profileFactsFrom({
           'UUID': 'ABC-123',
-          'Platform': 'watchOS',
+          'Platform': '["watchOS"]',
         }, 'odd.mobileprovision'),
         throwsA(
           isA<ProjectException>().having(
@@ -79,9 +79,63 @@ void main() {
 
     test('refuses one with no UUID, since the UUID is the filename', () {
       expect(
-        () => profileFactsFrom({'Platform': 'iOS'}, 'x.mobileprovision'),
+        () => profileFactsFrom({'Platform': '["iOS"]'}, 'x.mobileprovision'),
         throwsA(isA<ProjectException>()),
       );
+    });
+
+    // The real values, from four production profiles. A modern iOS profile
+    // names three platforms, which is why membership is tested rather than the
+    // first element — Apple reordering the array must not move the file.
+    test('a real iOS profile names three platforms and is still iOS', () {
+      expect(
+        profileFactsFrom({
+          'UUID': 'ABC-123',
+          'Platform': '["iOS","xrOS","visionOS"]',
+        }, 'ios_appstore.profile').platform,
+        ProfilePlatform.ios,
+      );
+    });
+
+    // The bug that broke every profile on both platforms: `plutil -extract
+    // Platform raw` prints an array's *element count*, so an iOS profile came
+    // back as "3" and a macOS one as "1". Refused with the reason rather than
+    // split into a set containing "3", which would have been indistinguishable
+    // from a platform nobody has heard of.
+    test('an element count is refused, and says why', () {
+      for (final counted in ['3', '1']) {
+        expect(
+          () => profileFactsFrom({
+            'UUID': 'ABC-123',
+            'Platform': counted,
+          }, 'counted.profile'),
+          throwsA(
+            isA<ProjectException>().having(
+              (e) => e.message,
+              'message',
+              contains('element count'),
+            ),
+          ),
+          reason: 'Platform=$counted',
+        );
+      }
+    });
+
+    test('the expiry format real profiles use parses', () {
+      // Verbatim from two production profiles. Parsing failure would be silent
+      // — an unparseable date reads as "no expiry" — so this is pinned against
+      // real input rather than against a stamp invented here.
+      for (final stamp in ['2027-08-10T11:00:16Z', '2044-08-05T18:27:33Z']) {
+        expect(
+          profileFactsFrom({
+            'UUID': 'ABC-123',
+            'Platform': '["OSX"]',
+            'ExpirationDate': stamp,
+          }, 'x').expires,
+          isNotNull,
+          reason: stamp,
+        );
+      }
     });
 
     // The UUID comes out of a file and becomes a path inside a directory of
@@ -90,7 +144,7 @@ void main() {
       expect(
         () => profileFactsFrom({
           'UUID': '../../../../etc/rc',
-          'Platform': 'iOS',
+          'Platform': '["iOS"]',
         }, 'evil.mobileprovision'),
         throwsA(isA<ProjectException>()),
       );
@@ -99,7 +153,7 @@ void main() {
     test('a missing name falls back to the uuid rather than being blank', () {
       final facts = profileFactsFrom({
         'UUID': 'ABC-123',
-        'Platform': 'iOS',
+        'Platform': '["iOS"]',
       }, 'x');
       expect(facts.name, 'ABC-123');
     });
@@ -107,7 +161,7 @@ void main() {
     test('daysLeft is negative once past', () {
       final facts = profileFactsFrom({
         'UUID': 'ABC-123',
-        'Platform': 'iOS',
+        'Platform': '["iOS"]',
         'ExpirationDate': '2026-01-01T00:00:00Z',
       }, 'x');
       expect(facts.daysLeft(DateTime.utc(2026, 1, 31)), -30);
@@ -117,7 +171,7 @@ void main() {
     test('an absent expiry is null rather than an error', () {
       final facts = profileFactsFrom({
         'UUID': 'ABC-123',
-        'Platform': 'iOS',
+        'Platform': '["iOS"]',
       }, 'x');
       expect(facts.expires, isNull);
       expect(facts.daysLeft(DateTime.utc(2026)), isNull);
