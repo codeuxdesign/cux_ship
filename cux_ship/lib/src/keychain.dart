@@ -470,14 +470,19 @@ _Session _create({
     // failed to import gets a clean bill of health here and fails in
     // productbuild at the end of the build.
     if (certificates.any((c) => c.name.contains('installer'))) {
-      final installers =
-          _security([
-                'find-identity',
-                '-v',
-                path,
-              ], 'list the installer identities in $path').stdout
-              as String;
-      if (!installers.contains('Installer')) {
+      // **No `-p codesigning` here, and that is the entire trick.** An
+      // installer identity does not appear under the codesigning policy at
+      // all, so a check that keeps the policy and merely greps for a different
+      // string finds nothing and passes anyway.
+      final installers = parseIdentities(
+        _security([
+              'find-identity',
+              '-v',
+              path,
+            ], 'list the installer identities in $path').stdout
+            as String,
+      ).where((i) => i.name.contains('Installer')).toList();
+      if (installers.isEmpty) {
         throw ProjectException(
           'an installer certificate was imported but yielded no installer '
           'identity.\n'
@@ -486,6 +491,13 @@ _Session _create({
           'Installer" and from the one that signs the app.',
         );
       }
+      // Named rather than counted, because the two kinds are not
+      // interchangeable and this command cannot tell which the build wants:
+      // "3rd Party Mac Developer Installer" signs a Mac App Store package,
+      // "Developer ID Installer" signs a direct download. Refusing either would
+      // be guessing; printing which one arrived makes the wrong certificate
+      // visible here instead of discovered by productbuild at the end.
+      stderr.writeln('==> ${installers.map((i) => i.name).join(', ')}');
     }
     return session;
   } on Object {
