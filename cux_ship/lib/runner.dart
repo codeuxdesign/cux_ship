@@ -776,12 +776,12 @@ class _KeychainExecCommand extends Command<void> {
       ..addOption(
         'api-key',
         help:
-            'Which App Store Connect key to put in the environment, when the '
-            'file holds more than one. An Apple flag rather than noise: a '
-            'build script may need one, and unlike an Android keystore this '
-            'command cannot rule that out. Android keystores are never chosen '
-            'between here, because an Apple signing command cannot sign an '
-            'Android artifact.',
+            'Put an App Store Connect key in the environment. Without this, '
+            'none is placed at all — signing needs no key, and a build step '
+            'that deliberately holds no App Store credential should not have '
+            'to accept one to get a keychain. An absent key also fails loudly '
+            'in whatever wanted it, unlike an absent Android keystore, which '
+            'is why neither is refused up front here.',
       )
       ..addMultiOption(
         'profile',

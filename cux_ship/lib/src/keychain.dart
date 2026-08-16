@@ -728,6 +728,11 @@ Future<int> runKeychainExec({
       // command at all — which is exactly what the first consumer hit, on the
       // first run.
       resolveAndroidKeystore: false,
+      // Likewise, and for a different reason: an absent App Store key fails
+      // loudly in its consumer's first line, so withholding one costs nothing —
+      // while forcing one in would inject a credential into a build step that
+      // may deliberately hold none. Pass --api-key to ask for it.
+      resolveApiKey: false,
     );
     environment = secrets.environment;
     source = secretsFile.path;

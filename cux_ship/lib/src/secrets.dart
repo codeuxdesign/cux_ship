@@ -671,6 +671,7 @@ LoadedSecrets loadSecrets({
   String? keystore,
   String? apiKey,
   bool resolveAndroidKeystore = true,
+  bool resolveApiKey = true,
 }) {
   final values = _decrypt(repoRoot: repoRoot, secretsFile: secretsFile);
 
@@ -685,6 +686,7 @@ LoadedSecrets loadSecrets({
       keystore: keystore,
       apiKey: apiKey,
       resolveAndroidKeystore: resolveAndroidKeystore,
+      resolveApiKey: resolveApiKey,
     );
   } on Object {
     work.deleteSync(recursive: true);
@@ -833,6 +835,7 @@ LoadedSecrets _materialize(
   String? keystore,
   String? apiKey,
   bool resolveAndroidKeystore = true,
+  bool resolveApiKey = true,
 }) {
   final environment = Map<String, String>.from(Platform.environment);
   final loaded = <String>[];
@@ -891,8 +894,30 @@ LoadedSecrets _materialize(
   // Every key goes into one directory, because altool finds a key by its id
   // inside $API_PRIVATE_KEYS_DIR rather than by a path. The selected one also
   // fills the singular names, for xcodebuild and for AscCredentials.
+  // **Not placed unless asked for, when the caller says so** — and the reason
+  // is a real asymmetry with the keystore above rather than a second helping of
+  // the same argument.
+  //
+  // A keystore that fails to arrive is *silent*: Gradle falls through to the
+  // debug signing config and produces an artifact only Play rejects, minutes
+  // after a full upload. Refusing up front is worth it. An App Store key that
+  // fails to arrive is *loud*: every consumer of one opens with
+  // `: "${APPLE_API_KEY_ID:?…}"` or equivalent and dies on its first line
+  // naming the cause. So being fatal buys something there and nothing here.
+  //
+  // And it costs something. A build script can deliberately hold no App Store
+  // credential — which is what lets CI sign without holding anything able to
+  // create or revoke signing material — and forcing a key into that step to get
+  // a keychain gives away exactly the property it was built for.
   final apiKeys = under('apple.api_keys').toList();
-  if (apiKeys.isNotEmpty) {
+  final withheld = !resolveApiKey && apiKey == null && apiKeys.isNotEmpty;
+  if (withheld) {
+    unresolved.add(
+      'apple.api_keys (${apiKeys.map((c) => c.instance).join(', ')}) '
+      '— none named, so no App Store credential is placed in the environment',
+    );
+  }
+  if (apiKeys.isNotEmpty && !withheld) {
     final keys = Directory('${work.path}/private_keys')..createSync();
     for (final key in apiKeys) {
       _writeBase64(
