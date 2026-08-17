@@ -740,6 +740,118 @@ void _verifyIdentity(String keychain, String? expectTeam) {
 }
 
 /// Reads the four fields installing a profile needs.
+/// A profile's name, expiry, and the fingerprint of every certificate it
+/// embeds — the last being what `secrets check` cross-checks against the
+/// certificates the file actually holds.
+///
+/// `DeveloperCertificates` is an array of DER blobs. Their fingerprints are
+/// taken with openssl rather than hashed here, so both sides of the comparison
+/// are produced by the same tool and cannot disagree about encoding.
+ProfileInspection inspectProfileForCheck(String path) {
+  final facts = _readProfile(path);
+  return ProfileInspection(
+    name: facts.name,
+    expires: facts.expires,
+    certificateFingerprints: _embeddedCertificateFingerprints(path),
+  );
+}
+
+List<String> _embeddedCertificateFingerprints(String path) {
+  final decoded = Process.runSync('security', [
+    'cms',
+    '-D',
+    '-i',
+    path,
+  ], stdoutEncoding: null);
+  if (decoded.exitCode != 0) {
+    throw ProjectException(
+      'could not decode $path — security cms exited ${decoded.exitCode}',
+    );
+  }
+  final work = Directory.systemTemp.createTempSync('cux_ship_profile_certs');
+  try {
+    final plist = File('${work.path}/p.plist')
+      ..writeAsBytesSync(decoded.stdout as List<int>);
+    // `xml1`, not `json`. The certificates are a `<data>` array, and plutil
+    // refuses that for JSON — "Invalid object in plist for JSON format" — so
+    // the obvious spelling fails on every real profile. It cost nothing to find
+    // because it was measured against a production profile; it would have cost
+    // a great deal to find in a report that had quietly checked nothing.
+    //
+    // `raw` is not the alternative: on an array it prints the element count,
+    // which parses fine and means something else entirely.
+    final extracted = Process.runSync('plutil', [
+      '-extract',
+      'DeveloperCertificates',
+      'xml1',
+      '-o',
+      '-',
+      plist.path,
+    ]);
+    if (extracted.exitCode != 0) {
+      throw ProjectException(
+        'could not read the certificates out of $path — '
+        'plutil -extract DeveloperCertificates xml1 exited '
+        '${extracted.exitCode}: ${(extracted.stderr as String).trim()}',
+      );
+    }
+    // Each <data> block is base64 with the line breaks plutil puts in.
+    final blobs = RegExp(r'<data>([\s\S]*?)</data>')
+        .allMatches(extracted.stdout as String)
+        .map((m) => m.group(1)!.replaceAll(RegExp(r'\s'), ''))
+        .where((s) => s.isNotEmpty)
+        .toList();
+    final fingerprints = <String>[];
+    for (var i = 0; i < blobs.length; i++) {
+      final der = File('${work.path}/cert$i.der')
+        ..writeAsBytesSync(base64.decode(blobs[i]));
+      final print = Process.runSync('openssl', [
+        'x509',
+        '-inform',
+        'DER',
+        '-in',
+        der.path,
+        '-noout',
+        '-fingerprint',
+        '-sha256',
+      ]);
+      final line = (print.stdout as String).trim();
+      final value = line.split('=').last.replaceAll(':', '').toUpperCase();
+      if (value.isNotEmpty) {
+        fingerprints.add(value);
+      }
+    }
+    return fingerprints;
+  } finally {
+    work.deleteSync(recursive: true);
+  }
+}
+
+/// SHA-256 of the certificate inside a .p12, in the same shape as the profile
+/// side above, so the two can be compared directly.
+String? fingerprintStoredCertificate(String p12Path, String password) {
+  final result = Process.runSync(
+    'sh',
+    [
+      '-c',
+      '{ openssl pkcs12 -in "\$1" -passin env:CUX_P12_PASSWORD -nokeys -clcerts '
+          '-legacy 2>/dev/null '
+          '|| openssl pkcs12 -in "\$1" -passin env:CUX_P12_PASSWORD -nokeys '
+          '-clcerts 2>/dev/null; } '
+          '| openssl x509 -noout -fingerprint -sha256 2>/dev/null',
+      'sh',
+      p12Path,
+    ],
+    environment: {'CUX_P12_PASSWORD': password},
+  );
+  final line = (result.stdout as String).trim();
+  if (!line.contains('=')) {
+    return null;
+  }
+  final value = line.split('=').last.replaceAll(':', '').toUpperCase();
+  return value.isEmpty ? null : value;
+}
+
 /// A profile's own account of itself, for `secrets add profile` to print back.
 ///
 /// Lives here rather than in `secrets_add.dart` because reading it needs

@@ -32,6 +32,7 @@ import 'placed.dart';
 import 'project.dart';
 
 part 'secrets_add.dart';
+part 'secrets_check.dart';
 
 /// What the file may contain, declared once.
 ///

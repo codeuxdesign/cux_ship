@@ -425,6 +425,7 @@ class _FlattenCommand extends Command<void> {
 class _SecretsCommand extends Command<void> {
   _SecretsCommand() {
     addSubcommand(_SecretsAddCommand());
+    addSubcommand(_SecretsCheckCommand());
     addSubcommand(_SecretsRemoveCommand());
     addSubcommand(_SecretsExecCommand());
     addSubcommand(_SecretsListCommand());
@@ -610,6 +611,72 @@ String? _readSecretInput({
     }
   }
   return stdin.readLineSync()?.trim();
+}
+
+class _SecretsCheckCommand extends Command<void> {
+  _SecretsCheckCommand() {
+    argParser.addOption(
+      'file',
+      help: 'The sops-encrypted file to read.',
+      defaultsTo: 'secrets/release.yaml',
+    );
+  }
+
+  @override
+  String get name => 'check';
+
+  @override
+  String get description =>
+      'Decrypt every credential and report whether it works, and whether the '
+      'profiles still match the certificates. Needs an identity, so it runs '
+      'where `secrets exec` runs. Exits non-zero only on a real failure — a '
+      'credential this cannot authenticate is reported, not failed.';
+
+  @override
+  Future<void> run() async {
+    final project = _project(this);
+    final option = argResults!.option('file')!;
+    final secretsFile = File(
+      p.isAbsolute(option) ? option : p.join(project.root, option),
+    );
+    try {
+      // On anything but a Mac the pairing cannot be read at all, and saying so
+      // is better than a report that silently covers less than it appears to.
+      final onMac = Platform.isMacOS;
+      final rows = checkCredentials(
+        repoRoot: project.root,
+        secretsFile: secretsFile,
+        inspectProfile: onMac ? inspectProfileForCheck : null,
+        fingerprintCertificate: onMac ? fingerprintStoredCertificate : null,
+      );
+      final width = rows.fold(
+        0,
+        (w, r) => r.path.length > w ? r.path.length : w,
+      );
+      for (final row in rows) {
+        stdout.writeln(
+          '${row.path.padRight(width)}  '
+          '${row.state.label.padRight(8)}  ${row.detail}',
+        );
+      }
+      final failed = rows.where((r) => r.state == CheckState.failed).length;
+      final opaque = rows.where((r) => r.state == CheckState.opaque).length;
+      stdout.writeln();
+      stdout.writeln(
+        '${rows.length} checked, $failed failed, '
+        '$opaque opaque (cannot be authenticated by design).',
+      );
+      // Only a failure colours the exit code. A token nobody can authenticate
+      // is not an error and must not read as one, or the check becomes a thing
+      // people learn to ignore.
+      if (failed > 0) {
+        exitCode = 1;
+      }
+    } on ProjectException catch (e) {
+      stderr.writeln('cux_ship secrets check: ${e.message}');
+      exitCode = 1;
+    }
+  }
 }
 
 class _SecretsRemoveCommand extends Command<void> {
