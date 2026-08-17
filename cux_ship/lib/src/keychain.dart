@@ -743,14 +743,16 @@ Future<int> runKeychainExec({
       //                              and requiring --keystore to pick between
       //                              two locked the first consumer out of an
       //                              Apple command entirely.
-      //   android.play_service_account  it is the one credential passed by
-      //                              *value* rather than as a path, so it is
-      //                              the one that can escape through anything
-      //                              that echoes its environment — and an Xcode
-      //                              script build phase writes its whole
-      //                              environment into the build log. It has
-      //                              already reached a public CI log this way,
-      //                              in a sibling project.
+      //   android.play_service_account  the child cannot publish to Play, so
+      //                              it has no use for it. Until 2.0.0 this was
+      //                              the sharper argument of the three — the
+      //                              credential was passed by *value*, and an
+      //                              Xcode script build phase writes its whole
+      //                              environment into the build log, which is
+      //                              how it reached a public CI log in a
+      //                              sibling project. It is a path now, like
+      //                              everything else, so withholding it is
+      //                              hygiene rather than the fix it once was.
       //   apple.api_keys             signing needs no App Store key, and a
       //                              build step may deliberately hold none.
       //                              --api-key asks for it.

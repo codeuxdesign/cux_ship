@@ -96,9 +96,7 @@ ServiceAccountCredentials _loadCredentials() {
     _fail(
       '$_serviceAccountVar is not set.\n'
       '  It holds the path to the Google Play service account JSON. Run this\n'
-      '  through `cux_ship secrets exec`, which writes the file and sets it.\n'
-      '  Before 2.0.0 this was GOOGLE_PLAY_SERVICE_ACCOUNT_JSON, holding the\n'
-      '  JSON itself; that variable is gone rather than deprecated.',
+      '  through `cux_ship secrets exec`, which writes the file and sets it.',
     );
   }
   final file = File(path);
