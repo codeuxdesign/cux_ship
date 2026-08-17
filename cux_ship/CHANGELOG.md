@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.3.1
+
+- **`Platform` is extracted as `xml1` rather than `json`.** On a `macos-15`
+  runner `plutil -extract Platform json` exits 1 with empty stderr — not an
+  absent key, not a malformed profile, a subprocess that fails and says
+  nothing. `keychain exec --profile` therefore refused every provisioning
+  profile on that runner, which is every GitHub job using `macos-latest` at the
+  time of writing.
+
+  Measured on a real runner rather than predicted, and found in one line
+  because 2.3.0 had already stopped reporting a failing `plutil` as an absent
+  key. The old message asserted the one thing that was false; the new one named
+  the command, the exit code, and the absence of any explanation to pass on.
+
+  This is the second failure of `-extract … json` on that OS — the first was
+  `DeveloperCertificates`, an array of `<data>` which JSON cannot represent and
+  plutil refuses outright. `Platform` is an array of *strings*, which JSON
+  represents perfectly well, so the two have no cause in common except the
+  format. `xml1` works on both macOS versions. `UUID`, `Name` and
+  `ExpirationDate` stay on `raw`, which has never failed and is unambiguous for
+  a scalar.
+
 ## 2.3.0
 
 - **`cux_ship secrets add`** puts a credential *into* the file. Until now
