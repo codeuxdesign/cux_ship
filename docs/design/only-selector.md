@@ -133,8 +133,14 @@ not have to name `apple.certificates` in order to sign.
 That is coherent — the child needs `APPLE_KEYCHAIN`, not the p12 paths, and the
 passwords are stripped after import regardless — but it means the flag is
 narrower on this command than "which credentials survive into the child"
-suggests, and the help text has to say so or the first user will expect
-otherwise.
+suggests.
+
+The help text is not enough. A consumer reviewing this said they would have
+assumed `--only marks` meant "and nothing else", concluded it had starved the
+import, and filed a bug. So it belongs in the **error** someone gets when they
+name a selector with no certificates in it and signing then fails — which is the
+moment they are already confused — rather than only in a paragraph they read
+before they were.
 
 **The limit of the whole mechanism, while it is being written down:** `--only`
 filters the *environment* channel. A child holding the sops identity can decrypt
@@ -179,9 +185,8 @@ first.
 Three cases, and they are not the same mistake. **Unknown to the schema** —
 `tokns`, or a family that does not exist — is fatal. **A named instance absent
 from the file** — `tokens.marsk` where `tokens` exists — is fatal. **A known
-family that is empty in this file** is the case two reviewers disagreed on; see
-the open question at the end, and do not read the paragraph below as having
-settled it.
+family that is empty in this file** is reported rather than fatal; see the
+section on empty families for why, since it was the one disputed point.
 
 This is the condition most likely to be under-built and it is the one with the
 worst failure. An allowlist that silently selects nothing produces a credential
@@ -320,34 +325,51 @@ which is the half-credential state `secrets add` exists to prevent.
 `secrets check` also keeps checking everything. A scoped check is a check people
 learn to trust wrongly.
 
-## One question still open
+## An empty family is reported, not fatal
 
-**Is a family that is empty in this file an error, or a reported no-op?**
+Split by grammar production:
 
-Two reviewers disagreed, and the disagreement is recorded rather than resolved,
-because both positions are coherent and the choice is a judgement about which
-mistake matters more.
+- **Unknown to the schema** — `tokns`, a family that does not exist — is fatal.
+- **A named instance absent from the file** — `tokens.marsk` — is fatal. Naming
+  an instance is an existence claim.
+- **A known family that is empty in this file** selects nothing, is allowed, and
+  is **reported**. Naming a family is a scope, not a claim about contents.
 
-*Fatal, both cases.* `--only` at a call site is an assertion that the child
-consumes this. If the file has none, the assertion is false, and both routes
-there are bugs worth stopping on: pointed at the wrong secrets file, or a
-credential was retired and the call site never updated. There is already a way
-to say "no tokens" — omit them — so a flag that means both "I need these" and "I
-need nothing" reintroduces in the semantics the ambiguity the name removed.
+This matches a line `decideProfile` already draws: a named profile absent from
+the file is fatal, while a profile that merely turns up unnamed is warned and
+skipped. A tool that draws one line in two places for the same kind of question
+is better than one that draws two.
 
-*Split by production.* Naming an *instance* is an existence claim, so
-`tokens.marks` with no `marks` is fatal — matching how a named profile absent
-from the file is already fatal. Naming a *family* is a scope: `tokens` in a file
-with no tokens selects nothing, is allowed, and is **reported** — matching how
-profiles that merely turn up unnamed are warned and skipped. A family name is
-validated against the schema and so cannot be a typo, and the reporting line the
-design already requires answers the silent-nothing fear.
+This was disputed. The other position was that an empty family should also be
+fatal, on the grounds that `--only` asserts the child consumes something, and
+the ways to reach an empty family — wrong secrets file, or a retired credential
+with a stale call site — are both bugs. It was withdrawn by the person who
+argued it, and the reasoning is worth keeping because it is what makes the
+decision safe rather than merely decided:
 
-The strongest point on each side: the first catches a wrong-file mistake at the
-call site; the second is the one that matches precedent already in this
-codebase, and observes that a family which is empty cannot strand a child,
-because a credential that does not exist cannot be consumed four layers down.
+- **An empty family cannot strand a child.** The argument for fatality invoked
+  "a credential absent four layers in, wrapper reports success". That failure is
+  unreachable here: if the family is empty the credential is absent from the
+  *file*, so no configuration of `--only` could have delivered it.
+- **The retirement case is caught by the undisputed half.** Retiring
+  `tokens.marks` while a call site still names it is fatal under instance-level
+  naming, which nobody disputes. Fatality at family level only adds anything
+  when a retirement empties an entire family.
+- **The wrong-file case is real but is not this flag's job.** An unexpectedly
+  empty family does suggest the wrong file — but a wrong file fails louder and
+  earlier (the certificates are absent too), and `secrets list` and `secrets
+  check` exist to answer "is this the file I think it is". Hanging that
+  detection off a filter flag puts it where it happens to be noticed rather than
+  where it belongs.
 
-Whichever is chosen, the messages must differ. "Unknown to the schema" and
-"known, but absent from this file" are different mistakes, and telling someone
-their spelling is wrong when it is not sends them looking in the wrong place.
+**The messages must differ, and the empty-family report must read as anomalous.**
+"Unknown to the schema" and "known, but absent from this file" are different
+mistakes; telling someone their spelling is wrong when it is not sends them
+looking in the wrong place. And since a warning is now carrying the whole weight
+of the design's answer to the silent-nothing fear, it has to be conspicuous:
+
+```
+==> family "tokens" selected, but there are no tokens in secrets/release.yaml
+```
+
+not a tally. `0 selected` at the end of a list is not a report anyone reads.
