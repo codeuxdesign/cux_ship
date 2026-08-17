@@ -4,7 +4,7 @@ description: >-
   publish the store listing, and promote a build a store already holds.
 repository: https://github.com/codeuxdesign/cux_ship
 issue_tracker: https://github.com/codeuxdesign/cux_ship/issues
-version: 2.4.0
+version: 2.3.2
 
 topics:
   - app-store

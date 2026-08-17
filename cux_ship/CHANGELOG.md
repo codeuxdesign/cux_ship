@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.4.0
+## 2.3.2
 
 - **An App Store Connect error that blocks a submission now says where to fix
   it.** "Unable to Add for Review — an Admin must provide information about the
