@@ -198,6 +198,38 @@ OnlySelection resolveOnly(
   return OnlySelection(paths, empty);
 }
 
+/// Families the selection excludes entirely, so they can be withheld whole.
+///
+/// The difference matters for the two families whose materialization *chooses*
+/// between instances: skipping the family avoids `_select`, which refuses to
+/// guess between two keystores. Filtering only at the instance level would make
+/// it refuse on behalf of a child that asked for neither — which is the lockout
+/// that made whole-family withholding necessary in the first place.
+///
+/// Returns null when [only] is null, so "everything" stays distinguishable from
+/// "nothing selected".
+Set<String>? _familiesWithNothingSelected(
+  List<_Credential> credentials,
+  Set<String>? only,
+) {
+  if (only == null) {
+    return null;
+  }
+  final held = <String>{};
+  for (final credential in credentials) {
+    final family = credential.instance.isEmpty
+        ? credential.path
+        : credential.path.substring(
+            0,
+            credential.path.length - credential.instance.length - 1,
+          );
+    if (!only.any((p) => p == family || _familyOf(p) == family)) {
+      held.add(family);
+    }
+  }
+  return held;
+}
+
 /// `tokens.marks` -> `tokens`; `android.play_service_account` -> itself.
 String _familyOf(String path) {
   final cut = path.lastIndexOf('.');

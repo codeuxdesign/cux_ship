@@ -1342,6 +1342,7 @@ Future<int> runKeychainExec({
   bool strictExpiry = false,
   Set<String>? profiles,
   String? apiKey,
+  List<String> only = const [],
 }) async {
   if (command.isEmpty) {
     throw ProjectException(
@@ -1374,10 +1375,35 @@ Future<int> runKeychainExec({
   // certificates-already-present path and never calls `loadSecrets` at all. A
   // withholding that only happened during loading would achieve nothing there
   // while every line of it read as correct.
-  final withheld = {
-    'android.keystores',
-    'android.play_service_account',
-    if (apiKey == null) 'apple.api_keys',
+  // **The default is nothing.** The child gets the keychain this command makes
+  // and whatever `--only` names, because what a build script consumes is
+  // knowledge only the call site has: consumption happens below this command's
+  // argv, sometimes four layers down inside a function, sometimes with the
+  // variable name in a `printf` format string. Three attempts at a useful
+  // default each needed more structure than the last, because a default has to
+  // satisfy every consumer and is therefore a union — and a union is wrong for
+  // each of them individually. See docs/design/only-selector.md.
+  //
+  // Read without decrypting: `env`, `kind` and the instance names are cleartext
+  // by design, which is what lets the nested case filter an environment it did
+  // not place and never called `loadSecrets` for.
+  final byCredential = variablesByCredential(secretsFile);
+  final selection = resolveOnly(
+    only,
+    available: byCredential.keys.toSet(),
+    at: secretsFile.path,
+  );
+  for (final family in selection.emptyFamilies) {
+    stderr.writeln(
+      '==> family "$family" selected, but there are no $family in '
+      '${secretsFile.path}',
+    );
+  }
+  final selectedVariables = {
+    for (final path in selection.paths) ...byCredential[path]!,
+  };
+  final everyCredentialVariable = {
+    for (final variables in byCredential.values) ...variables,
   };
 
   LoadedSecrets? secrets;
@@ -1409,29 +1435,13 @@ Future<int> runKeychainExec({
       //   apple.api_keys             signing needs no App Store key, and a
       //                              build step may deliberately hold none.
       //                              --api-key asks for it.
-      withhold: withheld,
+      only: selection.paths,
     );
     environment = secrets.environment;
     source = secretsFile.path;
     for (final note in secrets.unresolved) {
       stderr.writeln('==> not chosen: $note');
     }
-  }
-
-  // Whatever built it, the withheld variables leave. Reported when one was
-  // actually there, because a credential removed from a child's environment is
-  // a thing the operator should see rather than deduce — and because seeing it
-  // is what tells them the outer wrapper was handing it over.
-  final removed = <String>[];
-  for (final family in withheld) {
-    for (final name in familyVariables[family]!) {
-      if (environment.remove(name) != null) {
-        removed.add(name);
-      }
-    }
-  }
-  if (removed.isNotEmpty) {
-    stderr.writeln('==> removed from the environment: ${removed.join(', ')}');
   }
 
   try {
@@ -1491,6 +1501,41 @@ Future<int> runKeychainExec({
         strictExpiry: strictExpiry,
         selected: profiles,
       );
+
+      // **Now**, and not before: this command reads certificates and profiles
+      // out of the environment to do its own work, so the strip has to come
+      // after that work rather than before it.
+      //
+      // Removed rather than merely not placed, and that distinction is the
+      // whole of it. Under `secrets exec -- keychain exec -- build` the outer
+      // command has already put everything in place, so a filter that only
+      // declined to place would achieve nothing while reading as correct at
+      // every line. That is what 1.9.0 got wrong and 1.9.1 fixed.
+      final removed = <String>[];
+      for (final name in everyCredentialVariable.difference(
+        selectedVariables,
+      )) {
+        if (environment.remove(name) != null) {
+          removed.add(name);
+        }
+      }
+      // The master key to the whole file, and not a credential *in* it — so no
+      // selector can name it and no default covers it. Stripped
+      // unconditionally: nothing outside cux_ship reads it, and the one
+      // composition that did — a nested `secrets exec` inside this child —
+      // is replaced by running the two as siblings. A child that could decrypt
+      // the file would make the guarantee this command exists for hollow,
+      // since a key to the file that holds `apple.api_keys` can mint the very
+      // credential the archive is meant not to hold.
+      for (final name in const ['SOPS_AGE_KEY', 'SOPS_AGE_KEY_FILE']) {
+        if (environment.remove(name) != null) {
+          removed.add(name);
+        }
+      }
+      if (removed.isNotEmpty) {
+        removed.sort();
+        stderr.writeln('==> not passed to the child: ${removed.join(', ')}');
+      }
 
       environment['APPLE_KEYCHAIN'] = session.path;
       stderr.writeln('==> APPLE_KEYCHAIN=${session.path}');

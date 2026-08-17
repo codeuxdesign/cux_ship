@@ -860,13 +860,25 @@ class _SecretsExecCommand extends Command<void> {
             'than one — an upload key is scoped to one app, while reading the '
             'developer portal needs an Admin key.',
       );
-    argParser.addOption(
-      'file',
-      help:
-          'The sops-encrypted file to decrypt. Relative paths resolve against '
-          'the repository root.',
-      defaultsTo: 'secrets/release.yaml',
-    );
+    argParser
+      ..addOption(
+        'file',
+        help:
+            'The sops-encrypted file to decrypt. Relative paths resolve '
+            'against the repository root.',
+        defaultsTo: 'secrets/release.yaml',
+      )
+      ..addMultiOption(
+        'only',
+        help:
+            'The credentials this command\'s child consumes, as '
+            'family[.instance] — "tokens", "tokens.marks", '
+            '"apple.certificates.distribution". Omitted, every credential in '
+            'the file is placed, which is this command\'s default because a '
+            'general-purpose wrapper that hands over nothing is inert. '
+            '(`keychain exec` defaults the other way: it places nothing but '
+            'the keychain.)',
+      );
   }
 
   @override
@@ -897,6 +909,7 @@ class _SecretsExecCommand extends Command<void> {
         command: argResults!.rest,
         keystore: argResults!.option('keystore'),
         apiKey: argResults!.option('api-key'),
+        only: argResults!.multiOption('only'),
       );
     } on ProjectException catch (e) {
       stderr.writeln('cux_ship secrets exec: ${e.message}');
@@ -1182,6 +1195,17 @@ class _KeychainExecCommand extends Command<void> {
             'belonging to another account is refused here rather than '
             'surfacing later as a profile mismatch.',
       )
+      ..addMultiOption(
+        'only',
+        help:
+            'The credentials the child consumes, beyond the keychain itself, '
+            'as family[.instance] — "tokens.marks", '
+            '"ssh_keys.github_deploy". Omitted, the child gets APPLE_KEYCHAIN '
+            'and nothing else: no tokens, no keys, and not the sops identity. '
+            'This command wraps a build script, so what that script consumes '
+            'is knowledge only the call site has — it happens below this '
+            "command's arguments, sometimes several layers down.",
+      )
       ..addOption(
         'api-key',
         help:
@@ -1245,6 +1269,7 @@ class _KeychainExecCommand extends Command<void> {
         command: argResults!.rest,
         expectTeam: argResults!.option('team') ?? project.developmentTeam,
         strictExpiry: argResults!.flag('strict-expiry'),
+        only: argResults!.multiOption('only'),
         // Null rather than an empty set when none were named: "install
         // everything, fail on nothing" and "install exactly these" are
         // different instructions, and an empty set is the first.

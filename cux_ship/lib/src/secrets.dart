@@ -705,12 +705,17 @@ final withholdableFamilies = familyVariables.keys.toSet();
 /// — which is what happened to the first consumer, on the first run.
 ///
 /// So the choice is the caller's, and stays fatal by default.
+/// [only] is the credential paths the caller says its child consumes, or null
+/// for everything. Given, it also withholds whole any family with no selected
+/// member — which is what stops `_select` refusing to choose between two
+/// keystores on behalf of a child that wants neither.
 LoadedSecrets loadSecrets({
   required String repoRoot,
   required File secretsFile,
   String? keystore,
   String? apiKey,
   Set<String> withhold = const {},
+  Set<String>? only,
 }) {
   // A name that withholds nothing because it is misspelled would put a
   // credential in the environment that the caller believes it excluded — and
@@ -736,6 +741,8 @@ LoadedSecrets loadSecrets({
       keystore: keystore,
       apiKey: apiKey,
       withhold: withhold,
+      unnamed: _familiesWithNothingSelected(values, only),
+      only: only,
     );
   } on Object {
     work.deleteSync(recursive: true);
@@ -884,7 +891,13 @@ LoadedSecrets _materialize(
   String? keystore,
   String? apiKey,
   Set<String> withhold = const {},
+  Set<String>? unnamed,
+  Set<String>? only,
 }) {
+  // Null means "everything", which is `secrets exec`'s default. A set means the
+  // caller named what its child consumes, and nothing else is placed — see
+  // docs/design/only-selector.md.
+  bool wants(String path) => only == null || only.contains(path);
   final environment = Map<String, String>.from(Platform.environment);
   final loaded = <String>[];
   final unresolved = <String>[];
@@ -894,8 +907,17 @@ LoadedSecrets _materialize(
 
   /// Whether [family] was withheld, recording why for the caller to print.
   bool held(String family, String because) {
-    if (!withhold.contains(family)) {
+    // Two ways a family is not placed, and they are not the same fact. The
+    // caller withheld it explicitly, or the caller named what it wanted and
+    // this was not among it. Reporting the first reason for the second would
+    // tell an operator the command cannot use a credential when the truth is
+    // they did not ask for it.
+    final byOmission = unnamed?.contains(family) ?? false;
+    if (!withhold.contains(family) && !byOmission) {
       return false;
+    }
+    if (byOmission) {
+      because = 'not named in --only';
     }
     final held = credentials
         .where((c) => c.path == family || c.path.startsWith('$family.'))
@@ -1034,7 +1056,9 @@ LoadedSecrets _materialize(
   // certificate, notarizes with Developer ID and signs a .pkg with the
   // installer certificate. The names are a closed set, so they are enumerable
   // and collision-free by construction rather than by rule.
-  for (final certificate in under('apple.certificates')) {
+  for (final certificate in under(
+    'apple.certificates',
+  ).where((c) => wants(c.path))) {
     final file = _writeBase64(
       work,
       '${certificate.instance}.p12',
@@ -1047,7 +1071,7 @@ LoadedSecrets _materialize(
     loaded.add(certificate.path);
   }
 
-  for (final profile in under('apple.profiles')) {
+  for (final profile in under('apple.profiles').where((c) => wants(c.path))) {
     // Extension deliberately not derived from the name: a macOS profile is a
     // .provisionprofile and an iOS one a .mobileprovision, and Xcode will not
     // match one filed under the other. Reading which it is needs `security cms`
@@ -1069,14 +1093,14 @@ LoadedSecrets _materialize(
   // Declared rather than minted, so nothing invents a variable name from an
   // instance name, and a name this tool already exports cannot be quietly
   // overwritten by a token that happens to share it.
-  for (final token in under('tokens')) {
+  for (final token in under('tokens').where((c) => wants(c.path))) {
     final name = token.fields['env']!;
     _checkExportable(name, token.path, environment);
     environment[name] = token.fields['value']!;
     loaded.add(token.path);
   }
 
-  for (final key in under('ssh_keys')) {
+  for (final key in under('ssh_keys').where((c) => wants(c.path))) {
     final name = key.fields['env']!;
     _checkExportable(name, key.path, environment);
     final file = _writeBase64(
@@ -1239,6 +1263,7 @@ Future<int> runSecretsExec({
   required List<String> command,
   String? keystore,
   String? apiKey,
+  List<String> only = const [],
 }) async {
   if (command.isEmpty) {
     throw ProjectException(
@@ -1247,11 +1272,48 @@ Future<int> runSecretsExec({
     );
   }
 
+  // Omitted means everything, which is this command's default: a
+  // general-purpose wrapper that hands over nothing is inert. `keychain exec`
+  // defaults the other way, because it exists to sign and its child's needs
+  // are the call site's to declare.
+  OnlySelection? selection;
+  if (only.isNotEmpty) {
+    selection = resolveOnly(
+      only,
+      available: variablesByCredential(secretsFile).keys.toSet(),
+      at: secretsFile.path,
+    );
+    for (final family in selection.emptyFamilies) {
+      stderr.writeln(
+        '==> family "$family" selected, but there are no $family in '
+        '${secretsFile.path}',
+      );
+    }
+    // The one absence this cannot make loud. A missing Android keystore does
+    // not fail as "you forgot the keystore" — Gradle falls through to the
+    // debug signing config and produces an artifact only the store rejects,
+    // after a full upload. That is why ambiguous keystore selection is fatal
+    // rather than guessed, and naming a subset that omits one deserves a word
+    // rather than obedience.
+    final keystores = variablesByCredential(
+      secretsFile,
+    ).keys.where((p) => p.startsWith('android.keystores.'));
+    if (keystores.isNotEmpty &&
+        !selection.paths.any((p) => p.startsWith('android.keystores.'))) {
+      stderr.writeln(
+        '==> no keystore selected, and this file holds '
+        '${keystores.length}. An Android build without one does not fail — '
+        'it signs with the debug key.',
+      );
+    }
+  }
+
   final secrets = loadSecrets(
     repoRoot: repoRoot,
     secretsFile: secretsFile,
     keystore: keystore,
     apiKey: apiKey,
+    only: selection?.paths,
   );
   try {
     // To stderr, so `cux_ship secrets exec -- env | grep …` pipes the child's
