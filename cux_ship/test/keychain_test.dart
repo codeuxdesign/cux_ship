@@ -132,6 +132,30 @@ void main() {
       );
     });
 
+    // What the extraction now actually produces. `json` was dropped after
+    // `plutil -extract Platform json` was measured exiting 1 with empty stderr
+    // on a macos-15 runner — the second failure of `-extract … json` on that
+    // OS, after `DeveloperCertificates`, which points at the format rather than
+    // the field. These are the plist forms of the two cases above.
+    test('the xml1 form the extraction now asks for is understood', () {
+      expect(
+        profileFactsFrom({
+          'UUID': 'ABC-123',
+          'Platform':
+              '<array>\n\t<string>iOS</string>\n\t<string>xrOS</string>\n'
+              '\t<string>visionOS</string>\n</array>',
+        }, 'ios_appstore.profile').platform,
+        ProfilePlatform.ios,
+      );
+      expect(
+        profileFactsFrom({
+          'UUID': 'ABC-123',
+          'Platform': '<array>\n\t<string>OSX</string>\n</array>',
+        }, 'macos.profile').platform,
+        ProfilePlatform.macos,
+      );
+    });
+
     // The bug that broke every profile on both platforms: `plutil -extract
     // Platform raw` prints an array's *element count*, so an iOS profile came
     // back as "3" and a macOS one as "1". Refused with the reason rather than

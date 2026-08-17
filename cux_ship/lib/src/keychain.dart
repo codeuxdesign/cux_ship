@@ -269,20 +269,40 @@ ProfileDecision decideProfile({
 
 /// The platforms named by a profile's `Platform` key, lowercased.
 ///
-/// **`Platform` is a set, not a scalar, and it is extracted as json for a
-/// reason worth stating.** `plutil -extract Platform raw` prints an array's
-/// *element count* — a modern iOS profile says `[iOS, xrOS, visionOS]` and so
-/// prints `3`, while a macOS one says `[OSX]` and prints `1`. Neither is a
-/// platform name, and a first version of this read those numbers and refused
-/// every real profile on both platforms.
+/// **`Platform` is a set, not a scalar**, and `plutil -extract Platform raw`
+/// prints an array's *element count* — a modern iOS profile says
+/// `[iOS, xrOS, visionOS]` and so prints `3`, a macOS one says `[OSX]` and
+/// prints `1`. Neither is a platform name, and a first version read those
+/// numbers and refused every real profile on both platforms. So `raw` is out.
 ///
-/// So a value that is not a list is refused with the reason, rather than being
-/// split on whitespace and quietly yielding a set containing "3".
+/// **`json` is out too, and that was measured rather than reasoned.** On
+/// `macos-15`, `plutil -extract Platform json` exits 1 with empty stderr —
+/// not an absent key, not a malformed profile, a subprocess that fails and
+/// says nothing. `-extract … json` has now failed twice on that runner: here,
+/// on an array of *strings* which JSON represents perfectly well, and on
+/// `DeveloperCertificates`, an array of `<data>` which it refuses outright.
+/// Two independent failures of one format points at the format.
+///
+/// So `xml1`, which works on both macOS versions and needs no more parsing
+/// than a `<string>` scan. Both forms are accepted here: the plist is what the
+/// extraction now asks for, and the JSON array is what a hand-written fixture
+/// reaches for and what older callers produced.
 Set<String> _platformsFrom(String? value, String at) {
   final text = value?.trim() ?? '';
   if (text.isEmpty) {
     return const {};
   }
+
+  // The plist form: <array><string>iOS</string>…</array>.
+  if (text.contains('<string>')) {
+    return {
+      for (final match in RegExp(
+        r'<string>([\s\S]*?)</string>',
+      ).allMatches(text))
+        match.group(1)!.trim().toLowerCase(),
+    }..removeWhere((p) => p.isEmpty);
+  }
+
   Object? decoded;
   try {
     decoded = jsonDecode(text);
@@ -293,7 +313,7 @@ Set<String> _platformsFrom(String? value, String at) {
     throw ProjectException(
       '$at: Platform came back as "$text" rather than a list.\n'
       "`plutil -extract Platform raw` prints an array's element count rather "
-      'than its contents, so it has to be extracted as json.',
+      'than its contents, so it is extracted as xml1.',
     );
   }
   return {for (final entry in decoded) '$entry'.toLowerCase()};
@@ -1266,14 +1286,19 @@ ProfileFacts _readProfile(String path) {
     // JSON: `plutil -convert json` refuses any plist containing a date, and
     // every real profile carries ExpirationDate. A fixture written without one
     // would have passed.
-    // `raw` for the scalars, `json` for `Platform` — because `raw` on an array
-    // prints its element count. json works here and not on the whole payload
-    // because the extracted subtree is a list of strings; converting the entire
-    // profile would hit ExpirationDate and be refused.
+    // `raw` for the scalars, `xml1` for `Platform` — because `raw` on an array
+    // prints its element count, and `json` fails on `macos-15`: exit 1, empty
+    // stderr, on an array of strings JSON represents perfectly well. That is
+    // the second `-extract … json` failure on that runner, after
+    // `DeveloperCertificates`, so the format is the common factor rather than
+    // the field. `xml1` works on both macOS versions.
+    //
+    // The scalars stay on `raw`, which has never failed and is unambiguous for
+    // a scalar. Only `json` has broken.
     const format = {
       'UUID': 'raw',
       'Name': 'raw',
-      'Platform': 'json',
+      'Platform': 'xml1',
       'ExpirationDate': 'raw',
     };
     final extracted = <String, String>{};
