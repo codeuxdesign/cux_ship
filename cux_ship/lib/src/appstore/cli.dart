@@ -316,7 +316,8 @@ Future<void> runAsc(
     stdout.writeln(
       '==> ${metadata.locales.length} locale(s), '
       '${metadata.categories.length} categor(y|ies)'
-      '${metadata.ageRating == null ? '' : ', age rating'} validated',
+      '${metadata.ageRating == null ? '' : ', age rating'}'
+      '${metadata.reviewNotes == null ? '' : ', review notes'} validated',
     );
   }
 
@@ -549,9 +550,11 @@ Future<void> runAsc(
       // The version-scoped half needs a version to hang off. Created when
       // absent, because a listing push before the first release is exactly
       // when there is nothing there yet.
-      final needsVersion = metadata.locales.any(
-        (l) => l.version.isNotEmpty || l.screenshots.isNotEmpty,
-      );
+      final needsVersion =
+          metadata.reviewNotes != null ||
+          metadata.locales.any(
+            (l) => l.version.isNotEmpty || l.screenshots.isNotEmpty,
+          );
       if (needsVersion) {
         if (versionName == null) {
           fail(
@@ -575,6 +578,12 @@ Future<void> runAsc(
             await store.writeVersionAttributes(version, {
               'copyright': copyright,
             });
+          }
+
+          final reviewNotes = metadata.reviewNotes;
+          if (reviewNotes != null) {
+            stdout.writeln('==> review notes');
+            await store.writeReviewDetails(version, reviewNotes);
           }
 
           for (final localeMetadata in metadata.locales) {

@@ -182,6 +182,57 @@ class AppStoreMetadata {
 
   /// `ageRatingDeclarations` attributes, straight from age-rating.json.
   Map<String, Object?>? ageRating;
+
+  /// `appStoreReviewDetails.notes`, from review-notes.md.
+  ///
+  /// What the reviewer is told about testing an app they have no data for.
+  /// Everything after [reviewNotesMarker] is repo-internal and never reaches
+  /// Apple — see [readReviewNotes].
+  String? reviewNotes;
+}
+
+/// Where the reviewer-facing half of `review-notes.md` stops.
+///
+/// **Structural rather than remembered.** A review-notes file collects
+/// checklists and reasoning belonging to whoever maintains it, and uploading the
+/// file wholesale sends Apple an internal to-do list. A marker means the split
+/// cannot be forgotten by the next person to add something under it, and it is
+/// an HTML comment so it is invisible wherever the file is rendered.
+const reviewNotesMarker = '<!-- not for Apple -->';
+
+/// What Apple accepts in `appStoreReviewDetails.notes`.
+const reviewNotesLimit = 4000;
+
+/// The reviewer-facing half of a review-notes file, as plain text.
+///
+/// **Apple's field is plain text, so the markdown has to go.** A reviewer
+/// seeing literal `##` and `**` reads carelessness in the one document whose
+/// job is to argue the opposite. The transformation is deliberately small and
+/// predictable rather than a markdown renderer: heading hashes, bold markers,
+/// and the angle brackets that stop a bare URL being auto-linked.
+///
+/// Length is checked here rather than at upload, because a note over the limit
+/// is refused *after* an archive has been transferred, and this is the package
+/// that exists to find that sort of thing without a network.
+String readReviewNotes(File file, {String label = 'review-notes.md'}) {
+  final whole = file.readAsStringSync();
+  final end = whole.indexOf(reviewNotesMarker);
+  final facing = end < 0 ? whole : whole.substring(0, end);
+
+  final text = facing
+      .replaceAll(RegExp(r'^#{1,6}\s+', multiLine: true), '')
+      .replaceAll('**', '')
+      .replaceAllMapped(RegExp(r'<(https?://[^>]+)>'), (m) => m.group(1)!)
+      .trim();
+
+  if (text.isEmpty) {
+    throw MetadataException(
+      '$label has nothing above $reviewNotesMarker — the whole file is marked '
+      'as not for Apple',
+    );
+  }
+  _checkLength('info', label, text, reviewNotesLimit);
+  return text;
 }
 
 String _basename(String path) => path.split(Platform.pathSeparator).last;
@@ -265,6 +316,11 @@ AppStoreMetadata loadMetadata(String path) {
     metadata.ageRating = _loadAgeRating(ageRating);
   }
 
+  final reviewNotes = File('${root.path}${separator}review-notes.md');
+  if (reviewNotes.existsSync()) {
+    metadata.reviewNotes = readReviewNotes(reviewNotes);
+  }
+
   final listings = Directory('${root.path}${separator}listings');
   if (listings.existsSync()) {
     final localeDirs = listings.listSync().whereType<Directory>().toList()
@@ -280,6 +336,7 @@ AppStoreMetadata loadMetadata(String path) {
   if (metadata.categories.isEmpty &&
       metadata.locales.isEmpty &&
       metadata.ageRating == null &&
+      metadata.reviewNotes == null &&
       metadata.contentRights == null &&
       metadata.copyright == null) {
     throw MetadataException(

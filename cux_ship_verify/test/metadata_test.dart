@@ -312,6 +312,74 @@ void main() {
     });
   });
 
+  group('review-notes.md', () {
+    test('stops at the marker, so an internal checklist stays internal', () {
+      writeValidTree();
+      write('review-notes.md', '''
+# Notes for review
+
+Start with the sample at <https://example.com/sample.zip>.
+
+$reviewNotesMarker
+
+- [ ] ask somebody whether this reads well
+''');
+      final notes = load().reviewNotes!;
+      expect(notes, contains('Start with the sample'));
+      // The half that would embarrass us. A reviewer reading our to-do list is
+      // the failure the marker exists to make structural rather than remembered.
+      expect(notes, isNot(contains('ask somebody')));
+      expect(notes, isNot(contains(reviewNotesMarker)));
+    });
+
+    test('is plain text, because Apple renders none of the markdown', () {
+      writeValidTree();
+      write('review-notes.md', '''
+# Heading
+
+**Bold** and a link at <https://example.com/x.zip>.
+''');
+      final notes = load().reviewNotes!;
+      expect(notes, startsWith('Heading'));
+      expect(notes, contains('Bold and a link at https://example.com/x.zip.'));
+      expect(notes, isNot(contains('**')));
+      expect(notes, isNot(contains('<https')));
+    });
+
+    test('a file with no marker is all reviewer-facing', () {
+      writeValidTree();
+      write('review-notes.md', 'Everything here is for Apple.');
+      expect(load().reviewNotes, 'Everything here is for Apple.');
+    });
+
+    test('over the limit fails here rather than after an upload', () {
+      writeValidTree();
+      write('review-notes.md', 'x' * (reviewNotesLimit + 1));
+      expect(load, throwsMetadata(contains('review-notes.md')));
+      expect(load, throwsMetadata(contains('$reviewNotesLimit')));
+    });
+
+    test('only the reviewer-facing half counts toward the limit', () {
+      writeValidTree();
+      write(
+        'review-notes.md',
+        '${'x' * 100}\n$reviewNotesMarker\n${'y' * reviewNotesLimit}',
+      );
+      expect(load().reviewNotes, hasLength(100));
+    });
+
+    test('a file that is entirely internal is refused, not silently empty', () {
+      writeValidTree();
+      write('review-notes.md', '$reviewNotesMarker\nall of it is internal');
+      expect(load, throwsMetadata(contains('nothing above')));
+    });
+
+    test('absent is fine — not every project needs one', () {
+      writeValidTree();
+      expect(load().reviewNotes, isNull);
+    });
+  });
+
   group('age-rating.json', () {
     test('loads as attributes', () {
       writeValidTree();

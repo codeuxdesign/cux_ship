@@ -672,6 +672,53 @@ class AppStore {
     );
   }
 
+  /// Pushes what the reviewer is told, which hangs off the version.
+  ///
+  /// **The one piece of the listing whose absence costs a review cycle rather
+  /// than a rejection.** An app with no content of its own opens to an empty
+  /// screen, and a reviewer with no sample data concludes it does nothing —
+  /// which comes back as "we were unable to evaluate your app", days later,
+  /// with nothing to fix.
+  ///
+  /// Created where the version has no review detail yet and patched where it
+  /// has. Apple may then demand contact fields on the create; that error is left
+  /// to speak for itself rather than pre-empted with invented values, because a
+  /// wrong contact is worse than a missing one.
+  Future<void> writeReviewDetails(
+    Map<String, dynamic> version,
+    String notes,
+  ) async {
+    final versionId = _id(version);
+    final existing = await client.get(
+      '/v1/appStoreVersions/$versionId/appStoreReviewDetail',
+    );
+    final data = existing['data'];
+    final describe = 'review notes (${notes.length} characters)';
+
+    if (data is Map<String, dynamic> && data['id'] != null) {
+      await writer.patch('/v1/appStoreReviewDetails/${_id(data)}', {
+        'data': {
+          'type': 'appStoreReviewDetails',
+          'id': _id(data),
+          'attributes': {'notes': notes},
+        },
+      }, describe: describe);
+      return;
+    }
+
+    await writer.post('/v1/appStoreReviewDetails', {
+      'data': {
+        'type': 'appStoreReviewDetails',
+        'attributes': {'notes': notes},
+        'relationships': {
+          'appStoreVersion': {
+            'data': {'type': 'appStoreVersions', 'id': versionId},
+          },
+        },
+      },
+    }, describe: describe);
+  }
+
   // ------------------------------------------------------------- screenshots
 
   /// Replaces one display type's screenshots with the files in [files].

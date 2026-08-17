@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.1.0
+
+- **`appstore upload --metadata` now publishes review notes**, from
+  `review-notes.md` beside `info/` and `listings/`, into
+  `appStoreReviewDetails.notes` on the version.
+
+  **This is the piece of a listing whose absence costs a review cycle rather
+  than a rejection.** An app with no content of its own — anything that needs
+  the user's own files before it shows anything — opens to an empty screen, and
+  a reviewer with no sample data concludes it does nothing. That comes back days
+  later as "we were unable to evaluate your app", with nothing to fix, and it is
+  invisible beforehand because every other part of the listing uploaded fine.
+
+  The notes are created where the version has none and patched where it has
+  some. Apple may demand contact fields on the create; that error is passed
+  through rather than pre-empted with invented values, because a wrong review
+  contact is worse than a missing one.
+
+  Parsing, the marker that keeps internal checklists out of it, and the
+  4000-character check are `cux_ship_verify` 1.8.0 — so `cux_ship verify` fails
+  an over-long note with no network at all.
+
 ## 2.0.0
 
 **The Play service account is passed as a path, not as JSON.** `secrets exec`
