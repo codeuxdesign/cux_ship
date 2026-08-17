@@ -740,6 +740,26 @@ void _verifyIdentity(String keychain, String? expectTeam) {
 }
 
 /// Reads the four fields installing a profile needs.
+/// A profile's own account of itself, for `secrets add profile` to print back.
+///
+/// Lives here rather than in `secrets_add.dart` because reading it needs
+/// `security cms`, and `keychain.dart` is the file that is allowed to know a
+/// Mac exists — `secrets` is the lower layer and imports nothing from here.
+/// Passed in as a callback so the dependency points the right way.
+///
+/// Reporting, not validation: whether the file *is* a profile was already
+/// settled by `identifyArtifact`, which needs no Mac and no subprocess. So this
+/// failing costs a nicer message, not a wrong write.
+List<String> describeProfileForAdd(String path) {
+  final facts = _readProfile(path);
+  return [
+    '${facts.name} — ${facts.platform.name}, uuid ${facts.uuid}',
+    if (facts.expires != null)
+      'expires ${facts.expires!.toIso8601String().split('T').first}'
+          '${certificateExpiryNote(facts.daysLeft(DateTime.now()))}',
+  ];
+}
+
 ProfileFacts _readProfile(String path) {
   // Bytes rather than a decoded string: this is a CMS payload and nothing has
   // promised it is UTF-8, and it is about to be handed straight back to a tool

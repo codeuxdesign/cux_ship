@@ -25,10 +25,13 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:path/path.dart' as p;
 import 'package:yaml/yaml.dart';
 
 import 'placed.dart';
 import 'project.dart';
+
+part 'secrets_add.dart';
 
 /// What the file may contain, declared once.
 ///

@@ -2,7 +2,7 @@
 
 // Publishes a signed .ipa, the App Store listing, or both, to App Store Connect.
 //
-//   cux_ship appstore upload --ipa dist/ios/x.ipa --bundle-id design.codeux.holdthewheel \
+//   cux_ship appstore upload --artifact dist/ios/x.ipa --bundle-id design.codeux.holdthewheel \
 //     --build-number 12 --version-name 1.0.0 [--dry-run]
 //
 // A library rather than an executable: the `cux_ship` package wires [AscCommand]
@@ -38,7 +38,7 @@
 // `appstore promote` is how the App Store is reached, and builds nothing: it
 // points an App Store version at a build TestFlight already holds and submits it
 // for review, so what ships is the identical binary testers ran rather than a
-// rebuild of the same commit. It takes no --ipa, which is the whole point, and
+// rebuild of the same commit. It takes no --artifact, which is the whole point, and
 // the CLI now enforces that by construction rather than by a validation error.
 //
 // `appstore builds` and `appstore versions` are the read side, and the only way
@@ -74,7 +74,7 @@ enum AscCommand {
   versions('versions'),
   screenshotTypes('screenshot-types'),
   buildNumber('build-number'),
-  awaitBuild('await'),
+  awaitBuild('wait'),
   signing('signing');
 
   const AscCommand(this.name);
@@ -175,7 +175,17 @@ ArgParser buildAscParser(AscCommand cmd) {
   switch (cmd) {
     case AscCommand.upload:
       parser
-        ..addOption('ipa', help: 'Path to the signed .ipa (or .pkg for macos).')
+        // Named for what it is rather than for one platform's extension.
+        // `--platform macos` is first-class here, so a macOS release handing
+        // its .pkg to a flag called `--ipa` read as though macOS had been
+        // bolted onto an iOS-shaped command — and `--pkg`, which is what
+        // anyone would try first, failed with "no such option". Both spellings
+        // are accepted, so neither platform's users need the other's.
+        ..addOption(
+          'artifact',
+          aliases: ['ipa', 'pkg'],
+          help: 'Path to the signed .ipa (ios) or .pkg (macos).',
+        )
         ..addOption(
           'build-number',
           help: 'CFBundleVersion; verified against what Apple reports.',
@@ -320,7 +330,7 @@ Future<void> runAsc(
   // Inference applies only where it makes sense. An upload publishes the
   // listing when there is one to publish; a promote never does, so the
   // metadata default is not offered to it.
-  final ipaPath = opt('ipa');
+  final ipaPath = opt('artifact');
   final metadataPath = cmd == AscCommand.upload
       ? (opt('metadata') ?? defaults.metadata)
       : null;
@@ -328,7 +338,7 @@ Future<void> runAsc(
   final reads = cmd.isRead;
 
   if (cmd == AscCommand.upload && ipaPath == null && metadataPath == null) {
-    fail('nothing to do — pass --ipa, --metadata, or both');
+    fail('nothing to do — pass --artifact, --metadata, or both');
   }
 
   final versionName = opt('version-name') ?? defaults.versionName;
@@ -517,9 +527,26 @@ Future<void> runAsc(
       return;
     }
     if (cmd == AscCommand.awaitBuild) {
-      final buildNumber = args['build-number'] as String?;
+      // Positional, because it is required anyway and `wait 2132` is what the
+      // command is for. `--build-number` still works: the composition this
+      // exists to serve is `appstore wait $(cux_ship appstore build-number)`,
+      // and both spellings read the same there.
+      final positional = args.rest.isEmpty ? null : args.rest.first;
+      final buildNumber = positional ?? args['build-number'] as String?;
       if (buildNumber == null || buildNumber.isEmpty) {
-        fail('--build-number is required. See its help for why.');
+        fail(
+          'which build? Pass it as `appstore wait <build-number>`. '
+          'Deliberately not defaulted to the newest: the point of waiting from '
+          'another machine is to wait for a *specific* build, and "newest" '
+          "would succeed on somebody else's upload.",
+        );
+      }
+      final flagged = args['build-number'] as String?;
+      if (positional != null && flagged != null) {
+        fail(
+          'the build number was given twice, as "$positional" and as '
+          '"$flagged" — pass it once.',
+        );
       }
       await store.awaitProcessing(
         app,

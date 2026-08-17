@@ -424,8 +424,10 @@ class _FlattenCommand extends Command<void> {
 
 class _SecretsCommand extends Command<void> {
   _SecretsCommand() {
+    addSubcommand(_SecretsAddCommand());
+    addSubcommand(_SecretsRemoveCommand());
     addSubcommand(_SecretsExecCommand());
-    addSubcommand(_SecretsKeysCommand());
+    addSubcommand(_SecretsListCommand());
     addSubcommand(_SecretsPlaceCommand());
     addSubcommand(_SecretsCleanCommand());
     addSubcommand(_SecretsPackCommand());
@@ -437,6 +439,233 @@ class _SecretsCommand extends Command<void> {
   @override
   String get description =>
       'Credentials, and the only part of cux_ship that knows sops exists.';
+}
+
+/// `secrets add <kind> <name> <file>`.
+///
+/// Positional rather than flagged, and the same shape for every kind: a human
+/// names a file and an instance, and the tool works out the schema path, the
+/// base64, the JSON quoting and everything readable back out of the artifact.
+/// `--p12`/`--p8`/`--file` were the trivia this exists to remove.
+///
+/// The shape is not perfectly uniform — a token has no file, `play-account` has
+/// no name — and that is said in the help rather than left to be discovered.
+class _SecretsAddCommand extends Command<void> {
+  _SecretsAddCommand() {
+    argParser
+      ..addOption(
+        'file',
+        help: 'The sops-encrypted file to write into.',
+        defaultsTo: 'secrets/release.yaml',
+      )
+      ..addOption(
+        'env',
+        help:
+            'The variable this is exported as. Required for token and ssh-key, '
+            'which are declared rather than minted so a typo stays a typo.',
+      )
+      ..addOption(
+        'issuer-id',
+        help: 'For an api-key: the issuer, when the key is a team one.',
+      )
+      ..addOption(
+        'password-file',
+        help:
+            'File holding the password that opens a .p12 or keystore. Read '
+            'from a file rather than an argument, because an argument is '
+            'visible to every `ps` on the machine.',
+      )
+      ..addOption(
+        'value-file',
+        help: 'For a token: the file holding its value. Otherwise read stdin.',
+      )
+      ..addFlag(
+        'replace',
+        negatable: false,
+        help:
+            'Rotate an existing credential. Without this, adding over one that '
+            'exists is refused — silently replacing a signing key is worse '
+            'than any partial write.',
+      );
+  }
+
+  @override
+  String get name => 'add';
+
+  @override
+  String get description =>
+      'Put a credential into the secrets file: '
+      '${addKindNames.join(', ')}.\n'
+      'Usage: secrets add <kind> <name> <file>, where each applies — a token '
+      'takes no file (its value comes from stdin or --value-file), and '
+      'play-account takes no name.';
+
+  @override
+  Future<void> run() async {
+    final project = _project(this);
+    final rest = argResults!.rest;
+    if (rest.isEmpty) {
+      throw UsageException('which kind? ${addKindNames.join(', ')}', usage);
+    }
+    final kindName = rest.first;
+    final kind = addKinds[kindName];
+    if (kind == null) {
+      throw UsageException(
+        'no such kind: $kindName — there is ${addKindNames.join(', ')}',
+        usage,
+      );
+    }
+
+    // A singleton has no name, so its file is the first positional after the
+    // kind; everything else takes a name then a file.
+    final instance = kind.singleton ? '' : (rest.length > 1 ? rest[1] : '');
+    final fileArg = kind.singleton
+        ? (rest.length > 1 ? rest[1] : null)
+        : (rest.length > 2 ? rest[2] : null);
+
+    if (!kind.singleton && instance.isEmpty) {
+      throw UsageException('what should this $kindName be called?', usage);
+    }
+    // Two positionals, exactly one of which should exist on disk. Catching the
+    // swap here means the memorable order does not have to be enforced by
+    // syntax.
+    if (fileArg != null &&
+        !File(fileArg).existsSync() &&
+        File(instance).existsSync()) {
+      throw UsageException(
+        'those look swapped — "$instance" is a file and "$fileArg" is not.\n'
+        'The order is: secrets add $kindName <name> <file>',
+        usage,
+      );
+    }
+
+    final option = argResults!.option('file')!;
+    final secretsFile = File(
+      p.isAbsolute(option) ? option : p.join(project.root, option),
+    );
+
+    try {
+      final secret = _readSecretInput(
+        passwordFile: argResults!.option('password-file'),
+        valueFile: argResults!.option('value-file'),
+        needed: kind.needsSecretInput,
+      );
+      final result = await addCredential(
+        repoRoot: project.root,
+        secretsFile: secretsFile,
+        kindName: kindName,
+        instance: instance,
+        filePath: fileArg,
+        env: argResults!.option('env'),
+        issuerId: argResults!.option('issuer-id'),
+        password: secret,
+        replace: argResults!.flag('replace'),
+        describeProfile: describeProfileForAdd,
+      );
+      stdout.writeln(
+        '${result.replaced ? 'replaced' : 'added'} ${result.path}  '
+        '(${result.fields.join(', ')})',
+      );
+      for (final note in result.notes) {
+        stdout.writeln('  $note');
+      }
+    } on ProjectException catch (e) {
+      stderr.writeln('cux_ship secrets add: ${e.message}');
+      exitCode = 1;
+    }
+  }
+}
+
+/// Reads a password or token value without it ever being an argument.
+///
+/// A command-line argument is visible in `ps` to every user on the machine, and
+/// the value here is the credential itself.
+String? _readSecretInput({
+  required String? passwordFile,
+  required String? valueFile,
+  required bool needed,
+}) {
+  final path = passwordFile ?? valueFile;
+  if (path != null) {
+    final file = File(path);
+    if (!file.existsSync()) {
+      throw ProjectException('no such file: $path');
+    }
+    // A trailing newline is the classic way to supply a credential that looks
+    // right and authenticates as garbage.
+    return file.readAsStringSync().trim();
+  }
+  if (!needed) {
+    return null;
+  }
+  if (stdin.hasTerminal) {
+    stdout.write('password: ');
+    stdin.echoMode = false;
+    try {
+      final typed = stdin.readLineSync() ?? '';
+      return typed.trim();
+    } finally {
+      stdin.echoMode = true;
+      stdout.writeln();
+    }
+  }
+  return stdin.readLineSync()?.trim();
+}
+
+class _SecretsRemoveCommand extends Command<void> {
+  _SecretsRemoveCommand() {
+    argParser.addOption(
+      'file',
+      help: 'The sops-encrypted file to write into.',
+      defaultsTo: 'secrets/release.yaml',
+    );
+  }
+
+  @override
+  String get name => 'remove';
+
+  @override
+  String get description =>
+      'Retire a credential. Hand-editing sops YAML is the same failure class '
+      'as adding one that way, and it is what people do under pressure having '
+      'just decided something is compromised.';
+
+  @override
+  Future<void> run() async {
+    final project = _project(this);
+    final rest = argResults!.rest;
+    if (rest.isEmpty) {
+      throw UsageException('usage: secrets remove <kind> <name>', usage);
+    }
+    final kindName = rest.first;
+    final kind = addKinds[kindName];
+    if (kind == null) {
+      throw UsageException(
+        'no such kind: $kindName — there is ${addKindNames.join(', ')}',
+        usage,
+      );
+    }
+    if (!kind.singleton && rest.length < 2) {
+      throw UsageException('which $kindName?', usage);
+    }
+
+    final option = argResults!.option('file')!;
+    final secretsFile = File(
+      p.isAbsolute(option) ? option : p.join(project.root, option),
+    );
+    try {
+      final removed = await removeCredential(
+        repoRoot: project.root,
+        secretsFile: secretsFile,
+        kindName: kindName,
+        instance: kind.singleton ? '' : rest[1],
+      );
+      stdout.writeln('removed $removed');
+    } on ProjectException catch (e) {
+      stderr.writeln('cux_ship secrets remove: ${e.message}');
+      exitCode = 1;
+    }
+  }
 }
 
 class _SecretsExecCommand extends Command<void> {
@@ -668,8 +897,8 @@ class _SecretsCleanCommand extends _PlacedCommand {
   }
 }
 
-class _SecretsKeysCommand extends Command<void> {
-  _SecretsKeysCommand() {
+class _SecretsListCommand extends Command<void> {
+  _SecretsListCommand() {
     argParser.addOption(
       'file',
       help:
@@ -680,7 +909,7 @@ class _SecretsKeysCommand extends Command<void> {
   }
 
   @override
-  String get name => 'keys';
+  String get name => 'list';
 
   @override
   String get description =>
@@ -887,6 +1116,13 @@ class _DepsSubcommand extends Command<void> {
 
   @override
   String get name => cmd.name;
+
+  /// `update` re-pins cux_ship's own sources and refuses to run outside a
+  /// cux_ship checkout, so to every consuming project it is a documented way
+  /// to get an error. Hidden rather than removed: the maintainer still needs
+  /// it, and it still works when typed.
+  @override
+  bool get hidden => cmd == DepsCommand.update;
 
   @override
   String get description => switch (cmd) {
