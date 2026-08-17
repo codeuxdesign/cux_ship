@@ -55,7 +55,60 @@ class AscApiException implements Exception {
     for (final detail in details) {
       buffer.write('\n  - $detail');
     }
+    final guidance = guidanceFor(details);
+    if (guidance != null) {
+      buffer.write('\n\n$guidance');
+    }
     return buffer.toString();
+  }
+
+  /// What to do about an error whose own text does not say.
+  ///
+  /// Most of Apple's errors name a field and are actionable as printed. A few
+  /// name a *condition* the API cannot fix, and for those the useful reply is
+  /// not the error text but where the work has to happen. It lives on the
+  /// exception rather than at a call site so it reaches every path that prints
+  /// one.
+  ///
+  /// Public so the suite can hold the matching to a real error string rather
+  /// than to a paraphrase of one.
+  static String? guidanceFor(List<String> details) {
+    final text = details.join('\n').toLowerCase();
+
+    // "Unable to Add for Review — an Admin must provide information about the
+    // app's privacy practices in the App Privacy section."
+    //
+    // This blocks a submission and cannot be answered from here, because **App
+    // Privacy is absent from the App Store Connect API** — not readable, not
+    // writable. Saying so is the point: the natural reading of an API error is
+    // that the caller sent something wrong, and someone will otherwise go
+    // looking for the cux_ship flag that does not exist.
+    //
+    // Checked rather than assumed. Apple's API index enumerates the areas it
+    // automates and privacy is not among them; the `App` resource carries
+    // `appEncryptionDeclarations` and `accessibilityDeclarations` and nothing
+    // for data usage. fastlane cannot do it with an API key either — its
+    // privacy action authenticates with a web session, and its documentation
+    // says the endpoints are not in the official API.
+    if (text.contains('privacy practices') || text.contains('app privacy')) {
+      return 'App Privacy is answered in the web console, not from here:\n'
+          '    App Store Connect > your app > Distribution > App Privacy\n'
+          '\n'
+          '  Two things that decide who can unblock it, and when:\n'
+          '    - An Admin has to do it. A Developer-role account cannot, and '
+          'the error\n'
+          '      does not say so.\n'
+          '    - It is per app rather than per version, so it is answered once '
+          'and then\n'
+          '      only when what the app collects actually changes.\n'
+          '\n'
+          '  cux_ship cannot check this before a submission and will not '
+          'pretend to.\n'
+          '  App Privacy is absent from the App Store Connect API, so nothing '
+          'here can\n'
+          '  read what you declared or warn you that it is incomplete.';
+    }
+    return null;
   }
 }
 

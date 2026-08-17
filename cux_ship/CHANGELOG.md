@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.4.0
+
+- **An App Store Connect error that blocks a submission now says where to fix
+  it.** "Unable to Add for Review — an Admin must provide information about the
+  app's privacy practices in the App Privacy section" stops a release and names
+  no remedy, and the natural reading of an API error is that the caller sent
+  something wrong. The printed failure now adds the console path, that an
+  **Admin** must do it (a Developer-role account cannot, which the error does
+  not say), and that it is per *app* rather than per version.
+
+  It also says plainly that cux_ship cannot check this in advance and will not
+  pretend to. **App Privacy is absent from the App Store Connect API** — not
+  readable, not writable — so nothing here can tell you the section is
+  incomplete before Apple does. That was checked rather than assumed: Apple's
+  API index enumerates the areas it automates and privacy is not among them,
+  the `App` resource carries `appEncryptionDeclarations` and
+  `accessibilityDeclarations` and nothing for data usage, and fastlane's
+  privacy action authenticates with a web session because the endpoints are not
+  in the official API.
+
+  Only this one error is annotated. An error that already names its field is
+  actionable as printed, and a paragraph on every failure trains people to stop
+  reading the paragraph.
+
 ## 2.3.1
 
 - **`Platform` is extracted as `xml1` rather than `json`.** On a `macos-15`
