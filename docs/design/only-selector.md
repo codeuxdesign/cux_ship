@@ -1,60 +1,25 @@
-# `--only`: one selector for which credentials reach a child
+# `--only`: the child gets what you name
 
-Status: **proposed**, not built. Decision taken; open to review of the design.
+Status: **proposed**, not built.
 
-**Backward compatibility is not a constraint on this document.** Three projects
-consume cux_ship, they live next to each other, and all three are migrated by
-the same people who would read this. Nothing here should be shaped by what
-existing call sites happen to say today. Where this breaks them, they change.
-The question is what the right design is from here.
-
-## The problem
-
-Deciding which credentials reach a child process is currently two mechanisms,
-and neither is reachable by a caller.
-
-**One is a static per-family list, hardcoded in `keychain exec`.** It withholds
-`android.keystores`, `android.play_service_account` and — unless `--api-key`
-names one — `apple.api_keys`. The set is a constant in the source. A caller
-cannot see it, cannot extend it, and cannot ask for something different.
-
-**The other is nothing at all.** `secrets exec` places every credential in the
-file into the child's environment. There is no way to say a build does not
-consume one.
-
-The list has never been wrong. It withholds exactly the right three families
-today, and it is tempting to leave it alone on that evidence. The reason not to
-is that **it has already met a family it cannot express**, and that family is
-the one with a live exposure.
-
-### Why tokens broke it
-
-`tokens` is the escape hatch family: a project's own credentials, named by the
-project, exported under variable names the project declares. In one consuming
-repository there are eleven — `marks`, `marks_dashboard`, four
-`review_contact_*`, four `strava_*` — of which an Apple build consumes exactly
-one.
-
-The static list cannot hold them, because its members are compile-time
-constants and token instance names come out of the file at run time. So today
-every token reaches every child, including an Xcode build, whose script phases
-write the entire environment into a log. That is the mechanism by which a Play
-service-account key reached four public CI logs; it is closed for that family
-because the credential became a path, and it is open for tokens because a token
-is a value by definition.
-
-A `--withhold tokens` flag beside the static list would close the exposure and
-leave two mechanisms, one of them already known to be inextensible. The next
-family that does not fit gets a third.
+**Backward compatibility is not a constraint.** Three projects consume cux_ship,
+they sit in adjacent directories, the same people maintain all of them, and
+every call site will be rewritten by hand. Nothing here is shaped by what
+existing invocations happen to say.
 
 ## The design
 
-One flag, on both commands that place credentials:
+**`keychain exec` gives its child the keychain it made, and nothing else.
+Whatever else the child needs, the call site names.**
 
 ```
-secrets exec  --only apple.certificates,tokens.marks -- <command>
-keychain exec --only tokens.marks -- tool/build.sh --release ios
+keychain exec --profile ios_appstore -- tool/build.sh           # APPLE_KEYCHAIN only
+keychain exec --only ssh_keys.github_deploy -- ci-release.sh    # and the deploy key
+keychain exec --only tokens.marks -- tool/build.sh              # and that token
 ```
+
+`secrets exec` is unchanged: it places everything. It is the general-purpose
+wrapper, and a general-purpose wrapper that hands over nothing is inert.
 
 The selector is a comma-separated list of `family` or `family.instance`:
 
@@ -65,388 +30,236 @@ apple.certificates          every certificate
 android.keystores.upload    that one keystore
 ```
 
-Both granularities are supported because the grammar costs nothing extra and
-consumers want different ones: one project would start at `tokens` and tighten
-later, another needs `tokens.marks` on the first day.
-
-This replaces the static list entirely. What `keychain exec` withholds becomes
-a consequence of its default (below) rather than a constant nobody can see.
-
-### Why `--only`, and not `--secrets` or `--withhold`
-
-`--withhold` is subtractive, so the default is permissive: every credential
-reaches every child unless a caller remembers to exclude it. That is the same
-shape as the hand-maintained `unset` list one project wrote as a stopgap — the
-next person adding a credential does not know to add it to the flag either.
-
-An allowlist inverts that **on `keychain exec`**, whose default is minimal: a
-newly added credential is withheld until someone names it, and the failure is a
-build that says `X is not set` rather than a value riding quietly into a log.
-
-**It does not invert it on `secrets exec`**, and this is worth stating plainly
-because the rest of this section reads as though it did. That command keeps its
-default of everything (see below), so a credential added tomorrow still reaches
-every `secrets exec` child whose call site has not opted in. The exposure this
-design was written for occurs in Apple builds, which run under `keychain exec`,
-and that is where the guarantee holds. On `secrets exec` filtering is opt-in.
-A generic wrapper defaulting to nothing would be inert, so this is the right
-trade — but it is a trade, and a reader who takes "allowlists fail closed" from
-this section and applies it to `secrets exec` will be wrong.
-
-`--secrets` was the first candidate and is wrong on the command that needs it
-most:
-
-```
-secrets exec --file secrets/release.yaml --secrets tokens.marks -- ...
-```
-
-Two flags both called secrets, one naming a location and one naming a subset of
-its contents. `--only` says *filter* and cannot be misread as *which file*.
-
-`--tokens` was the original scope and is too narrow: it names one family in a
-mechanism that has to work for all of them.
-
-### Defaults differ per command, deliberately
-
-| command | `--only` omitted means |
-| --- | --- |
-| `secrets exec` | every credential in the file |
-| `keychain exec` | only what signs — no tokens, no api key unless `--api-key` names one |
-
-This is the part most likely to be got wrong, so it is stated rather than
-inferred, and both help texts must say it.
-
-**Why `keychain exec` gets the narrow default is an empirical claim, not a
-definitional one.** An earlier draft said this command "exists to sign Apple
-builds, so its child is an Apple build and nothing else" — the same sentence the
-code has carried for a while. That is false. AuthPass's child is a release
-script that runs `pod repo update`, builds, archives, uploads, and pushes over
-ssh; the other consuming project's child reads a changelog and writes a
-manifest. `keychain exec` is the *outer* wrapper in both, precisely because it
-is the one that places no App Store key in the environment, which makes it the
-natural place to hang everything else.
-
-The defensible claim is about where the exposure is: **`keychain exec` is where
-Apple builds run, and an Xcode script phase writes its whole environment into
-the build log.** That can be checked, and someone extending it will extend it
-safely. "Its child is an Apple build and nothing else" cannot be checked and is
-wrong.
-
-### Two rules decide the default, and they answer different threats
-
-A single rule was proposed — withhold what is value-shaped, pass what is
-path-shaped — and it is half right. Stated alone it silently undoes two
-exclusions that are currently correct.
-
-**Values are withheld, because an environment is broadcast.** It is inherited by
-everything a child spawns and printed wholesale by an Xcode script phase. Tokens
-are this rule's subject: theirs is the one family whose secret material is
-irreducibly a value, which is why 2.0.0 could convert every other one to a path
-and not that.
-
-**Capabilities this command does not confer are withheld, because holding a
-credential is itself the risk.** A child holding the Play service account path
-can publish to Play whether or not anything ever prints it. A child holding an
-App Store key can create and revoke signing material. Neither is a log-exposure
-question, and the code already says so — the comment on
-`android.play_service_account` notes that exposure *stopped* being the argument
-when 2.0.0 made it a path, leaving capability as the reason it stays withheld.
-This is why `--api-key` is opt-in.
-
-Two rules is not a defeat. One rule that silently covers half a threat model is
-worse than two that each say what they are for.
-
-**They compose as a union, never as a chain.** Withhold if *either* rule
-applies; do not let the first rule that matches decide. The order must not
-change the answer, and there is exactly one case that proves it:
-
-| | exposure rule | capability rule | outcome |
-| --- | --- | --- | --- |
-| a token | value — withhold | a capability — withhold | withheld twice, harmless |
-| the Play service account | **path — passes** | a capability — withhold | **must be withheld** |
-
-Since 2.0.0 the Play credential is path-shaped, so an implementation that
-evaluates exposure first and returns on a pass hands it to the child. That is
-the exact exclusion the capability rule exists for, and getting it wrong looks
-like the rule working.
-
-The tell is specific enough to test: **if `android.play_service_account` ever
-appears in a child's environment because it is path-shaped, the union has become
-a chain.**
-
-That 2.0.0 removed the *exposure* reason for withholding it while the exclusion
-stayed correct is the clue that there were two rules all along.
-
-**The unit is the variable, not the family.** Families are mixed:
-
-```
-path  APPLE_DISTRIBUTION_P12_PATH     value  APPLE_DISTRIBUTION_P12_PASSWORD
-path  ANDROID_KEYSTORE_PATH           value  ANDROID_KEYSTORE_PASSWORD
-path  APPLE_API_PRIVATE_KEY_PATH      value  APPLE_API_KEY_ID, APPLE_API_ISSUER_ID
-```
-
-So no family can be classified whole. This is not a new idea in the codebase: it
-is the generalisation of the one thing 2.3.0 already does correctly, which is to
-strip `APPLE_*_P12_PASSWORD` from a child while leaving the paths beside them.
-It also answers the keystore case without help — `ANDROID_KEYSTORE_PATH` passes,
-`ANDROID_KEYSTORE_PASSWORD` does not, and the Gradle build that genuinely needs
-the password gets it from `secrets exec`, whose default is everything. A rule
-that stands only because an unrelated exclusion happens to hide its worst case
-is not a rule.
-
-**Consequence for what `--only` is.** With a per-variable default, a caller
-writing `--only marks` is asking to readmit a specific *value*. That is a
-sharper description of the flag's job than "select credentials", and it makes
-the fail-closed story easier to state: values are out unless named.
-
-### What `--only` governs on `keychain exec`, and what it does not
-
-`keychain exec` is itself a consumer: it reads certificates to import them and
-profiles to install them, before any child exists. `--only` does **not** reach
-that. It governs the child's environment only, so `--only tokens.marks` does not
-starve the command of the certificates it exists to import, and a caller does
-not have to name `apple.certificates` in order to sign.
-
-That is coherent — the child needs `APPLE_KEYCHAIN`, not the p12 paths, and the
-passwords are stripped after import regardless — but it means the flag is
-narrower on this command than "which credentials survive into the child"
-suggests.
-
-The help text is not enough. A consumer reviewing this said they would have
-assumed `--only marks` meant "and nothing else", concluded it had starved the
-import, and filed a bug. So it belongs in the **error** someone gets when they
-name a selector with no certificates in it and signing then fails — which is the
-moment they are already confused — rather than only in a paragraph they read
-before they were.
-
-**The limit of the whole mechanism, while it is being written down:** `--only`
-filters the *environment* channel. A child holding the sops identity can decrypt
-the file itself — which is exactly what a nested `keychain exec` does. This is
-hygiene against leak-by-environment, not containment.
-
-### The default set is a selector, not a constant
-
-"Only what signs" is a slogan, and shipping a slogan leaves the constant at the
-top of `keychain exec` renamed rather than removed. The default must be
-*expressed as a selector string*, printed in `--help` and at runtime:
-
-```
-==> default selection: apple.certificates, apple.profiles
-```
-
-Enumerating it also forces a decision the slogan hides: **`ssh_keys` pass
-through `keychain exec` today** — they are not in the static withheld set — and
-"only what signs" would withhold them. The exported value is a path, so the log
-exposure is nil, but a build that fetches over ssh mid-archive breaks. That is a
-behaviour change and it needs deciding family by family rather than by phrase.
-
-### One structural dependency
-
-Withholding today works through `familyVariables`, a static map from family to
-*variable names*. Token variable names come from the file's `env` field, so
-implementing `--only`'s removal semantics requires that map to become a function
-of the parsed file.
-
-The awkward case is the nested one, where an inner `keychain exec` takes the
-certificates-already-present branch and never calls `loadSecrets` — it must
-learn token variable names without decrypting. That is possible, because `env`
-and the instance names are cleartext fields, but it needs a reader that keeps
-cleartext *values*, and the existing shape-inspector discards them. This is the
-one piece of real structural work the flag requires and it should be built
-first.
-
-### A selector that does not resolve is an error
-
-`--only tokens.marsk` must fail, naming what exists.
-
-Three cases, and they are not the same mistake. **Unknown to the schema** —
-`tokns`, or a family that does not exist — is fatal. **A named instance absent
-from the file** — `tokens.marsk` where `tokens` exists — is fatal. **A known
-family that is empty in this file** is reported rather than fatal; see the
-section on empty families for why, since it was the one disputed point.
-
-This is the condition most likely to be under-built and it is the one with the
-worst failure. An allowlist that silently selects nothing produces a credential
-absent four layers inside a build script, with the wrapper reporting success —
-a thing that did not work, presenting as a thing that was not there. That exact
-shape has caused three separate bugs in this codebase in two days: a `plutil`
-exit code read as an absent plist key, twice; and a cross-check that reported
-nothing wrong because its extraction had silently returned an empty list.
-
-So: every name in the selector must resolve, and an unknown family or instance
-is fatal with the valid set printed.
-
-**Resolution is against what this process holds, not against the file**, and the
-difference only appears under nesting:
-
-```
-secrets exec --only apple.certificates -- keychain exec --only tokens.marks -- build
-```
-
-The outer has filtered its child down to certificates. The inner then asks for
-`tokens.marks`, which is not in what it received. Validated against the *file*
-that passes, because the file does contain it — and the build dies four layers
-down with `MARKS_TOKEN is not set`. Validated against what the process actually
-holds, it stops here and names the missing one. A **partial** match is fatal
-too: `--only a,b` where `a` arrived and `b` was stripped upstream must name `b`
-rather than proceeding with `a`.
-
-This is the 1.9.0 bug approached from the other side. That one filtered
-placement instead of visibility; this one would validate against the file
-instead of against visibility.
-
-Nested selectors therefore compose as intersection — an inner command can only
-pass on what the outer passed, minus what it strips. That is the correct
-behaviour and it wants a test rather than a sentence.
-
-### The grammar needs three things defined
-
-- **Resolution is schema-aware.** `apple.certificates` and `tokens.marks` are
-  both two segments; one is a family and the other is family-plus-instance, and
-  only the schema separates them. A *section* — `--only apple` — is neither
-  production and is refused, naming the families under it.
-- **Some families cap instances at one.** `--only
-  android.keystores.upload,android.keystores.mirror` parses and cannot be
-  satisfied: there is one set of `ANDROID_*` variable names to fill. Refused,
-  saying why. Same for two `apple.api_keys`.
-- **`--keystore` and `--api-key` now overlap with `--only`.** An instance named
-  in `--only` resolves the ambiguity those flags exist to resolve; and
-  `--keystore upload` together with an `--only` that excludes
-  `android.keystores`, or names a different instance, is a contradiction and
-  fatal. This also settles the conditional in the defaults table: `--api-key`
-  given means `apple.api_keys` is in the default selection.
-
-`--only placed.foo` on an exec command is refused too, pointing at `secrets
-place`: exec never writes placed files.
-
-### `--only` filters what the child *sees*, not what this process *places*
-
-The distinction is invisible until commands are nested, and then it is the whole
-thing:
-
-```
-secrets exec -- keychain exec -- tool/build.sh
-```
-
-The outer command has already put every credential in the environment before the
-inner one runs. If `--only` means "which credentials I place", the inner
-command's filter achieves nothing while reading as correct at every line, and
-the build inherits everything.
-
-So `--only` means "which credentials survive into the child", and the
-implementation removes non-selected variables from the child's environment
-however they got there. This is not new: it is what the current static
-withholding already does, it is what 1.9.0 got wrong and 1.9.1 fixed, and it is
-preserved by removing from a copied environment map and passing
-`includeParentEnvironment: false`. It belongs in a test rather than a comment.
-
-### What was removed from the environment is reported
-
-`keychain exec` already prints:
-
-```
-==> imported, so withheld from the child: APPLE_DISTRIBUTION_P12_PASSWORD
-```
-
-The same line should name credentials withheld by `--only`, so a caller who
-forgot the flag sees it in the log beside the failure rather than guessing. A
-credential removed from a child's environment is something the operator should
-see rather than deduce — and seeing it is what tells them an outer wrapper was
-handing it over.
-
-## What this deliberately does not do
-
-**It does not detect which credentials a child consumes.** That was proposed and
-is not possible. `keychain exec` wraps a *build script* by design, so
-consumption happens below the wrapper's argv: in one real case the whole argv is
-`tool/build.sh --release ios`, while the token is read four layers down inside a
-function, where its *name* is a JSON key in a `printf` format string. A rule of
-"do not withhold a credential whose variable appears in the command line" would
-have withheld the one token that must never be withheld — it fails on the
-example it was designed around.
-
-Scanning the script does not rescue it either. In that same file the token name
-appears seven times: once in real consumption, once in a format string, and five
-times in `die` messages and comments — including a comment saying it must not be
-withheld. A detector that reads a warning about a credential as evidence the
-credential is needed is worse than no detector.
-
-So the knowledge of what a child consumes lives at the call site, written down,
-which is what an allowlist forces.
-
-## Settled questions
-
-**No escape hatch.** `--only all` was proposed and withdrawn by the person who
-proposed it, once backward compatibility stopped being a constraint: its only
-justification was migration, and there is no mid-migration state when every call
-site is rewritten by hand. It would become the thing a new project copies from
-an old one, restoring the permissive default under a nicer name — and worse,
-*looking deliberate in review*, where an omitted flag at least reads as an
-omission. A caller who genuinely needs everything writes everything out, and
-"this build consumes all eleven credentials" should look as strange on the page
-as it is in fact.
-
-**Not on `place`, `pack` or `clean`.** The reason `--only` exists is that a
-child's environment is *broadcast* — inherited by everything it spawns, echoed
-wholesale into a log by an Xcode script phase. A file `place` wrote is not
-broadcast; it sits at a path something opens deliberately. Same tool, different
-physics, and putting the flag on both would be symmetry rather than reasoning.
-
-Two concrete costs if it were added anyway. `place` and `clean` are a pair, and
-independent selectors can desynchronise into a credential left materialised in a
-working tree — the opposite of the flag's purpose; if this is ever wanted they
-need a shared record of what was placed, not two selectors that are supposed to
-agree. And `pack` runs the other way, so a filter there is a partial write,
-which is the half-credential state `secrets add` exists to prevent.
-
-`secrets check` also keeps checking everything. A scoped check is a check people
-learn to trust wrongly.
-
-## An empty family is reported, not fatal
-
-Split by grammar production:
-
-- **Unknown to the schema** — `tokns`, a family that does not exist — is fatal.
+## Why the default is nothing
+
+This document had three earlier defaults, and each was an attempt to make
+"pass the right things automatically" sound principled. All three failed, and
+the shape of the failures is the argument for having no default at all.
+
+**"The minimum that signs."** Rested on the claim that `keychain exec`'s child
+is an Apple build and nothing else. False: in one project the child is a release
+script that builds, uploads and pushes over ssh; in another it reads a changelog
+and writes a manifest. `keychain exec` is the *outer* wrapper in both, precisely
+because it is the one that places no App Store key — which makes it the natural
+place to hang everything else.
+
+**"Withhold values, pass paths."** Half a threat model. It would have passed the
+Play service account, which is path-shaped since 2.0.0 and still withheld —
+because a child holding that path can publish to Play whether or not anything
+prints it. That is not exposure, it is capability, and one rule could not say
+both.
+
+**"Two rules, applied per variable."** Broke worse. Per-variable splits a
+credential in half: it would pass `ANDROID_KEYSTORE_PATH` and strip the password
+beside it, which is the state this codebase calls dangerous everywhere else and
+throws on for the Apple analogue — *"half a credential is worse than none"*. It
+also resurrects the keystore lockout, since whole-family withholding is what
+lets `keychain exec` avoid choosing between two keystores. It is not derivable
+from the schema either: token variable names are project-declared, so a token
+named `FOO_PATH` classifies as a path and is passed. And it is inexpressible as
+a selector string, so the default would live as a constant in the source —
+exactly what replacing the constant was for.
+
+The "capability" half never became a rule at all. Asked to decide `ssh_keys` it
+could not, and the document had to punt to deciding family by family. A rule
+suspended for the first family it meets that it was not reverse-engineered from
+is not an axis; it is a name written over two decisions already made.
+
+**Three attempts, each needing more structure than the last, ending in one rule,
+one guarantee and a seven-row table.** That is not a default anyone holds in
+their head. They would read it once, learn nothing, and discover the real
+behaviour when a build broke.
+
+An empty default has none of these problems, because it makes none of the
+claims. It does not need to know what the child is, what a credential is shaped
+like, or what capability it confers.
+
+## What an empty default buys
+
+- **No premise about the child.** It does not matter what the script does.
+- **`ssh_keys` needs no decision.** Nothing passes unnamed, so there is no
+  question of whether this family should.
+- **The App Store guarantee is free.** `ios.yaml` relies by name on the archive
+  being unable to hold a key that could create or revoke signing material. With
+  an empty default it cannot hold *anything* unnamed. `--api-key` remains the
+  consent switch.
+- **No half-credentials.** Credentials are named whole.
+- **No keystore lockout.** Nothing is auto-selected, so nothing has to choose
+  between two keystores.
+- **The default is trivially printable.** It is empty.
+- **It is honestly fail-closed**, which the earlier drafts claimed and only
+  half-delivered.
+
+The cost is real and is the point: **a call site now states what its build
+consumes.** That is knowledge the tool cannot have — it wraps a build script, so
+consumption happens below its argv, four layers down, sometimes with the
+variable name inside a `printf` format string. Writing it at the call site is
+the only place it can live, and an empty default is what forces it there.
+
+## The selector
+
+### Not resolving is an error
+
+`--only tokens.marsk` fails, naming what exists. Three cases, three messages:
+
+- **Unknown to the schema** — `tokns` — is fatal.
 - **A named instance absent from the file** — `tokens.marsk` — is fatal. Naming
   an instance is an existence claim.
-- **A known family that is empty in this file** selects nothing, is allowed, and
-  is **reported**. Naming a family is a scope, not a claim about contents.
+- **A known family, empty in this file** selects nothing, is allowed, and is
+  **reported**. Naming a family is a scope, not a claim about contents.
 
-This matches a line `decideProfile` already draws: a named profile absent from
-the file is fatal, while a profile that merely turns up unnamed is warned and
-skipped. A tool that draws one line in two places for the same kind of question
-is better than one that draws two.
+The third matches a line `decideProfile` already draws: a named profile absent
+from the file is fatal, one that merely turns up unnamed is warned and skipped.
+A tool that draws one line in two places for the same question is better than
+one that draws two.
 
-This was disputed. The other position was that an empty family should also be
-fatal, on the grounds that `--only` asserts the child consumes something, and
-the ways to reach an empty family — wrong secrets file, or a retired credential
-with a stale call site — are both bugs. It was withdrawn by the person who
-argued it, and the reasoning is worth keeping because it is what makes the
-decision safe rather than merely decided:
-
-- **An empty family cannot strand a child.** The argument for fatality invoked
-  "a credential absent four layers in, wrapper reports success". That failure is
-  unreachable here: if the family is empty the credential is absent from the
-  *file*, so no configuration of `--only` could have delivered it.
-- **The retirement case is caught by the undisputed half.** Retiring
-  `tokens.marks` while a call site still names it is fatal under instance-level
-  naming, which nobody disputes. Fatality at family level only adds anything
-  when a retirement empties an entire family.
-- **The wrong-file case is real but is not this flag's job.** An unexpectedly
-  empty family does suggest the wrong file — but a wrong file fails louder and
-  earlier (the certificates are absent too), and `secrets list` and `secrets
-  check` exist to answer "is this the file I think it is". Hanging that
-  detection off a filter flag puts it where it happens to be noticed rather than
-  where it belongs.
-
-**The messages must differ, and the empty-family report must read as anomalous.**
-"Unknown to the schema" and "known, but absent from this file" are different
-mistakes; telling someone their spelling is wrong when it is not sends them
-looking in the wrong place. And since a warning is now carrying the whole weight
-of the design's answer to the silent-nothing fear, it has to be conspicuous:
+The report has to read as anomalous rather than as a tally, because it is now
+carrying the whole weight of the silent-nothing worry:
 
 ```
 ==> family "tokens" selected, but there are no tokens in secrets/release.yaml
 ```
 
-not a tally. `0 selected` at the end of a list is not a report anyone reads.
+not `0 selected` at the end of a list.
+
+### Resolution is against what this process holds
+
+Not against the file, and the difference appears under nesting:
+
+```
+secrets exec --only apple.certificates -- keychain exec --only tokens.marks -- build
+```
+
+The outer filtered its child to certificates; the inner then asks for
+`tokens.marks`, which did not arrive. Validated against the *file* that passes,
+and the build dies four layers down with `MARKS_TOKEN is not set`. Validated
+against what the process holds, it stops here and names it.
+
+**A partial match is fatal**: `--only a,b` where `a` arrived and `b` was
+stripped upstream names `b` rather than proceeding with `a`. And a family
+present in the file but stripped upstream is fatal too, with its own message —
+it is not the empty-family case, and pointing at the file would be the wrong
+diagnosis.
+
+This is the 1.9.0 bug from the other side. That one filtered placement instead
+of visibility; this would validate against the file instead of against
+visibility.
+
+### `--only` filters what the child sees, not what this process places
+
+Under `secrets exec -- keychain exec -- build` the outer has already placed
+everything before the inner runs. If `--only` meant "which credentials I place",
+the inner filter would achieve nothing while reading as correct at every line.
+So it removes non-selected variables from the child's environment however they
+got there — which is what the current static withholding already does, what
+1.9.0 got wrong and 1.9.1 fixed, and what the `includeParentEnvironment: false`
+on the child guarantees. It belongs in a test.
+
+Nested selectors compose as intersection: an inner command can only pass on what
+it received, minus what it strips.
+
+### Grammar
+
+- **Resolution is schema-aware.** `apple.certificates` and `tokens.marks` are
+  both two segments; only the schema says which is family-plus-instance. A
+  *section* — `--only apple` — is neither production and is refused, naming the
+  families under it.
+- **Some families cap instances at one.** `--only
+  android.keystores.upload,android.keystores.mirror` parses and cannot be
+  satisfied: there is one set of `ANDROID_*` names to fill. Refused, saying why.
+- **`--keystore` and `--api-key` overlap with `--only`.** An instance named in
+  `--only` resolves the ambiguity those flags exist to resolve; `--keystore
+  upload` together with an `--only` that excludes `android.keystores`, or names
+  a different instance, is a contradiction and fatal.
+- `--only placed.foo` on an exec command is refused, pointing at `secrets
+  place`: exec never writes placed files.
+
+No wildcards — family selection *is* the wildcard. No negation — "everything
+except X" is the fail-open shape wearing selector syntax, and it is what this
+design exists to avoid.
+
+### What is removed is reported
+
+`keychain exec` already prints what it withheld. That line should name what
+`--only` excluded, so a caller who forgot the flag sees it in the log beside the
+failure rather than guessing.
+
+## `SOPS_AGE_KEY` is not covered by any of this, and should be
+
+It is the master key to the whole file, it is value-shaped, and it is in the
+child's environment — which on an Apple build is written wholesale into the log
+by an Xcode script phase. It is not a credential *in* the file, so it is not a
+family, so no selector can name it and no default touches it.
+
+**It cannot simply be unset, and the reason is instructive: the only consumer is
+cux_ship itself.** One project's release nests `secrets exec` *inside* the
+`keychain exec` child, so the child decrypts again and needs the key. Removing
+it would break that composition — loudly, at the nested decrypt, but break it.
+
+So it wants a deliberate answer rather than inheritance:
+
+- strip it from the child by default, since nothing outside cux_ship reads it;
+- give it a spelling to readmit, for the nesting case — it cannot be
+  `--only <family>` because it is not one;
+- and say plainly, wherever the limits of this design are described, that the
+  environment filter protects individual credentials while passing the key that
+  mints all of them.
+
+Today the only thing protecting it in a public log is the CI provider's secret
+masking, which works because it is the one registered Actions secret. That is
+worth stating out loud: the Play service account leaked precisely because
+sops-decrypted material is invisible to that masker, and `SOPS_AGE_KEY` is
+covered only because it never passes through sops.
+
+## What this deliberately does not do
+
+**It does not detect which credentials a child consumes.** That was proposed and
+is not possible. In one real case cux_ship's whole argv is `tool/build.sh
+--release ios`, while the token is read four layers down inside a function where
+its *name* is a JSON key in a `printf` format string. A rule of "do not withhold
+a credential whose variable appears in the command line" would have withheld the
+one token that must never be withheld — it fails on the example it was designed
+around.
+
+Scanning the script does not rescue it. In that same file the token name appears
+seven times: once in real consumption, once in a format string, and five times
+in `die` messages and comments — including one saying it must not be withheld. A
+detector that reads a warning about a credential as evidence the credential is
+needed is worse than no detector.
+
+**It is hygiene, not containment.** `--only` filters the environment channel. A
+child holding the sops identity can decrypt the file itself, which is exactly
+what a nested `keychain exec` does.
+
+**It does not go on `place`, `pack` or `clean`.** Those have no child. `--only`
+exists because a child's environment is *broadcast* — inherited by everything it
+spawns and printed wholesale into a log. A file `place` wrote is not broadcast.
+And `place`/`clean` are a pair: independent selectors could desynchronise into a
+credential left materialised in a working tree, which is the opposite of the
+point. `pack` runs the other way, so a filter there is a partial write.
+
+`secrets check` also keeps checking everything. A scoped check is a check people
+learn to trust wrongly.
+
+## What it costs to adopt
+
+Two call sites, in two repositories:
+
+```
+authpass      keychain exec --only ssh_keys.github_deploy -- ci-release.sh
+storyteller   keychain exec --only tokens.marks -- tool/build.sh
+```
+
+The third project's `keychain exec` child needs nothing beyond the keychain and
+is unchanged.
+
+## Structural work required
+
+`familyVariables` is a static map from family to variable names, and token
+variable names come from the file's `env` field, so it must become a function of
+the parsed file. The nested case sharpens this: an inner `keychain exec` takes
+the certificates-already-present branch and never calls `loadSecrets`, so it
+must learn those names without decrypting. That is possible because `env` and
+the instance names are cleartext, but the existing shape-inspector discards
+cleartext values and a reader that keeps them does not exist yet. Build this
+first; everything else depends on it.
