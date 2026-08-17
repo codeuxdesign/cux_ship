@@ -77,10 +77,21 @@ a consequence of its default (below) rather than a constant nobody can see.
 `--withhold` is subtractive, so the default is permissive: every credential
 reaches every child unless a caller remembers to exclude it. That is the same
 shape as the hand-maintained `unset` list one project wrote as a stopgap — the
-next person adding a credential does not know to add it to the flag either. An
-allowlist inverts that: a newly added credential is withheld until someone says
-otherwise, and the failure is a build that says `X is not set` rather than a
-value riding quietly into a log.
+next person adding a credential does not know to add it to the flag either.
+
+An allowlist inverts that **on `keychain exec`**, whose default is minimal: a
+newly added credential is withheld until someone names it, and the failure is a
+build that says `X is not set` rather than a value riding quietly into a log.
+
+**It does not invert it on `secrets exec`**, and this is worth stating plainly
+because the rest of this section reads as though it did. That command keeps its
+default of everything (see below), so a credential added tomorrow still reaches
+every `secrets exec` child whose call site has not opted in. The exposure this
+design was written for occurs in Apple builds, which run under `keychain exec`,
+and that is where the guarantee holds. On `secrets exec` filtering is opt-in.
+A generic wrapper defaulting to nothing would be inert, so this is the right
+trade — but it is a trade, and a reader who takes "allowlists fail closed" from
+this section and applies it to `secrets exec` will be wrong.
 
 `--secrets` was the first candidate and is wrong on the command that needs it
 most:
@@ -111,6 +122,56 @@ to sign and defaults to the minimum that signs.** A command whose entire purpose
 is one operation can know what that operation needs. A command whose purpose is
 "run this with credentials" cannot.
 
+### What `--only` governs on `keychain exec`, and what it does not
+
+`keychain exec` is itself a consumer: it reads certificates to import them and
+profiles to install them, before any child exists. `--only` does **not** reach
+that. It governs the child's environment only, so `--only tokens.marks` does not
+starve the command of the certificates it exists to import, and a caller does
+not have to name `apple.certificates` in order to sign.
+
+That is coherent — the child needs `APPLE_KEYCHAIN`, not the p12 paths, and the
+passwords are stripped after import regardless — but it means the flag is
+narrower on this command than "which credentials survive into the child"
+suggests, and the help text has to say so or the first user will expect
+otherwise.
+
+**The limit of the whole mechanism, while it is being written down:** `--only`
+filters the *environment* channel. A child holding the sops identity can decrypt
+the file itself — which is exactly what a nested `keychain exec` does. This is
+hygiene against leak-by-environment, not containment.
+
+### The default set is a selector, not a constant
+
+"Only what signs" is a slogan, and shipping a slogan leaves the constant at the
+top of `keychain exec` renamed rather than removed. The default must be
+*expressed as a selector string*, printed in `--help` and at runtime:
+
+```
+==> default selection: apple.certificates, apple.profiles
+```
+
+Enumerating it also forces a decision the slogan hides: **`ssh_keys` pass
+through `keychain exec` today** — they are not in the static withheld set — and
+"only what signs" would withhold them. The exported value is a path, so the log
+exposure is nil, but a build that fetches over ssh mid-archive breaks. That is a
+behaviour change and it needs deciding family by family rather than by phrase.
+
+### One structural dependency
+
+Withholding today works through `familyVariables`, a static map from family to
+*variable names*. Token variable names come from the file's `env` field, so
+implementing `--only`'s removal semantics requires that map to become a function
+of the parsed file.
+
+The awkward case is the nested one, where an inner `keychain exec` takes the
+certificates-already-present branch and never calls `loadSecrets` — it must
+learn token variable names without decrypting. That is possible, because `env`
+and the instance names are cleartext fields, but it needs a reader that keeps
+cleartext *values*, and the existing shape-inspector discards them. This is the
+one piece of real structural work the flag requires and it should be built
+first.
+
 ### A selector that matches nothing is an error
 
 `--only tokens.marsk` must fail, naming what exists, and must never resolve to
@@ -124,8 +185,51 @@ shape has caused three separate bugs in this codebase in two days: a `plutil`
 exit code read as an absent plist key, twice; and a cross-check that reported
 nothing wrong because its extraction had silently returned an empty list.
 
-So: every name in the selector must resolve against the parsed file, and an
-unknown family or instance is fatal with the valid set printed.
+So: every name in the selector must resolve, and an unknown family or instance
+is fatal with the valid set printed.
+
+**Resolution is against what this process holds, not against the file**, and the
+difference only appears under nesting:
+
+```
+secrets exec --only apple.certificates -- keychain exec --only tokens.marks -- build
+```
+
+The outer has filtered its child down to certificates. The inner then asks for
+`tokens.marks`, which is not in what it received. Validated against the *file*
+that passes, because the file does contain it — and the build dies four layers
+down with `MARKS_TOKEN is not set`. Validated against what the process actually
+holds, it stops here and names the missing one. A **partial** match is fatal
+too: `--only a,b` where `a` arrived and `b` was stripped upstream must name `b`
+rather than proceeding with `a`.
+
+This is the 1.9.0 bug approached from the other side. That one filtered
+placement instead of visibility; this one would validate against the file
+instead of against visibility.
+
+Nested selectors therefore compose as intersection — an inner command can only
+pass on what the outer passed, minus what it strips. That is the correct
+behaviour and it wants a test rather than a sentence.
+
+### The grammar needs three things defined
+
+- **Resolution is schema-aware.** `apple.certificates` and `tokens.marks` are
+  both two segments; one is a family and the other is family-plus-instance, and
+  only the schema separates them. A *section* — `--only apple` — is neither
+  production and is refused, naming the families under it.
+- **Some families cap instances at one.** `--only
+  android.keystores.upload,android.keystores.mirror` parses and cannot be
+  satisfied: there is one set of `ANDROID_*` variable names to fill. Refused,
+  saying why. Same for two `apple.api_keys`.
+- **`--keystore` and `--api-key` now overlap with `--only`.** An instance named
+  in `--only` resolves the ambiguity those flags exist to resolve; and
+  `--keystore upload` together with an `--only` that excludes
+  `android.keystores`, or names a different instance, is a contradiction and
+  fatal. This also settles the conditional in the defaults table: `--api-key`
+  given means `apple.api_keys` is in the default selection.
+
+`--only placed.foo` on an exec command is refused too, pointing at `secrets
+place`: exec never writes placed files.
 
 ### `--only` filters what the child *sees*, not what this process *places*
 
@@ -182,13 +286,62 @@ credential is needed is worse than no detector.
 So the knowledge of what a child consumes lives at the call site, written down,
 which is what an allowlist forces.
 
-## Open questions
+## Settled questions
 
-1. Should `--only` accept a family that the file does not contain? Selecting
-   `tokens` in a project with no tokens is arguably fine (an empty family is not
-   a typo) and arguably the same silent-nothing failure as a misspelling.
-2. Is there a case for `--all` on `keychain exec` — a mid-migration escape
-   hatch — or does that just preserve the permissive default under a new name?
-3. `secrets place`, `pack` and `clean` also touch credentials. Do they want the
-   same selector, or is `--only` specific to the two commands that build a child
-   environment?
+**No escape hatch.** `--only all` was proposed and withdrawn by the person who
+proposed it, once backward compatibility stopped being a constraint: its only
+justification was migration, and there is no mid-migration state when every call
+site is rewritten by hand. It would become the thing a new project copies from
+an old one, restoring the permissive default under a nicer name — and worse,
+*looking deliberate in review*, where an omitted flag at least reads as an
+omission. A caller who genuinely needs everything writes everything out, and
+"this build consumes all eleven credentials" should look as strange on the page
+as it is in fact.
+
+**Not on `place`, `pack` or `clean`.** The reason `--only` exists is that a
+child's environment is *broadcast* — inherited by everything it spawns, echoed
+wholesale into a log by an Xcode script phase. A file `place` wrote is not
+broadcast; it sits at a path something opens deliberately. Same tool, different
+physics, and putting the flag on both would be symmetry rather than reasoning.
+
+Two concrete costs if it were added anyway. `place` and `clean` are a pair, and
+independent selectors can desynchronise into a credential left materialised in a
+working tree — the opposite of the flag's purpose; if this is ever wanted they
+need a shared record of what was placed, not two selectors that are supposed to
+agree. And `pack` runs the other way, so a filter there is a partial write,
+which is the half-credential state `secrets add` exists to prevent.
+
+`secrets check` also keeps checking everything. A scoped check is a check people
+learn to trust wrongly.
+
+## One question still open
+
+**Is a family that is empty in this file an error, or a reported no-op?**
+
+Two reviewers disagreed, and the disagreement is recorded rather than resolved,
+because both positions are coherent and the choice is a judgement about which
+mistake matters more.
+
+*Fatal, both cases.* `--only` at a call site is an assertion that the child
+consumes this. If the file has none, the assertion is false, and both routes
+there are bugs worth stopping on: pointed at the wrong secrets file, or a
+credential was retired and the call site never updated. There is already a way
+to say "no tokens" — omit them — so a flag that means both "I need these" and "I
+need nothing" reintroduces in the semantics the ambiguity the name removed.
+
+*Split by production.* Naming an *instance* is an existence claim, so
+`tokens.marks` with no `marks` is fatal — matching how a named profile absent
+from the file is already fatal. Naming a *family* is a scope: `tokens` in a file
+with no tokens selects nothing, is allowed, and is **reported** — matching how
+profiles that merely turn up unnamed are warned and skipped. A family name is
+validated against the schema and so cannot be a typo, and the reporting line the
+design already requires answers the silent-nothing fear.
+
+The strongest point on each side: the first catches a wrong-file mistake at the
+call site; the second is the one that matches precedent already in this
+codebase, and observes that a family which is empty cannot strand a child,
+because a credential that does not exist cannot be consumed four layers down.
+
+Whichever is chosen, the messages must differ. "Unknown to the schema" and
+"known, but absent from this file" are different mistakes, and telling someone
+their spelling is wrong when it is not sends them looking in the wrong place.
