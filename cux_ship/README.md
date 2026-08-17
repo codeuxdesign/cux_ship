@@ -42,6 +42,7 @@ cux_ship appstore upload            play upload            release finish
                                                            secrets place
                                                            secrets clean
                                                            secrets pack
+                                                           keychain exec
                                                            deps install
                                                            deps check
 ```
@@ -242,6 +243,21 @@ the distribution certificate — into a private temp directory it removes howeve
 the run ends, including on Ctrl-C. The child runs with the repository root as
 its working directory.
 
+**`--only` narrows that to what the child actually consumes:**
+
+```bash
+cux_ship secrets exec --only apple.api_keys.upload -- tool/upload.sh
+```
+
+The selector is `family` or `family.instance`, comma-separated or repeated. On
+this command it is optional — omitted, everything is placed, because a
+general-purpose wrapper that hands over nothing is inert. On `keychain exec` it
+is the only way anything arrives at all; see below.
+
+Naming a subset *removes* what is not named, rather than merely declining to
+place it. That matters under nesting, where an outer wrapper has already put
+everything in the environment before an inner one runs.
+
 ```yaml
 # secrets/release.yaml, before sops encrypts the values
 keystore_base64:              # the Android upload key, and its
@@ -276,6 +292,44 @@ A credential does not become a different credential because of the heading it
 was filed under, so the names that matter are the leaves. The same leaf under
 two headings is refused rather than resolved — which one wins is not something
 to guess at with a credential.
+
+### `keychain exec` — signing, and a child that holds nothing
+
+```bash
+cux_ship keychain exec --profile ios_appstore -- tool/build.sh --release ios
+```
+
+It imports the signing certificate into a keychain that exists for the length of
+one command and is destroyed however that command exits, installs the profiles
+you name, and sets `APPLE_KEYCHAIN`. The login keychain is never read — a build
+whose identity comes from whatever a developer happens to have installed is a
+build nobody can reproduce.
+
+The wrapped command is expected to pass
+`OTHER_CODE_SIGN_FLAGS="--keychain $APPLE_KEYCHAIN"` to xcodebuild. That is not
+a nicety: this command cannot *remove* the login keychain from the search list
+without taking Apple's intermediate certificates with it, so pinning codesign to
+ours is the only thing that makes "signed with the certificate we imported" true
+rather than likely.
+
+**Its child gets `APPLE_KEYCHAIN` and nothing else.** No tokens, no keys, and
+not the sops identity. Whatever else the child needs is named:
+
+```bash
+cux_ship keychain exec --only ssh_keys.github_deploy -- tool/release.sh
+```
+
+That is knowledge only the call site has. This command wraps a *build script*,
+so what the script consumes happens below this command's arguments — in one real
+project four layers down inside a function, with the variable's name inside a
+`printf` format string. Nothing here can read that, and a rule that tried
+withheld the one token that must never be withheld.
+
+`SOPS_AGE_KEY` is stripped unconditionally and cannot be readmitted. It is the
+master key to the whole file, and a child that can decrypt makes the useful
+guarantee here — that an archive cannot hold a key able to create or revoke
+signing material — hollow. If a child of yours needs to decrypt, run the two
+commands as siblings rather than nesting them.
 
 ### Reading a secrets file without decrypting it
 

@@ -1,5 +1,92 @@
 # Changelog
 
+## 3.0.0
+
+**`keychain exec` gives its child the keychain it made and nothing else.**
+Everything further is named at the call site:
+
+```
+keychain exec --profile ios_appstore -- tool/build.sh          # APPLE_KEYCHAIN only
+keychain exec --only tokens.marks -- tool/build.sh             # and that token
+keychain exec --only ssh_keys.github_deploy -- ci-release.sh   # and the deploy key
+```
+
+`secrets exec` is unchanged by default — it places everything, because a
+general-purpose wrapper that hands over nothing is inert — and takes the same
+`--only` when a caller wants to narrow it.
+
+The selector is `family` or `family.instance`, comma-separated or repeated:
+`tokens`, `tokens.marks`, `apple.certificates.distribution`.
+
+### Why the default is nothing rather than something better
+
+This replaces a hardcoded three-family withhold list that no caller could see,
+extend, or ask for something different from. The obvious replacement was a
+better default, and three were tried: "the minimum that signs", then "withhold
+values and pass paths", then two rules applied per variable. Each needed more
+structure than the last, ending in one rule, one guarantee and a seven-row
+table.
+
+The reason is structural rather than a failure to pick well. **A default has to
+satisfy every consumer, so it is the union of their needs, and a union is wrong
+for each of them individually.** A union has no explanation, only a membership
+list — which is why it could not be written down in a way anyone could hold in
+their head. A call-site selector is one consumer's own set, and it has a reason
+that fits in the flag.
+
+It also could not be derived. `keychain exec` wraps a *build script*, so what
+that script consumes happens below this command's arguments — in one real case
+four layers down inside a function, with the variable's name in a `printf`
+format string. A rule of "do not withhold a credential whose variable appears in
+the command line" was proposed and would have withheld the one token that must
+never be withheld: it failed on the example it was designed around.
+
+### `SOPS_AGE_KEY` is stripped from `keychain exec`'s child
+
+Unconditionally, with no way to readmit it. It is the master key to the whole
+file, value-shaped, and not a credential *in* the file — so no selector can name
+it and no default covered it, while an Xcode script phase writes the whole
+environment into a build log.
+
+Nothing outside cux_ship reads it. The one composition that did — a nested
+`secrets exec` inside a `keychain exec` child — is replaced by running the two
+as siblings, which is a change in the consuming project rather than here.
+
+This is also what makes the archive guarantee true rather than nearly true. A
+child that could decrypt the file could mint the App Store key the archive is
+meant not to hold.
+
+### Behaviour worth knowing
+
+- **A selector that does not resolve is fatal, and the three mistakes get three
+  messages.** Unknown to the schema, a named instance absent from the file, and
+  a section named instead of a family are different errors; telling someone
+  their spelling is wrong when it is not sends them looking in the wrong place.
+- **A known family that is empty in this file is reported, not fatal.** Naming a
+  family is a scope; naming an instance is an existence claim. That is the line
+  `decideProfile` already draws.
+- **Resolution is against what the process holds, not the file.** Under
+  `secrets exec --only x -- keychain exec --only y --`, the inner command asking
+  for something the outer stripped fails there, naming it, rather than four
+  layers down inside a build. A partial match is fatal too.
+- **Selection removes, it does not merely decline to place.** An outer wrapper
+  has already put everything in the environment before an inner one runs.
+- **`--keystore` and `--api-key` are refused alongside `--only`**, which already
+  names the instance they exist to choose. `--only apple.profiles.*` is refused
+  pointing at `--profile`, and `placed.*` pointing at `secrets place`.
+- **`secrets exec --only` warns when it omits a keystore the file holds.** A
+  missing Android keystore is the one absence that is silent: Gradle falls
+  through to the debug key and produces an artifact only the store rejects.
+
+### Fixed on the way
+
+`secrets exec` never passed `includeParentEnvironment: false` to its child.
+`Process.start` merges the map into the parent's environment, so anything
+removed from the map came back. It had never removed anything, so it had never
+needed the flag — and the moment `--only` gave it something to remove, the
+removals silently did nothing. `keychain exec` has carried the flag, and a
+comment warning about exactly this, since 1.9.1.
+
 ## 2.3.2
 
 - **An App Store Connect error that blocks a submission now says where to fix

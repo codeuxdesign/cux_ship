@@ -71,6 +71,30 @@ Every command reads **plain environment variables** and nothing else. How they
 get there is the project's business; `cux_ship secrets exec -- <command>` is one
 way, decrypting a sops file and removing the plaintext however the run ends.
 
+**`keychain exec` gives its child nothing but `APPLE_KEYCHAIN`.** Not a token,
+not a key, not the sops identity. Whatever else the build needs is named at the
+call site:
+
+```bash
+cux_ship keychain exec --only ssh_keys.github_deploy -- tool/release.sh
+cux_ship secrets exec --only apple.api_keys.upload -- tool/upload.sh
+```
+
+The selector is `family` or `family.instance`. On `secrets exec` it is optional
+and omitting it places everything; on `keychain exec` it is the only way
+anything arrives.
+
+Two consequences worth knowing before you debug something:
+
+- **A build that dies with `X is not set` under `keychain exec` is usually a
+  missing `--only`, not a missing credential.** That failure is deliberate and
+  is the design working: what a build script consumes happens below the
+  wrapper's arguments, so it cannot be detected and has to be declared.
+- **`SOPS_AGE_KEY` is stripped from that child and cannot be readmitted.** If a
+  script under `keychain exec` needs to decrypt, that is the signal to run the
+  two commands as siblings rather than nesting them — the archive is not
+  supposed to be able to reach the file that holds the App Store key.
+
 Three rules, and the second one has already leaked a key once:
 
 - **Never decrypt a secrets file to look at it.** A sops file keeps its key
