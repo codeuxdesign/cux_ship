@@ -365,14 +365,49 @@ List<String> collectStaleKeychains(
   Iterable<String> candidates, {
   required bool Function(int pid) alive,
   required int selfPid,
+  DateTime Function(String path)? createdAt,
+  DateTime? Function(int pid)? startedAt,
 }) => [
   for (final path in candidates)
     if (pidOfKeychain(path) case final pid?)
       // Never our own, even though we are obviously alive: the ordering of
       // garbage collection against creation is not something a later edit
       // should be able to get wrong.
-      if (pid != selfPid && !alive(pid)) path,
+      if (pid != selfPid &&
+          (!alive(pid) || _reused(path, pid, createdAt, startedAt)))
+        path,
 ];
+
+/// Whether the process now holding [pid] is a *different* one that inherited it.
+///
+/// **A pid does not identify a process for long.** macOS reuses them, and a
+/// machine running three builds gets through them quickly — so "is something
+/// alive with this id" answers a different question from "is the run that made
+/// this keychain still going". A collector that conflates the two leaves an
+/// orphan behind forever, because the id it is watching now belongs to
+/// something that will not exit on its behalf.
+///
+/// That was observed rather than theorised: a build killed by memory pressure
+/// left `cux_ship-build-80436.keychain-db`, and the next run declined to
+/// collect it.
+///
+/// A process cannot have started before a file it created, so a start time
+/// later than the keychain's creation means the id was recycled. Both callbacks
+/// are optional, and without them this reduces to the old pid-only behaviour —
+/// which is wrong in this one way and right in every other, so the fixtures
+/// that do not supply them still mean what they meant.
+bool _reused(
+  String path,
+  int pid,
+  DateTime Function(String path)? createdAt,
+  DateTime? Function(int pid)? startedAt,
+) {
+  if (createdAt == null || startedAt == null) {
+    return false;
+  }
+  final started = startedAt(pid);
+  return started != null && started.isAfter(createdAt(path));
+}
 
 // -------------------------------------------------------------- the impure half
 
@@ -1691,6 +1726,8 @@ void _collect(String home) {
     alive: (pid) =>
         Process.runSync('ps', ['-p', '$pid', '-o', 'pid=']).exitCode == 0,
     selfPid: pid,
+    createdAt: (path) => File(path).statSync().modified,
+    startedAt: _processStartedAt,
   );
   for (final path in stale) {
     stderr.writeln('==> removing a keychain left by a killed run: $path');
@@ -1700,6 +1737,105 @@ void _collect(String home) {
       file.deleteSync();
     }
   }
+
+  _pruneSearchList();
+}
+
+/// Drops entries naming a keychain of ours whose file is gone.
+///
+/// **This is the half that leaves state on somebody's machine.** An orphaned
+/// keychain *file* is clutter in a directory. An orphaned entry in the user's
+/// login search list is configuration, it accumulates one line per killed
+/// build, and nothing else will ever remove it — `security delete-keychain`
+/// takes both out together, but only for a keychain that got collected.
+///
+/// Run unconditionally rather than only after a collection, because the entries
+/// that most need removing are the ones from runs this process never saw.
+void _pruneSearchList() {
+  final listed = Process.runSync('security', ['list-keychains', '-d', 'user']);
+  if (listed.exitCode != 0) {
+    return;
+  }
+  final current = parseSearchList(listed.stdout as String);
+  final live = current
+      .where(
+        (k) =>
+            !k.split('/').last.startsWith(keychainNamePrefix) ||
+            File(k).existsSync(),
+      )
+      .toList();
+  if (live.length == current.length) {
+    return;
+  }
+  stderr.writeln(
+    '==> dropping ${current.length - live.length} search-list '
+    'entr${current.length - live.length == 1 ? 'y' : 'ies'} for keychains that '
+    'no longer exist',
+  );
+  Process.runSync('security', ['list-keychains', '-d', 'user', '-s', ...live]);
+}
+
+/// When the process holding [pid] started, or null when it cannot be read.
+///
+/// `ps -o lstart=` rather than `etime`, because an elapsed time has to be
+/// subtracted from a clock this process reads separately, and the two can
+/// disagree across a suspend.
+DateTime? _processStartedAt(int pid) {
+  final result = Process.runSync('ps', ['-p', '$pid', '-o', 'lstart=']);
+  if (result.exitCode != 0) {
+    return null;
+  }
+  return parsePsStartTime(result.stdout as String);
+}
+
+/// `ps -o lstart=` output as a time, or null when it is not that shape.
+///
+/// `Mon Aug 17 16:29:27 2026` — day name, month, day, time, year. No Dart
+/// parser takes it, hence the month table.
+///
+/// Null rather than a throw or a guess, because a start time that cannot be
+/// read must not cause a collection: deleting a live build's signing keychain
+/// out from under it is far worse than leaving an orphan for the next run.
+///
+/// Split out and public so the format is checked against a real `ps` string in
+/// the suite, rather than by reading one once and trusting the regex.
+DateTime? parsePsStartTime(String output) {
+  final text = output.trim().replaceAll(RegExp(r'\s+'), ' ');
+  if (text.isEmpty) {
+    return null;
+  }
+  final match = RegExp(
+    r'^\w{3} (\w{3}) (\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$',
+  ).firstMatch(text);
+  if (match == null) {
+    return null;
+  }
+  const months = {
+    'Jan': 1,
+    'Feb': 2,
+    'Mar': 3,
+    'Apr': 4,
+    'May': 5,
+    'Jun': 6,
+    'Jul': 7,
+    'Aug': 8,
+    'Sep': 9,
+    'Oct': 10,
+    'Nov': 11,
+    'Dec': 12,
+  };
+  final month = months[match.group(1)];
+  if (month == null) {
+    return null;
+  }
+  return DateTime(
+    int.parse(match.group(6)!),
+    month,
+    int.parse(match.group(2)!),
+    int.parse(match.group(3)!),
+    int.parse(match.group(4)!),
+    int.parse(match.group(5)!),
+  );
 }
 
 /// Files every `APPLE_PROFILE_<name>_PATH` where Xcode looks for it.

@@ -502,4 +502,80 @@ void _expiryTests() {
       expect(certificateExpiryNote(-3), contains('EXPIRED 3d ago'));
     });
   });
+
+  group('collecting a keychain a killed run left behind', () {
+    // Observed rather than theorised: a build died under memory pressure and
+    // left cux_ship-build-80436.keychain-db, and the *next* run declined to
+    // collect it — because something else was alive holding pid 80436 by then.
+    // A pid does not identify a process for long, and a collector that treats
+    // it as if it does leaves the orphan forever.
+    test('a recycled pid does not protect an orphan', () {
+      final made = DateTime(2026, 8, 17, 14, 0);
+      expect(
+        collectStaleKeychains(
+          ['/k/cux_ship-build-4242.keychain-db'],
+          alive: (_) => true,
+          selfPid: 1,
+          createdAt: (_) => made,
+          // Started after the keychain existed, so it cannot be the process
+          // that created it.
+          startedAt: (_) => made.add(const Duration(minutes: 5)),
+        ),
+        ['/k/cux_ship-build-4242.keychain-db'],
+      );
+    });
+
+    test('the process that made it is left alone', () {
+      final made = DateTime(2026, 8, 17, 14, 0);
+      expect(
+        collectStaleKeychains(
+          ['/k/cux_ship-build-4242.keychain-db'],
+          alive: (_) => true,
+          selfPid: 1,
+          createdAt: (_) => made,
+          startedAt: (_) => made.subtract(const Duration(seconds: 30)),
+        ),
+        isEmpty,
+      );
+    });
+
+    // Null means "cannot tell", and cannot tell must never collect: deleting a
+    // live build's signing keychain is far worse than leaving an orphan.
+    test('an unreadable start time never collects', () {
+      expect(
+        collectStaleKeychains(
+          ['/k/cux_ship-build-4242.keychain-db'],
+          alive: (_) => true,
+          selfPid: 1,
+          createdAt: (_) => DateTime(2026, 8, 17, 14, 0),
+          startedAt: (_) => null,
+        ),
+        isEmpty,
+      );
+    });
+  });
+
+  group('reading a process start time', () {
+    // The exact string this machine's `ps -p <pid> -o lstart=` prints, so the
+    // format is checked rather than remembered.
+    test('the real ps format parses', () {
+      expect(
+        parsePsStartTime('Mon Aug 17 16:29:27 2026'),
+        DateTime(2026, 8, 17, 16, 29, 27),
+      );
+    });
+
+    test('padded and multi-space forms parse too', () {
+      expect(
+        parsePsStartTime('Mon Aug  7 06:05:04 2026\n'),
+        DateTime(2026, 8, 7, 6, 5, 4),
+      );
+    });
+
+    test('anything else is null rather than a guess', () {
+      expect(parsePsStartTime(''), isNull);
+      expect(parsePsStartTime('not a date'), isNull);
+      expect(parsePsStartTime('Mon Xxx 17 16:29:27 2026'), isNull);
+    });
+  });
 }
