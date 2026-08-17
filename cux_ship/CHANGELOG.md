@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.2.0
+
+- **`cux_ship appstore await`** exposes the wait that `appstore upload` already
+  did internally. Uploading and waiting can now run on different machines,
+  which matters because the wait is a poll against a REST endpoint that needs
+  no Xcode, no keychain and no signing material — only the API key — while the
+  runner that built the artifact is billed at 10× for being macOS. It also
+  finishes `--skip-waiting`, which until now said a caller would wait later and
+  left nothing to wait with.
+
+  `--build-number` is required rather than defaulting to the newest build: the
+  point of waiting elsewhere is to wait for a *specific* build, and "newest"
+  would succeed on somebody else's upload. The three outcomes keep the meanings
+  `upload` gave them — success, the 422 for a build Apple refused, and the
+  timeout that names where the reason actually is.
+
+- **Every certificate's remaining life is reported at import**, by
+  `keychain exec`, in the words the developer-account audit already uses.
+  A profile carries its own expiry and a certificate carries `notAfter`; they
+  are independent, and nothing read the second. A profile valid for a year that
+  embeds a certificate dying next week passed every check and failed inside
+  codesign — and a project on automatic signing had no profile to check at all.
+  Reported for every certificate imported, not only the one that signs, because
+  an installer certificate expiring is a `productbuild` failure at the end of a
+  Mac App Store run. A warning, never a refusal.
+
 ## 2.1.0
 
 - **The App Store review contact comes from the environment**, as
