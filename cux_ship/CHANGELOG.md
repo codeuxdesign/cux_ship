@@ -1,5 +1,79 @@
 # Changelog
 
+## 2.3.0
+
+- **`cux_ship secrets add`** puts a credential *into* the file. Until now
+  `secrets` could read one five ways and write one — `pack`, and only for a
+  `placed` file `place` had already written — so adding a certificate, a
+  profile or a token meant a hand-rolled `ruby | sops set` pipeline in every
+  project. Those encode the schema path by hand, write one field at a time so
+  an interrupted run leaves a half-credential, and hand `sops set` a bare
+  string when it wants JSON — which is accepted, stored wrong, and
+  authenticates as garbage.
+
+  ```
+  secrets add certificate distribution dist.p12 --password-file pw
+  secrets add profile ios_appstore app.mobileprovision
+  secrets add api-key upload ~/Downloads/AuthKey_ZHGL57YJVC.p8
+  secrets add token artifact --env ARTIFACT_TOKEN --value-file tok
+  ```
+
+  A name and an artifact, positionally. **No `--p12` / `--p8` / `--file`: the
+  artifact is identified by its contents.** That names the real mistake rather
+  than the wrong flag, and catches a correctly named file with the wrong thing
+  inside — which happens, because people rename downloads. An api key's `id`
+  and `kind` are read back out of Apple's `AuthKey_`/`ApiKey_` naming, so the
+  two fields most often got wrong are two nobody types.
+
+  Every field of a credential lands in **one** write, making the partial state
+  `secrets exec` refuses unrepresentable rather than merely reported. Adding
+  over an existing credential is refused; `--replace` is the rotation verb.
+  Passwords and values are never arguments, because an argument is visible to
+  `ps`; a certificate's password is checked against the `.p12` before anything
+  is written.
+
+- **`cux_ship secrets check`** decrypts and reports whether each credential
+  actually works, as **verified**, **failed** or **opaque** — the last being one
+  this tool can never authenticate, such as a token. Only `failed` colours the
+  exit code; an opaque credential is not an error and must not read as one, or
+  the check becomes something people learn to skip past.
+
+  Its unique value is the **cross-checks**, which no single-artifact command can
+  perform: above all whether a stored profile still embeds a certificate the
+  file actually holds. That is not derivable from either artifact alone — a
+  Developer ID profile can outlive the certificate inside it by a decade, so its
+  expiry says nothing about whether it still holds a usable certificate, and
+  replacing a certificate silently invalidates every profile issued against it.
+
+- **`cux_ship secrets remove`** retires one. Doing it by hand was the same
+  failure class as adding by hand, at the worst possible moment — having just
+  decided something is compromised.
+
+- **Renames.** `secrets keys` is now **`secrets list`**: the file holds
+  `api_keys`, `ssh_keys` and `keystores`, so "keys" read as a category rather
+  than as the credential names it actually prints. `appstore await` is now
+  **`appstore wait`**, taking the build number positionally — it was required
+  anyway, and `await`/`builds`/`build-number` shared tokens while meaning
+  unrelated things. `appstore upload` takes **`--artifact`**, with `--ipa` and
+  `--pkg` as accepted spellings: `--platform macos` is first-class, so a macOS
+  release passing its `.pkg` to a flag called `--ipa` read as though macOS had
+  been bolted onto an iOS-shaped command, and `--pkg` — what anyone tries first
+  — was rejected outright.
+
+- **`deps update` is hidden from `--help`.** It re-pins cux_ship's own sources
+  and refuses to run outside a cux_ship checkout, so to every consuming project
+  it was a documented way to get an error. Still runs when typed.
+
+- **A failing `plutil` no longer reads as an absent key.** The per-key loop
+  recorded a value only on exit 0, so a tool that could not do what was asked,
+  a key that is genuinely missing, and a plist that would not parse all arrived
+  at the same message — and the one it printed named the least likely cause.
+  That cost a consuming project an afternoon bisecting macOS versions to learn
+  `Platform` had been present all along. The same bug bit again while building
+  the cross-check, where `plutil -extract … json` refuses a `<data>` array
+  outright ("Invalid object in plist for JSON format") and the empty result
+  silently checked nothing.
+
 ## 2.2.0
 
 - **`cux_ship appstore await`** exposes the wait that `appstore upload` already

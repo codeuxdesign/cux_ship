@@ -173,7 +173,7 @@ const _schema = _Section({
 
 /// Fields whose values must stay readable without an identity.
 ///
-/// `secrets keys` reports paths, and `place` checks a path against the
+/// `secrets list` reports paths, and `place` checks a path against the
 /// repository before writing anything — both of which need the value, so these
 /// have to be outside sops' encryption. That is a real disclosure: a `path`
 /// tells a reader where a project keeps things and an `env` which services it
@@ -281,7 +281,7 @@ const _sopsMetadataKey = 'sops';
 /// Every credential in [document], or an error naming the path of the first
 /// thing that is not one.
 ///
-/// **This is the only reader.** `secrets keys` calls it and ignores the values;
+/// **This is the only reader.** `secrets list` calls it and ignores the values;
 /// the parser calls it and keeps them. Recognition is reaching a leaf without an
 /// error, so there is nowhere for a second opinion about what counts as
 /// recognized to live.
@@ -412,7 +412,7 @@ Map<String, String> _leaves(
 
     // A field this has to read without an identity, that sops encrypted anyway.
     // The dependency on `.sops.yaml` is only tolerable if getting it wrong is
-    // loud: silently, `secrets keys` would report a path of `ENC[...]` and the
+    // loud: silently, `secrets list` would report a path of `ENC[...]` and the
     // pre-flight would check a path nothing will ever write to.
     if (_cleartextFields.contains(key) && values[key]!.startsWith('ENC[')) {
       problems.add(

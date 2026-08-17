@@ -1032,7 +1032,7 @@ class _SecretsListCommand extends Command<void> {
       );
       exitCode = 1;
     } on ProjectException catch (e) {
-      stderr.writeln('cux_ship secrets keys: ${e.message}');
+      stderr.writeln('cux_ship secrets list: ${e.message}');
       exitCode = 1;
     }
   }

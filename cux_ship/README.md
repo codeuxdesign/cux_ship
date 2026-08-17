@@ -34,11 +34,16 @@ note is too long.
 cux_ship appstore upload            play upload            release finish
          appstore promote           play promote           screenshots flatten
          appstore builds            play tracks            verify
-         appstore versions          play listing           secrets exec
-         appstore screenshot-types  play version-code      secrets keys
-         appstore build-number                             deps install
-         appstore signing                                  deps check
-                                                           deps update
+         appstore versions          play listing           secrets add
+         appstore screenshot-types  play version-code      secrets check
+         appstore build-number                             secrets list
+         appstore wait                                     secrets remove
+         appstore signing                                  secrets exec
+                                                           secrets place
+                                                           secrets clean
+                                                           secrets pack
+                                                           deps install
+                                                           deps check
 ```
 
 **Run it from a project root and it works out the rest.** The `applicationId`
@@ -275,7 +280,7 @@ to guess at with a credential.
 ### Reading a secrets file without decrypting it
 
 ```bash
-cux_ship secrets keys
+cux_ship secrets list
 ```
 
 sops keeps key names in cleartext and encrypts only the values, so the shape of
@@ -306,6 +311,99 @@ It reports what it *loaded* rather than what it was asked for, so a credential
 that quietly is not in the file is visible before the command runs instead of
 three minutes into one.
 
+### Putting a credential in
+
+```bash
+cux_ship secrets add certificate distribution dist.p12 --password-file pw
+cux_ship secrets add profile ios_appstore app.mobileprovision
+cux_ship secrets add api-key upload ~/Downloads/AuthKey_ZHGL57YJVC.p8
+cux_ship secrets add token artifact --env ARTIFACT_TOKEN --value-file tok
+cux_ship secrets remove token fosshub
+```
+
+A name and an artifact, positionally, in that order. **There are no `--p12` /
+`--p8` / `--file` flags: the artifact is identified by its contents.** That is
+not only shorter to remember — it names the actual mistake when there is one
+("this is a PEM private key, not a PKCS#12 bundle; did you mean `add
+api-key`?") and it catches what an extension cannot, a correctly named file with
+the wrong thing inside, which happens because people rename downloads.
+
+The shape is not perfectly uniform, and the exceptions are stated rather than
+discovered: `token` takes no file — its value comes from `--value-file` or
+stdin — and `play-account` takes no name.
+
+What it works out so nobody has to type it: the schema path, the base64, the
+JSON quoting, and an api key's `id` and `kind`, read back out of Apple's own
+`AuthKey_` / `ApiKey_` naming. Those last two are the fields most often got
+wrong, and the filename is the only signal `altool` ever gets about which kind
+of key it holds. It prints a certificate's subject and expiry and a profile's
+uuid, name and platform, so what was added is visible rather than assumed.
+
+Two properties this exists for:
+
+- **Every field lands in one write.** Field-at-a-time writing is what makes
+  half-credentials possible, and a half-credential is the dangerous state — a
+  keystore with no password does not fail as "you forgot the password", Gradle
+  falls through to the debug key. The partial state `secrets exec` refuses is
+  now unrepresentable rather than merely reported.
+- **It refuses to overwrite.** `--replace` is the rotation verb. Silently
+  replacing a signing key is worse than any partial write.
+
+Passwords and token values are never command-line arguments — an argument is
+visible to every `ps` on the machine — so they arrive by `--password-file`,
+`--value-file`, or a prompt. A certificate's password is checked against the
+`.p12` **before** anything is written: a bundle stored with the wrong password
+is accepted everywhere until something tries to sign with it, which is a full CI
+cycle away and does not look like a password problem when it arrives.
+
+### Checking that the credentials work, and agree
+
+```bash
+cux_ship secrets check
+```
+
+Three levels, each needing strictly more than the last and answering something
+the last cannot:
+
+| | needs | answers |
+|---|---|---|
+| `cux_ship verify` | nothing | are the release inputs sound |
+| `cux_ship secrets list` | no identity | what is in the file |
+| `cux_ship secrets check` | an identity | do the credentials work, and agree |
+
+Every credential is reported **verified**, **failed**, or **opaque**, and the
+exit code is non-zero only for `failed`. Opaque is not a to-do: it is a
+credential this tool cannot ever authenticate — a token, whose validity is the
+service's to judge — and it must not colour the exit code or the check becomes
+something people learn to skip past. There is deliberately **no way for the
+secrets file to describe how to verify a token**: a command or URL per token
+would make a credential file into something that executes, and the property
+worth keeping is that cux_ship cannot be tricked into spending a token it holds.
+
+Run it after adding a credential, after a rotation, and when onboarding a
+machine — the moments an upload-time warning is structurally too late for. "Is
+anything about to expire" is a different question, continuous, and well served
+by a warning during upload.
+
+**The cross-checks are the part nothing else can do.** A single-artifact command
+sees one credential; only something holding the whole decrypted file can ask
+whether a stored profile still embeds a certificate the file actually holds:
+
+```
+apple.profiles.macos_developerid                 verified  expires in 6563d
+apple.profiles.macos_developerid ↔ certificates  verified  embeds apple.certificates.developer_id
+```
+
+That pairing is not derivable from either artifact alone. The profile above
+outlives the certificate inside it by more than a decade, so its own expiry date
+says nothing about whether it still holds a usable certificate — and replacing a
+certificate silently invalidates every profile issued against it, with nothing
+to notice until codesign fails partway through an archive.
+
+The pairing needs `security cms`, so it is macOS-only. On anything else it is
+reported as opaque rather than skipped, because a cross-check that quietly does
+not run reads exactly like one that ran and found nothing wrong.
+
 ### `deps` — sops and age, pinned by hash
 
 `secrets exec` needs a `sops` binary. `deps install` fetches it, and `age`
@@ -329,6 +427,8 @@ The pins live in this repository, not in yours — bumping them is a `cux_ship`
 release rather than an edit in every project. `deps update` re-pins to the
 latest upstream releases and rewrites `deps_pins.dart`, so it only works inside
 a cux_ship checkout; a consumer gets new pins by moving the ref it depends on.
+It is hidden from `--help` for that reason — to every consuming project it is a
+documented way to get an error — but it still runs when typed.
 
 **`APPLE_API_ISSUER_ID` is optional, and leaving it out means something.** A
 **team** key — Users and Access > Integrations > Team Keys — has an issuer id
