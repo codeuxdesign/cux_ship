@@ -343,6 +343,78 @@ List<String> collectStaleKeychains(
 /// One certificate to import.
 typedef _Certificate = ({String name, String path, String password});
 
+/// Whole days until the `notAfter` in an `openssl x509 -enddate` line.
+///
+/// openssl prints `notAfter=Aug 10 11:00:16 2027 GMT`, which no Dart date
+/// parser accepts — hence the month table. Null when the line is not that
+/// shape, because a certificate whose date cannot be read must not stop a
+/// build over it.
+int? daysUntilNotAfter(String enddateLine, DateTime now) {
+  final match = RegExp(
+    r'notAfter=(\w{3}) +(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})',
+  ).firstMatch(enddateLine);
+  if (match == null) {
+    return null;
+  }
+  const months = {
+    'Jan': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'May': 5, 'Jun': 6,
+    'Jul': 7, 'Aug': 8, 'Sep': 9, 'Oct': 10, 'Nov': 11, 'Dec': 12,
+  };
+  final month = months[match.group(1)];
+  if (month == null) {
+    return null;
+  }
+  return DateTime.utc(
+    int.parse(match.group(6)!),
+    month,
+    int.parse(match.group(2)!),
+    int.parse(match.group(3)!),
+    int.parse(match.group(4)!),
+    int.parse(match.group(5)!),
+  ).difference(now).inDays;
+}
+
+/// How much life a certificate has left, in the words the developer-account
+/// audit uses.
+///
+/// Same threshold and same phrasing as `appstore/signing.dart`, so the two
+/// commands never disagree about what "soon" means.
+String certificateExpiryNote(int? days) {
+  if (days == null) {
+    return '';
+  }
+  if (days < 0) {
+    return '  ** EXPIRED ${-days}d ago **';
+  }
+  if (days <= _soonInDays) {
+    return '  ** expires in ${days}d **';
+  }
+  return '  (${days}d left)';
+}
+
+/// Reads `notAfter` out of a .p12 without putting its password on a command
+/// line, where `ps` would show it. The `-legacy` attempt comes first because
+/// OpenSSL 3 refuses the older PKCS#12 encryption Apple still hands out, and
+/// LibreSSL — which is what `openssl` is on a stock macOS — does not know the
+/// flag at all.
+String readCertificateEnddate(String p12Path, String password) {
+  final result = Process.runSync(
+    'sh',
+    [
+      '-c',
+      '{ openssl pkcs12 -in "\$1" -passin env:CUX_P12_PASSWORD -nokeys -clcerts '
+          '-legacy 2>/dev/null '
+          '|| openssl pkcs12 -in "\$1" -passin env:CUX_P12_PASSWORD -nokeys '
+          '-clcerts 2>/dev/null; } | openssl x509 -noout -enddate 2>/dev/null',
+      'sh',
+      p12Path,
+    ],
+    environment: {'CUX_P12_PASSWORD': password},
+  );
+  return result.stdout as String;
+}
+
+
 /// Runs `security`, and turns a failure into something that names the step.
 ///
 /// Failures are loud here as a rule rather than case by case. One of the
@@ -472,6 +544,31 @@ _Session _create({
       password,
       path,
     ], 'allow codesign to use the imported key');
+
+    // Every certificate's remaining life, reported at import.
+    //
+    // **The profile check cannot cover this.** A profile carries its own
+    // ExpirationDate and a certificate carries `notAfter`; they are independent
+    // dates, and it is the certificate that is capped and shared across the
+    // team. A profile good for a year that embeds a certificate dying next week
+    // passes every check here and then fails inside codesign — and a project on
+    // automatic signing has no profile to check at all, which is how a sibling
+    // project came within twenty days of a dead release path with nothing in
+    // its build saying so.
+    //
+    // A warning, never a refusal: a certificate with a fortnight left must not
+    // stop a build that is going to succeed. That is the reasoning
+    // `decideProfile` already applies to a profile nobody named.
+    for (final certificate in certificates) {
+      final days = daysUntilNotAfter(
+        readCertificateEnddate(certificate.path, certificate.password),
+        DateTime.now().toUtc(),
+      );
+      final note = certificateExpiryNote(days);
+      if (note.isNotEmpty) {
+        stderr.writeln('==> ${certificate.name}$note');
+      }
+    }
 
     // Prepended, never replaced. Replacing would drop the system keychain and
     // with it Apple's intermediate certificates, leaving the leaf chaining to

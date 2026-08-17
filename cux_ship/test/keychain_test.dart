@@ -11,6 +11,7 @@ import 'package:cux_ship/src/project.dart';
 import 'package:test/test.dart';
 
 void main() {
+  _expiryTests();
   group('profileFactsFrom', () {
     test('reads an iOS profile', () {
       final facts = profileFactsFrom({
@@ -414,6 +415,33 @@ Policy: Code Signing
 
     test('the partition list carries apple:, which is the one that works', () {
       expect(keychainPartitionList, contains('apple:'));
+    });
+  });
+}
+
+void _expiryTests() {
+  group('certificate expiry', () {
+    final now = DateTime.utc(2026, 8, 17, 8, 0, 0);
+
+    test('reads the date openssl actually prints', () {
+      expect(
+        daysUntilNotAfter('notAfter=Aug 10 11:00:16 2027 GMT\n', now),
+        358,
+      );
+      // The case that prompted this: a certificate a sibling project was
+      // signing with, three weeks out and reported nowhere in the build.
+      expect(daysUntilNotAfter('notAfter=Sep  6 11:01:52 2026 GMT', now), 20);
+    });
+
+    test('an unreadable date is not a failure', () {
+      expect(daysUntilNotAfter('unable to load certificate', now), isNull);
+      expect(certificateExpiryNote(null), isEmpty);
+    });
+
+    test('says which way the date falls', () {
+      expect(certificateExpiryNote(358), contains('358d left'));
+      expect(certificateExpiryNote(20), contains('expires in 20d'));
+      expect(certificateExpiryNote(-3), contains('EXPIRED 3d ago'));
     });
   });
 }
