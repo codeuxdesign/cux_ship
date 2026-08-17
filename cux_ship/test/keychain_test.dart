@@ -78,6 +78,40 @@ void main() {
       );
     });
 
+    // The message is the feature. A profile that lacks Platform and a plutil
+    // that could not read it are different problems with different fixes, and
+    // reporting the first for the second sent a maintainer bisecting macOS
+    // versions to explain a profile that turned out to be fine.
+    test('says so when reading Platform failed, rather than "absent"', () {
+      expect(
+        () => profileFactsFrom(
+          {'UUID': 'ABC-123'},
+          'ios.mobileprovision',
+          failed: {'Platform': 'plutil -extract Platform json exited 1: boom'},
+        ),
+        throwsA(
+          isA<ProjectException>().having(
+            (e) => e.toString(),
+            'message',
+            allOf(contains('reading Platform failed'), contains('boom')),
+          ),
+        ),
+      );
+    });
+
+    test('still says "absent" when nothing failed', () {
+      expect(
+        () => profileFactsFrom({'UUID': 'ABC-123'}, 'bare.mobileprovision'),
+        throwsA(
+          isA<ProjectException>().having(
+            (e) => e.toString(),
+            'message',
+            contains('Platform was absent'),
+          ),
+        ),
+      );
+    });
+
     test('refuses one with no UUID, since the UUID is the filename', () {
       expect(
         () => profileFactsFrom({'Platform': '["iOS"]'}, 'x.mobileprovision'),

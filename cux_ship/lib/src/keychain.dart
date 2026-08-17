@@ -148,7 +148,20 @@ class ProfileFacts {
 /// live there.
 ///
 /// The keys are Apple's, from the decoded CMS payload.
-ProfileFacts profileFactsFrom(Map<String, String> extracted, String at) {
+///
+/// [failed] carries why a key is missing from [extracted], keyed the same way.
+///
+/// Without it every reason a key is absent reads identically — the profile
+/// genuinely lacks it, `plutil` is not the version we expect, the plist would
+/// not parse — and the message names the one that is merely most likely. That
+/// cost a maintainer of a consuming project an afternoon bisecting two macOS
+/// versions to learn that `Platform` was present all along and the extraction
+/// had failed.
+ProfileFacts profileFactsFrom(
+  Map<String, String> extracted,
+  String at, {
+  Map<String, String> failed = const {},
+}) {
   final uuid = extracted['UUID']?.trim();
   if (uuid == null || uuid.isEmpty) {
     throw ProjectException(
@@ -176,10 +189,12 @@ ProfileFacts profileFactsFrom(Map<String, String> extracted, String at) {
       platforms.contains('xros')) {
     platform = ProfilePlatform.ios;
   } else {
-    throw ProjectException(
-      '$at does not say which platform it is for — Platform was '
-      '${platforms.isEmpty ? 'absent' : platforms.join(', ')}',
-    );
+    final why = platforms.isNotEmpty
+        ? 'Platform was ${platforms.join(', ')}'
+        : failed['Platform'] != null
+        ? 'reading Platform failed — ${failed['Platform']}'
+        : 'Platform was absent';
+    throw ProjectException('$at does not say which platform it is for — $why');
   }
 
   return ProfileFacts(
@@ -764,6 +779,11 @@ ProfileFacts _readProfile(String path) {
       'ExpirationDate': 'raw',
     };
     final extracted = <String, String>{};
+    // A non-zero exit is kept rather than dropped. It used to be indistinguishable
+    // from the key being absent, so a `plutil` that could not do what was asked
+    // reported itself as a profile that did not say which platform it was for —
+    // a true-looking statement about the wrong thing.
+    final failed = <String, String>{};
     for (final entry in format.entries) {
       final result = Process.runSync('plutil', [
         '-extract',
@@ -775,9 +795,13 @@ ProfileFacts _readProfile(String path) {
       ]);
       if (result.exitCode == 0) {
         extracted[entry.key] = (result.stdout as String).trim();
+      } else {
+        failed[entry.key] =
+            'plutil -extract ${entry.key} ${entry.value} exited '
+            '${result.exitCode}: ${(result.stderr as String).trim()}';
       }
     }
-    return profileFactsFrom(extracted, path);
+    return profileFactsFrom(extracted, path, failed: failed);
   } finally {
     work.deleteSync(recursive: true);
   }
@@ -911,6 +935,31 @@ Future<int> runKeychainExec({
       certificates: certificates,
       expectTeam: expectTeam,
     );
+
+    // The passwords have done their work — `_create` imported the certificates
+    // with them, and nothing downstream of this point reads one. They are not a
+    // withholdable family, because this command *needs* them; they are a
+    // credential whose useful life ends here.
+    //
+    // Dropping them matters because they are passed by value. An xcode script
+    // build phase writes its whole environment into the build log, and in a
+    // public repository those logs are public — which is how a sibling project
+    // published three p12 passwords in every ios and macos release for a month.
+    // A consumer can unset them by hand, but only one who knows to; doing it
+    // here means the next build script inherits the protection.
+    final spent = environment.keys
+        .where((k) => k.startsWith('APPLE_') && k.endsWith('_P12_PASSWORD'))
+        .toList();
+    for (final key in spent) {
+      environment.remove(key);
+    }
+    if (spent.isNotEmpty) {
+      stderr.writeln(
+        '==> imported, so withheld from the child: '
+        '${spent.join(', ')}',
+      );
+    }
+
     try {
       _installProfiles(
         session,
