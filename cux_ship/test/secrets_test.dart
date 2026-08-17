@@ -449,7 +449,9 @@ android:
         isEmpty,
       );
       expect(
-        File(loaded['GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_PATH']!).readAsStringSync(),
+        File(
+          loaded['GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_PATH']!,
+        ).readAsStringSync(),
         contains('BEGIN PRIVATE KEY'),
         reason: 'the file still holds what the caller needs',
       );

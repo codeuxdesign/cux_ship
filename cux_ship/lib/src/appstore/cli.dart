@@ -583,7 +583,11 @@ Future<void> runAsc(
           final reviewNotes = metadata.reviewNotes;
           if (reviewNotes != null) {
             stdout.writeln('==> review notes');
-            await store.writeReviewDetails(version, reviewNotes);
+            await store.writeReviewDetails(
+              version,
+              reviewNotes,
+              contact: ReviewContact.fromEnvironment(),
+            );
           }
 
           for (final localeMetadata in metadata.locales) {

@@ -121,6 +121,90 @@ Map<String, dynamic> _attributes(Map<String, dynamic> resource) {
   return attributes is Map<String, dynamic> ? attributes : const {};
 }
 
+/// Who Apple contacts about a review, read from the environment.
+///
+/// **From the environment and not from the metadata tree, because one of the
+/// projects using this package is a public repository.** Every other listing
+/// field is a file beside `info/` and this one deliberately is not: a name, an
+/// e-mail address and a mobile number are one person's, they are the same
+/// person's across every project here, and a phone number in git history
+/// outlives whatever the repository's visibility happened to be on the day it
+/// was committed — and unlike a leaked key, cannot be rotated.
+///
+/// So each project decides where they live. Both of the ones behind this
+/// package already hold arbitrary values in their sops file and hand them over
+/// through `secrets exec`, which is the same route every credential takes.
+class ReviewContact {
+  const ReviewContact({
+    required this.firstName,
+    required this.lastName,
+    required this.email,
+    required this.phone,
+  });
+
+  final String firstName;
+  final String lastName;
+  final String email;
+  final String phone;
+
+  static const firstNameVar = 'APPLE_REVIEW_CONTACT_FIRST_NAME';
+  static const lastNameVar = 'APPLE_REVIEW_CONTACT_LAST_NAME';
+  static const emailVar = 'APPLE_REVIEW_CONTACT_EMAIL';
+  static const phoneVar = 'APPLE_REVIEW_CONTACT_PHONE';
+
+  static const variables = [firstNameVar, lastNameVar, emailVar, phoneVar];
+
+  /// The contact, or null when none of it is set.
+  ///
+  /// All four or none: a partial set is refused rather than sent, because Apple
+  /// demands all four together and a half-filled request fails after the rest
+  /// of the listing has already been written.
+  static ReviewContact? fromEnvironment([Map<String, String>? env]) {
+    final source = env ?? Platform.environment;
+    final present = variables
+        .where((v) => (source[v] ?? '').trim().isNotEmpty)
+        .toList();
+    if (present.isEmpty) {
+      return null;
+    }
+    if (present.length != variables.length) {
+      final missing = variables.where((v) => !present.contains(v));
+      throw AscApiException(400, [
+        'the review contact is half set — ${missing.join(', ')} '
+            '${missing.length == 1 ? 'is' : 'are'} empty.',
+        'Apple wants all four together, so a partial set fails after the rest '
+            'of the listing has been written.',
+      ], request: 'the environment');
+    }
+
+    final phone = source[phoneVar]!.trim();
+    // Apple's own words when it refuses one, checked here instead: "Preface the
+    // phone number with '+' followed by the country code". Worth catching
+    // locally because the rejection arrives mid-push, after several fields have
+    // already landed.
+    if (!RegExp(r'^\+[0-9][0-9 ()./-]*[0-9]$').hasMatch(phone)) {
+      throw AscApiException(400, [
+        '$phoneVar is "$phone", which Apple will refuse.',
+        "It wants '+' then the country code, as in +44 844 209 0611.",
+      ], request: 'the environment');
+    }
+
+    return ReviewContact(
+      firstName: source[firstNameVar]!.trim(),
+      lastName: source[lastNameVar]!.trim(),
+      email: source[emailVar]!.trim(),
+      phone: phone,
+    );
+  }
+
+  Map<String, String> get attributes => {
+    'contactFirstName': firstName,
+    'contactLastName': lastName,
+    'contactEmail': email,
+    'contactPhone': phone,
+  };
+}
+
 /// A build that never became visible, which is usually a rejection.
 ///
 /// Separate from [AscApiException] because nothing went wrong with the API: the
@@ -757,21 +841,35 @@ class AppStore {
   /// wrong contact is worse than a missing one.
   Future<void> writeReviewDetails(
     Map<String, dynamic> version,
-    String notes,
-  ) async {
+    String notes, {
+    ReviewContact? contact,
+  }) async {
     final versionId = _id(version);
     final existing = await client.get(
       '/v1/appStoreVersions/$versionId/appStoreReviewDetail',
     );
     final data = existing['data'];
-    final describe = 'review notes (${notes.length} characters)';
+
+    // **All four contact fields go with every write, not only the first.**
+    // Creating a review detail with nothing but notes succeeds; *updating* one
+    // is refused unless the whole contact is sent alongside — so the second
+    // push of an unchanged file fails where the first one worked. That is the
+    // least guessable order to meet these two rules in, and it cost a release
+    // upload to find.
+    final attributes = <String, String>{
+      'notes': notes,
+      ...?contact?.attributes,
+    };
+    final describe =
+        'review notes (${notes.length} characters)'
+        '${contact == null ? '' : ', contact ${contact.firstName} ${contact.lastName}'}';
 
     if (data is Map<String, dynamic> && data['id'] != null) {
       await writer.patch('/v1/appStoreReviewDetails/${_id(data)}', {
         'data': {
           'type': 'appStoreReviewDetails',
           'id': _id(data),
-          'attributes': {'notes': notes},
+          'attributes': attributes,
         },
       }, describe: describe);
       return;
@@ -780,7 +878,7 @@ class AppStore {
     await writer.post('/v1/appStoreReviewDetails', {
       'data': {
         'type': 'appStoreReviewDetails',
-        'attributes': {'notes': notes},
+        'attributes': attributes,
         'relationships': {
           'appStoreVersion': {
             'data': {'type': 'appStoreVersions', 'id': versionId},

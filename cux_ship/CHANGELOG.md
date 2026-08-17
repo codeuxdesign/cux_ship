@@ -2,6 +2,29 @@
 
 ## 2.1.0
 
+- **The App Store review contact comes from the environment**, as
+  `APPLE_REVIEW_CONTACT_FIRST_NAME`, `_LAST_NAME`, `_EMAIL` and `_PHONE`, and is
+  sent with every review-notes write.
+
+  **Not from the metadata tree, and the asymmetry is deliberate.** Every other
+  listing field is a file beside `info/`; a name, an e-mail address and a mobile
+  number are one person's, they are the same person's across every project using
+  this package, and at least one of those projects is a public repository. A
+  phone number in git history outlives whatever the repository's visibility was
+  on the day it was committed, and unlike a leaked key it cannot be rotated. The
+  environment keeps the choice with each project — a sops file, a CI secret, a
+  shell — which is where every other credential here already lives.
+
+  All four or none: a partial set is refused before anything is written, since
+  Apple wants them together. The phone is checked against the format Apple's own
+  rejection describes — `+` then the country code — because that refusal
+  otherwise arrives mid-push with several fields already landed.
+
+  Sent on create *and* update, which is the part that is not guessable: creating
+  a review detail with notes alone succeeds, and updating one is then refused
+  without the whole contact. So the second push of an unchanged file failed
+  where the first had worked.
+
 - **`appstore upload --metadata` now publishes review notes**, from
   `review-notes.md` beside `info/` and `listings/`, into
   `appStoreReviewDetails.notes` on the version.
@@ -14,9 +37,7 @@
   invisible beforehand because every other part of the listing uploaded fine.
 
   The notes are created where the version has none and patched where it has
-  some. Apple may demand contact fields on the create; that error is passed
-  through rather than pre-empted with invented values, because a wrong review
-  contact is worse than a missing one.
+  some — with the contact above sent alongside either way.
 
   Parsing, the marker that keeps internal checklists out of it, and the
   4000-character check are `cux_ship_verify` 1.8.0 — so `cux_ship verify` fails
