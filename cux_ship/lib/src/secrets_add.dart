@@ -214,6 +214,24 @@ const addKinds = <String, _AddKind>{
   ),
 };
 
+/// The names this family allows, or null when the project chooses them.
+///
+/// Read out of the schema rather than restated here, so `add` and the reader
+/// cannot disagree about what a valid name is — the reader has always refused
+/// an unknown one, and a writer with its own opinion would let something in
+/// that the reader then rejects for the whole file.
+Set<String>? _allowedInstancesFor(_AddKind kind) {
+  _Node? node = _schema;
+  for (final step in [...kind.section, kind.family]) {
+    if (node is _Section) {
+      node = node.children[step];
+    } else {
+      return null;
+    }
+  }
+  return node is _Family ? node.instances : null;
+}
+
 /// The kinds `secrets add` accepts, for help text and completion.
 List<String> get addKindNames => addKinds.keys.toList()..sort();
 
@@ -311,6 +329,21 @@ Future<AddResult> addCredential({
     throw ProjectException(
       '$instance is not a usable name — lowercase letters, digits and '
       'underscores, starting with a letter',
+    );
+  }
+
+  // Some families close the set of names, because the names mean something —
+  // Apple has exactly three certificate kinds. The *reader* has always enforced
+  // that; this did not, so a mistyped instance was written, and only the
+  // read-back noticed. That left an invalid credential in the file, which
+  // `secrets exec` then refuses **as a whole** — a per-credential typo taking
+  // down every command that loads secrets, which is the same class this command
+  // exists to make impossible.
+  final allowed = _allowedInstancesFor(kind);
+  if (allowed != null && !allowed.contains(instance)) {
+    throw ProjectException(
+      '$instance is not one of the ${kind.noun} kinds there are.\n'
+      '    There is: ${(allowed.toList()..sort()).join(', ')}',
     );
   }
   if (kind.needsEnv) {
@@ -423,8 +456,10 @@ Future<AddResult> addCredential({
   final written = after.credentials.where((c) => c.path == pretty).firstOrNull;
   if (written == null) {
     throw ProjectException(
-      'wrote $pretty but reading it back found nothing — '
-      'the file may not match the schema',
+      'wrote $pretty but reading it back did not find it. The write may have '
+      'landed anyway —\n'
+      '    run `secrets list`, which needs no identity, and remove it with '
+      '`secrets remove` if it is there.',
     );
   }
   if (written.missing.isNotEmpty) {

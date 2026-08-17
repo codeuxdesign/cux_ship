@@ -973,38 +973,46 @@ ExportedIdentity exportIdentityFromKeychain({
       );
     }
 
-    // Any currently-valid certificate for the team can sign, so the first one
-    // still in date is as good as any other — there is nothing to rank beyond
-    // "not expired".
+    // **The longest-lived, not the first still in date.** The shell original
+    // this was ported from says "any currently-valid certificate for the team
+    // can sign, so the first one still in date is as good as any other — there
+    // is nothing to rank beyond not expired", and that sentence is wrong.
+    //
+    // It was proved wrong by running it. A keychain holding a certificate with
+    // twenty days left beside its freshly issued replacement passes both on
+    // `-checkend 0`, and "first" picked the one being rotated away from. It
+    // then reported success, and would have signed correctly until the old
+    // certificate lapsed — with the rotation apparently done. "Not expired" and
+    // "usable for a release" are not the same predicate, and the difference is
+    // invisible on the day.
+    //
+    // Ranking by `notAfter` is stable under exactly the thing that should
+    // change the answer. Which one was taken, and which were passed over, is
+    // printed rather than decided quietly.
     PemBag? chosen;
+    DateTime? chosenEnds;
     final expired = <String>[];
+    final alsoValid = <String>[];
     for (final candidate in candidates) {
       final certFile = File('${work.path}/cand.pem')
         ..writeAsStringSync(candidate.certificatePem);
-      final valid =
-          Process.runSync('openssl', [
-            'x509',
-            '-in',
-            certFile.path,
-            '-noout',
-            '-checkend',
-            '0',
-          ]).exitCode ==
-          0;
-      if (valid) {
-        chosen = candidate;
-        break;
+      final ends = _certificateEnds(certFile.path);
+      if (ends == null) {
+        continue;
       }
-      final ends =
-          Process.runSync('openssl', [
-                'x509',
-                '-in',
-                certFile.path,
-                '-noout',
-                '-enddate',
-              ]).stdout
-              as String;
-      expired.add(ends.trim().replaceFirst('notAfter=', ''));
+      if (!ends.isAfter(DateTime.now().toUtc())) {
+        expired.add(_day(ends));
+        continue;
+      }
+      if (chosenEnds == null || ends.isAfter(chosenEnds)) {
+        if (chosenEnds != null) {
+          alsoValid.add(_day(chosenEnds));
+        }
+        chosen = candidate;
+        chosenEnds = ends;
+      } else {
+        alsoValid.add(_day(ends));
+      }
     }
     if (chosen == null) {
       throw ProjectException(
@@ -1094,6 +1102,12 @@ ExportedIdentity exportIdentityFromKeychain({
         'exported from ${keychain ?? 'the login keychain'}',
         if (expired.isNotEmpty)
           'skipped ${expired.length} expired certificate(s) for the same team',
+        // Named rather than counted. With two in-date certificates the choice
+        // is the whole question, and "one other was also valid" does not let
+        // anyone check it was the right one.
+        if (alsoValid.isNotEmpty)
+          'passed over ${alsoValid.length} shorter-lived certificate(s) '
+              'for the same team, expiring ${alsoValid.join(', ')}',
       ],
     );
   } catch (_) {
@@ -1101,6 +1115,27 @@ ExportedIdentity exportIdentityFromKeychain({
     rethrow;
   }
 }
+
+/// `notAfter` of a PEM certificate, or null when openssl would not say.
+DateTime? _certificateEnds(String pemPath) {
+  final result = Process.runSync('openssl', [
+    'x509',
+    '-in',
+    pemPath,
+    '-noout',
+    '-enddate',
+  ]);
+  if (result.exitCode != 0) {
+    return null;
+  }
+  final text = (result.stdout as String).trim();
+  if (!text.startsWith('notAfter=')) {
+    return null;
+  }
+  return parseOpensslDate(text.substring('notAfter='.length).trim());
+}
+
+String _day(DateTime value) => value.toIso8601String().split('T').first;
 
 String _loginKeychain() {
   final home = Platform.environment['HOME'];

@@ -542,11 +542,14 @@ DateTime? readCertificateEnddateFor(String p12Path, String password) {
   if (!text.startsWith('notAfter=')) {
     return null;
   }
-  return _parseOpensslDate(text.substring('notAfter='.length).trim());
+  return parseOpensslDate(text.substring('notAfter='.length).trim());
 }
 
 /// `Mar  1 12:00:00 2027 GMT`, which is not a format `DateTime.parse` knows.
-DateTime? _parseOpensslDate(String value) {
+///
+/// Public because `keychain.dart` ranks certificates by the same field, and two
+/// parsers for one format is the drift this file has already been bitten by.
+DateTime? parseOpensslDate(String value) {
   const months = {
     'Jan': 1,
     'Feb': 2,

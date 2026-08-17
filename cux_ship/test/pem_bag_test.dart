@@ -3,6 +3,7 @@
 // The pairing rule `--from-keychain` is built on, tested without a Mac.
 
 import 'package:cux_ship/src/keychain.dart';
+import 'package:cux_ship/src/secrets.dart';
 import 'package:test/test.dart';
 
 /// What `openssl pkcs12 -nodes` prints for a keychain holding one identity.
@@ -92,6 +93,37 @@ void main() {
             b.body.contains('Apple Distribution'),
       );
       expect(byTeamAndKind, hasLength(1));
+    });
+
+    // Proved wrong by *running* the port, which reading it could not have
+    // shown: the shell original picks the first candidate that is not expired,
+    // and a keychain holding a certificate with twenty days left beside its
+    // fresh replacement passes both. "First" then re-installs the one being
+    // rotated away from, reports success, and signs correctly until it lapses.
+    test('the longest-lived certificate wins, not the first still in date', () {
+      final soon = parseOpensslDate('Sep  6 11:01:52 2026 GMT');
+      final later = parseOpensslDate('Aug 10 09:00:00 2027 GMT');
+      expect(soon, isNotNull);
+      expect(later, isNotNull);
+
+      // Both are in date, so "not expired" cannot separate them — which is the
+      // whole finding. Ranking by notAfter can.
+      final now = DateTime.utc(2026, 8, 17);
+      expect(soon!.isAfter(now), isTrue);
+      expect(later!.isAfter(now), isTrue);
+      expect(later.isAfter(soon), isTrue);
+    });
+
+    test('openssl dates parse, including the single-digit day', () {
+      expect(
+        parseOpensslDate('Sep  6 11:01:52 2026 GMT'),
+        DateTime.utc(2026, 9, 6, 11, 1, 52),
+      );
+      expect(
+        parseOpensslDate('Mar 01 12:00:00 2027 GMT'),
+        DateTime.utc(2027, 3, 1, 12, 0, 0),
+      );
+      expect(parseOpensslDate('not a date'), isNull);
     });
 
     test('the certificate PEM comes back out on its own', () {
