@@ -156,6 +156,27 @@ This is why `--api-key` is opt-in.
 Two rules is not a defeat. One rule that silently covers half a threat model is
 worse than two that each say what they are for.
 
+**They compose as a union, never as a chain.** Withhold if *either* rule
+applies; do not let the first rule that matches decide. The order must not
+change the answer, and there is exactly one case that proves it:
+
+| | exposure rule | capability rule | outcome |
+| --- | --- | --- | --- |
+| a token | value — withhold | a capability — withhold | withheld twice, harmless |
+| the Play service account | **path — passes** | a capability — withhold | **must be withheld** |
+
+Since 2.0.0 the Play credential is path-shaped, so an implementation that
+evaluates exposure first and returns on a pass hands it to the child. That is
+the exact exclusion the capability rule exists for, and getting it wrong looks
+like the rule working.
+
+The tell is specific enough to test: **if `android.play_service_account` ever
+appears in a child's environment because it is path-shaped, the union has become
+a chain.**
+
+That 2.0.0 removed the *exposure* reason for withholding it while the exclusion
+stayed correct is the clue that there were two rules all along.
+
 **The unit is the variable, not the family.** Families are mixed:
 
 ```
