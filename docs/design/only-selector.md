@@ -116,11 +116,67 @@ mechanism that has to work for all of them.
 This is the part most likely to be got wrong, so it is stated rather than
 inferred, and both help texts must say it.
 
-The rule that makes it principled rather than two exceptions: **`secrets exec`
-is a general-purpose wrapper and defaults to everything; `keychain exec` exists
-to sign and defaults to the minimum that signs.** A command whose entire purpose
-is one operation can know what that operation needs. A command whose purpose is
-"run this with credentials" cannot.
+**Why `keychain exec` gets the narrow default is an empirical claim, not a
+definitional one.** An earlier draft said this command "exists to sign Apple
+builds, so its child is an Apple build and nothing else" — the same sentence the
+code has carried for a while. That is false. AuthPass's child is a release
+script that runs `pod repo update`, builds, archives, uploads, and pushes over
+ssh; the other consuming project's child reads a changelog and writes a
+manifest. `keychain exec` is the *outer* wrapper in both, precisely because it
+is the one that places no App Store key in the environment, which makes it the
+natural place to hang everything else.
+
+The defensible claim is about where the exposure is: **`keychain exec` is where
+Apple builds run, and an Xcode script phase writes its whole environment into
+the build log.** That can be checked, and someone extending it will extend it
+safely. "Its child is an Apple build and nothing else" cannot be checked and is
+wrong.
+
+### Two rules decide the default, and they answer different threats
+
+A single rule was proposed — withhold what is value-shaped, pass what is
+path-shaped — and it is half right. Stated alone it silently undoes two
+exclusions that are currently correct.
+
+**Values are withheld, because an environment is broadcast.** It is inherited by
+everything a child spawns and printed wholesale by an Xcode script phase. Tokens
+are this rule's subject: theirs is the one family whose secret material is
+irreducibly a value, which is why 2.0.0 could convert every other one to a path
+and not that.
+
+**Capabilities this command does not confer are withheld, because holding a
+credential is itself the risk.** A child holding the Play service account path
+can publish to Play whether or not anything ever prints it. A child holding an
+App Store key can create and revoke signing material. Neither is a log-exposure
+question, and the code already says so — the comment on
+`android.play_service_account` notes that exposure *stopped* being the argument
+when 2.0.0 made it a path, leaving capability as the reason it stays withheld.
+This is why `--api-key` is opt-in.
+
+Two rules is not a defeat. One rule that silently covers half a threat model is
+worse than two that each say what they are for.
+
+**The unit is the variable, not the family.** Families are mixed:
+
+```
+path  APPLE_DISTRIBUTION_P12_PATH     value  APPLE_DISTRIBUTION_P12_PASSWORD
+path  ANDROID_KEYSTORE_PATH           value  ANDROID_KEYSTORE_PASSWORD
+path  APPLE_API_PRIVATE_KEY_PATH      value  APPLE_API_KEY_ID, APPLE_API_ISSUER_ID
+```
+
+So no family can be classified whole. This is not a new idea in the codebase: it
+is the generalisation of the one thing 2.3.0 already does correctly, which is to
+strip `APPLE_*_P12_PASSWORD` from a child while leaving the paths beside them.
+It also answers the keystore case without help — `ANDROID_KEYSTORE_PATH` passes,
+`ANDROID_KEYSTORE_PASSWORD` does not, and the Gradle build that genuinely needs
+the password gets it from `secrets exec`, whose default is everything. A rule
+that stands only because an unrelated exclusion happens to hide its worst case
+is not a rule.
+
+**Consequence for what `--only` is.** With a per-variable default, a caller
+writing `--only marks` is asking to readmit a specific *value*. That is a
+sharper description of the flag's job than "select credentials", and it makes
+the fail-closed story easier to state: values are out unless named.
 
 ### What `--only` governs on `keychain exec`, and what it does not
 
