@@ -67,21 +67,64 @@ is not an axis; it is a name written over two decisions already made.
 
 **Three attempts, each needing more structure than the last, ending in one rule,
 one guarantee and a seven-row table.** That is not a default anyone holds in
-their head. They would read it once, learn nothing, and discover the real
-behaviour when a build broke.
+their head.
 
-An empty default has none of these problems, because it makes none of the
-claims. It does not need to know what the child is, what a credential is shaped
-like, or what capability it confers.
+And the reason is structural rather than a failure to write it well: **a default
+has to satisfy every consumer, so it is the union of their needs, and a union is
+wrong for each of them individually.** That is what kept demanding more
+structure — three attempts to make one list correct for three different
+children, the last needing a table because that is what a union looks like
+written out. A union has no explanation, only a membership list.
+
+A call-site selector is each consumer's own set. It is smaller, and it has a
+reason that fits in the flag: *this build bakes one token, so it names one
+token.*
+
+An empty default has none of these problems because it makes none of the claims.
+It does not need to know what the child is, what a credential is shaped like, or
+what capability it confers.
+
+### What it withholds is what cux_ship placed
+
+Not the ambient environment. `PATH`, `HOME`, `SSH_AUTH_SOCK` and everything else
+inherited from the invoking shell are untouched — the filter removes credentials
+this tool put there, and nothing else.
+
+Worth stating because it looks like a counterexample and is not: one project's
+build authenticates to git during the build, through an agent socket that
+cux_ship never placed. An empty default cannot break it. A reader whose first
+question is "does my build still have git access" needs that answered once,
+here, rather than by experiment.
+
+### Both kinds of list rot; the failures differ
+
+An honest comparison, because the call-site list is not immune:
+
+- **A call-site list that becomes too narrow fails loudly**, immediately, in the
+  one build that is wrong, in front of whoever changed it — and the tool's own
+  "removed from the environment" line is in the log beside the failure.
+- **A call-site list that becomes too broad is silent.** What makes it tolerable
+  is that it is *visible in a diff*: the flag sits in the same repository, and
+  usually the same change, as the consumption that justified it.
+- **A tool default that grows a family is silent for everyone**, and the change
+  is in a different repository behind a version pin, which no consumer's review
+  ever sees. That is how a Play service-account key reached four public logs.
+
+So the claim is not that call sites are better maintained. It is that the failure
+becomes local, loud and reviewable instead of shared, silent and invisible.
 
 ## What an empty default buys
 
 - **No premise about the child.** It does not matter what the script does.
 - **`ssh_keys` needs no decision.** Nothing passes unnamed, so there is no
   question of whether this family should.
-- **The App Store guarantee is free.** `ios.yaml` relies by name on the archive
-  being unable to hold a key that could create or revoke signing material. With
-  an empty default it cannot hold *anything* unnamed. `--api-key` remains the
+- **The App Store guarantee is free, and only because the sops identity goes
+  too.** `ios.yaml` relies by name on the archive being unable to hold a key that
+  could create or revoke signing material. An empty default gets that for
+  nothing — but it would have been a hollow guarantee if the child still carried
+  `SOPS_AGE_KEY`, since a key to the file that *holds* `apple.api_keys` can mint
+  the credential the guarantee denies. Stripping the identity unconditionally is
+  what makes this bullet true rather than nearly true. `--api-key` remains the
   consent switch.
 - **No half-credentials.** Credentials are named whole.
 - **No keystore lockout.** Nothing is auto-selected, so nothing has to choose
@@ -167,12 +210,35 @@ it received, minus what it strips.
 - **Some families cap instances at one.** `--only
   android.keystores.upload,android.keystores.mirror` parses and cannot be
   satisfied: there is one set of `ANDROID_*` names to fill. Refused, saying why.
-- **`--keystore` and `--api-key` overlap with `--only`.** An instance named in
-  `--only` resolves the ambiguity those flags exist to resolve; `--keystore
-  upload` together with an `--only` that excludes `android.keystores`, or names
-  a different instance, is a contradiction and fatal.
+- **`--keystore` and `--api-key` are refused when `--only` is given.** They exist
+  to resolve which instance fills a singular set of variable names, and an
+  instance named in `--only` already says that. Adjudicating their interaction
+  was three rules; refusing them flat is one, and the error names the
+  replacement. They survive only for the no-`--only` mode of `secrets exec`,
+  where the ambiguity still needs an answer. A side effect worth having: one
+  project's iOS upload currently passes a vestigial `--keystore upload` that
+  exists solely to appease ambiguity refusal, and it disappears.
+- **`--profile` is a different axis and is not replaced.** It selects which
+  profiles get *installed for Xcode*; `--only` selects what the child's
+  environment holds. Readers will conflate them, so `--only apple.profiles.*` on
+  `keychain exec` is refused, pointing at `--profile` — the same shape as
+  `placed.foo` pointing at `secrets place`.
 - `--only placed.foo` on an exec command is refused, pointing at `secrets
   place`: exec never writes placed files.
+
+### One absence this cannot make loud
+
+Fail-closed at the environment is not fail-closed at the build, and there is one
+family where the difference bites. A missing Android keystore does not fail as
+"you forgot the keystore" — Gradle falls through to the debug key and produces an
+artifact only the store rejects, after a full upload. That is the whole reason
+ambiguous keystore selection is fatal rather than guessed.
+
+It never reaches `keychain exec`, whose child cannot sign an Android artifact.
+But `secrets exec --only tokens.foo -- build android` reintroduces exactly that
+state. So on `secrets exec`, an `--only` that omits a keystore the file holds
+should say so rather than proceed silently — the one place where naming a subset
+deserves a question rather than obedience.
 
 No wildcards — family selection *is* the wildcard. No negation — "everything
 except X" is the fail-open shape wearing selector syntax, and it is what this
@@ -191,19 +257,53 @@ child's environment — which on an Apple build is written wholesale into the lo
 by an Xcode script phase. It is not a credential *in* the file, so it is not a
 family, so no selector can name it and no default touches it.
 
-**It cannot simply be unset, and the reason is instructive: the only consumer is
-cux_ship itself.** One project's release nests `secrets exec` *inside* the
-`keychain exec` child, so the child decrypts again and needs the key. Removing
-it would break that composition — loudly, at the nested decrypt, but break it.
+**It is stripped from the child, unconditionally, with no way to readmit it.**
 
-So it wants a deliberate answer rather than inheritance:
+The obvious objection is that one project's release nests `secrets exec`
+*inside* the `keychain exec` child, so that child decrypts again and needs the
+key. That was nearly the reason for a readmit flag. It is the wrong fix, because
+the nesting is itself the thing to remove.
 
-- strip it from the child by default, since nothing outside cux_ship reads it;
-- give it a spelling to readmit, for the nesting case — it cannot be
-  `--only <family>` because it is not one;
-- and say plainly, wherever the limits of this design are described, that the
-  environment filter protects individual credentials while passing the key that
-  mints all of them.
+The nest exists to scope a credential to part of a script: the archive must not
+hold an App Store key, the upload must, and they are two phases of one child. But
+if two phases need different credentials they should be two invocations, not one
+wrapping the other:
+
+```
+keychain exec --only ssh_keys.github_deploy -- build.sh   # signs; no ASC key, no age key
+secrets exec --api-key upload -- upload.sh                # uploads; has both
+```
+
+The scoping is then done by the step boundary. Checked before proposing it: the
+ios and macos arms of that project's release script are already
+build-then-`secrets exec`-upload in sequence, two lines each, so the split is
+mechanical rather than a redesign.
+
+What that buys is worth more than the flag it deletes:
+
+- **the readmit spelling has no consumers and does not exist** — one less
+  concept, and one less thing that is a flag away from false;
+- **"`keychain exec`'s child never holds the sops identity" becomes a flat
+  guarantee**, not a default;
+- and the App Store guarantee below stops being conditional. With a readmit, an
+  Xcode script phase would dump an environment containing the master key to the
+  file that holds `apple.api_keys` — so the archive could mint the very
+  credential the guarantee says it cannot hold.
+
+Two things to know before someone "fixes" this later. `ci-install-deps` also
+consumes `SOPS_AGE_KEY`, but as a **sibling workflow step outside the wrapper**,
+so stripping does not touch it. And in one consuming project the key is *already*
+absent from the `keychain exec` child — measured, not inferred — so for them this
+writes down an invariant that holds by accident rather than changing anything.
+
+That the only consumer is cux_ship itself is verified for the project that
+nests. It is checked per project rather than assumed about the world.
+
+Today the only thing protecting this key in a public log is the CI provider's
+secret masking, which works because it is the one registered Actions secret. The
+Play service account leaked precisely because sops-decrypted material is
+invisible to that masker; `SOPS_AGE_KEY` is covered only because it never passes
+through sops.
 
 Today the only thing protecting it in a public log is the CI provider's secret
 masking, which works because it is the one registered Actions secret. That is
@@ -243,15 +343,38 @@ learn to trust wrongly.
 
 ## What it costs to adopt
 
-Two call sites, in two repositories:
-
 ```
-authpass      keychain exec --only ssh_keys.github_deploy -- ci-release.sh
+authpass      keychain exec --only ssh_keys.github_deploy -- build
+              secrets exec --api-key upload -- upload-and-push     # was nested inside
 storyteller   keychain exec --only tokens.marks -- tool/build.sh
 ```
 
-The third project's `keychain exec` child needs nothing beyond the keychain and
-is unchanged.
+The storyteller change is one line and is already written. The authpass change is
+the step split described under `SOPS_AGE_KEY` — its `keychain exec` child cannot
+simply gain a flag, because it is the project that nests.
+
+**And on the other side of the ledger, authpass deletes more than it adds.**
+`ci-release.sh` currently carries a hand-maintained *denylist*: ten `unset` lines
+and a comment essay, including a claim that had to be verified by hand across
+five scripts ("Verified in build-ios.sh, build-macos.sh, upload-ios.sh,
+upload-macos.sh and release.sh: none of them mentions these"). That block exists
+only because the current default is fail-open. Under an empty default the whole
+of it is deletable, replaced by one token in the workflow.
+
+That is the strongest concrete evidence for this design: the complexity is not
+being moved to the call site, it is **already at the call site**, in negated
+form, and this removes it.
+
+Two stale strings in that project should be fixed in the same change, since both
+are already wrong: `ci-release.sh`'s guard says "run this under 'cux_ship secrets
+exec'" when the wrapper is `keychain exec`, and `release.sh` still claims
+`build-ios.sh` imports a certificate into a keychain, which the workflow
+contradicts.
+
+The third project's `keychain exec` child needs nothing beyond the keychain, and
+that is measured rather than assumed: its build reads `APPLE_KEYCHAIN` and one
+token on the Apple path, and its Android path runs under `secrets exec`, whose
+default does not change.
 
 ## Structural work required
 
