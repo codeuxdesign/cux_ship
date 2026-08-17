@@ -357,8 +357,18 @@ int? daysUntilNotAfter(String enddateLine, DateTime now) {
     return null;
   }
   const months = {
-    'Jan': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'May': 5, 'Jun': 6,
-    'Jul': 7, 'Aug': 8, 'Sep': 9, 'Oct': 10, 'Nov': 11, 'Dec': 12,
+    'Jan': 1,
+    'Feb': 2,
+    'Mar': 3,
+    'Apr': 4,
+    'May': 5,
+    'Jun': 6,
+    'Jul': 7,
+    'Aug': 8,
+    'Sep': 9,
+    'Oct': 10,
+    'Nov': 11,
+    'Dec': 12,
   };
   final month = months[match.group(1)];
   if (month == null) {
@@ -413,7 +423,6 @@ String readCertificateEnddate(String p12Path, String password) {
   );
   return result.stdout as String;
 }
-
 
 /// Runs `security`, and turns a failure into something that names the step.
 ///

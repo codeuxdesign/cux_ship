@@ -117,7 +117,6 @@ Duration? _duration(String value) {
   };
 }
 
-
 /// The arguments [cmd] accepts.
 ///
 /// No `help` flag: `CommandRunner` adds one to every command it owns, and a
@@ -136,7 +135,11 @@ ArgParser buildAscParser(AscCommand cmd) {
     parser
       ..addOption(
         'build-number',
-        help: 'The build to wait for. Required, and deliberately not defaulted '
+        help:
+            'The build to wait for. If this never arrives, check the bundle '
+            'id first: a wrong one resolves to a different app and reports '
+            'nothing uploaded, which reads like a build that has not landed. '
+            'Required, and deliberately not defaulted '
             'to the newest: the point of waiting on another machine is to wait '
             'for a *specific* build, and "newest" would succeed on somebody '
             "else's upload.",
@@ -276,6 +279,39 @@ Future<void> runAsc(
       'no bundle identifier — none could be read from the Xcode project, so '
       'pass --bundle-id',
     );
+  }
+
+  // Parsed and bounded here rather than at the point of use, because this
+  // package checks what it can offline before loading a credential — and an
+  // argument is the most checkable thing there is. Validated later, `--poll 0`
+  // is reported only after the network has already been touched.
+  Duration? awaitTimeout;
+  Duration? awaitPoll;
+  if (cmd == AscCommand.awaitBuild) {
+    final timeoutText = args.option('timeout')!;
+    final pollText = args.option('poll')!;
+    awaitTimeout =
+        _duration(timeoutText) ??
+        fail('--timeout is "$timeoutText" — write it as 45m or 90s.');
+    awaitPoll =
+        _duration(pollText) ??
+        fail('--poll is "$pollText" — write it as 45m or 90s.');
+    // A floor, because the failure is silent and somebody else's: `--poll 0`
+    // parses, and then asks Apple for builds as fast as the network allows for
+    // as long as --timeout says. A typo that reads as harmless should be an
+    // argument error rather than forty-five minutes of hammering.
+    if (awaitPoll < const Duration(seconds: 1)) {
+      fail(
+        '--poll is "$pollText" — one second is the floor, or this becomes an '
+        'unthrottled request loop against Apple.',
+      );
+    }
+    if (awaitTimeout < const Duration(seconds: 1)) {
+      fail(
+        '--timeout is "$timeoutText" — at zero this checks once and then '
+        'reports a build as refused for being young.',
+      );
+    }
   }
 
   final locale = opt('locale') ?? _defaultLocale;
@@ -485,17 +521,11 @@ Future<void> runAsc(
       if (buildNumber == null || buildNumber.isEmpty) {
         fail('--build-number is required. See its help for why.');
       }
-      final timeoutText = args['timeout'] as String;
-      final pollText = args['poll'] as String;
       await store.awaitProcessing(
         app,
         buildNumber,
-        timeout:
-            _duration(timeoutText) ??
-            fail('--timeout is "$timeoutText" — write it as 45m or 90s.'),
-        poll:
-            _duration(pollText) ??
-            fail('--poll is "$pollText" — write it as 45m or 90s.'),
+        timeout: awaitTimeout!,
+        poll: awaitPoll!,
       );
       return;
     }
