@@ -6,6 +6,8 @@
 // different kind of check and does not belong in a unit suite that mutates
 // nothing.
 
+import 'dart:io';
+
 import 'package:cux_ship/src/keychain.dart';
 import 'package:cux_ship/src/project.dart';
 import 'package:test/test.dart';
@@ -539,6 +541,23 @@ void _expiryTests() {
       );
     });
 
+    // The safety rests on `isAfter` being strict, so the boundary is pinned:
+    // a process whose recorded start equals the file's timestamp is the owner,
+    // not a recycled id.
+    test('an equal timestamp is the owner, not a reuse', () {
+      final made = DateTime(2026, 8, 17, 14, 0);
+      expect(
+        collectStaleKeychains(
+          ['/k/cux_ship-build-4242.keychain-db'],
+          alive: (_) => true,
+          selfPid: 1,
+          createdAt: (_) => made,
+          startedAt: (_) => made,
+        ),
+        isEmpty,
+      );
+    });
+
     // Null means "cannot tell", and cannot tell must never collect: deleting a
     // live build's signing keychain is far worse than leaving an orphan.
     test('an unreadable start time never collects', () {
@@ -556,13 +575,26 @@ void _expiryTests() {
   });
 
   group('reading a process start time', () {
-    // The exact string this machine's `ps -p <pid> -o lstart=` prints, so the
-    // format is checked rather than remembered.
-    test('the real ps format parses', () {
-      expect(
-        parsePsStartTime('Mon Aug 17 16:29:27 2026'),
-        DateTime(2026, 8, 17, 16, 29, 27),
-      );
+    // Asks the real `ps` about this very process, rather than asserting a
+    // string somebody transcribed once. The previous version of this test fed a
+    // literal while its own comment claimed the format was "checked rather than
+    // remembered" — which is reading it once and trusting the regex, with a
+    // test asserting the transcription. A literal cannot notice a locale or
+    // format drift; this can.
+    test('the format this machine actually prints parses', () {
+      final printed =
+          Process.runSync('ps', ['-p', '$pid', '-o', 'lstart=']).stdout
+              as String;
+      expect(printed.trim(), isNotEmpty, reason: 'ps printed nothing');
+
+      final parsed = parsePsStartTime(printed);
+      expect(parsed, isNotNull, reason: 'could not parse: "${printed.trim()}"');
+
+      // Sane rather than exact: this process started before now and has not
+      // been running for a year.
+      final now = DateTime.now();
+      expect(parsed!.isAfter(now.subtract(const Duration(days: 365))), isTrue);
+      expect(parsed.isBefore(now.add(const Duration(minutes: 1))), isTrue);
     });
 
     test('padded and multi-space forms parse too', () {
@@ -576,6 +608,54 @@ void _expiryTests() {
       expect(parsePsStartTime(''), isNull);
       expect(parsePsStartTime('not a date'), isNull);
       expect(parsePsStartTime('Mon Xxx 17 16:29:27 2026'), isNull);
+    });
+  });
+
+  group('pruning the user search list', () {
+    // A path that really is there, and one that really is not — the predicate
+    // is `existsSync`, so a stub returning a non-existent File would make
+    // "exists" mean the opposite of its name.
+    File exists(String path) => File(Platform.resolvedExecutable);
+    File missing(String path) => File('/definitely/missing/$path');
+
+    const login = '/Users/x/Library/Keychains/login.keychain-db';
+    const dead = '/Users/x/Library/Keychains/cux_ship-build-999.keychain-db';
+
+    // The case that makes this worth extracting: every entry is a dead keychain
+    // of ours. Writing the result would set an *empty* user search list, which
+    // severs the login keychain from every later security and codesign call for
+    // that user until it is repaired by hand. Declining costs nothing — the
+    // next run adds a real entry and the dead ones go then.
+    test('an all-dead list is never written', () {
+      expect(searchListWithoutDeadKeychains([dead], missing), isNull);
+      expect(
+        searchListWithoutDeadKeychains([dead, '$dead.2'], missing),
+        isNull,
+      );
+    });
+
+    test('a dead entry beside a live one is dropped', () {
+      expect(searchListWithoutDeadKeychains([login, dead], missing), [login]);
+    });
+
+    // Nothing to do is not the same as nothing to keep, and both return null —
+    // so this pins that the no-change path is the reason, not the empty one.
+    test('an unchanged list is not rewritten', () {
+      expect(searchListWithoutDeadKeychains([login], missing), isNull);
+      expect(searchListWithoutDeadKeychains([login, dead], exists), isNull);
+    });
+
+    // Only ours. A dead keychain belonging to somebody else is not this tool's
+    // to remove, and a search list is shared.
+    test('a foreign entry is kept even when its file is gone', () {
+      const foreign = '/Users/x/Library/Keychains/somebody-else.keychain-db';
+      expect(searchListWithoutDeadKeychains([foreign, dead], missing), [
+        foreign,
+      ]);
+      expect(searchListWithoutDeadKeychains([login, foreign, dead], missing), [
+        login,
+        foreign,
+      ]);
     });
   });
 }

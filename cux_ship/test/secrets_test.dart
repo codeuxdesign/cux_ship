@@ -609,13 +609,24 @@ tokens:
       '    distribution:\n'
       '      p12_base64: ${b64('c')}\n'
       '      password: p\n'
+      '  profiles:\n'
+      '    ios_appstore:\n'
+      '      base64: ${b64('p')}\n'
       'tokens:\n'
       '  wanted:\n'
       '    env: WANTED_TOKEN\n'
       '    value: v\n'
       '  unwanted:\n'
       '    env: UNWANTED_TOKEN\n'
-      '    value: v\n',
+      '    value: v\n'
+      'ssh_keys:\n'
+      '  deploy:\n'
+      '    env: DEPLOY_KEY_PATH\n'
+      '    base64: ${b64('k')}\n'
+      'placed:\n'
+      '  env_production:\n'
+      '    path: lib/env/production.dart\n'
+      '    base64: ${b64('// generated')}\n',
     );
 
     Set<String> placed(LoadedSecrets loaded) => loaded.environment.keys
@@ -641,6 +652,27 @@ tokens:
         placed(loaded).difference(derived),
         isEmpty,
         reason: 'materialization exports something the filter cannot see',
+      );
+
+      // The other direction, which the doc comment also promises and which was
+      // unasserted: a name the filter derives but nothing ever exports would
+      // strip an *ambient* variable out of a child, silently.
+      //
+      // Checked over the families whose names do not depend on which instance
+      // was selected — the singular ANDROID_*/APPLE_API_* names are filled by
+      // one chosen instance, so the union legitimately exceeds what is placed.
+      final instanceNamed = {
+        for (final entry in variablesByCredential(_secretsFile).entries)
+          if (entry.key.startsWith('apple.certificates.') ||
+              entry.key.startsWith('apple.profiles.') ||
+              entry.key.startsWith('tokens.') ||
+              entry.key.startsWith('ssh_keys.'))
+            ...entry.value,
+      };
+      expect(
+        instanceNamed.difference(placed(loaded)),
+        isEmpty,
+        reason: 'the filter names something materialization never exports',
       );
       loaded.dispose();
     });

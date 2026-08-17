@@ -1462,9 +1462,12 @@ Future<int> runKeychainExec({
         : 'the environment this command received',
   );
   for (final family in selection.emptyFamilies) {
+    // Names where the family was looked for. In the nested branch the file does
+    // hold them and an outer wrapper stripped them, so pointing at the file
+    // would be a false statement about a real file.
     stderr.writeln(
       '==> family "$family" selected, but there are no $family in '
-      '${secretsFile.path}',
+      '${loadsItself ? secretsFile.path : 'the environment this command received'}',
     );
   }
   // **This command's own inputs are not in `--only`'s domain.** It imports
@@ -1488,10 +1491,22 @@ Future<int> runKeychainExec({
   // flag documented as *the* way to give a child an App Store credential was a
   // silent no-op — placement and visibility disagreeing, which is the same
   // family of bug as the two already fixed here.
+  // Resolved through `deliverable` like everything else, and not against the
+  // file. In the nested branch `--only apple.api_keys.upload` for a key the
+  // outer wrapper stripped is fatal with a message that names it, while
+  // `--api-key upload` for that same stripped key would silently select
+  // variables that never arrived and fail downstream — the same flag, the same
+  // key, two different failure modes.
   final selectedPaths = {
     ...selection.paths,
     if (apiKey != null)
-      ...byCredential.keys.where((p) => p == 'apple.api_keys.$apiKey'),
+      ...resolveOnly(
+        ['apple.api_keys.$apiKey'],
+        available: deliverable,
+        at: loadsItself
+            ? secretsFile.path
+            : 'the environment this command received',
+      ).paths,
   };
   final selectedVariables = {
     for (final path in selectedPaths) ...byCredential[path]!,
@@ -1574,8 +1589,22 @@ Future<int> runKeychainExec({
     // published three p12 passwords in every ios and macos release for a month.
     // A consumer can unset them by hand, but only one who knows to; doing it
     // here means the next build script inherits the protection.
+    // Explicitly named certificates keep their password. Removing it would
+    // hand the child a `_P12_PATH` with no `_P12_PASSWORD` — and that pairing
+    // is not merely useless, it is *fatal* downstream: `_certificatesIn` treats
+    // a path without its password as a half-credential and throws, so any
+    // process below this one that itself runs `keychain exec` would die on the
+    // spot. Honouring the selector's letter while destroying its point.
+    final namedCertificates = selectedVariables
+        .where((v) => v.endsWith('_P12_PASSWORD'))
+        .toSet();
     final spent = environment.keys
-        .where((k) => k.startsWith('APPLE_') && k.endsWith('_P12_PASSWORD'))
+        .where(
+          (k) =>
+              k.startsWith('APPLE_') &&
+              k.endsWith('_P12_PASSWORD') &&
+              !namedCertificates.contains(k),
+        )
         .toList();
     for (final key in spent) {
       environment.remove(key);
@@ -1757,14 +1786,8 @@ void _pruneSearchList() {
     return;
   }
   final current = parseSearchList(listed.stdout as String);
-  final live = current
-      .where(
-        (k) =>
-            !k.split('/').last.startsWith(keychainNamePrefix) ||
-            File(k).existsSync(),
-      )
-      .toList();
-  if (live.length == current.length) {
+  final live = searchListWithoutDeadKeychains(current, File.new);
+  if (live == null) {
     return;
   }
   stderr.writeln(
@@ -1773,6 +1796,38 @@ void _pruneSearchList() {
     'no longer exist',
   );
   Process.runSync('security', ['list-keychains', '-d', 'user', '-s', ...live]);
+}
+
+/// [current] with dead keychains of ours dropped, or null when nothing should
+/// be written.
+///
+/// Pure, and separated from the `security` calls, because this decides a
+/// **destructive** write: `list-keychains -s` replaces the user's search list
+/// outright. The two ways to get it wrong are both silent, and only one of them
+/// is recoverable.
+///
+/// Null means "do not write" and covers both: nothing changed, or *everything*
+/// was ours and dead. That second case matters more than it looks — a CI
+/// account can genuinely reach it, and so can any parse that recognises our
+/// lines but not the login keychain's. Writing an empty list there severs
+/// `login.keychain-db` from every later `security` and codesign call for that
+/// user until somebody repairs it by hand, whereas declining costs nothing: the
+/// next run adds a real entry through `_create` and the dead ones go then.
+List<String>? searchListWithoutDeadKeychains(
+  List<String> current,
+  File Function(String path) open,
+) {
+  final live = current
+      .where(
+        (k) =>
+            !k.split('/').last.startsWith(keychainNamePrefix) ||
+            open(k).existsSync(),
+      )
+      .toList();
+  if (live.length == current.length || live.isEmpty) {
+    return null;
+  }
+  return live;
 }
 
 /// When the process holding [pid] started, or null when it cannot be read.
