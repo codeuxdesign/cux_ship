@@ -285,22 +285,20 @@ CheckRow _checkOne(
 
     if (path.startsWith('tokens.') || path.startsWith('ssh_keys.')) {
       final env = credential.fields['env'];
-      if (env == null || !RegExp(r'^[A-Z][A-Z0-9_]*$').hasMatch(env)) {
-        return CheckRow(
-          path,
-          CheckState.failed,
-          'env is "$env", not a usable variable name',
-        );
+      if (env == null) {
+        return CheckRow(path, CheckState.failed, 'has no env');
       }
-      // This is checked at materialization too, where it throws — and there it
-      // takes down every command that loads secrets, not just this credential.
-      // Finding it here is the difference between a report and a broken build.
-      if (_reservedNames.contains(env)) {
-        return CheckRow(
-          path,
-          CheckState.failed,
-          '$env is a name cux_ship exports itself',
-        );
+      // [envNameProblem] rather than a copy of its rule, and this is the place
+      // where that matters most. This check exists to *predict* whether
+      // `loadSecrets` will throw — and there it takes down every command that
+      // loads secrets, not just this credential. A predictor holding its own
+      // copy of the rule predicts its own behaviour rather than the loader's,
+      // so the moment the two drift `check` reports `verified` for a credential
+      // that then breaks the build. That is worse than not checking: it turns a
+      // loud failure into a confident all-clear.
+      final problem = envNameProblem(env);
+      if (problem != null) {
+        return CheckRow(path, CheckState.failed, 'env $problem');
       }
       if (path.startsWith('ssh_keys.')) {
         final kind = identifyArtifact(
@@ -342,8 +340,21 @@ CheckRow _checkOne(
     }
 
     return CheckRow(path, CheckState.opaque, 'nothing known to check');
+  } on ProjectException catch (e) {
+    // A fact about the credential: every deliberate throw in these files raises
+    // this, and the message is already written for the operator.
+    return CheckRow(path, CheckState.failed, e.message);
   } catch (e) {
-    return CheckRow(path, CheckState.failed, '$e');
+    // A fact about *this tool*, and said so. A blanket catch renders a null
+    // check error as "apple.profiles.ios_appstore failed: Null check operator
+    // used on a null value", which reads as "your profile is broken" when it
+    // means "the checker is" — the same shape as a failing subprocess reading
+    // as an absent value, which has now cost three separate bugs.
+    return CheckRow(
+      path,
+      CheckState.failed,
+      'cux_ship could not check this: $e',
+    );
   }
 }
 
@@ -488,9 +499,21 @@ List<CheckRow> _crossCheckProfiles(
           ),
         );
       }
+    } on ProjectException catch (e) {
+      rows.add(
+        CheckRow(
+          '${credential.path} ↔ certificates',
+          CheckState.failed,
+          e.message,
+        ),
+      );
     } catch (e) {
       rows.add(
-        CheckRow('${credential.path} ↔ certificates', CheckState.failed, '$e'),
+        CheckRow(
+          '${credential.path} ↔ certificates',
+          CheckState.failed,
+          'cux_ship could not check this: $e',
+        ),
       );
     }
   }
