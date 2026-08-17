@@ -56,6 +56,32 @@ This is also what makes the archive guarantee true rather than nearly true. A
 child that could decrypt the file could mint the App Store key the archive is
 meant not to hold.
 
+### Check the advice your own tooling prints
+
+This release changes no message cux_ship prints. It can invalidate messages
+**you** print. Grep your own scripts for a remedy naming `keychain exec` without
+`--only`:
+
+```
+no temporary keychain — run this through `cux_ship keychain exec`
+```
+
+Correct for years, and incomplete at 3.0.0. Someone who follows it gets a
+keychain, clears that check, and dies further down on the credential the empty
+default no longer places — one error handing them to the next, each true on its
+own. Name the whole invocation instead, `--only` included.
+
+The asymmetry is what hides this. Advice naming `secrets exec` survives
+unchanged, because that command kept its everything default; only `keychain
+exec` moved. The two read as the same kind of sentence, so a sweep for one does
+not suggest a sweep for the other.
+
+Worth doing even though your build passes. The loud version of this failure is
+the lucky one — a later check that refuses outright. Where the credential is
+read by something that merely carries on without it, an optional feature quietly
+staying off or a signing step choosing a different identity, nothing fails and
+the sentence that sent them there still reads as correct.
+
 ### Behaviour worth knowing
 
 - **A selector that does not resolve is fatal, and the three mistakes get three
