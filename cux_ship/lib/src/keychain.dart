@@ -34,6 +34,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'project.dart';
 import 'secrets.dart';
@@ -850,6 +851,336 @@ String? fingerprintStoredCertificate(String p12Path, String password) {
   }
   final value = line.split('=').last.replaceAll(':', '').toUpperCase();
   return value.isEmpty ? null : value;
+}
+
+/// A `.p12` built out of the login keychain, and the password that opens it.
+///
+/// The caller owns [work] and must delete it — the file inside is a signing
+/// identity in plaintext.
+class ExportedIdentity {
+  const ExportedIdentity({
+    required this.p12Path,
+    required this.password,
+    required this.work,
+    required this.notes,
+  });
+
+  final String p12Path;
+  final String password;
+  final Directory work;
+
+  /// Subject and expiry, read back out of the finished file.
+  final List<String> notes;
+}
+
+/// Exports a signing identity from a keychain into a fresh `.p12`.
+///
+/// The onboarding path: it is how a certificate reaches the secrets file when
+/// there is no `.p12` in hand, only an identity macOS is already holding.
+/// Ported from a shell version in a sibling project, and what makes it worth
+/// porting rather than reimplementing is three traps it already encodes.
+///
+/// **Pair on `localKeyID`, never on `friendlyName`.** openssl prints
+/// `localKeyID` on a certificate bag *and* on its matching private key bag, and
+/// it is the only attribute the two reliably share. `friendlyName` looks like
+/// it and is not: macOS labels the certificate with the certificate's name and
+/// the key with whatever the key was imported as — usually the account holder's
+/// name. Filtering on it matches the certificate, misses the key, and produces
+/// a `.p12` that imports without complaint and cannot sign. That is not
+/// hypothetical; it is what the first version of the shell script did.
+///
+/// **Match the kind as well as the team.** An Apple *Development* certificate
+/// carries the same `OU=`, so team alone can quietly export the development
+/// identity and produce builds the App Store refuses.
+///
+/// **Check expiry on every candidate.** A keychain accumulates every
+/// distribution certificate a team has ever held and never sheds the expired
+/// ones, so "the certificate for this team" is usually several.
+///
+/// The password is generated rather than accepted. Nothing has to type it, and
+/// a password a human picks is one they reuse.
+ExportedIdentity exportIdentityFromKeychain({
+  required String team,
+  required String certificateKind,
+  String? keychain,
+}) {
+  final work = Directory.systemTemp.createTempSync('cux_ship_export');
+  Process.runSync('chmod', ['700', work.path]);
+  try {
+    final transit = _randomPassword();
+    final password = _randomPassword();
+    final all = '${work.path}/all.p12';
+
+    // `security` has no way to take this from the environment, so the transit
+    // password is an argument and briefly visible to `ps`. It protects a file
+    // in a 0700 directory for the length of one openssl call and is discarded;
+    // the password that matters — the one stored — never reaches a command
+    // line.
+    final exported = Process.runSync('security', [
+      'export',
+      '-k',
+      keychain ?? _loginKeychain(),
+      '-t',
+      'identities',
+      '-f',
+      'pkcs12',
+      '-P',
+      transit,
+      '-o',
+      all,
+    ]);
+    if (exported.exitCode != 0) {
+      throw ProjectException(
+        'the keychain export was cancelled or failed — macOS asks for '
+        'permission, and it has to be granted.\n'
+        '${(exported.stderr as String).trim()}',
+      );
+    }
+
+    // `-legacy`: security(1) writes RC2/3DES, which OpenSSL 3 will not read
+    // from its default provider.
+    final pem = _openssl(
+      [
+        'pkcs12',
+        '-in',
+        all,
+        '-passin',
+        'env:CUX_TRANSIT_PASSWORD',
+        '-nodes',
+        '-legacy',
+      ],
+      environment: {'CUX_TRANSIT_PASSWORD': transit},
+    );
+    File(all).deleteSync();
+    if (pem == null) {
+      throw ProjectException('could not read the exported keychain');
+    }
+
+    final bags = parsePemBags(pem);
+    final candidates = bags
+        .where(
+          (b) =>
+              b.isCertificate &&
+              b.localKeyId != null &&
+              b.body.contains(team) &&
+              b.body.contains(certificateKind),
+        )
+        .toList();
+    if (candidates.isEmpty) {
+      throw ProjectException(
+        'no "$certificateKind" certificate for team $team in that keychain.\n'
+        '    What it does hold:\n${_identitiesIn(keychain)}',
+      );
+    }
+
+    // Any currently-valid certificate for the team can sign, so the first one
+    // still in date is as good as any other — there is nothing to rank beyond
+    // "not expired".
+    PemBag? chosen;
+    final expired = <String>[];
+    for (final candidate in candidates) {
+      final certFile = File('${work.path}/cand.pem')
+        ..writeAsStringSync(candidate.certificatePem);
+      final valid =
+          Process.runSync('openssl', [
+            'x509',
+            '-in',
+            certFile.path,
+            '-noout',
+            '-checkend',
+            '0',
+          ]).exitCode ==
+          0;
+      if (valid) {
+        chosen = candidate;
+        break;
+      }
+      final ends =
+          Process.runSync('openssl', [
+                'x509',
+                '-in',
+                certFile.path,
+                '-noout',
+                '-enddate',
+              ]).stdout
+              as String;
+      expired.add(ends.trim().replaceFirst('notAfter=', ''));
+    }
+    if (chosen == null) {
+      throw ProjectException(
+        'every "$certificateKind" certificate for $team in that keychain has '
+        'expired (${expired.length} of them: ${expired.join('; ')}).\n'
+        '    Create a new one at developer.apple.com > Certificates, download '
+        'it, open it so it\n'
+        '    lands in the keychain beside its private key, then run this '
+        'again.',
+      );
+    }
+
+    // The pair: every bag carrying the chosen certificate's localKeyID.
+    final pair = bags.where((b) => b.localKeyId == chosen!.localKeyId).toList();
+    final certificates = pair.where((b) => b.isCertificate).length;
+    final keys = pair.where((b) => b.isPrivateKey).length;
+    // Both halves have to survive. One that kept only the certificate builds a
+    // .p12 that imports without complaint and then cannot sign anything, which
+    // is the whole reason this pairs on localKeyID.
+    if (certificates < 1) {
+      throw ProjectException('no certificate survived the filter for $team');
+    }
+    if (keys < 1) {
+      throw ProjectException(
+        'found the certificate for $team but not its private key.\n'
+        '    The keychain holds the certificate without the key that signs for '
+        'it, so nothing\n'
+        '    here can sign. Either it was imported from a .cer rather than a '
+        '.p12, or the key\n'
+        '    lives in a different keychain — try --keychain.',
+      );
+    }
+
+    final pairFile = File('${work.path}/dist.pem')
+      ..writeAsStringSync(pair.map((b) => b.body).join());
+    final p12Path = '${work.path}/dist.p12';
+    final built = Process.runSync(
+      'openssl',
+      [
+        'pkcs12',
+        '-export',
+        '-legacy',
+        '-in',
+        pairFile.path,
+        '-passout',
+        'env:CUX_P12_PASSWORD',
+        '-name',
+        '$certificateKind ($team)',
+        '-out',
+        p12Path,
+      ],
+      environment: {'CUX_P12_PASSWORD': password},
+    );
+    pairFile.deleteSync();
+    if (built.exitCode != 0) {
+      throw ProjectException(
+        'could not build the .p12: ${(built.stderr as String).trim()}',
+      );
+    }
+
+    // Read back the way a runner will, so a broken file is found here rather
+    // than inside a fifteen-minute archive.
+    final facts = readPkcs12Facts(p12Path, password);
+    final hasKey = _openssl(
+      [
+        'pkcs12',
+        '-in',
+        p12Path,
+        '-passin',
+        'env:CUX_P12_PASSWORD',
+        '-nocerts',
+        '-nodes',
+        '-legacy',
+      ],
+      environment: {'CUX_P12_PASSWORD': password},
+    )?.contains('PRIVATE KEY');
+    if (hasKey != true) {
+      throw ProjectException('the .p12 this produced carries no private key');
+    }
+
+    return ExportedIdentity(
+      p12Path: p12Path,
+      password: password,
+      work: work,
+      notes: [
+        ...facts,
+        'exported from ${keychain ?? 'the login keychain'}',
+        if (expired.isNotEmpty)
+          'skipped ${expired.length} expired certificate(s) for the same team',
+      ],
+    );
+  } catch (_) {
+    work.deleteSync(recursive: true);
+    rethrow;
+  }
+}
+
+String _loginKeychain() {
+  final home = Platform.environment['HOME'];
+  return '$home/Library/Keychains/login.keychain-db';
+}
+
+String _identitiesIn(String? keychain) {
+  final result = Process.runSync('security', [
+    'find-identity',
+    '-v',
+    '-p',
+    'codesigning',
+    ?keychain,
+  ]);
+  final text = (result.stdout as String).trim();
+  return text.isEmpty
+      ? '      (none)'
+      : text.split('\n').map((l) => '      ${l.trim()}').join('\n');
+}
+
+/// 24 bytes from the platform's secure source, base64. Never typed, never
+/// reused, and never on a command line.
+String _randomPassword() {
+  final random = Random.secure();
+  return base64.encode(List<int>.generate(24, (_) => random.nextInt(256)));
+}
+
+String? _openssl(List<String> args, {Map<String, String>? environment}) {
+  final result = Process.runSync('openssl', args, environment: environment);
+  if (result.exitCode != 0) {
+    return null;
+  }
+  return result.stdout as String;
+}
+
+/// One PEM bag as openssl prints it: the attribute block plus the object.
+///
+/// Public because the pairing rule it encodes — match on `localKeyID`, never on
+/// `friendlyName` — is the whole reason this code exists, and a rule the tests
+/// cannot reach is one that gets quietly rewritten.
+class PemBag {
+  PemBag(this.body, this.localKeyId);
+
+  final String body;
+  final String? localKeyId;
+
+  bool get isCertificate => body.contains('-----BEGIN CERTIFICATE-----');
+  bool get isPrivateKey =>
+      RegExp(r'-----BEGIN( [A-Z0-9]+)? PRIVATE KEY-----').hasMatch(body);
+
+  String get certificatePem {
+    final match = RegExp(
+      r'-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----',
+    ).firstMatch(body);
+    return match?.group(0) ?? '';
+  }
+}
+
+/// Splits openssl's `-nodes` output into bags, each ending at its `-----END`.
+List<PemBag> parsePemBags(String pem) {
+  final bags = <PemBag>[];
+  var current = StringBuffer();
+  String? localKeyId;
+  for (final line in pem.split('\n')) {
+    if (line.startsWith('Bag Attributes')) {
+      current = StringBuffer();
+      localKeyId = null;
+    }
+    current.writeln(line);
+    final idIndex = line.indexOf('localKeyID:');
+    if (idIndex >= 0) {
+      localKeyId = line.substring(idIndex + 'localKeyID:'.length).trim();
+    }
+    if (line.startsWith('-----END')) {
+      bags.add(PemBag(current.toString(), localKeyId));
+      current = StringBuffer();
+      localKeyId = null;
+    }
+  }
+  return bags;
 }
 
 /// A profile's own account of itself, for `secrets add profile` to print back.

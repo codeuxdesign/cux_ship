@@ -347,6 +347,76 @@ CheckRow _checkOne(
   }
 }
 
+/// Which stored profiles were issued against the certificate at
+/// [certificatePath] — asked *before* that certificate is replaced.
+///
+/// This is the operational half of the fact the cross-check reports. Replacing
+/// a certificate invalidates every profile issued against it, and no artifact
+/// says so: the profile keeps its own expiry date, and in this project a
+/// Developer ID profile outlives the certificate inside it by eighteen years.
+/// So the moment to name them is while the outgoing certificate is still there
+/// to be fingerprinted — afterwards the evidence is gone.
+///
+/// Returns an empty list when nothing can be established, and the caller says
+/// so rather than reporting "no profiles affected", which is a different claim.
+List<String> profilesEmbeddingCertificate({
+  required String repoRoot,
+  required File secretsFile,
+  required String certificatePath,
+  required ProfileInspection Function(String path) inspectProfile,
+  required String? Function(String p12Path, String password)
+  fingerprintCertificate,
+}) {
+  final credentials = _decrypt(repoRoot: repoRoot, secretsFile: secretsFile);
+  final certificate = credentials
+      .where((c) => c.path == certificatePath)
+      .firstOrNull;
+  if (certificate == null) {
+    return const [];
+  }
+  final work = Directory.systemTemp.createTempSync('cux_ship_stale');
+  try {
+    final p12 = _writeBase64(
+      work,
+      'outgoing.p12',
+      certificate.fields['p12_base64']!,
+      certificatePath,
+    ).path;
+    final fingerprint = fingerprintCertificate(
+      p12,
+      certificate.fields['password']!,
+    );
+    if (fingerprint == null) {
+      return const [];
+    }
+    final affected = <String>[];
+    for (final profile in credentials.where(
+      (c) => c.path.startsWith('apple.profiles.'),
+    )) {
+      try {
+        final file = _writeBase64(
+          work,
+          '${profile.instance}.mobileprovision',
+          profile.fields['base64']!,
+          profile.path,
+        ).path;
+        if (inspectProfile(
+          file,
+        ).certificateFingerprints.contains(fingerprint)) {
+          affected.add(profile.path);
+        }
+      } catch (_) {
+        // A profile that cannot be read cannot be cleared either, so it is not
+        // reported as affected — the cross-check in `secrets check` is where an
+        // unreadable profile is meant to surface.
+      }
+    }
+    return affected;
+  } finally {
+    work.deleteSync(recursive: true);
+  }
+}
+
 /// Does each profile still embed a certificate this file actually holds?
 ///
 /// The coupling nothing else sees. Replacing a certificate silently invalidates

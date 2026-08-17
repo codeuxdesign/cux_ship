@@ -167,6 +167,17 @@ Two safety properties worth relying on:
 - **It refuses to overwrite.** `--replace` is the rotation verb. Silently
   replacing a signing key is worse than any partial write.
 
+Replacing a *certificate* also names the profiles issued against the outgoing
+one, which stop working the moment it is replaced — a coupling no artifact
+carries, since the profile keeps its own expiry date. If it cannot establish
+that, it says so rather than reporting that none were affected.
+
+`--from-keychain --team <id>` builds the `.p12` out of a macOS keychain instead
+of taking one, with a generated password — the onboarding path. It pairs the
+certificate with its private key on `localKeyID` and never on `friendlyName`:
+macOS names the two bags differently, so a friendlyName filter yields a `.p12`
+that imports cleanly and cannot sign.
+
 Passwords and token values are never arguments — a command line is visible to
 every `ps` on the machine — so they come from `--password-file`,
 `--value-file`, or a prompt. A certificate's password is checked against the

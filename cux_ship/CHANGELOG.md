@@ -49,6 +49,25 @@
   failure class as adding by hand, at the worst possible moment — having just
   decided something is compromised.
 
+- **Replacing a certificate names the profiles it invalidates.** Every profile
+  issued against a certificate stops working the moment that certificate is
+  replaced, and no artifact says so — the profile keeps its own expiry date.
+  Established *before* the write, while the outgoing certificate is still there
+  to fingerprint; afterwards the evidence is gone. When it cannot be
+  established it says so rather than reporting that none were affected, which
+  is a different claim and the only reassuring one.
+
+- **`secrets add certificate --from-keychain`** builds the `.p12` out of a
+  macOS keychain, with a generated password, for onboarding a machine that has
+  an identity but no file. Ported from a shell version in a sibling project,
+  for three traps it already encodes — each of which produces a file that looks
+  correct: pairing the certificate with its key on `localKeyID` rather than
+  `friendlyName` (macOS names the two bags differently, so a friendlyName
+  filter yields a `.p12` that imports cleanly and cannot sign); matching the
+  certificate *kind* as well as the team, since Apple Development carries the
+  same `OU=`; and checking expiry on every candidate, because a keychain never
+  sheds the expired ones.
+
 - **Renames.** `secrets keys` is now **`secrets list`**: the file holds
   `api_keys`, `ssh_keys` and `keystores`, so "keys" read as a category rather
   than as the credential names it actually prints. `appstore await` is now

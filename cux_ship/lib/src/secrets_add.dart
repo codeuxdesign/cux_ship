@@ -250,6 +250,8 @@ class AddResult {
     required this.fields,
     required this.notes,
     required this.replaced,
+    this.staleProfiles = const [],
+    this.staleProfilesUnknown = false,
   });
 
   final String path;
@@ -262,6 +264,17 @@ class AddResult {
   final List<String> notes;
 
   final bool replaced;
+
+  /// Profiles that were issued against the certificate this replaced, and are
+  /// therefore now unusable. Established before the write, while the outgoing
+  /// certificate was still there to fingerprint.
+  final List<String> staleProfiles;
+
+  /// True when the pairing could not be established at all — not a Mac, or the
+  /// outgoing certificate would not open. Distinct from an empty
+  /// [staleProfiles], because "no profiles are affected" and "this could not be
+  /// checked" are different claims and only one of them is reassuring.
+  final bool staleProfilesUnknown;
 }
 
 /// Writes one credential into the secrets file, as a single sops operation.
@@ -284,6 +297,7 @@ Future<AddResult> addCredential({
   String? password,
   bool replace = false,
   List<String> Function(String filePath)? describeProfile,
+  List<String> Function(String certificatePath)? findStaleProfiles,
 }) async {
   final kind = addKinds[kindName];
   if (kind == null) {
@@ -320,6 +334,25 @@ Future<AddResult> addCredential({
       '$pretty already exists, holding ${existing.fields.join(', ')}.\n'
       '    To rotate it deliberately, pass --replace.',
     );
+  }
+
+  // Asked before the write, because afterwards the outgoing certificate is gone
+  // and with it the only way to know which profiles were issued against it.
+  var staleProfiles = const <String>[];
+  var staleProfilesUnknown = false;
+  if (existing != null && kind.noun == 'certificate') {
+    if (findStaleProfiles == null) {
+      staleProfilesUnknown = true;
+    } else {
+      try {
+        staleProfiles = findStaleProfiles(pretty);
+      } catch (_) {
+        // Reported as unknown rather than as none. The write still proceeds:
+        // failing a rotation because the *advisory* could not be produced would
+        // be the worse trade, and the operator is told what was not checked.
+        staleProfilesUnknown = true;
+      }
+    }
   }
 
   final fields = <String, String>{};
@@ -394,6 +427,8 @@ Future<AddResult> addCredential({
     fields: written.fields,
     notes: notes,
     replaced: existing != null,
+    staleProfiles: staleProfiles,
+    staleProfilesUnknown: staleProfilesUnknown,
   );
 }
 

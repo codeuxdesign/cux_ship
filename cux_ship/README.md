@@ -349,6 +349,51 @@ Two properties this exists for:
 - **It refuses to overwrite.** `--replace` is the rotation verb. Silently
   replacing a signing key is worse than any partial write.
 
+Replacing a *certificate* also names the profiles that were issued against the
+one going away, established before the write while the outgoing certificate is
+still there to fingerprint:
+
+```
+replaced apple.certificates.distribution
+
+** 3 profiles were issued against the certificate you just replaced:
+     apple.profiles.ios_appstore
+     apple.profiles.ios_appstore_autofill
+     apple.profiles.macos_appstore
+```
+
+Nothing else reports that coupling, and no artifact carries it — see
+`secrets check` below.
+
+#### Building the `.p12` from a keychain
+
+```bash
+cux_ship secrets add certificate distribution --from-keychain --team 64ZPC769JY
+```
+
+The onboarding path, for when there is an identity in the keychain but no file.
+It exports the certificate **and its private key**, builds a `.p12` with a
+generated password, stores both, and removes the plaintext. macOS only, and
+macOS will ask permission — that prompt has to be granted.
+
+The password is generated rather than accepted here, unlike every other path:
+we are building the bundle, nothing ever has to type its password, and one a
+human picks is one they reuse.
+
+Three traps it encodes, all of which produce a file that looks fine:
+
+- **It pairs on `localKeyID`, never on `friendlyName`.** macOS labels the
+  certificate bag with the certificate's name and the key bag with whatever the
+  key was imported as — usually the account holder — so the two share no
+  friendlyName. Filtering on it matches the certificate, misses the key, and
+  builds a `.p12` that imports without complaint and cannot sign.
+- **It matches the certificate kind as well as the team**, because an Apple
+  *Development* certificate carries the same `OU=` and would otherwise be
+  exported silently, producing builds the App Store refuses.
+- **It checks expiry on every candidate.** A keychain accumulates every
+  distribution certificate a team has ever held and never sheds the expired
+  ones, so "the certificate for this team" is usually several.
+
 Passwords and token values are never command-line arguments — an argument is
 visible to every `ps` on the machine — so they arrive by `--password-file`,
 `--value-file`, or a prompt. A certificate's password is checked against the

@@ -487,6 +487,32 @@ class _SecretsAddCommand extends Command<void> {
             'Rotate an existing credential. Without this, adding over one that '
             'exists is refused — silently replacing a signing key is worse '
             'than any partial write.',
+      )
+      ..addFlag(
+        'from-keychain',
+        negatable: false,
+        help:
+            'For a certificate: build the .p12 out of a macOS keychain instead '
+            'of taking one, with a generated password. The onboarding path, '
+            'for when there is an identity but no file.',
+      )
+      ..addOption(
+        'team',
+        help: 'With --from-keychain: the team id, as it appears in OU=.',
+      )
+      ..addOption(
+        'certificate-kind',
+        defaultsTo: 'Apple Distribution',
+        help:
+            'With --from-keychain: which certificate. Matched as well as the '
+            'team, because an Apple Development certificate carries the same '
+            'OU and would otherwise be exported silently.',
+      )
+      ..addOption(
+        'keychain',
+        help:
+            'With --from-keychain: which keychain to export from. Defaults to '
+            'the login keychain.',
       );
   }
 
@@ -545,23 +571,68 @@ class _SecretsAddCommand extends Command<void> {
       p.isAbsolute(option) ? option : p.join(project.root, option),
     );
 
+    // The keychain path supplies both the file and its password, so neither is
+    // asked for. It is the only case where the password is generated rather
+    // than taken: we are building the .p12, nothing ever has to type its
+    // password, and one a human picks is one they reuse.
+    ExportedIdentity? exported;
+    var artifact = fileArg;
+    final exportedNotes = <String>[];
     try {
-      final secret = _readSecretInput(
-        passwordFile: argResults!.option('password-file'),
-        valueFile: argResults!.option('value-file'),
-        needed: kind.needsSecretInput,
-      );
+      if (argResults!.flag('from-keychain')) {
+        if (kindName != 'certificate') {
+          throw UsageException(
+            '--from-keychain builds a certificate; $kindName does not come '
+            'from a keychain',
+            usage,
+          );
+        }
+        if (!Platform.isMacOS) {
+          throw ProjectException('--from-keychain needs macOS');
+        }
+        final team = argResults!.option('team');
+        if (team == null || team.isEmpty) {
+          throw UsageException(
+            '--from-keychain needs --team, the id as it appears in OU=',
+            usage,
+          );
+        }
+        exported = exportIdentityFromKeychain(
+          team: team,
+          certificateKind: argResults!.option('certificate-kind')!,
+          keychain: argResults!.option('keychain'),
+        );
+        artifact = exported.p12Path;
+        exportedNotes.addAll(exported.notes);
+      }
+
+      final secret =
+          exported?.password ??
+          _readSecretInput(
+            passwordFile: argResults!.option('password-file'),
+            valueFile: argResults!.option('value-file'),
+            needed: kind.needsSecretInput,
+          );
       final result = await addCredential(
         repoRoot: project.root,
         secretsFile: secretsFile,
         kindName: kindName,
         instance: instance,
-        filePath: fileArg,
+        filePath: artifact,
         env: argResults!.option('env'),
         issuerId: argResults!.option('issuer-id'),
         password: secret,
         replace: argResults!.flag('replace'),
         describeProfile: describeProfileForAdd,
+        findStaleProfiles: Platform.isMacOS
+            ? (certificatePath) => profilesEmbeddingCertificate(
+                repoRoot: project.root,
+                secretsFile: secretsFile,
+                certificatePath: certificatePath,
+                inspectProfile: inspectProfileForCheck,
+                fingerprintCertificate: fingerprintStoredCertificate,
+              )
+            : null,
       );
       stdout.writeln(
         '${result.replaced ? 'replaced' : 'added'} ${result.path}  '
@@ -570,9 +641,47 @@ class _SecretsAddCommand extends Command<void> {
       for (final note in result.notes) {
         stdout.writeln('  $note');
       }
+      // The coupling nothing else reports. A profile keeps its own expiry date,
+      // so a rotation leaves profiles that look valid for years and cannot
+      // sign — and the only moment to establish which is *before* the outgoing
+      // certificate has been overwritten.
+      if (result.staleProfiles.isNotEmpty) {
+        final n = result.staleProfiles.length;
+        stderr.writeln();
+        stderr.writeln(
+          '** $n profile${n == 1 ? ' was' : 's were'} issued against the '
+          'certificate you just replaced:',
+        );
+        for (final profile in result.staleProfiles) {
+          stderr.writeln('     $profile');
+        }
+        stderr.writeln(
+          '   They cannot sign with the new certificate. Download replacements '
+          'from the developer\n'
+          '   portal and add them with '
+          '`secrets add profile <name> <file> --replace`.',
+        );
+      } else if (result.staleProfilesUnknown) {
+        stderr.writeln();
+        stderr.writeln(
+          '** which profiles were issued against the replaced certificate '
+          'could not be\n'
+          '   established, so this is not a report that none were. It needs '
+          'macOS; run\n'
+          '   `secrets check` on a Mac, where a profile that matches no stored '
+          'certificate\n'
+          '   is reported.',
+        );
+      }
     } on ProjectException catch (e) {
       stderr.writeln('cux_ship secrets add: ${e.message}');
       exitCode = 1;
+    } finally {
+      // However this ended. What is in there is a signing identity in
+      // plaintext, and the encrypted copy is already written.
+      if (exported != null && exported.work.existsSync()) {
+        exported.work.deleteSync(recursive: true);
+      }
     }
   }
 }
