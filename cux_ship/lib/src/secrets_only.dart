@@ -24,10 +24,12 @@ part of 'secrets.dart';
 /// them; that is the reason `familyVariables` had to become a function of the
 /// parsed file rather than a constant.
 ///
-/// **Kept beside the materializer it mirrors.** These names are asserted equal
-/// to what materialization actually exports, because a filter that disagrees
-/// with the placer either strips something live or fails to strip something
-/// present, and both are silent.
+/// **Kept beside the materializer it mirrors**, and asserted equal to what it
+/// actually exports — see `secrets_test.dart`, "every placed variable is one
+/// variablesForCredential names". A filter that disagrees with the placer
+/// either strips something live or fails to strip something present, and both
+/// are silent. That assertion was claimed in this comment before it existed,
+/// which is its own small instance of the problem.
 Set<String> variablesForCredential({
   required String path,
   required String instance,

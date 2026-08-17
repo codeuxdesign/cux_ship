@@ -991,6 +991,7 @@ LoadedSecrets _materialize(
           keystore ?? selectedInstance('android.keystores'),
           'keystore',
           'signs',
+          family: only == null ? null : 'android.keystores',
         );
   if (keystores.length == 1) {
     final keystore = keystores.single;
@@ -1097,6 +1098,7 @@ LoadedSecrets _materialize(
       apiKey ?? selectedInstance('apple.api_keys'),
       'api-key',
       'is used',
+      family: only == null ? null : 'apple.api_keys',
     ).single;
     environment['APPLE_API_KEY_ID'] = key.fields['id']!;
     environment['APPLE_API_PRIVATE_KEY_PATH'] =
@@ -1201,12 +1203,20 @@ LoadedSecrets _materialize(
 /// it refuses and lists them. A name that is not there is an error too, rather
 /// than a fall back to the default: falling back would run an Admin-gated read
 /// with a scoped key and surface as a bare 403 from Apple.
+/// [family] is the schema path, given when `--only` is in play so the refusal
+/// can name the spelling that will actually be accepted.
+///
+/// Without it the message says `Name it: --keystore <name>` — a flag
+/// `checkOnlyCombination` refuses alongside `--only`, whose own error then says
+/// to name the instance in `--only`. The caller reaches the right answer, but
+/// only by being told the wrong one first and trying it.
 List<_Credential> _select(
   List<_Credential> available,
   String? chosen,
   String flag,
-  String verb,
-) {
+  String verb, {
+  String? family,
+}) {
   if (chosen != null) {
     final match = available.where((c) => c.instance == chosen);
     if (match.isEmpty) {
@@ -1222,7 +1232,7 @@ List<_Credential> _select(
       'this file holds ${available.length} of these — '
       '${available.map((c) => c.instance).join(', ')} — so which one $verb is '
       'not something to infer.\n'
-      'Name it: --$flag <name>',
+      '${family == null ? 'Name it: --$flag <name>' : 'Name it: --only $family.<name>'}',
     );
   }
   return available;

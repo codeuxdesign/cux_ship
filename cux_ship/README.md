@@ -331,6 +331,20 @@ guarantee here — that an archive cannot hold a key able to create or revoke
 signing material — hollow. If a child of yours needs to decrypt, run the two
 commands as siblings rather than nesting them.
 
+**`--only` governs the environment. It does not govern the keychain.** The
+keychain this command builds holds every certificate the file has, and the child
+is given its path — so a child named only `tokens.marks` can still sign with any
+of them. That is deliberate rather than an oversight: a release run legitimately
+signs with the App Store certificate, notarizes with Developer ID and signs a
+`.pkg` with the installer certificate, and `xcodebuild` takes one `--keychain`.
+Splitting them would replace one keychain with a set the child has to choose
+between.
+
+Assume it, rather than assuming otherwise. Which certificates the keychain holds
+is a different axis from what the child's environment holds, in the same way
+`--profile` is — and if it ever needs controlling it wants its own selector
+beside `--profile`, not an overload of this one.
+
 ### Reading a secrets file without decrypting it
 
 ```bash

@@ -577,4 +577,139 @@ tokens:
       expect(load, throwsA(isA<ProjectException>()));
     });
   });
+
+  group('--only against the materializer', () {
+    /// Two keystores and two api keys, which is the shape that makes selection
+    /// ambiguous. Neither consuming project holds it, so it only exists here.
+    void everyFamily() => secrets(
+      'android:\n'
+      '  keystores:\n'
+      '    upload:\n'
+      '      base64: ${b64('one')}\n'
+      '      password: p\n'
+      '      key_alias: a\n'
+      '    mirror:\n'
+      '      base64: ${b64('two')}\n'
+      '      password: p\n'
+      '      key_alias: a\n'
+      '  play_service_account:\n'
+      '    json_base64: ${b64('{}')}\n'
+      'apple:\n'
+      '  api_keys:\n'
+      '    upload:\n'
+      '      id: AAA\n'
+      '      kind: individual\n'
+      '      private_key_base64: ${b64('k1')}\n'
+      '    admin:\n'
+      '      id: BBB\n'
+      '      kind: team\n'
+      '      issuer_id: iii\n'
+      '      private_key_base64: ${b64('k2')}\n'
+      '  certificates:\n'
+      '    distribution:\n'
+      '      p12_base64: ${b64('c')}\n'
+      '      password: p\n'
+      'tokens:\n'
+      '  wanted:\n'
+      '    env: WANTED_TOKEN\n'
+      '    value: v\n'
+      '  unwanted:\n'
+      '    env: UNWANTED_TOKEN\n'
+      '    value: v\n',
+    );
+
+    Set<String> placed(LoadedSecrets loaded) => loaded.environment.keys
+        .toSet()
+        .difference(Platform.environment.keys.toSet());
+
+    // The assertion a comment in secrets_only.dart claimed existed and did not.
+    // A filter that disagrees with the placer either strips something live or
+    // fails to strip something present, and both are silent.
+    test('every placed variable is one variablesForCredential names', () {
+      everyFamily();
+      final loaded = loadSecrets(
+        repoRoot: _root.path,
+        secretsFile: _secretsFile,
+        keystore: 'upload',
+        apiKey: 'upload',
+      );
+      final derived = {
+        for (final entry in variablesByCredential(_secretsFile).entries)
+          ...entry.value,
+      };
+      expect(
+        placed(loaded).difference(derived),
+        isEmpty,
+        reason: 'materialization exports something the filter cannot see',
+      );
+      loaded.dispose();
+    });
+
+    test('an unnamed credential is not placed', () {
+      everyFamily();
+      final loaded = loadSecrets(
+        repoRoot: _root.path,
+        secretsFile: _secretsFile,
+        only: {'tokens.wanted'},
+      );
+      expect(placed(loaded), contains('WANTED_TOKEN'));
+      expect(placed(loaded), isNot(contains('UNWANTED_TOKEN')));
+      expect(placed(loaded), isNot(contains('ANDROID_KEYSTORE_PATH')));
+      loaded.dispose();
+    });
+
+    // The deadlock: --only names an instance, and _select must take it rather
+    // than demanding the flag that is refused alongside --only.
+    test('an instance named in --only resolves the ambiguity', () {
+      everyFamily();
+      final loaded = loadSecrets(
+        repoRoot: _root.path,
+        secretsFile: _secretsFile,
+        only: {'android.keystores.mirror'},
+      );
+      expect(placed(loaded), contains('ANDROID_KEYSTORE_PATH'));
+      expect(
+        File(loaded.environment['ANDROID_KEYSTORE_PATH']!).readAsStringSync(),
+        'two',
+        reason: 'the instance --only named must be the one materialized',
+      );
+      loaded.dispose();
+    });
+
+    // Reported rather than reproduced by a consumer: neither project holds two
+    // of anything, so this shape exists only in this fixture.
+    test('a family with two members points at --only, not --keystore', () {
+      everyFamily();
+      expect(
+        () => loadSecrets(
+          repoRoot: _root.path,
+          secretsFile: _secretsFile,
+          only: {'android.keystores.upload', 'android.keystores.mirror'},
+        ),
+        throwsSaying(
+          allOf(
+            contains('--only android.keystores.<name>'),
+            isNot(contains('--keystore')),
+          ),
+        ),
+      );
+    });
+
+    // Storyteller's finding: the directory handed the child every key.
+    test('only the named api key reaches the key directory', () {
+      everyFamily();
+      final loaded = loadSecrets(
+        repoRoot: _root.path,
+        secretsFile: _secretsFile,
+        only: {'apple.api_keys.upload'},
+      );
+      final dir = Directory(loaded.environment['API_PRIVATE_KEYS_DIR']!);
+      expect(
+        dir.listSync().map((f) => f.path.split('/').last).toList(),
+        ['ApiKey_AAA.p8'],
+        reason: 'the unnamed key was materialized beside the named one',
+      );
+      loaded.dispose();
+    });
+  });
 }
