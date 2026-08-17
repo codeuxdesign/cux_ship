@@ -172,10 +172,16 @@ cleartext *values*, and the existing shape-inspector discards them. This is the
 one piece of real structural work the flag requires and it should be built
 first.
 
-### A selector that matches nothing is an error
+### A selector that does not resolve is an error
 
-`--only tokens.marsk` must fail, naming what exists, and must never resolve to
-an empty selection.
+`--only tokens.marsk` must fail, naming what exists.
+
+Three cases, and they are not the same mistake. **Unknown to the schema** —
+`tokns`, or a family that does not exist — is fatal. **A named instance absent
+from the file** — `tokens.marsk` where `tokens` exists — is fatal. **A known
+family that is empty in this file** is the case two reviewers disagreed on; see
+the open question at the end, and do not read the paragraph below as having
+settled it.
 
 This is the condition most likely to be under-built and it is the one with the
 worst failure. An allowlist that silently selects nothing produces a credential
