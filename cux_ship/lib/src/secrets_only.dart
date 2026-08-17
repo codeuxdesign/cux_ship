@@ -207,14 +207,19 @@ OnlySelection resolveOnly(
 ///
 /// `--profile` is a different axis and is not replaced: it selects which
 /// profiles are *installed for Xcode*, while `--only` selects what the child's
-/// environment holds. Readers will conflate them, so naming a profile in
-/// `--only` is refused pointing at `--profile`, the same shape as `placed`
-/// pointing at `secrets place`.
+/// environment holds.
+///
+/// Naming a profile in `--only` was briefly refused, on the grounds that
+/// profiles are installed rather than exported. That was wrong and contradicted
+/// this file's own variable map: `apple.profiles` exports
+/// `APPLE_PROFILE_<INSTANCE>_PATH`, `_materialize` sets it, and it is
+/// observable in a `secrets exec` environment. A child that wants that path can
+/// ask for it. The two flags remain different questions — install for Xcode,
+/// versus place in the environment — and that is said rather than enforced.
 void checkOnlyCombination({
   required List<String> only,
   String? keystore,
   String? apiKey,
-  bool allowProfiles = false,
 }) {
   if (only.isEmpty) {
     return;
@@ -228,18 +233,8 @@ void checkOnlyCombination({
       );
     }
   }
-  if (allowProfiles) {
-    return;
-  }
   for (final selector in only.expand((s) => s.split(','))) {
     final name = selector.trim();
-    if (name == 'apple.profiles' || name.startsWith('apple.profiles.')) {
-      throw ProjectException(
-        '--only $name: profiles are installed for Xcode rather than placed in '
-        'the environment.\n'
-        '    Use --profile to choose which ones are installed.',
-      );
-    }
     if (name == 'placed' || name.startsWith('placed.')) {
       throw ProjectException(
         '--only $name: exec never writes placed files.\n'

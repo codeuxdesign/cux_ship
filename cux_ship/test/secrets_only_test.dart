@@ -200,69 +200,81 @@ void main() {
     });
   });
 
-  group('flags that say the same thing are refused, naming the replacement', () {
-    // `--keystore` and `--api-key` exist to resolve which instance fills a
-    // singular set of variable names. An instance in `--only` already says
-    // that, so adjudicating the interaction was three rules where refusing is
-    // one — and the error tells the caller what to write instead of what is
-    // wrong.
-    test('--keystore alongside --only is refused', () {
-      expect(
-        () => checkOnlyCombination(only: ['tokens.marks'], keystore: 'upload'),
-        throwsA(
-          isA<ProjectException>().having(
-            (e) => e.message,
-            'message',
-            allOf(contains('say the same thing'), contains('--only')),
+  group(
+    'flags that say the same thing are refused, naming the replacement',
+    () {
+      // `--keystore` and `--api-key` exist to resolve which instance fills a
+      // singular set of variable names. An instance in `--only` already says
+      // that, so adjudicating the interaction was three rules where refusing is
+      // one — and the error tells the caller what to write instead of what is
+      // wrong.
+      test('--keystore alongside --only is refused', () {
+        expect(
+          () =>
+              checkOnlyCombination(only: ['tokens.marks'], keystore: 'upload'),
+          throwsA(
+            isA<ProjectException>().having(
+              (e) => e.message,
+              'message',
+              allOf(contains('say the same thing'), contains('--only')),
+            ),
           ),
-        ),
-      );
-    });
+        );
+      });
 
-    test('--api-key alongside --only is refused', () {
-      expect(
-        () => checkOnlyCombination(only: ['tokens.marks'], apiKey: 'upload'),
-        throwsA(isA<ProjectException>()),
-      );
-    });
+      test('--api-key alongside --only is refused', () {
+        expect(
+          () => checkOnlyCombination(only: ['tokens.marks'], apiKey: 'upload'),
+          throwsA(isA<ProjectException>()),
+        );
+      });
 
-    // Different axes, and readers will conflate them: `--profile` decides what
-    // Xcode gets installed, `--only` what the child's environment holds.
-    test('a profile named in --only points at --profile', () {
-      expect(
-        () => checkOnlyCombination(only: ['apple.profiles.ios_appstore']),
-        throwsA(
-          isA<ProjectException>().having(
-            (e) => e.message,
-            'message',
-            contains('--profile'),
+      // Naming a profile was briefly refused, on the grounds that profiles are
+      // installed for Xcode rather than exported. That contradicted this tool's
+      // own variable map — `apple.profiles` exports
+      // `APPLE_PROFILE_<INSTANCE>_PATH`, materialization sets it, and it is
+      // observable in a real environment. A child that wants that path may ask.
+      //
+      // `--profile` and `--only` remain different questions, and the difference
+      // is documented rather than enforced by refusal.
+      test('a profile may be named — it does export a variable', () {
+        expect(
+          () => checkOnlyCombination(only: ['apple.profiles.ios_appstore']),
+          returnsNormally,
+        );
+        expect(
+          variablesForCredential(
+            path: 'apple.profiles.ios_appstore',
+            instance: 'ios_appstore',
+            fields: {},
           ),
-        ),
-      );
-    });
+          {'APPLE_PROFILE_IOS_APPSTORE_PATH'},
+        );
+      });
 
-    test('placed in --only points at secrets place', () {
-      expect(
-        () => checkOnlyCombination(only: ['placed.env_production']),
-        throwsA(
-          isA<ProjectException>().having(
-            (e) => e.message,
-            'message',
-            contains('secrets place'),
+      test('placed in --only points at secrets place', () {
+        expect(
+          () => checkOnlyCombination(only: ['placed.env_production']),
+          throwsA(
+            isA<ProjectException>().having(
+              (e) => e.message,
+              'message',
+              contains('secrets place'),
+            ),
           ),
-        ),
-      );
-    });
+        );
+      });
 
-    // Without --only there is nothing to conflict with, so the flags they
-    // replace still work as they always did.
-    test('the flags are untouched when --only is absent', () {
-      expect(
-        () => checkOnlyCombination(only: const [], keystore: 'upload'),
-        returnsNormally,
-      );
-    });
-  });
+      // Without --only there is nothing to conflict with, so the flags they
+      // replace still work as they always did.
+      test('the flags are untouched when --only is absent', () {
+        expect(
+          () => checkOnlyCombination(only: const [], keystore: 'upload'),
+          returnsNormally,
+        );
+      });
+    },
+  );
 
   // The case that only appears under nesting: the outer wrapper filtered its
   // child, and the inner one asks for something that did not arrive. Resolved

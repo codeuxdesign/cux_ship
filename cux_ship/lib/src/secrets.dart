@@ -899,6 +899,25 @@ LoadedSecrets _materialize(
   // docs/design/only-selector.md.
   bool wants(String path) => only == null || only.contains(path);
 
+  /// The instance `--only` named in [family], when it named exactly one.
+  ///
+  /// `android.keystores` and `apple.api_keys` fill a *singular* set of variable
+  /// names, so materialization has to choose one and `_select` refuses to
+  /// guess. Without this, `--only android.keystores.upload` on a file holding
+  /// two reached that refusal and was told to "name it with --keystore" — the
+  /// flag refused alongside `--only`, whose own error says to name the instance
+  /// in `--only`. A closed loop of advice, each half correct.
+  String? selectedInstance(String family) {
+    if (only == null) {
+      return null;
+    }
+    final named = only
+        .where((p) => p.startsWith('$family.'))
+        .map((p) => p.substring(family.length + 1))
+        .toSet();
+    return named.length == 1 ? named.single : null;
+  }
+
   final environment = Map<String, String>.from(Platform.environment);
   // **Removed, not merely not placed.** `environment` began as a copy of this
   // process's own, so under `secrets exec -- secrets exec --only x` the outer
@@ -969,7 +988,7 @@ LoadedSecrets _materialize(
       ? const <_Credential>[]
       : _select(
           under('android.keystores').toList(),
-          keystore,
+          keystore ?? selectedInstance('android.keystores'),
           'keystore',
           'signs',
         );
@@ -1043,7 +1062,17 @@ LoadedSecrets _materialize(
   // credential — which is what lets CI sign without holding anything able to
   // create or revoke signing material — and forcing a key into that step to get
   // a keychain gives away exactly the property it was built for.
-  final apiKeys = under('apple.api_keys').toList();
+  // Filtered like every other family. Without this, `--only
+  // apple.api_keys.upload` on a file holding two wrote *both* private keys into
+  // the directory exported as `API_PRIVATE_KEYS_DIR`, so the child received a
+  // credential the call site had not named — the exact guarantee this flag
+  // exists to make. Only the singular names narrowed to the selected key.
+  //
+  // The all-keys-in-one-directory shape predates `--only` and was deliberate:
+  // altool finds a key by its id inside that directory rather than by path. A
+  // child that needs several must now name several, which is the same rule as
+  // everywhere else.
+  final apiKeys = under('apple.api_keys').where((c) => wants(c.path)).toList();
   final withheldKeys =
       apiKey == null &&
       held(
@@ -1063,7 +1092,12 @@ LoadedSecrets _materialize(
     }
     environment['API_PRIVATE_KEYS_DIR'] = keys.path;
 
-    final key = _select(apiKeys, apiKey, 'api-key', 'is used').single;
+    final key = _select(
+      apiKeys,
+      apiKey ?? selectedInstance('apple.api_keys'),
+      'api-key',
+      'is used',
+    ).single;
     environment['APPLE_API_KEY_ID'] = key.fields['id']!;
     environment['APPLE_API_PRIVATE_KEY_PATH'] =
         '${keys.path}/'

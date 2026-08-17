@@ -1394,10 +1394,37 @@ Future<int> runKeychainExec({
   checkOnlyCombination(only: only, apiKey: apiKey);
 
   final byCredential = variablesByCredential(secretsFile);
+
+  // **Resolved against what this process can actually deliver, not against the
+  // file.** They are the same thing when this command loads the secrets itself.
+  // They differ under `secrets exec --only x -- keychain exec --only y`: the
+  // outer has already placed and filtered, this command takes the
+  // certificates-already-present branch and never decrypts, so the only
+  // credentials it can hand on are the ones whose variables actually arrived.
+  //
+  // Resolving against the file there would accept a selector for something the
+  // outer wrapper stripped, and the build would die four layers down with the
+  // variable simply absent — which is the failure this whole flag exists to
+  // move forward to the call site.
+  final inherited = Platform.environment;
+  final loadsItself = _certificatesIn(
+    Map<String, String>.from(inherited),
+  ).isEmpty;
+  final deliverable = loadsItself
+      ? byCredential.keys.toSet()
+      : byCredential.entries
+            .where(
+              (e) => e.value.isNotEmpty && e.value.every(inherited.containsKey),
+            )
+            .map((e) => e.key)
+            .toSet();
+
   final selection = resolveOnly(
     only,
-    available: byCredential.keys.toSet(),
-    at: secretsFile.path,
+    available: deliverable,
+    at: loadsItself
+        ? secretsFile.path
+        : 'the environment this command received',
   );
   for (final family in selection.emptyFamilies) {
     stderr.writeln(
@@ -1405,8 +1432,34 @@ Future<int> runKeychainExec({
       '${secretsFile.path}',
     );
   }
+  // **This command's own inputs are not in `--only`'s domain.** It imports
+  // certificates into a keychain and writes profiles where Xcode looks, both
+  // before any child exists — neither reaches the child as a value, and neither
+  // is what the flag exists to control. Filtering them starves the command of
+  // the thing it is for: with an empty selection it could not find its own
+  // certificate, and with the certificate named it could not find its profile.
+  //
+  // So they are always loaded, and the child filter below takes them back out
+  // again unless the caller named them.
+  final ownInputs = byCredential.keys
+      .where(
+        (p) =>
+            p.startsWith('apple.certificates.') ||
+            p.startsWith('apple.profiles.'),
+      )
+      .toSet();
+  // `--api-key` is a selection too, in the one place it is spelled differently.
+  // Without this it loaded the key and the strip below removed it again, so the
+  // flag documented as *the* way to give a child an App Store credential was a
+  // silent no-op — placement and visibility disagreeing, which is the same
+  // family of bug as the two already fixed here.
+  final selectedPaths = {
+    ...selection.paths,
+    if (apiKey != null)
+      ...byCredential.keys.where((p) => p == 'apple.api_keys.$apiKey'),
+  };
   final selectedVariables = {
-    for (final path in selection.paths) ...byCredential[path]!,
+    for (final path in selectedPaths) ...byCredential[path]!,
   };
   final everyCredentialVariable = {
     for (final variables in byCredential.values) ...variables,
@@ -1441,7 +1494,7 @@ Future<int> runKeychainExec({
       //   apple.api_keys             signing needs no App Store key, and a
       //                              build step may deliberately hold none.
       //                              --api-key asks for it.
-      only: selection.paths,
+      only: {...selectedPaths, ...ownInputs},
     );
     environment = secrets.environment;
     source = secretsFile.path;

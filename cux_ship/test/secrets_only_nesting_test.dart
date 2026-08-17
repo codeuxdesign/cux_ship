@@ -23,7 +23,29 @@ import 'package:test/test.dart';
 late Directory _root;
 
 /// The real CLI, so the test exercises the path a caller does.
-final _binary = File('bin/cux_ship.dart').absolute.path;
+///
+/// Found by walking up rather than resolved against the working directory: this
+/// suite is run both from the package and from the workspace root, and a
+/// relative path is correct in exactly one of those.
+final _binary = _findBinary();
+
+String _findBinary() {
+  for (
+    var dir = Directory.current;
+    dir.parent.path != dir.path;
+    dir = dir.parent
+  ) {
+    final candidate = File('${dir.path}/bin/cux_ship.dart');
+    if (candidate.existsSync()) {
+      return candidate.path;
+    }
+    final nested = File('${dir.path}/cux_ship/bin/cux_ship.dart');
+    if (nested.existsSync()) {
+      return nested.path;
+    }
+  }
+  throw StateError('cannot find bin/cux_ship.dart from ${Directory.current}');
+}
 
 void _write(String path, String contents) {
   final file = File('${_root.path}/$path')
@@ -41,7 +63,7 @@ void main() {
     _root = Directory.systemTemp.createTempSync('cux_ship_nesting_test');
     // `cat "$2"` — the file is its own plaintext, which is all this needs.
     _write('.bin/sops', '#!/bin/sh\ncat "\$2"\n');
-    _write('pubspec.yaml', 'name: fixture\n');
+    _write('pubspec.yaml', 'name: fixture\nenvironment:\n  sdk: ^3.0.0\n');
     _write(
       'secrets/release.yaml',
       'tokens:\n'
