@@ -74,6 +74,7 @@ enum AscCommand {
   versions('versions'),
   screenshotTypes('screenshot-types'),
   buildNumber('build-number'),
+  awaitBuild('await'),
   signing('signing');
 
   const AscCommand(this.name);
@@ -87,6 +88,7 @@ enum AscCommand {
     AscCommand.versions,
     AscCommand.screenshotTypes,
     AscCommand.buildNumber,
+    AscCommand.awaitBuild,
     AscCommand.signing,
   }.contains(this);
 }
@@ -96,6 +98,25 @@ enum AscCommand {
 /// Apple spells it `en-US`, matching a Play listing's default language rather
 /// than diverging for no reason.
 const _defaultLocale = 'en-US';
+
+/// `45m`, `90s`, or a bare number of seconds. Null when it is none of those.
+///
+/// Its own function so `--timeout 45` cannot silently mean 45 microseconds,
+/// which is what handing the string to a `Duration` constructor would invite.
+/// Returns null rather than failing so the caller can name the option.
+Duration? _duration(String value) {
+  final match = RegExp(r'^(\d+)(s|m|h)?$').firstMatch(value.trim());
+  if (match == null) {
+    return null;
+  }
+  final n = int.parse(match.group(1)!);
+  return switch (match.group(2)) {
+    'm' => Duration(minutes: n),
+    'h' => Duration(hours: n),
+    _ => Duration(seconds: n),
+  };
+}
+
 
 /// The arguments [cmd] accepts.
 ///
@@ -110,6 +131,24 @@ ArgParser buildAscParser(AscCommand cmd) {
       allowed: ['ios', 'macos'],
       help: 'Which App Store platform to act on.',
     );
+
+  if (cmd == AscCommand.awaitBuild) {
+    parser
+      ..addOption(
+        'build-number',
+        help: 'The build to wait for. Required, and deliberately not defaulted '
+            'to the newest: the point of waiting on another machine is to wait '
+            'for a *specific* build, and "newest" would succeed on somebody '
+            "else's upload.",
+      )
+      ..addOption(
+        'timeout',
+        defaultsTo: '45m',
+        help: 'How long to wait before giving up, e.g. 45m or 90s.',
+      )
+      ..addOption('poll', defaultsTo: '30s', help: 'How often to ask.');
+    return parser;
+  }
 
   if (cmd.isRead) {
     return parser;
@@ -175,6 +214,7 @@ ArgParser buildAscParser(AscCommand cmd) {
     case AscCommand.versions:
     case AscCommand.screenshotTypes:
     case AscCommand.buildNumber:
+    case AscCommand.awaitBuild:
     case AscCommand.signing:
       throw StateError('unreachable: handled by cmd.isRead above');
   }
@@ -438,6 +478,25 @@ Future<void> runAsc(
 
     if (cmd == AscCommand.buildNumber) {
       await store.printBuildNumber(app);
+      return;
+    }
+    if (cmd == AscCommand.awaitBuild) {
+      final buildNumber = args['build-number'] as String?;
+      if (buildNumber == null || buildNumber.isEmpty) {
+        fail('--build-number is required. See its help for why.');
+      }
+      final timeoutText = args['timeout'] as String;
+      final pollText = args['poll'] as String;
+      await store.awaitProcessing(
+        app,
+        buildNumber,
+        timeout:
+            _duration(timeoutText) ??
+            fail('--timeout is "$timeoutText" — write it as 45m or 90s.'),
+        poll:
+            _duration(pollText) ??
+            fail('--poll is "$pollText" — write it as 45m or 90s.'),
+      );
       return;
     }
     if (cmd == AscCommand.builds) {

@@ -154,6 +154,10 @@ class _AscSubcommand extends Command<void> {
           'published enum lags the console, so read rather than guess.',
     AscCommand.buildNumber =>
       'Print the newest processed build number and nothing else, for scripts.',
+    AscCommand.awaitBuild =>
+      'Wait for a build Apple is processing, and say which of the three ways '
+          'it ended. Needs only the API key, so it belongs on a cheap runner '
+          'rather than the macOS one that built it.',
     AscCommand.signing =>
       'Print the certificates, App IDs and profiles the developer account '
           'holds, so drift from automatic signing is visible. Reads only, and '
