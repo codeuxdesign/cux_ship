@@ -898,7 +898,29 @@ LoadedSecrets _materialize(
   // caller named what its child consumes, and nothing else is placed — see
   // docs/design/only-selector.md.
   bool wants(String path) => only == null || only.contains(path);
+
   final environment = Map<String, String>.from(Platform.environment);
+  // **Removed, not merely not placed.** `environment` began as a copy of this
+  // process's own, so under `secrets exec -- secrets exec --only x` the outer
+  // command has already put everything here before the inner one runs. A filter
+  // that only declined to place would achieve nothing while reading as correct
+  // at every line — which is precisely what 1.9.0 got wrong and 1.9.1 fixed,
+  // and what an end-to-end nesting test caught in this implementation after the
+  // unit tests were green.
+  if (only != null) {
+    for (final credential in credentials) {
+      if (wants(credential.path)) {
+        continue;
+      }
+      for (final name in variablesForCredential(
+        path: credential.path,
+        instance: credential.instance,
+        fields: credential.fields,
+      )) {
+        environment.remove(name);
+      }
+    }
+  }
   final loaded = <String>[];
   final unresolved = <String>[];
 
@@ -1276,6 +1298,8 @@ Future<int> runSecretsExec({
   // general-purpose wrapper that hands over nothing is inert. `keychain exec`
   // defaults the other way, because it exists to sign and its child's needs
   // are the call site's to declare.
+  checkOnlyCombination(only: only, keystore: keystore, apiKey: apiKey);
+
   OnlySelection? selection;
   if (only.isNotEmpty) {
     selection = resolveOnly(
@@ -1340,6 +1364,21 @@ Future<int> runSecretsExec({
       command.first,
       command.skip(1).toList(),
       environment: secrets.environment,
+      // **Without this a removed variable comes back.** `Process.start` merges
+      // the map into the parent's environment by default, so anything `--only`
+      // deleted from the map is restored from this process's own — which is
+      // exactly the case that matters, since under `secrets exec -- secrets
+      // exec --only x` the parent is the one holding the credentials.
+      //
+      // Safe because the map began as a full copy of this process's
+      // environment rather than an empty one, so PATH and the rest are in it.
+      //
+      // `keychain exec` has carried this flag, and a comment saying the same
+      // thing, since 1.9.1. This command never removed anything so it never
+      // needed it — and the moment `--only` gave it something to remove, the
+      // removals silently did nothing. Found by an end-to-end nesting test
+      // while the unit tests were green.
+      includeParentEnvironment: false,
       workingDirectory: repoRoot,
       mode: ProcessStartMode.inheritStdio,
     );

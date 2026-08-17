@@ -1387,6 +1387,12 @@ Future<int> runKeychainExec({
   // Read without decrypting: `env`, `kind` and the instance names are cleartext
   // by design, which is what lets the nested case filter an environment it did
   // not place and never called `loadSecrets` for.
+  // `--profile` is allowed alongside `--only` here: they are different axes.
+  // One decides which profiles Xcode gets installed, the other what the child's
+  // environment holds — but naming a profile in `--only` is still refused,
+  // because that is the conflation the two flags invite.
+  checkOnlyCombination(only: only, apiKey: apiKey);
+
   final byCredential = variablesByCredential(secretsFile);
   final selection = resolveOnly(
     only,

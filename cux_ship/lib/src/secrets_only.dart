@@ -198,6 +198,57 @@ OnlySelection resolveOnly(
   return OnlySelection(paths, empty);
 }
 
+/// Refuses flag combinations that say the same thing twice, or two things.
+///
+/// `--keystore` and `--api-key` exist to resolve *which instance* fills a
+/// singular set of variable names. An instance named in `--only` already says
+/// that, so adjudicating the interaction was three rules where refusing it is
+/// one — and the error names the replacement rather than the conflict.
+///
+/// `--profile` is a different axis and is not replaced: it selects which
+/// profiles are *installed for Xcode*, while `--only` selects what the child's
+/// environment holds. Readers will conflate them, so naming a profile in
+/// `--only` is refused pointing at `--profile`, the same shape as `placed`
+/// pointing at `secrets place`.
+void checkOnlyCombination({
+  required List<String> only,
+  String? keystore,
+  String? apiKey,
+  bool allowProfiles = false,
+}) {
+  if (only.isEmpty) {
+    return;
+  }
+  for (final entry in {'--keystore': keystore, '--api-key': apiKey}.entries) {
+    if (entry.value != null) {
+      throw ProjectException(
+        '${entry.key} and --only say the same thing. Name the instance in '
+        '--only:\n'
+        '    --only <family>.${entry.value}',
+      );
+    }
+  }
+  if (allowProfiles) {
+    return;
+  }
+  for (final selector in only.expand((s) => s.split(','))) {
+    final name = selector.trim();
+    if (name == 'apple.profiles' || name.startsWith('apple.profiles.')) {
+      throw ProjectException(
+        '--only $name: profiles are installed for Xcode rather than placed in '
+        'the environment.\n'
+        '    Use --profile to choose which ones are installed.',
+      );
+    }
+    if (name == 'placed' || name.startsWith('placed.')) {
+      throw ProjectException(
+        '--only $name: exec never writes placed files.\n'
+        '    Use `cux_ship secrets place`.',
+      );
+    }
+  }
+}
+
 /// Families the selection excludes entirely, so they can be withheld whole.
 ///
 /// The difference matters for the two families whose materialization *chooses*
