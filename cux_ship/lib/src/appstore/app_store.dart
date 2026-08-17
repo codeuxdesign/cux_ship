@@ -121,6 +121,41 @@ Map<String, dynamic> _attributes(Map<String, dynamic> resource) {
   return attributes is Map<String, dynamic> ? attributes : const {};
 }
 
+/// A build that never became visible, which is usually a rejection.
+///
+/// Separate from [AscApiException] because nothing went wrong with the API: the
+/// waiting is this tool's, and every poll was answered.
+class ProcessingTimeout implements Exception {
+  ProcessingTimeout({
+    required this.buildNumber,
+    required this.waited,
+    this.lastState,
+  });
+
+  final String buildNumber;
+  final Duration waited;
+
+  /// What Apple last said, or null while the build was not visible at all —
+  /// which is the shape a rejected upload takes.
+  final String? lastState;
+
+  @override
+  String toString() =>
+      'build $buildNumber was still ${lastState ?? "not visible"} after '
+      '${waited.inMinutes} minutes.\n'
+      '  A build that never appears has usually been refused during '
+      'processing, and\n'
+      '  Apple reports that only by e-mail and in App Store Connect > '
+      'Activity —\n'
+      '  never through this API. Read the e-mail before uploading again: an '
+      'ITMS\n'
+      '  error will name the exact key or entitlement, and re-sending the same\n'
+      '  artifact fails the same way.\n'
+      '  If it was merely slow, re-running the upload step finds it rather '
+      'than\n'
+      '  transferring the artifact a second time.';
+}
+
 /// An app record, which is the one thing in this whole pipeline that a human
 /// had to create by hand — `POST /v1/apps` does not exist.
 class App {
@@ -175,10 +210,32 @@ class AppStore {
   Future<List<Map<String, dynamic>>> builds(App app) async {
     final builds = await client.getAll(
       '/v1/builds',
-      query: {'filter[app]': app.id, 'sort': '-version', 'limit': '200'},
+      query: {
+        'filter[app]': app.id,
+        ..._platformFilter,
+        'sort': '-version',
+        'limit': '200',
+      },
     );
     return builds;
   }
+
+  /// Restricts a build query to the platform this instance was built for.
+  ///
+  /// **Without it every build query answered a question nobody asked.** The doc
+  /// comments here have always said "on this platform" and the filter was
+  /// simply absent, so `appstore builds --platform ios` listed the macOS builds
+  /// too — and a project that ships both from one commit gives them the *same
+  /// build number*, so the two are indistinguishable in the output.
+  ///
+  /// That is worse in [findBuild] than in a listing. [awaitProcessing] polls it
+  /// until a build appears, so an iOS upload could have been satisfied by a
+  /// macOS build of the same number: waited on, found, declared processed, and
+  /// released notes attached to the wrong platform's binary. It was a listing
+  /// that showed a build which had never been uploaded that made this visible.
+  Map<String, String> get _platformFilter => {
+    'filter[preReleaseVersion.platform]': platform.api,
+  };
 
   /// The build carrying [buildNumber] as its `CFBundleVersion`, or null.
   ///
@@ -188,7 +245,11 @@ class AppStore {
   Future<Map<String, dynamic>?> findBuild(App app, String buildNumber) async {
     final found = await client.getAll(
       '/v1/builds',
-      query: {'filter[app]': app.id, 'filter[version]': buildNumber},
+      query: {
+        'filter[app]': app.id,
+        'filter[version]': buildNumber,
+        ..._platformFilter,
+      },
     );
     return found.isEmpty ? null : found.first;
   }
@@ -225,12 +286,22 @@ class AppStore {
         ], request: 'GET /v1/builds');
       }
       if (DateTime.now().isAfter(deadline)) {
-        throw AscApiException(504, [
-          'build $buildNumber was still ${state ?? "not visible"} after '
-              '${timeout.inMinutes} minutes.',
-          'It is not lost — re-run the upload step, which will find it rather '
-              'than sending the .ipa again.',
-        ], request: 'GET /v1/builds');
+        // **Not an AscApiException, and not a 504.** Apple answered every one
+        // of these polls correctly; the timeout is ours. Reporting it as a
+        // gateway error Apple never sent sends the reader looking for a network
+        // problem, and "re-run, it is not lost" — which was the only advice
+        // here — is exactly wrong in the case that actually happens.
+        //
+        // A build that never becomes visible has usually been *rejected* during
+        // processing, and Apple reports that by e-mail and nowhere else: not in
+        // this response, not as a FAILED state, not as anything the API will
+        // ever show. So the tool has to name the place the answer is, or the
+        // next forty-five minutes go the same way.
+        throw ProcessingTimeout(
+          buildNumber: buildNumber,
+          waited: timeout,
+          lastState: state,
+        );
       }
       if (!announced) {
         stdout.writeln(

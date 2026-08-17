@@ -706,6 +706,12 @@ Future<void> runAsc(
   } on AscApiException catch (e) {
     stderr.writeln('asc_upload: $e');
     exitCode = 1;
+  } on ProcessingTimeout catch (e) {
+    // Caught rather than left to the runtime: an uncaught exception exits 255
+    // with a stack trace, and a stack trace above the one sentence that says
+    // "read the e-mail" is how that sentence gets skimmed past.
+    stderr.writeln('asc_upload: $e');
+    exitCode = 1;
   } on MetadataException catch (e) {
     stderr.writeln('asc_upload: ${e.message}');
     exitCode = 1;
