@@ -313,10 +313,21 @@ Future<AddResult> addCredential({
       'underscores, starting with a letter',
     );
   }
-  if (kind.needsEnv && (env == null || env.isEmpty)) {
-    throw ProjectException(
-      'a ${kind.noun} needs --env, naming the variable it is exported as',
-    );
+  if (kind.needsEnv) {
+    if (env == null || env.isEmpty) {
+      throw ProjectException(
+        'a ${kind.noun} needs --env, naming the variable it is exported as',
+      );
+    }
+    // Checked here, with the loader's own rule, because otherwise a bad name
+    // is accepted now and throws at materialization — and there it takes down
+    // *every* command that loads secrets, not just this credential. That is
+    // the same shape as the partial write this command exists to prevent:
+    // a per-credential defect made fatal to the whole file.
+    final problem = envNameProblem(env);
+    if (problem != null) {
+      throw ProjectException('--env $problem');
+    }
   }
 
   final path = kind.pathFor(instance);

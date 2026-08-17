@@ -1152,18 +1152,31 @@ List<_Credential> _select(
 ///
 /// A token quietly taking `ANDROID_KEYSTORE_PATH` would redirect a real
 /// credential, and the file's own author would be unlikely to notice.
-void _checkExportable(String name, String at, Map<String, String> environment) {
+/// Why [name] cannot be exported as a variable, or null when it can.
+///
+/// One rule, reached from two places. `secrets add` refuses a bad name at the
+/// moment it is typed; materialization still throws on one that reached the
+/// file by some other route. Sharing the function is what keeps the two from
+/// drifting — a write-time check merely *similar* to the load-time one
+/// eventually admits something the loader rejects, and the loader's rejection
+/// is fatal to every command that loads secrets rather than to the one
+/// credential at fault.
+String? envNameProblem(String name) {
   if (!RegExp(r'^[A-Z][A-Z0-9_]*$').hasMatch(name)) {
-    throw ProjectException(
-      '$at.env is $name, which is not a usable variable name — '
-      'capitals, digits and underscores, starting with a letter',
-    );
+    return 'is $name, which is not a usable variable name — '
+        'capitals, digits and underscores, starting with a letter';
   }
   if (_reservedNames.contains(name)) {
-    throw ProjectException(
-      '$at.env is $name, which is a name this tool sets itself — '
-      'a credential would be overwritten and nothing would say so',
-    );
+    return 'is $name, which is a name this tool sets itself — '
+        'a credential would be overwritten and nothing would say so';
+  }
+  return null;
+}
+
+void _checkExportable(String name, String at, Map<String, String> environment) {
+  final problem = envNameProblem(name);
+  if (problem != null) {
+    throw ProjectException('$at.env $problem');
   }
 }
 

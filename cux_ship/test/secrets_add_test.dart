@@ -80,6 +80,34 @@ void main() {
     });
   });
 
+  // Found by a reviewer asking whether the load-time throw is now genuinely
+  // unreachable through `add`, rather than merely unlikely. It was not: `add`
+  // checked only that --env was non-empty, so a malformed or reserved name was
+  // written happily and threw at materialization — where it takes down every
+  // command that loads secrets, not just the credential at fault.
+  group('the env name is held to the rule that will judge it later', () {
+    test('a name the loader would refuse is refused now', () {
+      expect(
+        envNameProblem('my-token'),
+        contains('not a usable variable name'),
+      );
+      expect(envNameProblem('lowercase'), isNotNull);
+      expect(envNameProblem('9LIVES'), isNotNull);
+    });
+
+    test('a name cux_ship exports itself is refused', () {
+      expect(
+        envNameProblem('ANDROID_KEYSTORE_PATH'),
+        contains('a name this tool sets itself'),
+      );
+    });
+
+    test('an ordinary name is fine', () {
+      expect(envNameProblem('ARTIFACT_TOKEN'), isNull);
+      expect(envNameProblem('A'), isNull);
+    });
+  });
+
   group('api key facts, read back out of the filename', () {
     // Apple's own naming is the only signal altool gets about which kind of key
     // it holds, and getting it wrong sends `iss` with an individual key and
