@@ -221,11 +221,28 @@ grep -A5 'name: cux_ship$' tool/cux_ship/pubspec.lock | grep version  # the pinn
 ```
 
 Neither is `--version`, because there is no such flag — the command reports
-nothing about itself, which is part of why the two can disagree unnoticed.
+nothing about itself, which is part of why the two can disagree unnoticed. The
+`$` in that grep is load-bearing: without it the pattern also matches
+`cux_ship_verify`, which is the next entry in the lockfile, so it prints two
+versions with the wrong one first. Two people wrote that grep unanchored before
+it was noticed.
 
 Worth checking first whenever a version's behaviour is not what its changelog
-says. A project whose commands all go through a wrapper script cannot hit this
-at all, which is the quieter argument for having one.
+says.
+
+**The pinning problem is in your documentation, not your scripts.** Scripts are
+already safe: anything that `cd`s into the pinned package before `dart run`
+cannot reach the global install, and that is nearly every script that exists.
+What resolves `PATH` is the bare `cux_ship …` in a README, a runbook, or a
+usage header — every command a person types by hand. Two projects measured
+themselves after hitting this: one had 4 pinned invocations against 63
+documented bare ones, and the other, whose documented commands all name a
+wrapper script, had one. Same package, same lockfile, an order of magnitude
+apart in exposure.
+
+So a repository that documents a bare command name has not pinned it, however
+carefully it pinned the package. The wrapper script is not protecting the
+scripts — they were never at risk. It is protecting the reader.
 
 **If your test suite uses the checks, depend on
 [`cux_ship_verify`](https://pub.dev/packages/cux_ship_verify) directly** rather
