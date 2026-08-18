@@ -499,7 +499,11 @@ class _SecretsAddCommand extends Command<void> {
       )
       ..addOption(
         'team',
-        help: 'With --from-keychain: the team id, as it appears in OU=.',
+        help:
+            'With --from-keychain: the team id, as it appears in OU=. '
+            'Defaults to DEVELOPMENT_TEAM from the Xcode project, and is '
+            'refused rather than guessed when the project names more than '
+            'one.',
       )
       ..addOption(
         'certificate-kind',
@@ -597,7 +601,6 @@ class _SecretsAddCommand extends Command<void> {
         // identifier — retyping it once a year during a certificate rotation
         // is exactly where a transposition goes unnoticed until a profile
         // mismatch that never mentions the team.
-        final project = _project(this);
         final team = argResults!.option('team') ?? project.developmentTeam;
         if (team == null || team.isEmpty) {
           throw UsageException(
