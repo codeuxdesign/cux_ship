@@ -25,6 +25,7 @@ import 'package:path/path.dart' as p;
 
 import 'src/appstore/cli.dart';
 import 'src/appstore/flatten_cli.dart';
+import 'src/config.dart';
 import 'src/confirm.dart';
 import 'src/deps.dart';
 import 'src/keychain.dart';
@@ -1373,6 +1374,109 @@ class _DepsSubcommand extends Command<void> {
 
 // ------------------------------------------------------------------ verify
 
+/// The version that first required a store block to declare its locales.
+///
+/// Named in the failure rather than only in the changelog, because the reader's
+/// question is not *what is missing* but *why did this work yesterday*. It cost
+/// one string and it is the difference between a message that serves somebody
+/// who upgraded deliberately and one that serves somebody who did not.
+const _storeConfigSince = '3.2.0';
+
+/// What a declared store block has to say, and what a tree has to be there for.
+///
+/// Two failures, and they are the same failure from opposite ends: a block that
+/// declares nothing, and a block that declares a store whose tree is not there.
+/// Both are configurations that read as complete and check less than they
+/// appear to.
+List<ReleaseProblem> _declarationProblems(
+  ProjectConfig config,
+  ArgResults args,
+  String? appstore,
+  String? play,
+) {
+  final problems = <ReleaseProblem>[];
+  final overriddenLocales = args.multiOption('require-locale').isNotEmpty;
+
+  void check(String key, StoreConfig? store, String? tree) {
+    if (store == null) {
+      // A tree nobody declared. It is still checked against everything
+      // intrinsic to it — sizes, transparency, text limits — but nothing knows
+      // which locales it *should* carry, so the one thing that cannot be
+      // inferred is the one thing missing. Reported rather than passed over,
+      // because a listing tree with no declaration is how a check ends up
+      // green while requiring nothing.
+      if (tree != null) {
+        problems.add(
+          ReleaseProblem(
+            '$cuxShipConfigFile: $key',
+            'is not declared, and $tree exists — so the tree is checked but '
+                'nothing says which locales it must carry, and a locale that '
+                'silently stopped being there would not be noticed. Declaring '
+                '$key has been required since $_storeConfigSince: add '
+                '$key.locales, e.g. locales: [en-US]',
+          ),
+        );
+      }
+      return;
+    }
+    if (store.locales.isEmpty && !overriddenLocales) {
+      problems.add(
+        ReleaseProblem(
+          '$cuxShipConfigFile: $key',
+          'declares no locales, so nothing would be required of the listing '
+              'and this check would pass without checking. $key.locales is '
+              'required since $_storeConfigSince — add the locales this app '
+              'publishes, e.g. locales: [en-US]',
+        ),
+      );
+    }
+    if (tree == null) {
+      problems.add(
+        ReleaseProblem(
+          '$cuxShipConfigFile: $key',
+          'is declared and no metadata tree was found — declaring the block '
+              'is what says this project publishes there, so either create the '
+              'tree, name it, or remove the block',
+        ),
+      );
+    }
+  }
+
+  check('appstore', config.appstore, appstore);
+  check('play', config.play, play);
+  return problems;
+}
+
+/// The locales a listing must carry: the flag when given, the config otherwise.
+Set<String> _requiredLocales(ArgResults args, StoreConfig? store) {
+  final flag = args.multiOption('require-locale').toSet();
+  return flag.isNotEmpty ? flag : (store?.locales ?? const {});
+}
+
+/// The screenshot types a listing must carry.
+///
+/// Precedence is the tool's usual one — flag, then file, then inference — and
+/// the inference step is what makes the App Store side work with nothing
+/// declared. Play has nothing to infer from, so an undeclared Play list simply
+/// requires no types; the icon and feature graphic are checked regardless,
+/// because they are Play's rules rather than a project's choice.
+Set<String> _requiredScreenshotTypes(
+  ArgResults args,
+  StoreConfig? store,
+  ProjectContext project, {
+  String platform = 'ios',
+}) {
+  final flag = args.multiOption('require-screenshot-type').toSet();
+  if (flag.isNotEmpty) {
+    return flag;
+  }
+  final declared = store?.screenshotsFor(platform) ?? const <String>{};
+  if (declared.isNotEmpty || platform == StoreConfig.anyPlatform) {
+    return declared;
+  }
+  return project.requiredScreenshotTypes(platform) ?? const {};
+}
+
 /// The offline checks, against a consuming repository's own files.
 ///
 /// Public because it is useful on its own: a project with no store credentials
@@ -1395,19 +1499,34 @@ class VerifyCommand extends Command<void> {
         'appstore',
         help:
             'App Store metadata tree to validate. Defaults to store/appstore '
-            'when the project has one, and is skipped when it does not.',
+            'when .cux-ship.yaml declares an appstore: block.',
+      )
+      ..addOption(
+        'play',
+        help:
+            'Play metadata tree to validate. Defaults to store/play when '
+            '.cux-ship.yaml declares a play: block.',
+      )
+      ..addOption(
+        'data-safety',
+        help:
+            "Play's data safety CSV. Defaults to store/play/data-safety.csv. "
+            'Checked for structure, never for whether the answers are true.',
       )
       ..addMultiOption(
         'require-screenshot-type',
         help:
             'A ScreenshotDisplayType the listing must carry, e.g. '
-            'APP_IPAD_PRO_3GEN_129. A universal app needs an iPad set as well '
-            'as an iPhone one, and Apple refuses the submission rather than '
-            'the upload.',
+            'APP_IPAD_PRO_3GEN_129. Overrides what the Xcode project implies. '
+            'Normally unnecessary: TARGETED_DEVICE_FAMILY says whether an iPad '
+            'set is required, and Apple refuses the submission rather than the '
+            'upload.',
       )
       ..addMultiOption(
         'require-locale',
-        help: 'A locale the listing must carry, e.g. en-US.',
+        help:
+            'A locale the listing must carry, e.g. en-US. Overrides '
+            'appstore.locales and play.locales.',
       );
   }
 
@@ -1423,32 +1542,62 @@ class VerifyCommand extends Command<void> {
   void run() {
     final args = argResults!;
     final project = _project(this);
+    final config = ProjectConfig.read(project.root);
     final changelog = args.option('changelog') ?? project.changelog;
-    final appstore = args.option('appstore') ?? project.appStoreMetadata;
 
-    // Refused rather than passed: checking nothing and reporting success is the
-    // failure this command exists to prevent, so having nothing to check is
-    // itself the finding.
-    if (changelog == null && appstore == null) {
-      stderr.writeln(
-        'cux_ship verify: nothing to check — no CHANGELOG.md and no App Store '
-        'metadata tree were found, and neither was named.',
-      );
-      exitCode = 1;
-      return;
-    }
+    // **Declaring the block is what says a project publishes to a store**, and
+    // it is what the *requirements* hang off — which locales, which screenshot
+    // types. It is deliberately not what decides whether a tree is looked at.
+    //
+    // A tree that is present is checked against the rules intrinsic to it
+    // whether or not anybody declared it, because an upgrade that silently
+    // checks less than the version before it is the failure this change exists
+    // to remove, committed on the way in. An undeclared tree is reported, and
+    // a declared one additionally has to satisfy what it declared.
+    final appstore = args.option('appstore') ?? project.appStoreMetadata;
+    final play = args.option('play') ?? project.playMetadata;
+    final dataSafety = args.option('data-safety') ?? project.dataSafety;
 
     final problems = <ReleaseProblem>[
+      ..._declarationProblems(config, args, appstore, play),
       if (changelog != null) ...checkChangelogFile(changelog),
       if (appstore != null)
         ...checkAppStoreTree(
           appstore,
-          requireScreenshotTypes: args
-              .multiOption('require-screenshot-type')
-              .toSet(),
-          requireLocales: args.multiOption('require-locale').toSet(),
+          requireScreenshotTypes: _requiredScreenshotTypes(
+            args,
+            config.appstore,
+            project,
+          ),
+          requireLocales: _requiredLocales(args, config.appstore),
         ),
+      if (play != null)
+        ...checkPlayTree(
+          play,
+          requireScreenshotTypes: _requiredScreenshotTypes(
+            args,
+            config.play,
+            project,
+            platform: StoreConfig.anyPlatform,
+          ),
+          requireLocales: _requiredLocales(args, config.play),
+        ),
+      if (dataSafety != null) ...checkDataSafetyFile(dataSafety),
     ];
+
+    // Refused rather than passed: checking nothing and reporting success is the
+    // failure this command exists to prevent, so having nothing to check is
+    // itself the finding.
+    if (changelog == null && appstore == null && play == null) {
+      stderr.writeln(
+        'cux_ship verify: nothing to check — no CHANGELOG.md, and '
+        '$cuxShipConfigFile declares neither appstore: nor play:, so no '
+        'listing tree was looked for. Declare the store this project '
+        'publishes to, or name a tree with --appstore or --play.',
+      );
+      exitCode = 1;
+      return;
+    }
 
     if (problems.isEmpty) {
       stdout.writeln('==> release inputs are publishable');

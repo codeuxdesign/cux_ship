@@ -61,6 +61,8 @@ class ProjectContext {
     this.iosBundleIdProblem,
     this.macosBundleIdProblem,
     this.developmentTeamProblem,
+    this.targetedDeviceFamily,
+    this.targetedDeviceFamilyProblem,
     this.versionName,
     this.buildNumber,
     this.changelog,
@@ -134,6 +136,11 @@ class ProjectContext {
         ? _developmentTeam(text(appPath, macosProject), macosProject)
         : iosTeam;
 
+    final deviceFamily = _targetedDeviceFamily(
+      text(appPath, iosProject),
+      iosProject,
+    );
+
     return ProjectContext(
       root: rootPath,
       appDir: appPath,
@@ -149,6 +156,8 @@ class ProjectContext {
       iosBundleIdProblem: ios.problem,
       macosBundleIdProblem: macos.problem,
       developmentTeamProblem: team.problem,
+      targetedDeviceFamily: deviceFamily.value,
+      targetedDeviceFamilyProblem: deviceFamily.problem,
       versionName: versionName,
       buildNumber: buildNumber,
       changelog: path(rootPath, 'CHANGELOG.md'),
@@ -252,6 +261,52 @@ class ProjectContext {
 
   /// Why [developmentTeam] is null, when the reason is worth saying.
   final String? developmentTeamProblem;
+
+  /// `TARGETED_DEVICE_FAMILY` from the iOS project, e.g. `1,2`.
+  ///
+  /// What it buys is [requiredScreenshotTypes]: the App Store refuses a
+  /// submission from a universal app that carries no iPad screenshots, and it
+  /// refuses it long after the upload. Which types are required follows from
+  /// which device families the binary targets, so it can be read rather than
+  /// declared — and a value that is read cannot drift out of date the way a
+  /// list of display-type names in a config file does.
+  final String? targetedDeviceFamily;
+
+  /// Why [targetedDeviceFamily] is null, when the reason is worth saying.
+  final String? targetedDeviceFamilyProblem;
+
+  /// The `ScreenshotDisplayType` values a submission must carry, for
+  /// [platform], or null when they cannot be derived.
+  ///
+  /// **Apple's requirement, not the app's**, which is exactly why deriving it
+  /// beats declaring it. `{APP_IPHONE_67, APP_IPAD_PRO_3GEN_129}` is what Apple
+  /// asks of a universal app *today*; the 6.7" class replaced the 6.5" one and
+  /// something will replace it. A project that writes the names into its own
+  /// config holds a value that ages into a post-upload rejection, whereas a
+  /// mapping kept here is fixed for every consumer by taking a new version.
+  ///
+  /// macOS has no `TARGETED_DEVICE_FAMILY` — the Mac App Store has one
+  /// screenshot type and it is required — so that side is a constant rather
+  /// than a lookup. Two mechanisms behind one word, said plainly so the macOS
+  /// half is not later built as "no inference available".
+  Set<String>? requiredScreenshotTypes(String platform) {
+    if (platform == 'macos') {
+      return const {'APP_DESKTOP'};
+    }
+    final families = targetedDeviceFamily;
+    if (families == null) {
+      return null;
+    }
+    final parts = families
+        .split(',')
+        .map((f) => f.trim())
+        .where((f) => f.isNotEmpty)
+        .toSet();
+    return {
+      if (parts.contains('1')) 'APP_IPHONE_67',
+      if (parts.contains('2')) 'APP_IPAD_PRO_3GEN_129',
+    };
+  }
 
   /// The marketing version from `pubspec.yaml`, e.g. `1.0.3`.
   final String? versionName;
@@ -370,6 +425,47 @@ class ProjectContext {
         problem:
             '$where names ${found.length} development teams '
             '(${found.join(', ')}) — pass --team to choose',
+      );
+    }
+    return (value: found.single, problem: null);
+  }
+
+  /// `TARGETED_DEVICE_FAMILY`, or why there is not one.
+  ///
+  /// Refuses disagreement for the same reason [_bundleId] and
+  /// [_developmentTeam] do, and the multi-target shape is the same one: a test
+  /// target or an app extension carries its own, and taking the first match
+  /// would answer a question about the app with a value belonging to something
+  /// else. Here the consequence is a screenshot set required or not required
+  /// wrongly, and the App Store says so at submission rather than at upload.
+  ///
+  /// Test targets are skipped by name, as they are for the bundle identifier.
+  /// Anything left has to agree.
+  static ({String? value, String? problem}) _targetedDeviceFamily(
+    String? pbxproj,
+    String where,
+  ) {
+    if (pbxproj == null) {
+      return (value: null, problem: null);
+    }
+    final found = _distinct(
+      pbxproj,
+      RegExp(r'TARGETED_DEVICE_FAMILY\s*=\s*([^;]+);'),
+      // A device family is digits and commas. Anything else is an Xcode
+      // variable this can only read as text, and reading `$(INHERITED)` as a
+      // family would silently require the wrong screenshots.
+      skip: (value) => value.isEmpty || !RegExp(r'^[\d,\s]+$').hasMatch(value),
+    );
+    if (found.isEmpty) {
+      return (value: null, problem: null);
+    }
+    if (found.length > 1) {
+      return (
+        value: null,
+        problem:
+            '$where names ${found.length} device families '
+            '(${found.join(', ')}), so which screenshots are required cannot '
+            'be derived — declare appstore.screenshots.ios instead',
       );
     }
     return (value: found.single, problem: null);
