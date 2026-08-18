@@ -26,6 +26,20 @@ truncated file as a complete one.
 it checks without the import becoming a cycle. It is still exported from
 `cux_ship_verify.dart`; no consumer changes.
 
+### What is not covered, said plainly
+
+**Localized graphics fall back to the default language**, so only the locale
+others fall back to is required to carry the icon, the feature graphic and the
+declared screenshot types. That behaviour is documented by Play and was
+confirmed from the documentation independently of the author's reading — but
+**every repository that reviewed this release publishes a single locale**, so no
+real listing has ever exercised it. The synthetic trees in
+`play_metadata_test.dart` are the whole of the evidence.
+
+This is recorded rather than left implicit because "reviewed by three projects"
+would otherwise read as covering it. It does not. The first consumer to publish
+a second locale is the first real test of that rule.
+
 ### On numbers, and whose they are
 
 Both kinds appear in `play_metadata.dart` and they are labelled: Play's limits

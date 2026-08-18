@@ -24,6 +24,21 @@
 // discrepancy as a bug, and a number with no source cannot be defended or
 // dropped.
 //
+// **The weakest thing here is the fallback-locale rule, and it is weak in a
+// specific way worth naming.** Localized graphics are optional per locale and
+// inherit the default language's, so only the locale others fall back to is
+// held to the required images. That is right — it is Play Console's documented
+// behaviour, found independently of the author's reading — but it is the one
+// rule in this file with **no real-listing evidence under it**. Every
+// repository that reviewed this release publishes a single locale, so nothing
+// but the synthetic trees in `play_metadata_test.dart` has ever exercised it.
+//
+// Said out loud because "reviewed by three projects" would otherwise read as
+// covering it, and a rule believed to be covered is the failure this whole
+// release is about. The first consumer to ship a second locale is the first
+// real test; if it reports something odd about an inheriting locale, start
+// here.
+//
 // **What is deliberately not checked: aspect ratio.** Play's published guidance
 // once said a screenshot's longer side may be at most twice its shorter one.
 // That rule is not enforced as written and asserting it would fail listings the

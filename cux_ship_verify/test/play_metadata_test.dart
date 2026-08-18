@@ -148,6 +148,50 @@ void main() {
       );
     });
 
+    test('a locale may override some types and inherit the rest', () {
+      // The shape between the two obvious ones: `de-DE/` has its own
+      // screenshots and no graphics, so it overrides one and inherits two.
+      // Nothing may demand the inherited ones of it.
+      final dir = _tree(
+        locales: {'en-US': _text, 'de-DE': _text},
+        images: {
+          'en-US': _fullImages,
+          'de-DE': {
+            'phoneScreenshots': [_phone, _phone],
+          },
+        },
+        defaultLanguage: 'en-US',
+      );
+      expect(
+        checkPlayTree(
+          dir.path,
+          requireLocales: {'en-US', 'de-DE'},
+          requireScreenshotTypes: {'phoneScreenshots'},
+        ),
+        isEmpty,
+      );
+    });
+
+    test('an image a non-default locale does override is still checked', () {
+      // The mirror-image risk of the fix above: skipping the *requirement* for
+      // an inheriting locale must not skip the rules for what it actually
+      // carries. A wrongly sized override publishes; it is not inherited away.
+      final dir = _tree(
+        locales: {'en-US': _text, 'de-DE': _text},
+        images: {
+          'en-US': _fullImages,
+          'de-DE': {
+            'icon': [(w: 256, h: 256)],
+          },
+        },
+        defaultLanguage: 'en-US',
+      );
+      expect(
+        checkPlayTree(dir.path).map((p) => p.message),
+        contains(allOf(contains('256x256'), contains('512x512'))),
+      );
+    });
+
     test('two locales and no default language is itself the problem', () {
       final dir = _tree(
         locales: {'en-US': _text, 'de-DE': _text},
