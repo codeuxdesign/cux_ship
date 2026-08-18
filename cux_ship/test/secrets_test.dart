@@ -736,11 +736,9 @@ tokens:
         only: {'apple.api_keys.upload'},
       );
       final dir = Directory(loaded.environment['API_PRIVATE_KEYS_DIR']!);
-      expect(
-        dir.listSync().map((f) => f.path.split('/').last).toList(),
-        ['ApiKey_AAA.p8'],
-        reason: 'the unnamed key was materialized beside the named one',
-      );
+      expect(dir.listSync().map((f) => f.path.split('/').last).toList(), [
+        'ApiKey_AAA.p8',
+      ], reason: 'the unnamed key was materialized beside the named one');
       loaded.dispose();
     });
   });

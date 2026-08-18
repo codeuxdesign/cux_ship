@@ -418,17 +418,13 @@ class AppStore {
         },
       }, describe: 'what to test ($locale)');
     } else {
-      await writer.patch(
-        '/v1/betaBuildLocalizations/${_id(existing.first)}',
-        {
-          'data': {
-            'type': 'betaBuildLocalizations',
-            'id': _id(existing.first),
-            'attributes': {'whatsNew': text},
-          },
+      await writer.patch('/v1/betaBuildLocalizations/${_id(existing.first)}', {
+        'data': {
+          'type': 'betaBuildLocalizations',
+          'id': _id(existing.first),
+          'attributes': {'whatsNew': text},
         },
-        describe: 'what to test ($locale)',
-      );
+      }, describe: 'what to test ($locale)');
     }
   }
 
@@ -570,17 +566,13 @@ class AppStore {
     Map<String, dynamic> version,
     Map<String, dynamic> build,
   ) async {
-    await writer.patch(
-      '/v1/appStoreVersions/${_id(version)}',
-      {
-        'data': {
-          'type': 'appStoreVersions',
-          'id': _id(version),
-          'relationships': {'build': relation('builds', _id(build)!)},
-        },
+    await writer.patch('/v1/appStoreVersions/${_id(version)}', {
+      'data': {
+        'type': 'appStoreVersions',
+        'id': _id(version),
+        'relationships': {'build': relation('builds', _id(build)!)},
       },
-      describe: 'attached build ${_attributes(build)['version']}',
-    );
+    }, describe: 'attached build ${_attributes(build)['version']}');
   }
 
   /// Writes the version's own attributes, as opposed to a locale's.
@@ -620,19 +612,15 @@ class AppStore {
         .where((l) => _attributes(l)['locale'] == locale)
         .toList();
     if (match.isEmpty) {
-      await writer.post(
-        '/v1/appStoreVersionLocalizations',
-        {
-          'data': {
-            'type': 'appStoreVersionLocalizations',
-            'attributes': {'locale': locale, ...attributes},
-            'relationships': {
-              'appStoreVersion': relation('appStoreVersions', _id(version)!),
-            },
+      await writer.post('/v1/appStoreVersionLocalizations', {
+        'data': {
+          'type': 'appStoreVersionLocalizations',
+          'attributes': {'locale': locale, ...attributes},
+          'relationships': {
+            'appStoreVersion': relation('appStoreVersions', _id(version)!),
           },
         },
-        describe: '$locale: ${attributes.keys.join(", ")}',
-      );
+      }, describe: '$locale: ${attributes.keys.join(", ")}');
     } else {
       await writer.patch(
         '/v1/appStoreVersionLocalizations/${_id(match.first)}',
@@ -734,17 +722,13 @@ class AppStore {
       for (final entry in categories.entries)
         entry.key: relation('appCategories', entry.value),
     };
-    await writer.patch(
-      '/v1/appInfos/${_id(appInfo)}',
-      {
-        'data': {
-          'type': 'appInfos',
-          'id': _id(appInfo),
-          'relationships': relationships,
-        },
+    await writer.patch('/v1/appInfos/${_id(appInfo)}', {
+      'data': {
+        'type': 'appInfos',
+        'id': _id(appInfo),
+        'relationships': relationships,
       },
-      describe: 'categories: ${categories.values.join(", ")}',
-    );
+    }, describe: 'categories: ${categories.values.join(", ")}');
   }
 
   Future<void> writeAppInfoLocalization(
@@ -762,29 +746,21 @@ class AppStore {
         .where((l) => _attributes(l)['locale'] == locale)
         .toList();
     if (match.isEmpty) {
-      await writer.post(
-        '/v1/appInfoLocalizations',
-        {
-          'data': {
-            'type': 'appInfoLocalizations',
-            'attributes': {'locale': locale, ...attributes},
-            'relationships': {'appInfo': relation('appInfos', _id(appInfo)!)},
-          },
+      await writer.post('/v1/appInfoLocalizations', {
+        'data': {
+          'type': 'appInfoLocalizations',
+          'attributes': {'locale': locale, ...attributes},
+          'relationships': {'appInfo': relation('appInfos', _id(appInfo)!)},
         },
-        describe: '$locale: ${attributes.keys.join(", ")}',
-      );
+      }, describe: '$locale: ${attributes.keys.join(", ")}');
     } else {
-      await writer.patch(
-        '/v1/appInfoLocalizations/${_id(match.first)}',
-        {
-          'data': {
-            'type': 'appInfoLocalizations',
-            'id': _id(match.first),
-            'attributes': attributes,
-          },
+      await writer.patch('/v1/appInfoLocalizations/${_id(match.first)}', {
+        'data': {
+          'type': 'appInfoLocalizations',
+          'id': _id(match.first),
+          'attributes': attributes,
         },
-        describe: '$locale: ${attributes.keys.join(", ")}',
-      );
+      }, describe: '$locale: ${attributes.keys.join(", ")}');
     }
   }
 
@@ -814,17 +790,13 @@ class AppStore {
         'the app has no ageRatingDeclaration to write to',
       ], request: 'GET /v1/appInfos');
     }
-    await writer.patch(
-      '/v1/ageRatingDeclarations/$declarationId',
-      {
-        'data': {
-          'type': 'ageRatingDeclarations',
-          'id': declarationId,
-          'attributes': declaration,
-        },
+    await writer.patch('/v1/ageRatingDeclarations/$declarationId', {
+      'data': {
+        'type': 'ageRatingDeclarations',
+        'id': declarationId,
+        'attributes': declaration,
       },
-      describe: 'age rating (${declaration.length} answers)',
-    );
+    }, describe: 'age rating (${declaration.length} answers)');
   }
 
   /// Pushes what the reviewer is told, which hangs off the version.
@@ -920,22 +892,18 @@ class AppStore {
       setId = null;
     }
 
-    final created = await writer.post(
-      '/v1/appScreenshotSets',
-      {
-        'data': {
-          'type': 'appScreenshotSets',
-          'attributes': {'screenshotDisplayType': displayType},
-          'relationships': {
-            'appStoreVersionLocalization': relation(
-              'appStoreVersionLocalizations',
-              _id(localization)!,
-            ),
-          },
+    final created = await writer.post('/v1/appScreenshotSets', {
+      'data': {
+        'type': 'appScreenshotSets',
+        'attributes': {'screenshotDisplayType': displayType},
+        'relationships': {
+          'appStoreVersionLocalization': relation(
+            'appStoreVersionLocalizations',
+            _id(localization)!,
+          ),
         },
       },
-      describe: '$displayType: ${files.length} screenshot(s)',
-    );
+    }, describe: '$displayType: ${files.length} screenshot(s)');
 
     final data = created?['data'];
     if (data is! Map<String, dynamic>) {
@@ -1015,19 +983,15 @@ class AppStore {
   /// fixed seven-day schedule it runs on its own, so there is nothing to
   /// choose beyond on or off.
   Future<void> enablePhasedRelease(Map<String, dynamic> version) async {
-    await writer.post(
-      '/v1/appStoreVersionPhasedReleases',
-      {
-        'data': {
-          'type': 'appStoreVersionPhasedReleases',
-          'attributes': {'phasedReleaseState': 'INACTIVE'},
-          'relationships': {
-            'appStoreVersion': relation('appStoreVersions', _id(version)!),
-          },
+    await writer.post('/v1/appStoreVersionPhasedReleases', {
+      'data': {
+        'type': 'appStoreVersionPhasedReleases',
+        'attributes': {'phasedReleaseState': 'INACTIVE'},
+        'relationships': {
+          'appStoreVersion': relation('appStoreVersions', _id(version)!),
         },
       },
-      describe: 'phased release over seven days',
-    );
+    }, describe: 'phased release over seven days');
   }
 
   /// Sends a version to review, in the three steps Apple now requires.

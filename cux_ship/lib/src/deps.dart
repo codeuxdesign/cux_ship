@@ -429,7 +429,13 @@ Future<String> _get(String url) async {
     if (response.statusCode != HttpStatus.ok) {
       throw ProjectException('GET $url returned ${response.statusCode}');
     }
-    return response.transform(utf8.decoder).join();
+    // Awaited, so the body is drained before `finally` closes the client.
+    // Returning the future unawaited hands the caller a stream to read from a
+    // client that has already been closed. `close()` waits for in-flight
+    // requests, which is why this worked — but the ordering was wrong, and the
+    // sibling `_download` below never had it. Dart 3.13's
+    // `unawaited_return_in_try_block` is what surfaced it.
+    return await response.transform(utf8.decoder).join();
   } finally {
     client.close();
   }
