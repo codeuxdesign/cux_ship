@@ -24,7 +24,7 @@ import 'dart:io';
 
 import 'package:yaml/yaml.dart';
 
-import 'appstore/cli.dart';
+import 'asc_platforms.dart';
 import 'project.dart';
 
 /// The name every consumer uses. Not configurable — a config file whose
@@ -253,6 +253,21 @@ class ProjectConfig {
     } else if (declared is YamlMap) {
       // The App Store's shape: per platform, because one tree serves both and
       // the required types differ.
+      //
+      // **Play does not have this shape**, and saying so is not pedantry. Play
+      // has no platform axis, so every Play consumer reads the flat list; a
+      // `play: screenshots: {ios: […]}` would parse, validate, and then be
+      // read by nobody — a declared requirement enforcing nothing, which is
+      // the failure this file's header exists to refuse. Worse than being
+      // ignored: the platform check below would *legitimize* Apple's names
+      // inside a Play block.
+      if (key != 'appstore') {
+        throw ProjectException(
+          '$cuxShipConfigFile: $key.screenshots is a mapping of platform to '
+          'list, and only appstore: has platforms — Play publishes one set, so '
+          'write it as a list',
+        );
+      }
       for (final entry in declared.entries) {
         final platform = '${entry.key}';
         // Checked against the values --platform takes, so the flag and the file

@@ -37,6 +37,10 @@ import 'dart:io';
 import 'metadata.dart';
 import 'release_problem.dart';
 
+// loadPlayMetadata throws it, so a caller reaching this through the umbrella
+// library has to be able to name it.
+export 'metadata.dart' show MetadataException;
+
 /// Play's limits on the listing text, in UTF-16 code units.
 ///
 /// Counted over the file's bytes as stored — not whitespace-normalised, and not

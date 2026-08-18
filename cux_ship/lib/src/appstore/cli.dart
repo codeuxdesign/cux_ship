@@ -55,6 +55,7 @@ import 'package:cux_ship_verify/cux_ship_verify.dart';
 import 'package:cux_ship_verify/metadata.dart';
 import 'package:cux_ship_verify/release_notes.dart';
 
+import '../asc_platforms.dart';
 import '../listing_requirements.dart';
 import '../reachable.dart';
 import 'app_store.dart';
@@ -95,12 +96,6 @@ enum AscCommand {
     AscCommand.signing,
   }.contains(this);
 }
-
-/// The App Store platforms this tool acts on.
-///
-/// One list, used both by `--platform` and by the config reader, so a platform
-/// name cannot be valid in a file and unknown to the flag.
-const ascPlatforms = ['ios', 'macos'];
 
 /// The locale the listing is written in.
 ///
@@ -265,6 +260,7 @@ class AscDefaults {
     this.metadata,
     this.bundleIdProblem,
     this.listingRequirements,
+    this.listingProblem,
   });
 
   /// Empty, for a caller that wants nothing inferred.
@@ -287,6 +283,13 @@ class AscDefaults {
   /// What the repository declares the listing must carry, or null when it
   /// declares nothing. See [ListingRequirements].
   final ListingRequirements? listingRequirements;
+
+  /// Why the requirement could not be worked out, when nothing declared one.
+  ///
+  /// Requiring nothing is a legitimate answer; requiring nothing *because the
+  /// question could not be answered* is not, and the two are indistinguishable
+  /// without this.
+  final String? listingProblem;
 }
 
 /// Called once, immediately before the first write, with a summary of it.
@@ -452,6 +455,11 @@ Future<void> runAsc(
     // reads as a standing fact and is not one. This is the command that
     // reaches Apple, so it is the one that must not publish a listing missing
     // a locale somebody declared.
+    final listingProblem = defaults.listingProblem;
+    if (listingProblem != null) {
+      fail(listingProblem);
+    }
+
     final requirements = defaults.listingRequirements;
     if (requirements != null) {
       final problems = checkAppStoreTree(

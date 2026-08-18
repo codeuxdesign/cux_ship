@@ -367,7 +367,16 @@ List<CsvRecord> parseCsvRecords(String input) {
         endRecord();
         line++;
       default:
-        if (quotedField && char.trim().isNotEmpty) {
+        if (quotedField) {
+          // Whitespace between a closing quote and the delimiter is dropped
+          // rather than appended. Appending it is worse than it sounds: `"…" ,`
+          // would make an answer requirement of `REQUIRED ` — a value that no
+          // longer matches, silently, so a required question would read as
+          // optional. Anything that is *not* whitespace is text after a closing
+          // quote and is refused above.
+          if (char.trim().isEmpty) {
+            break;
+          }
           throw FormatException(
             'line $line: text after a closing quote — a value that contains a '
             'quote has to double it ("") rather than close and reopen',

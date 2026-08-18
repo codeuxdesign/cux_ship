@@ -53,6 +53,42 @@ void main() {
     test('refuses a quote that opens mid-field', () {
       expect(() => parseCsv('a,b"c"\n'), throwsA(isA<FormatException>()));
     });
+
+    test('refuses text after a closing quote rather than concatenating', () {
+      // `"abc"def` silently becoming `abcdef` is a mangled value read as a
+      // good one, which is the one thing this parser must not do.
+      expect(() => parseCsv('"abc"def\n'), throwsA(isA<FormatException>()));
+    });
+
+    test('drops whitespace between a closing quote and the delimiter', () {
+      // Appending it is worse than it sounds: `"REQUIRED" ,` would yield
+      // "REQUIRED " and stop matching, so a required question would silently
+      // read as optional.
+      expect(parseCsv('"REQUIRED" ,b\n').single, ['REQUIRED', 'b']);
+    });
+
+    test('names the line a quoted value spans from, not where it ended', () {
+      expect(
+        () => parseCsv('a,b\n"unterminated\nmore\nmore\n'),
+        throwsA(
+          isA<FormatException>().having(
+            (e) => e.message,
+            'message',
+            contains('opened on line 2'),
+          ),
+        ),
+      );
+    });
+
+    test('keeps real line numbers across a value that spans newlines', () {
+      final records = parseCsvRecords('a,"two\nlines"\nc,d\n');
+      expect(records.map((r) => r.line), [1, 3]);
+    });
+
+    test('keeps real line numbers across a blank line', () {
+      final records = parseCsvRecords('a,b\n\nc,d\n');
+      expect(records.map((r) => r.line), [1, 3]);
+    });
   });
 
   group('checkDataSafety', () {

@@ -180,6 +180,18 @@ class _AscSubcommand extends Command<void> {
         versionName: project.versionName,
         changelog: project.changelog,
         metadata: project.appStoreMetadata,
+        // Why the requirement could not be derived, when nothing declared one
+        // either. Without it this path falls back to requiring nothing and
+        // says nothing — which is the silent-pass shape the release removes,
+        // surviving on the one command that reaches Apple.
+        listingProblem: store == null
+            ? null
+            : _derivationProblem(
+                argResults!,
+                store,
+                project,
+                platform: platform,
+              )?.message,
         // Null when the repository declares nothing, so a project that has not
         // adopted the config is unaffected. Declared, and this is the command
         // that has to honour it — see the check at the call site.

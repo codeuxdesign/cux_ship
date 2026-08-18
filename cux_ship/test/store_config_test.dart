@@ -62,6 +62,45 @@ play:
       });
     });
 
+    test('a bare block key is empty, not absent', () {
+      // The natural way to write "I publish there". Reading it as absent would
+      // classify the project as not publishing and then tell it that it never
+      // declared the line it is looking at.
+      final config = _read('appstore:\nplay:\n');
+      expect(config.appstore, isNotNull);
+      expect(config.play, isNotNull);
+      expect(config.appstore!.locales, isEmpty);
+    });
+
+    test('play: screenshots as a platform map is refused', () {
+      // Play has no platform axis, so every Play consumer reads the flat list.
+      // A map would parse, validate against Apple's platform names, and then be
+      // read by nobody — a declared requirement enforcing nothing.
+      expect(
+        () => _read('play:\n  screenshots:\n    ios: [phoneScreenshots]\n'),
+        throwsA(
+          isA<ProjectException>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains('only appstore:'), contains('write it as a list')),
+          ),
+        ),
+      );
+    });
+
+    test('an unknown platform under appstore.screenshots is refused', () {
+      expect(
+        () => _read('appstore:\n  screenshots:\n    iOS: [APP_IPHONE_67]\n'),
+        throwsA(
+          isA<ProjectException>().having(
+            (e) => e.message,
+            'message',
+            contains('is not a platform'),
+          ),
+        ),
+      );
+    });
+
     test('an unknown key inside a block is refused', () {
       expect(
         () => _read('appstore:\n  locales: [en-US]\n  screenshot: []\n'),
