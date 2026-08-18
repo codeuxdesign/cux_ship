@@ -25,6 +25,7 @@ import 'package:path/path.dart' as p;
 
 import 'src/appstore/cli.dart';
 import 'src/appstore/flatten_cli.dart';
+import 'src/asc_platforms.dart';
 import 'src/config.dart';
 import 'src/confirm.dart';
 import 'src/deps.dart';
@@ -1569,6 +1570,14 @@ class VerifyCommand extends Command<void> {
             'when .cux-ship.yaml declares an appstore: block.',
       )
       ..addOption(
+        'platform',
+        allowed: ascPlatforms,
+        help:
+            'Which App Store platform --appstore names. Chooses among '
+            'appstore.screenshots. Defaults to ios when only one platform is '
+            'declared; with two, this has to say which tree is being checked.',
+      )
+      ..addOption(
         'play',
         help:
             'Play metadata tree to validate. Defaults to store/play when '
@@ -1625,7 +1634,38 @@ class VerifyCommand extends Command<void> {
     final play = args.option('play') ?? project.playMetadata;
     final dataSafety = args.option('data-safety') ?? project.dataSafety;
 
-    final derivation = _derivationProblem(args, config.appstore, project);
+    // **Which platform's requirements `--appstore` is being checked against.**
+    //
+    // `--appstore` takes a path, and a path carries no platform, so without
+    // this there is nothing for `appstore.screenshots.macos` to be selected
+    // *by* — and an earlier revision silently applied `ios:` to every tree,
+    // failing a macOS listing Apple holds for lacking iPhone screenshots. A
+    // declared requirement enforcing the *other* platform's rules is worse
+    // than one enforcing nothing.
+    //
+    // `appstore upload` has had `--platform` all along and selects correctly;
+    // this is the same axis, given to the command that lacked it.
+    final declaredPlatforms =
+        config.appstore?.screenshots.keys.toSet() ?? const <String>{};
+    final platform = args.option('platform');
+    if (platform == null && declaredPlatforms.length > 1) {
+      stderr.writeln(
+        'cux_ship verify: $cuxShipConfigFile declares appstore.screenshots '
+        'for ${(declaredPlatforms.toList()..sort()).join(' and ')}, and '
+        '--appstore names one tree — pass --platform to say which of them it '
+        'is, or the wrong platform\'s requirements would be applied.',
+      );
+      exitCode = 1;
+      return;
+    }
+    final appStorePlatform = platform ?? 'ios';
+
+    final derivation = _derivationProblem(
+      args,
+      config.appstore,
+      project,
+      platform: appStorePlatform,
+    );
 
     final problems = <ReleaseProblem>[
       ..._declarationProblems(config, args, appstore, play),
@@ -1638,6 +1678,7 @@ class VerifyCommand extends Command<void> {
             args,
             config.appstore,
             project,
+            platform: appStorePlatform,
           ),
           requireLocales: _requiredLocales(args, config.appstore),
         ),
@@ -1668,6 +1709,22 @@ class VerifyCommand extends Command<void> {
       );
       exitCode = 1;
       return;
+    }
+
+    // **What was checked, named, on the way past.**
+    //
+    // A clean run used to print one line, so a reader could not tell whether
+    // the data safety declaration had been validated or silently skipped —
+    // they had to suspect it and go looking. That is the failure this release
+    // exists to close, on the success path: absence of output reading as
+    // coverage. Every artifact says so itself.
+    for (final line in [
+      if (changelog != null) 'changelog  $changelog',
+      if (appstore != null) 'appstore   $appstore ($appStorePlatform)',
+      if (play != null) 'play       $play',
+      if (dataSafety != null) 'data safe  $dataSafety',
+    ]) {
+      stdout.writeln('    checked $line');
     }
 
     if (problems.isEmpty) {
