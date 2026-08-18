@@ -1,5 +1,91 @@
 # Changelog
 
+## 3.2.1
+
+**Every `appstore` subcommand crashed in 3.2.0 if the repository declared an
+`appstore:` block.** Upgrade immediately; 3.2.0 should not be used.
+
+```
+Unhandled exception:
+Invalid argument(s): Could not find an option named "--require-screenshot-type".
+#1  _derivationProblem (package:cux_ship/runner.dart:1535:12)
+#2  _AscSubcommand.run (package:cux_ship/runner.dart:190:15)
+```
+
+`upload`, `promote`, `wait`, `builds`, `versions`, `signing` and
+`screenshot-types` all died before doing anything. Nothing reached Apple and
+nothing was published wrongly — the command could not start. `verify` and the
+whole Play side were unaffected.
+
+`_derivationProblem` read `--require-screenshot-type` out of `ArgResults`. That
+option is declared on `verify` alone; the function was also wired into the App
+Store path, where `argResults` is a parser that has never heard of it.
+
+**And 3.2.0 left no way back.** A repository that adopted the declaration could
+neither upload on 3.2.0 nor fall back to 3.1.0, which refuses the config
+outright:
+
+```
+--app-dir: .cux-ship.yaml has unknown keys: appstore, play
+    known keys: app-dir, apple
+```
+
+3.2.0's own notes said to land the constraint bump and the config in one commit.
+That is right for *migration ordering*, and it removes the *rollback* — which
+those notes did not say and should have. Anyone who followed them was stuck on
+both sides until this release.
+
+### The fix, and why it is not the one-line guard
+
+`_derivationProblem` takes the flag's value as a parameter now instead of
+reading it. `verify` passes what its flag supplied; the App Store path passes an
+empty set, because it has no such flag.
+
+Guarding the read — `args.options.contains(…)` before `multiOption` — works, and
+leaves the function still asking a question about a parser it does not own,
+which is the same trap for the next helper shared across two commands. Declaring
+the option on the App Store parser would grow the CLI surface to fix internal
+wiring. A parameter makes the question unaskable.
+
+### Worth saying plainly
+
+**The crash was in the error-reporting path 3.2.0 added to close a silent-pass
+hole.** That guard existed to make an underived screenshot requirement loud
+rather than silent; instead it killed the command and named a flag the user
+never passed. A check that cannot start is not a stricter check.
+
+And the ordering is the general lesson, in the words of the project that hit
+it: **loudness added at the wrong layer is quieter than what it replaced.** The
+guard ran before the validation that would have produced a useful message, so
+it did not merely fail to help — it hid the thing that would have.
+
+It shipped because no test ran a subcommand against a repository that declares a
+store block — the crash needs one to fire, and every fixture in this package had
+none. `test/subcommand_smoke_test.dart` now starts every subcommand against both
+shapes: a repository declaring `appstore:` and `play:`, and one declaring
+neither. It asserts only that a command gets past argument handling and into its
+own body, which is the whole class of failure this was.
+
+Found by a consuming project, one command after adopting the config, by somebody
+doing something unrelated.
+
+### `3.2.1` means uploads tell you the truth, not that they succeed
+
+If a project has an interpolated `PRODUCT_BUNDLE_IDENTIFIER` — per-configuration
+suffixes, `design.codeux.example$(BUNDLE_ID_SUFFIX)` — the next thing it meets
+is 3.1.0's refusal:
+
+```
+PRODUCT_BUNDLE_IDENTIFIER in ios/Runner.xcodeproj/project.pbxproj is
+'…$(BUNDLE_ID_SUFFIX)', which Xcode expands at build time and this can only
+read as text — pass --bundle-id
+```
+
+That is correct and is not a regression: `--bundle-id` is required for those
+projects and always was. But 3.2.0's crash fired *before* it, so two blockers
+were stacked and only the second becomes visible once this release removes the
+first. Nothing further is broken; there is simply a second thing to pass.
+
 ## 3.2.0
 
 **A repository can declare what its listings must carry, and `verify` reads it.**

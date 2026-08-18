@@ -188,7 +188,11 @@ class _AscSubcommand extends Command<void> {
         listingProblem: store == null
             ? null
             : _derivationProblem(
-                argResults!,
+                // Empty rather than read: the App Store parser has no
+                // --require-screenshot-type. That flag belongs to `verify`,
+                // and reading it here is what crashed every appstore
+                // subcommand in 3.2.0.
+                const {},
                 store,
                 project,
                 platform: platform,
@@ -1526,13 +1530,25 @@ Set<String> _appStoreScreenshotTypes(
 /// and a carefully worded problem string is set and never read. Requiring
 /// nothing *silently* is the shape this release exists to remove, so the
 /// inability to derive is itself reported.
+///
+/// [flagTypes] is what `--require-screenshot-type` supplied, or empty when the
+/// caller has no such flag. **Taken as a value rather than read out of
+/// [ArgResults], because only the caller knows its own parser.** Reading it
+/// here crashed every `appstore` subcommand in 3.2.0: the option is declared on
+/// `verify` alone, this function was wired into the upload path as well, and
+/// `multiOption` throws `Invalid argument(s): Could not find an option named
+/// "--require-screenshot-type"` before the command does anything.
+///
+/// The guard-shaped fix — ask whether the option exists, then read it — would
+/// have worked and left the same trap for the next helper shared across two
+/// parsers. A parameter makes the question unaskable.
 ReleaseProblem? _derivationProblem(
-  ArgResults args,
+  Set<String> flagTypes,
   StoreConfig? store,
   ProjectContext project, {
   String platform = 'ios',
 }) {
-  if (args.multiOption('require-screenshot-type').isNotEmpty) {
+  if (flagTypes.isNotEmpty) {
     return null;
   }
   if ((store?.screenshotsFor(platform) ?? const <String>{}).isNotEmpty) {
@@ -1661,7 +1677,7 @@ class VerifyCommand extends Command<void> {
     final appStorePlatform = platform ?? 'ios';
 
     final derivation = _derivationProblem(
-      args,
+      args.multiOption('require-screenshot-type').toSet(),
       config.appstore,
       project,
       platform: appStorePlatform,
