@@ -58,6 +58,9 @@ class ProjectContext {
     this.iosBundleId,
     this.macosBundleId,
     this.developmentTeam,
+    this.iosBundleIdProblem,
+    this.macosBundleIdProblem,
+    this.developmentTeamProblem,
     this.versionName,
     this.buildNumber,
     this.changelog,
@@ -117,6 +120,20 @@ class ProjectContext {
       buildNumber = match?.group(2);
     }
 
+    const iosProject = 'ios/Runner.xcodeproj/project.pbxproj';
+    const macosProject = 'macos/Runner.xcodeproj/project.pbxproj';
+    final ios = _bundleId(text(appPath, iosProject), iosProject);
+    final macos = _bundleId(text(appPath, macosProject), macosProject);
+
+    // iOS first, macOS only when iOS said nothing at all. A problem on the iOS
+    // side is *something*: an ambiguous iOS project must not be answered by
+    // quietly reading the macOS one, which is the same substitution this whole
+    // change exists to stop.
+    final iosTeam = _developmentTeam(text(appPath, iosProject), iosProject);
+    final team = iosTeam.value == null && iosTeam.problem == null
+        ? _developmentTeam(text(appPath, macosProject), macosProject)
+        : iosTeam;
+
     return ProjectContext(
       root: rootPath,
       appDir: appPath,
@@ -126,19 +143,12 @@ class ProjectContext {
             text(appPath, 'android/app/build.gradle'),
         RegExp(r'applicationId\s*=?\s*"([^"]+)"'),
       ),
-      iosBundleId: _bundleId(
-        text(appPath, 'ios/Runner.xcodeproj/project.pbxproj'),
-      ),
-      macosBundleId: _bundleId(
-        text(appPath, 'macos/Runner.xcodeproj/project.pbxproj'),
-      ),
-      developmentTeam:
-          _developmentTeam(
-            text(appPath, 'ios/Runner.xcodeproj/project.pbxproj'),
-          ) ??
-          _developmentTeam(
-            text(appPath, 'macos/Runner.xcodeproj/project.pbxproj'),
-          ),
+      iosBundleId: ios.value,
+      macosBundleId: macos.value,
+      developmentTeam: team.value,
+      iosBundleIdProblem: ios.problem,
+      macosBundleIdProblem: macos.problem,
+      developmentTeamProblem: team.problem,
       versionName: versionName,
       buildNumber: buildNumber,
       changelog: path(rootPath, 'CHANGELOG.md'),
@@ -233,6 +243,16 @@ class ProjectContext {
   /// certificates.
   final String? developmentTeam;
 
+  /// Why [iosBundleId] is null, when the reason is worth saying. See
+  /// [bundleIdProblemFor].
+  final String? iosBundleIdProblem;
+
+  /// Why [macosBundleId] is null, when the reason is worth saying.
+  final String? macosBundleIdProblem;
+
+  /// Why [developmentTeam] is null, when the reason is worth saying.
+  final String? developmentTeamProblem;
+
   /// The marketing version from `pubspec.yaml`, e.g. `1.0.3`.
   final String? versionName;
 
@@ -255,41 +275,121 @@ class ProjectContext {
   String? bundleIdFor(String platform) =>
       platform == 'macos' ? macosBundleId : iosBundleId;
 
-  /// The RunnerTests target carries its own identifier and must not win, so
-  /// the first match that is not a test target is the app's.
-  static String? _bundleId(String? pbxproj) {
+  /// Why [bundleIdFor] gave nothing, when there is more to say than "nothing".
+  ///
+  /// Null when the project simply has no identifier to read, because the
+  /// caller's own message already covers that. A sentence when the project has
+  /// several, or one it cannot read — those are not missing flags and should
+  /// not be reported as though they were.
+  String? bundleIdProblemFor(String platform) =>
+      platform == 'macos' ? macosBundleIdProblem : iosBundleIdProblem;
+
+  /// The app's bundle identifier, or why there is not one.
+  ///
+  /// The RunnerTests target carries its own and is skipped. Everything left has
+  /// to agree. This used to return the first match, which is right only when
+  /// the project has a single identifier to give, and two real projects showed
+  /// that it does not always: one puts an app extension's target first, so the
+  /// first match was the appex rather than the app, and another interpolates
+  /// `design.codeux.howitwent$(BUNDLE_ID_SUFFIX)`, which Xcode expands at build
+  /// time and this can only read as text. Each would have talked to Apple about
+  /// an identifier nobody chose.
+  ///
+  /// A refusal carries its own sentence rather than returning a bare null,
+  /// because a bare null reaches the caller as "pass --bundle-id" — which reads
+  /// as *you forgot a flag* when the truth is *your project cannot be read as
+  /// one*. Absent is the exception and stays null: a project with no iOS target
+  /// is ordinary, and "none could be read" is already what the caller says.
+  static ({String? value, String? problem}) _bundleId(
+    String? pbxproj,
+    String where,
+  ) {
     if (pbxproj == null) {
-      return null;
+      return (value: null, problem: null);
     }
-    for (final match in RegExp(
-      r'PRODUCT_BUNDLE_IDENTIFIER\s*=\s*([^;]+);',
-    ).allMatches(pbxproj)) {
-      final value = match.group(1)!.trim().replaceAll('"', '');
-      if (value.contains('RunnerTests') || value.endsWith('.RunnerTests')) {
-        continue;
-      }
-      return value;
+    final found = _distinct(
+      pbxproj,
+      RegExp(r'PRODUCT_BUNDLE_IDENTIFIER\s*=\s*([^;]+);'),
+      skip: (value) =>
+          value.contains('RunnerTests') || value.endsWith('.RunnerTests'),
+    );
+    if (found.isEmpty) {
+      return (value: null, problem: null);
     }
-    return null;
+    if (found.length > 1) {
+      return (
+        value: null,
+        problem:
+            '$where names ${found.length} bundle identifiers '
+            '(${found.join(', ')}), so none of them can be assumed to be the '
+            "app's — pass --bundle-id to choose",
+      );
+    }
+    final only = found.single;
+    if (only.contains(r'$(')) {
+      return (
+        value: null,
+        problem:
+            "PRODUCT_BUNDLE_IDENTIFIER in $where is '$only', which Xcode "
+            'expands at build time and this can only read as text — pass '
+            '--bundle-id',
+      );
+    }
+    return (value: only, problem: null);
   }
 
-  /// The team id, ignoring the empty assignment Xcode writes for a target that
-  /// has none — `DEVELOPMENT_TEAM = "";` is how a project says *unset*, and
-  /// reading it as a team would make every certificate belong to the wrong one.
-  static String? _developmentTeam(String? pbxproj) {
+  /// The team id, or why there is not one.
+  ///
+  /// Ignores the empty assignment Xcode writes for a target that has none —
+  /// `DEVELOPMENT_TEAM = "";` is how a project says *unset*, and reading it as
+  /// a team would make every certificate belong to the wrong one.
+  ///
+  /// Disagreement is refused for the same reason as [_bundleId], and the case
+  /// is real rather than theoretical: manual signing configurations can carry a
+  /// different team per build configuration. A wrong team exports somebody
+  /// else's identity, or nothing, and the failure surfaces much later as a
+  /// profile mismatch that never mentions the team.
+  static ({String? value, String? problem}) _developmentTeam(
+    String? pbxproj,
+    String where,
+  ) {
     if (pbxproj == null) {
-      return null;
+      return (value: null, problem: null);
     }
-    for (final match in RegExp(
-      r'DEVELOPMENT_TEAM\s*=\s*([^;]+);',
-    ).allMatches(pbxproj)) {
+    final found = _distinct(
+      pbxproj,
+      RegExp(r'DEVELOPMENT_TEAM\s*=\s*([^;]+);'),
+      skip: (value) => value.isEmpty,
+    );
+    if (found.isEmpty) {
+      return (value: null, problem: null);
+    }
+    if (found.length > 1) {
+      return (
+        value: null,
+        problem:
+            '$where names ${found.length} development teams '
+            '(${found.join(', ')}) — pass --team to choose',
+      );
+    }
+    return (value: found.single, problem: null);
+  }
+
+  /// Distinct captures of [pattern], in the order the file gives them.
+  static List<String> _distinct(
+    String text,
+    RegExp pattern, {
+    required bool Function(String) skip,
+  }) {
+    final found = <String>[];
+    for (final match in pattern.allMatches(text)) {
       final value = match.group(1)!.trim().replaceAll('"', '');
-      if (value.isEmpty) {
+      if (skip(value) || found.contains(value)) {
         continue;
       }
-      return value;
+      found.add(value);
     }
-    return null;
+    return found;
   }
 
   static String? _firstGroup(String? text, RegExp pattern) =>

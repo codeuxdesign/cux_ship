@@ -201,6 +201,15 @@ ArgParser buildAscParser(AscCommand cmd) {
           help: 'Directory of store listing text and screenshots to publish.',
         )
         ..addFlag(
+          'no-metadata',
+          negatable: false,
+          help:
+              'Upload the build and nothing else, leaving the store listing '
+              'untouched. For a TestFlight build, which is not a version '
+              'submission and needs no listing — and which is otherwise '
+              'refused whenever the App Store version is locked by review.',
+        )
+        ..addFlag(
           'skip-waiting',
           negatable: false,
           help:
@@ -245,6 +254,7 @@ class AscDefaults {
     this.versionName,
     this.changelog,
     this.metadata,
+    this.bundleIdProblem,
   });
 
   /// Empty, for a caller that wants nothing inferred.
@@ -254,6 +264,15 @@ class AscDefaults {
   final String? versionName;
   final String? changelog;
   final String? metadata;
+
+  /// Why [bundleId] is null, when the caller knows something worth saying.
+  ///
+  /// "None could be read" and "several were read, and none can be assumed"
+  /// are different situations that one null cannot tell apart, and only the
+  /// first is answered by *pass the flag*. Reporting the second as the first
+  /// sends someone to look at their credentials or their app record, which is
+  /// where the afternoon goes.
+  final String? bundleIdProblem;
 }
 
 /// Called once, immediately before the first write, with a summary of it.
@@ -286,8 +305,9 @@ Future<void> runAsc(
   final bundleId = opt('bundle-id') ?? defaults.bundleId;
   if (bundleId == null) {
     fail(
-      'no bundle identifier — none could be read from the Xcode project, so '
-      'pass --bundle-id',
+      defaults.bundleIdProblem ??
+          'no bundle identifier — none could be read from the Xcode project, '
+              'so pass --bundle-id',
     );
   }
 
@@ -331,7 +351,19 @@ Future<void> runAsc(
   // listing when there is one to publish; a promote never does, so the
   // metadata default is not offered to it.
   final ipaPath = opt('artifact');
-  final metadataPath = cmd == AscCommand.upload
+  // `--no-metadata` turns the inference off; it does not merely decline to add
+  // one. Omitting `--metadata` never disabled the listing publish, because the
+  // inference fills it from `store/appstore` whenever that directory exists —
+  // so before this flag there was no way to put a build on TestFlight without
+  // also pushing the listing, and a version locked by review (WAITING_FOR_REVIEW
+  // or IN_REVIEW — both ordinary states) made that fail after the binary and
+  // the notes had already gone up. A command that did everything asked and then
+  // exited non-zero, which invites the one response that is wrong: run it again.
+  final noMetadata = cmd == AscCommand.upload && flag('no-metadata');
+  if (noMetadata && opt('metadata') != null) {
+    fail('--metadata and --no-metadata ask for opposite things');
+  }
+  final metadataPath = cmd == AscCommand.upload && !noMetadata
       ? (opt('metadata') ?? defaults.metadata)
       : null;
   final promote = cmd == AscCommand.promote;

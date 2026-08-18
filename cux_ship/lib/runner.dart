@@ -173,6 +173,7 @@ class _AscSubcommand extends Command<void> {
       argResults!,
       defaults: AscDefaults(
         bundleId: project.bundleIdFor(platform),
+        bundleIdProblem: project.bundleIdProblemFor(platform),
         versionName: project.versionName,
         changelog: project.changelog,
         metadata: project.appStoreMetadata,
@@ -590,10 +591,19 @@ class _SecretsAddCommand extends Command<void> {
         if (!Platform.isMacOS) {
           throw ProjectException('--from-keychain needs macOS');
         }
-        final team = argResults!.option('team');
+        // Defaults from DEVELOPMENT_TEAM, as `keychain exec --team` already
+        // did. This was the one value in an Apple setup still typed by hand,
+        // and it is derivable from a file already being parsed for the bundle
+        // identifier — retyping it once a year during a certificate rotation
+        // is exactly where a transposition goes unnoticed until a profile
+        // mismatch that never mentions the team.
+        final project = _project(this);
+        final team = argResults!.option('team') ?? project.developmentTeam;
         if (team == null || team.isEmpty) {
           throw UsageException(
-            '--from-keychain needs --team, the id as it appears in OU=',
+            project.developmentTeamProblem ??
+                '--from-keychain needs --team, the id as it appears in OU= — '
+                    'no DEVELOPMENT_TEAM could be read from the Xcode project',
             usage,
           );
         }
@@ -1258,6 +1268,15 @@ class _KeychainExecCommand extends Command<void> {
   Future<void> run() async {
     final project = _project(this);
     final file = argResults!.option('file')!;
+    // An ambiguous project must not quietly become an unchecked one. A null
+    // expectTeam means "do not check", which is the right meaning when the
+    // project names no team and the wrong one when it names several: the check
+    // exists to catch a certificate from another account, and silently
+    // dropping it is a worse answer than the first-match guess this replaced.
+    if (argResults!.option('team') == null &&
+        project.developmentTeamProblem != null) {
+      throw UsageException(project.developmentTeamProblem!, usage);
+    }
     try {
       exitCode = await runKeychainExec(
         repoRoot: project.root,

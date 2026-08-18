@@ -130,6 +130,127 @@ void main() {
     test('an absent iOS project yields null rather than throwing', () {
       expect(read().iosBundleId, isNull);
       expect(read().bundleIdFor('ios'), isNull);
+      // Absent is not a *problem*, and the difference matters: the caller's own
+      // "none could be read" is the right thing to say here, and a sentence
+      // would displace it.
+      expect(read().iosBundleIdProblem, isNull);
+    });
+
+    test('an app extension does not win by being first', () {
+      // AuthPass, exactly: the AutoFill appex target appears before the app's,
+      // so the first match was the extension. Its uploads were correct only
+      // because the release script passes --bundle-id — luck, not design.
+      write(
+        'ios/Runner.xcodeproj/project.pbxproj',
+        'PRODUCT_BUNDLE_IDENTIFIER = design.codeux.authpass.ios.autofill;\n'
+            'PRODUCT_BUNDLE_IDENTIFIER = design.codeux.authpass.ios;\n',
+      );
+      expect(read().iosBundleId, isNull);
+      expect(
+        read().iosBundleIdProblem,
+        allOf(
+          contains('2 bundle identifiers'),
+          contains('design.codeux.authpass.ios.autofill'),
+          contains('--bundle-id'),
+        ),
+      );
+    });
+
+    test('an interpolated identifier is refused, not passed on as text', () {
+      // How It Went, exactly. Xcode expands this at build time; read as text it
+      // names an app that does not exist and Apple answers 404 — which sends
+      // you to look at the app record rather than at the project.
+      write(
+        'ios/Runner.xcodeproj/project.pbxproj',
+        r'PRODUCT_BUNDLE_IDENTIFIER = design.codeux.howitwent$(SUFFIX);'
+            '\n',
+      );
+      expect(read().iosBundleId, isNull);
+      expect(
+        read().iosBundleIdProblem,
+        allOf(
+          contains(r'$(SUFFIX)'),
+          contains('expands at build time'),
+          contains('--bundle-id'),
+        ),
+      );
+    });
+
+    test('one identifier repeated across configurations is not a conflict', () {
+      // The ordinary shape: one identifier named once per build configuration.
+      // Refusing this would refuse almost every project.
+      write(
+        'ios/Runner.xcodeproj/project.pbxproj',
+        'PRODUCT_BUNDLE_IDENTIFIER = design.codeux.holdthewheel;\n'
+            'PRODUCT_BUNDLE_IDENTIFIER = design.codeux.holdthewheel;\n'
+            'PRODUCT_BUNDLE_IDENTIFIER = "design.codeux.holdthewheel";\n',
+      );
+      expect(read().iosBundleId, 'design.codeux.holdthewheel');
+      expect(read().iosBundleIdProblem, isNull);
+    });
+  });
+
+  group('DEVELOPMENT_TEAM', () {
+    test('is read, ignoring the empty assignment Xcode writes', () {
+      write(
+        'ios/Runner.xcodeproj/project.pbxproj',
+        'DEVELOPMENT_TEAM = "";\nDEVELOPMENT_TEAM = 64ZPC769JY;\n',
+      );
+      expect(read().developmentTeam, '64ZPC769JY');
+      expect(read().developmentTeamProblem, isNull);
+    });
+
+    test('repeated across targets is one team, not a conflict', () {
+      // AuthPass has six of these, all identical.
+      write(
+        'ios/Runner.xcodeproj/project.pbxproj',
+        'DEVELOPMENT_TEAM = 64ZPC769JY;\n' * 6,
+      );
+      expect(read().developmentTeam, '64ZPC769JY');
+      expect(read().developmentTeamProblem, isNull);
+    });
+
+    test('two teams are refused rather than guessed', () {
+      // Manual signing can carry a different team per configuration. The wrong
+      // one exports somebody else's identity and fails much later, as a profile
+      // mismatch that never mentions the team.
+      write(
+        'ios/Runner.xcodeproj/project.pbxproj',
+        'DEVELOPMENT_TEAM = 64ZPC769JY;\nDEVELOPMENT_TEAM = ABCDE12345;\n',
+      );
+      expect(read().developmentTeam, isNull);
+      expect(
+        read().developmentTeamProblem,
+        allOf(
+          contains('2 development teams'),
+          contains('64ZPC769JY'),
+          contains('ABCDE12345'),
+          contains('--team'),
+        ),
+      );
+    });
+
+    test('macOS answers only when iOS said nothing at all', () {
+      write(
+        'macos/Runner.xcodeproj/project.pbxproj',
+        'DEVELOPMENT_TEAM = 64ZPC769JY;\n',
+      );
+      expect(read().developmentTeam, '64ZPC769JY');
+    });
+
+    test('an ambiguous iOS project is not answered by the macOS one', () {
+      // The substitution this change exists to stop: falling through to another
+      // file makes the ambiguity disappear silently.
+      write(
+        'ios/Runner.xcodeproj/project.pbxproj',
+        'DEVELOPMENT_TEAM = 64ZPC769JY;\nDEVELOPMENT_TEAM = ABCDE12345;\n',
+      );
+      write(
+        'macos/Runner.xcodeproj/project.pbxproj',
+        'DEVELOPMENT_TEAM = ZZZZZ99999;\n',
+      );
+      expect(read().developmentTeam, isNull);
+      expect(read().developmentTeamProblem, contains('2 development teams'));
     });
   });
 

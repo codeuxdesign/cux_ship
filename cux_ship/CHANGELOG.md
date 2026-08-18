@@ -1,5 +1,77 @@
 # Changelog
 
+## 3.1.0
+
+**Inference refuses an ambiguous project instead of taking the first match.**
+`PRODUCT_BUNDLE_IDENTIFIER` and `DEVELOPMENT_TEAM` are read from the Xcode
+project as before when the project names one of them. When it names several,
+the command stops and lists them rather than picking.
+
+**The one thing to check on upgrade**, because a caret constraint takes this
+without asking: a project that was inferring by luck now needs a flag. It stops
+at the start of a release rather than partway through, and names the project and
+the candidates — but it can stop a run that worked yesterday. Two real projects
+were relying on that luck, in different ways and neither visibly:
+
+- One puts an app extension's target first, so the first match was the appex
+  rather than the app. Its uploads were correct only because the release script
+  passes `--bundle-id` — remove that flag and it would have talked to Apple
+  about the extension.
+- One interpolates `design.codeux.howitwent$(BUNDLE_ID_SUFFIX)`, which Xcode
+  expands at build time and this can only read as literal text. Apple answered
+  404 for an app by that name, which sends you to look at the app record and
+  the API key before the project.
+
+`head -1` on a file that may legitimately name several things is not a rule,
+it is a coin toss that has been landing the same way.
+
+### The refusal says which failure it is
+
+Three situations a single null cannot tell apart, so they no longer share a
+message: nothing could be read, several were read, or the one that was read is
+not literal text. Only the first is answered by *pass the flag*. Reporting the
+others as the first is what sends someone to check their credentials — the
+sentence has to name the project, or the afternoon goes elsewhere.
+
+An absent iOS project is unchanged and still just absent. That is ordinary, not
+a problem, and "none could be read from the Xcode project" was already right.
+
+### `secrets add certificate --from-keychain` defaults `--team`
+
+From `DEVELOPMENT_TEAM`, as `keychain exec --team` already did. It was the last
+value in an Apple setup still typed by hand, out of a file already being parsed
+for the bundle identifier. A team retyped once a year during a certificate
+rotation is where a transposition survives — the wrong one exports somebody
+else's identity and surfaces much later as a profile mismatch that never
+mentions the team.
+
+`keychain exec --team` gets the ambiguity refusal too, and there it is a
+tightening rather than a convenience: `expectTeam` is optional, so an ambiguous
+project used to become an *unchecked* one. Silently dropping the check that
+exists to catch a certificate from another account is a worse answer than the
+guess it replaced.
+
+### `--no-metadata` on `appstore upload`
+
+Uploads the build and leaves the store listing alone.
+
+Omitting `--metadata` never did this: the default is inferred from
+`store/appstore` whenever that directory exists, so there was no way to put a
+build on TestFlight without also publishing the listing. When the App Store
+version is locked by review — `WAITING_FOR_REVIEW` or `IN_REVIEW`, both
+ordinary states — the listing push fails with a 409.
+
+It failed *last*. The binary and the TestFlight notes were already up, so the
+command did everything asked and then exited non-zero, which invites the one
+response that is wrong: run it again.
+
+A TestFlight build is not a version submission and needs no listing. Apple
+reviews the listing together with the version, which is why `upload` is where
+metadata belongs and `promote` still never publishes it — that part is
+unchanged and deliberate.
+
+`--metadata` and `--no-metadata` together are refused rather than ordered.
+
 ## 3.0.0
 
 **`keychain exec` gives its child the keychain it made and nothing else.**
