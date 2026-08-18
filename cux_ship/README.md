@@ -207,6 +207,26 @@ belongs in what you ship — and because `dart run` resolves against the package
 it is invoked from. Everything the command needs is inferred from the repository
 around it, so the directory it lives in does not matter.
 
+**Most projects end up with both, and the two drift apart silently.** Scripts
+run the pinned one through `dart run`; anything typed at a prompt runs the
+global one, because that is what is on `PATH`. Bumping the lockfile does nothing
+for `cux_ship …` typed by hand, and neither install mentions the other — so a
+fix can be installed, resolved, and still absent from the command you are
+actually running. That has already cost someone twenty minutes concluding a
+released fix had not landed when it had.
+
+```bash
+dart pub global list | grep cux_ship                 # the global one
+grep -A5 'name: cux_ship' tool/cux_ship/pubspec.lock | grep version  # the pinned one
+```
+
+Neither is `--version`, because there is no such flag — the command reports
+nothing about itself, which is part of why the two can disagree unnoticed.
+
+Worth checking first whenever a version's behaviour is not what its changelog
+says. A project whose commands all go through a wrapper script cannot hit this
+at all, which is the quieter argument for having one.
+
 **If your test suite uses the checks, depend on
 [`cux_ship_verify`](https://pub.dev/packages/cux_ship_verify) directly** rather
 than reaching them through `package:cux_ship/verify.dart`. That re-export still
