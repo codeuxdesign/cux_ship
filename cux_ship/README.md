@@ -217,7 +217,7 @@ released fix had not landed when it had.
 
 ```bash
 dart pub global list | grep cux_ship                 # the global one
-grep -A5 'name: cux_ship' tool/cux_ship/pubspec.lock | grep version  # the pinned one
+grep -A5 'name: cux_ship$' tool/cux_ship/pubspec.lock | grep version  # the pinned one
 ```
 
 Neither is `--version`, because there is no such flag — the command reports
