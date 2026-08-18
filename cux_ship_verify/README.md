@@ -9,6 +9,20 @@ last part is the point: this belongs in your `dev_dependencies` so the checks
 run in your own test suite on every push, and what it drags into a
 contributor's lockfile matters.
 
+## Two invariants, not two descriptions
+
+**No dependencies, and no network or credentials — ever.** These are rules about
+what this package is not allowed to become, rather than observations about what
+it currently happens to do, and they exist for one reason: a check that can only
+run at release time is a check that runs once per release, by whoever is already
+under time pressure. Everything here runs on a pre-commit hook.
+
+Each is individually easy to erode with one reasonable-sounding addition. The
+first real candidate was a URL reachability check — a 404 privacy policy is a
+store rejection, so the check is worth having — and it lives in `cux_ship` on
+the upload path instead, where a network call is already happening. Anything
+that needs the network or a credential belongs there, not here.
+
 ```yaml
 dev_dependencies:
   cux_ship_verify: ^1.6.0

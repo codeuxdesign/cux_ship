@@ -169,6 +169,7 @@ class _AscSubcommand extends Command<void> {
   Future<void> run() {
     final project = _project(this);
     final platform = argResults!.option('platform') ?? 'ios';
+    final store = ProjectConfig.read(project.root).appstore;
     return runAsc(
       cmd,
       argResults!,
@@ -178,6 +179,17 @@ class _AscSubcommand extends Command<void> {
         versionName: project.versionName,
         changelog: project.changelog,
         metadata: project.appStoreMetadata,
+        // Null when the repository declares nothing, so a project that has not
+        // adopted the config is unaffected. Declared, and this is the command
+        // that has to honour it — see the check at the call site.
+        listingRequirements: store == null
+            ? null
+            : ListingRequirements(
+                locales: store.locales,
+                screenshotTypes: store.screenshotsFor(platform).isNotEmpty
+                    ? store.screenshotsFor(platform)
+                    : project.requiredScreenshotTypes(platform) ?? const {},
+              ),
       ),
       confirm: (summary) => confirmOrExit(summary, assumeYes: _assumeYes(this)),
     );

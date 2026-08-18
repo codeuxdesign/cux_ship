@@ -51,9 +51,11 @@
 import 'dart:io';
 
 import 'package:args/args.dart';
+import 'package:cux_ship_verify/cux_ship_verify.dart';
 import 'package:cux_ship_verify/metadata.dart';
 import 'package:cux_ship_verify/release_notes.dart';
 
+import '../reachable.dart';
 import 'app_store.dart';
 import 'asc_client.dart';
 import 'signing_report.dart';
@@ -248,6 +250,23 @@ ArgParser buildAscParser(AscCommand cmd) {
 ///
 /// Passed in rather than read here, because knowing what a Flutter project
 /// looks like is not this package's business — it talks to App Store Connect.
+/// What a repository declares its listing must carry.
+///
+/// Passed in rather than read here, because this library does not know about
+/// `.cux-ship.yaml` and should not: the runner resolves flag, then file, then
+/// inference, and hands down the answer.
+class ListingRequirements {
+  const ListingRequirements({
+    this.locales = const {},
+    this.screenshotTypes = const {},
+  });
+
+  final Set<String> locales;
+  final Set<String> screenshotTypes;
+
+  bool get isEmpty => locales.isEmpty && screenshotTypes.isEmpty;
+}
+
 class AscDefaults {
   const AscDefaults({
     this.bundleId,
@@ -255,6 +274,7 @@ class AscDefaults {
     this.changelog,
     this.metadata,
     this.bundleIdProblem,
+    this.listingRequirements,
   });
 
   /// Empty, for a caller that wants nothing inferred.
@@ -273,6 +293,10 @@ class AscDefaults {
   /// sends someone to look at their credentials or their app record, which is
   /// where the afternoon goes.
   final String? bundleIdProblem;
+
+  /// What the repository declares the listing must carry, or null when it
+  /// declares nothing. See [ListingRequirements].
+  final ListingRequirements? listingRequirements;
 }
 
 /// Called once, immediately before the first write, with a summary of it.
@@ -431,12 +455,56 @@ Future<void> runAsc(
     } on MetadataException catch (e) {
       fail(e.message);
     }
+
+    // The requirements the *repository* declares, applied here and not only in
+    // `verify`. A requirement that is a property of the repository and is
+    // enforced by one command out of two is worse than a flag, because it
+    // reads as a standing fact and is not one. This is the command that
+    // reaches Apple, so it is the one that must not publish a listing missing
+    // a locale somebody declared.
+    final requirements = defaults.listingRequirements;
+    if (requirements != null) {
+      final problems = checkAppStoreTree(
+        metadataPath,
+        requireScreenshotTypes: requirements.screenshotTypes,
+        requireLocales: requirements.locales,
+      );
+      if (problems.isNotEmpty) {
+        fail(
+          'the listing does not satisfy what this repository declares:\n'
+          '${problems.map((ReleaseProblem p) => '    $p').join('\n')}',
+        );
+      }
+    }
+
     stdout.writeln(
       '==> ${metadata.locales.length} locale(s), '
       '${metadata.categories.length} categor(y|ies)'
       '${metadata.ageRating == null ? '' : ', age rating'}'
       '${metadata.reviewNotes == null ? '' : ', review notes'} validated',
     );
+
+    // Reported, never fatal. A URL can be legitimately dead at exactly one
+    // release — a policy site deployed after the app it belongs to — and a
+    // gate there would fail correctly and teach the bypass. See reachable.dart.
+    for (final locale in metadata.locales) {
+      final urls = <String, String>{
+        for (final field in const [
+          'privacyPolicyUrl',
+          'supportUrl',
+          'marketingUrl',
+        ])
+          if (locale.appInfo[field] != null) field: locale.appInfo[field]!,
+        for (final field in const ['supportUrl', 'marketingUrl'])
+          if (locale.version[field] != null) field: locale.version[field]!,
+      };
+      for (final problem in await unreachableUrls(urls)) {
+        stdout.writeln(
+          '==> note: ${locale.locale} ${problem.field} '
+          '${problem.url} ${problem.detail}',
+        );
+      }
+    }
   }
 
   /// Release notes for [forVersion], resolved late because promotion does not

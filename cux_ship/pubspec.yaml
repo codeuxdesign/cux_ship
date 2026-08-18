@@ -4,7 +4,7 @@ description: >-
   publish the store listing, and promote a build a store already holds.
 repository: https://github.com/codeuxdesign/cux_ship
 issue_tracker: https://github.com/codeuxdesign/cux_ship/issues
-version: 3.1.0
+version: 3.2.0
 
 topics:
   - app-store
@@ -53,7 +53,7 @@ dependencies:
   # constraint names a version that does not exist on pub.dev yet, and CI's
   # consumer probe goes red every release. Raise it only when something here
   # actually needs a newer cux_ship_verify.
-  cux_ship_verify: ^1.8.0
+  cux_ship_verify: ^1.9.0
   # ES256 over the .p8 private key. App Store Connect accepts nothing else, and
   # package:crypto has no ECDSA, so this or pointycastle-by-hand were the
   # options.

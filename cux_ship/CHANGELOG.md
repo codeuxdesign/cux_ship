@@ -1,5 +1,118 @@
 # Changelog
 
+## 3.2.0
+
+**A repository can declare what its listings must carry, and `verify` reads it.**
+
+```yaml
+appstore:
+  locales: [en-US]
+  screenshots:            # optional — derived when absent
+    ios: [APP_IPHONE_67, APP_IPAD_PRO_3GEN_129]
+play:
+  locales: [en-US]
+  screenshots: [phoneScreenshots, tenInchScreenshots]
+```
+
+`--require-screenshot-type` and `--require-locale` never varied between runs;
+they vary between apps, which is what `.cux-ship.yaml` is for. Three consuming
+repositories had each hand-written the same wiring to say them.
+
+### **Breaking, in a minor. Read this one.**
+
+**A project that has a listing tree and does not declare it now fails
+`verify`.** Semantically this is a major; it ships as a minor deliberately,
+because the alternative is a major every few days and a version number that has
+stopped carrying information. The compensation is that the break is loud, early,
+and says what to do:
+
+```
+.cux-ship.yaml: appstore: is not declared, and store/appstore exists — so the
+tree is checked but nothing says which locales it must carry […] Declaring
+appstore has been required since 3.2.0: add appstore.locales, e.g.
+locales: [en-US]
+```
+
+The failure names **the version that introduced the requirement**, because the
+question a reader actually has is not *what is missing* but *why did this work
+yesterday*.
+
+**Nothing checks less than it did before.** A present tree is still validated
+against everything intrinsic to it, declared or not — an upgrade that quietly
+checked less would be the exact failure this release exists to remove. What the
+declaration adds is the one thing that cannot be inferred: which locales the
+listing must carry, so that one silently disappearing is noticed.
+
+**Take this bump in a commit that also adds the config**, in the same way the
+secrets file moves with a constraint that admits a new shape.
+
+### `verify` gains the Play half
+
+`--play`, `--data-safety`, and the checks behind them. Play was covered for
+release-note length and nothing else.
+
+**`data-safety.csv` is the reason this release is ordered the way it is.**
+`play upload --dry-run` discards its edit rather than validating it, and skips
+the declaration outright; a real run sends it as a separate POST, deliberately
+after the commit, because it is not versioned with a release. That ordering is
+right and cannot be changed — so a broken declaration fails *after* the release
+is public, and an offline check is the only place it can be caught at all.
+
+Structure, never content: whether the answers are *true* is a question about a
+particular app, and this cannot answer it. There is also nothing to specify —
+the file is Play's own export and every row states its own answer requirement.
+
+### Screenshot types are derived from `TARGETED_DEVICE_FAMILY`
+
+`{APP_IPHONE_67, APP_IPAD_PRO_3GEN_129}` is Apple's current requirement for a
+universal app, not a fact about any app: the 6.7" class replaced the 6.5" one.
+A project holding those names in its own config holds a value that ages into a
+rejection after upload; one derived here is fixed for everybody by taking a new
+version. `appstore.screenshots` overrides it when Apple and this table disagree.
+
+macOS has no `TARGETED_DEVICE_FAMILY`, so that side is a constant rather than a
+lookup — two mechanisms behind one word, said out loud.
+
+`TARGETED_DEVICE_FAMILY` gets 3.1.0's refuse-on-ambiguity rule. It is the same
+multi-target shape that forced `PRODUCT_BUNDLE_IDENTIFIER`'s.
+
+### The declared requirements are enforced on `appstore upload`, not only in `verify`
+
+A requirement that is a property of the repository and is honoured by one
+command out of two reads as a standing fact and is not one. `upload` is the
+command that reaches Apple.
+
+### Listing URLs are checked for reachability, and never block
+
+A privacy policy URL that 404s is a rejection, and the site is usually deployed
+by a different command than the app. This runs on the upload path, always, and
+**reports rather than fails**: a URL can be legitimately dead at exactly one
+release — a policy site deployed after the app — and a gate there would fail
+correctly and teach the bypass.
+
+It is not in `cux_ship_verify` and never will be. That package has no
+dependencies and makes no network calls, and `verify --help`'s "No network, no
+credentials" is an **invariant**, not a description of what it currently does.
+
+### Two checks were written, run against a live listing, and deleted
+
+Both would have failed a listing a store is serving right now:
+
+- *a response id belongs to one question* — Play reuses them across questions by
+  design. 22 problems on an accepted declaration.
+- *an enumerated set of answer requirements* — exports also use `SINGLE_CHOICE`
+  and `OPTIONAL`. 88 problems.
+
+Play's published "longest side at most twice the shortest" is absent for the
+same reason. A 20:9 phone capture is 2.22:1, and the reductio needs no
+counterexample: Play *mandates* a 1024x500 feature graphic, which is 2.048:1.
+
+**A check that fails what a store accepts is worse than one that passes
+vacuously**, because the first response to a red board over a live listing is to
+find the flag that turns it off. No dimension or length rule should ship without
+being run against a real listing and asked whether it would have failed
+something already published.
+
 ## 3.1.0
 
 **Inference refuses an ambiguous project instead of taking the first match.**
