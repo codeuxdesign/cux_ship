@@ -89,6 +89,30 @@ void main() {
       final records = parseCsvRecords('a,b\n\nc,d\n');
       expect(records.map((r) => r.line), [1, 3]);
     });
+
+    test('refuses a lone carriage return rather than fusing two rows', () {
+      // Swallowing it turns `a,b\rc,d` into `[a, bc, d]` — b and c joined —
+      // which is this parser reading a mangled value as a good one, the single
+      // thing it refuses to do everywhere else.
+      expect(
+        () => parseCsv('a,b\rc,d\n'),
+        throwsA(
+          isA<FormatException>().having(
+            (e) => e.message,
+            'message',
+            contains('carriage return'),
+          ),
+        ),
+      );
+    });
+
+    test('a CRLF file still parses', () {
+      // The refusal above must not cost the ordinary Windows-ending case.
+      expect(parseCsv('a,b\r\nc,d\r\n'), [
+        ['a', 'b'],
+        ['c', 'd'],
+      ]);
+    });
   });
 
   group('checkDataSafety', () {

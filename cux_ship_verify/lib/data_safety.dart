@@ -361,8 +361,20 @@ List<CsvRecord> parseCsvRecords(String input) {
         endField();
         anyContent = true;
       case '\r':
-        // Swallowed; the \n that follows ends the record.
-        break;
+        // Part of a CRLF, and the \n that follows ends the record.
+        //
+        // A *lone* carriage return is refused rather than swallowed. Swallowing
+        // it fuses two rows into one — `a,b\rc,d` becomes `[a, bc, d]`, with
+        // `b` and `c` joined — which is this parser reading a mangled value as
+        // a good one, the single thing it refuses to do everywhere else. Play
+        // does not emit classic-Mac line endings, so this costs nothing and
+        // closes the last path where the parser contradicts itself.
+        if (i + 1 >= input.length || input[i + 1] != '\n') {
+          throw FormatException(
+            'line $line: a carriage return not followed by a newline — a '
+            'classic-Mac line ending would silently join two rows',
+          );
+        }
       case '\n':
         endRecord();
         line++;

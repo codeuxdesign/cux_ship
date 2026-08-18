@@ -192,15 +192,37 @@ void main() {
       );
     });
 
-    test('two locales and no default language is itself the problem', () {
+    test('a fallback that lacks the graphics is the one blamed', () {
+      final dir = _tree(
+        locales: {'en-US': _text, 'de-DE': _text},
+        images: {'de-DE': _fullImages},
+        defaultLanguage: 'en-US',
+      );
+      final problems = checkPlayTree(dir.path);
+      expect(problems.map((p) => p.where), everyElement(contains('en-US')));
+    });
+
+    test('two locales and no default language reports that, and only that', () {
+      // The whole finding, in one assertion. An earlier revision treated
+      // *every* locale as the fallback when none could be determined, on the
+      // theory that checking more was the safe direction. It reported three
+      // missing images against `de-DE` — a locale that was fine — alongside
+      // the real defect, so acting on the output meant adding an icon to a
+      // translation that never needed one and still having the problem.
+      //
+      // Same rule as the App Store platform selection: when the answer cannot
+      // be determined, say so rather than picking and blaming the consequences
+      // of the pick.
       final dir = _tree(
         locales: {'en-US': _text, 'de-DE': _text},
         images: {'en-US': _fullImages},
       );
-      expect(
-        checkPlayTree(dir.path).map((p) => p.message),
-        contains(contains('which one supplies the icon')),
+      final problems = checkPlayTree(
+        dir.path,
+        requireScreenshotTypes: {'phoneScreenshots'},
       );
+      expect(problems, hasLength(1));
+      expect(problems.single.message, contains('which one supplies the icon'));
     });
   });
 

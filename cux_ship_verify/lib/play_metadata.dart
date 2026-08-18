@@ -312,7 +312,20 @@ List<ReleaseProblem> checkPlayTree(
         requireScreenshotTypes,
         // Same reasoning as the images: a locale without its own screenshots
         // shows the default language's.
-        isFallback: fallbackLocale == null || locale.locale == fallbackLocale,
+        //
+        // **When the fallback cannot be determined, nothing is treated as
+        // one.** An earlier revision passed `true` for every locale here, on
+        // the theory that checking more was the safe direction. It is not: a
+        // two-locale tree with no `default_language.txt` then reported a
+        // missing icon against the locale that happened not to carry one,
+        // which is an innocent locale — someone acting on that adds an icon to
+        // a translation that never needed it and still has the real problem.
+        //
+        // The real problem is reported once, below. This is the same rule the
+        // App Store platform selection follows: when the answer cannot be
+        // determined, say so rather than picking one and blaming what follows
+        // from the pick.
+        isFallback: fallbackLocale != null && locale.locale == fallbackLocale,
       ),
     );
   }
@@ -407,17 +420,24 @@ List<ReleaseProblem> _checkLocale(
     }
   }
 
-  for (final type in requireScreenshotTypes) {
-    if (!isFallback) {
-      // Screenshots fall back to the default language too, so a translated
-      // listing that reuses them is ordinary rather than incomplete.
-      break;
-    }
-    final files = locale.images[type];
-    if (files == null || files.isEmpty) {
-      problems.add(
-        ReleaseProblem(where, 'no $type, which this app is required to carry'),
-      );
+  // Screenshots fall back to the default language too, so a translated listing
+  // that reuses them is ordinary rather than incomplete.
+  //
+  // The condition is outside the loop rather than a `break` inside it. It is
+  // loop-invariant either way and both are correct today, but a `break` reads
+  // as "skip this type" while meaning "skip all of them", and it is one
+  // inserted per-type condition away from being wrong.
+  if (isFallback) {
+    for (final type in requireScreenshotTypes) {
+      final files = locale.images[type];
+      if (files == null || files.isEmpty) {
+        problems.add(
+          ReleaseProblem(
+            where,
+            'no $type, which this app is required to carry',
+          ),
+        );
+      }
     }
   }
 
