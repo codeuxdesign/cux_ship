@@ -240,6 +240,51 @@ void main() {
       );
     });
 
+    // Each of the three below survived a mutation of its own limit — raise the
+    // number and nothing failed. They are here as a set rather than one at a
+    // time because the gap had a shape: in both pairs the *sibling* was
+    // covered, so the file read as tested. `short_description` was pinned and
+    // `title` and `full_description` were not; the screenshot floor was pinned
+    // and the ceiling was not.
+    test('an over-long title is reported with both numbers', () {
+      final dir = _tree(
+        locales: {
+          'en-US': {..._text, 'title': 'x' * 31},
+        },
+        images: {'en-US': _fullImages},
+      );
+      expect(
+        checkPlayTree(dir.path).map((p) => p.message),
+        contains(allOf(contains('31 characters'), contains('30'))),
+      );
+    });
+
+    test('an over-long full description is reported with both numbers', () {
+      final dir = _tree(
+        locales: {
+          'en-US': {..._text, 'full_description': 'x' * 4001},
+        },
+        images: {'en-US': _fullImages},
+      );
+      expect(
+        checkPlayTree(dir.path).map((p) => p.message),
+        contains(allOf(contains('4001 characters'), contains('4000'))),
+      );
+    });
+
+    test('more screenshots than Play accepts is refused', () {
+      final dir = _tree(
+        locales: {'en-US': _text},
+        images: {
+          'en-US': {..._fullImages, 'phoneScreenshots': List.filled(9, _phone)},
+        },
+      );
+      expect(
+        checkPlayTree(dir.path).map((p) => p.message),
+        contains(allOf(contains('9 images'), contains('8'))),
+      );
+    });
+
     test('a wrongly sized icon is refused', () {
       final dir = _tree(
         locales: {'en-US': _text},
