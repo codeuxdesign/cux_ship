@@ -264,22 +264,49 @@ List<ReleaseProblem> checkPlayTree(
     );
   }
 
-  for (final locale in metadata.locales) {
-    if (requireLocales.isNotEmpty && !requireLocales.contains(locale.locale)) {
-      // Reported, not failed. `--metadata` publishes every locale in the tree,
-      // so this is worth saying out loud; failing it would make adding a
-      // language a two-commit operation for no safety.
-      problems.add(
-        ReleaseProblem(
-          '$path → ${locale.locale}',
-          'is in the tree and not among the declared locales, so it publishes '
-              'without having been declared — add it to the config, or remove the '
-              'directory',
-        ),
-      );
-    }
+  // **A locale in the tree that nobody declared is not reported here.**
+  //
+  // An earlier draft did report it, with a comment claiming it was "reported,
+  // not failed" — which was untrue twice over. `ReleaseProblem` carries no
+  // severity, so every caller fails on it; and `checkAppStoreTree` settles the
+  // same question the opposite way, by skipping such a locale silently. One
+  // store failing where the other shrugs is not a policy, it is an accident.
+  //
+  // The decision on record is that an undeclared locale reports and does not
+  // fail. Until there is a mechanism that can express that, the honest
+  // implementation is the one that matches its sibling.
 
-    problems.addAll(_checkLocale(path, locale, requireScreenshotTypes));
+  // Which locale carries the images Play requires. Localized graphics are
+  // optional per locale and fall back to the default language, so demanding an
+  // icon in every locale directory fails a tree Play accepts — a text-only
+  // `de-DE/` beside a fully illustrated `en-US/` is an ordinary, published
+  // shape. Only the locale that has to stand alone is held to it.
+  final fallbackLocale =
+      metadata.defaultLanguage ??
+      (metadata.locales.length == 1 ? metadata.locales.single.locale : null);
+
+  for (final locale in metadata.locales) {
+    problems.addAll(
+      _checkLocale(
+        path,
+        locale,
+        requireScreenshotTypes,
+        // Same reasoning as the images: a locale without its own screenshots
+        // shows the default language's.
+        isFallback: fallbackLocale == null || locale.locale == fallbackLocale,
+      ),
+    );
+  }
+
+  if (fallbackLocale == null && metadata.locales.length > 1) {
+    problems.add(
+      ReleaseProblem(
+        '$path → details/default_language.txt',
+        'is missing, and the tree has ${metadata.locales.length} locales — so '
+            'which one supplies the icon, the feature graphic and the '
+            'screenshots the others fall back to cannot be told from the tree',
+      ),
+    );
   }
 
   return problems;
@@ -288,8 +315,9 @@ List<ReleaseProblem> checkPlayTree(
 List<ReleaseProblem> _checkLocale(
   String path,
   PlayLocaleMetadata locale,
-  Set<String> requireScreenshotTypes,
-) {
+  Set<String> requireScreenshotTypes, {
+  required bool isFallback,
+}) {
   final problems = <ReleaseProblem>[];
   final where = '$path → ${locale.locale}';
 
@@ -312,18 +340,24 @@ List<ReleaseProblem> _checkLocale(
     }
   }
 
-  // Play's rules, so they are asserted whatever the config says.
+  // Play's rules, so they are asserted whatever the config says — but only of
+  // the locale that has to stand alone. A locale that overrides the graphic is
+  // held to the size; one that inherits it is not asked for a file it does not
+  // need.
   for (final entry in playRequiredImages.entries) {
     final files = locale.images[entry.key];
     final spec = entry.value;
     if (files == null || files.isEmpty) {
-      problems.add(
-        ReleaseProblem(
-          where,
-          'no ${entry.key}/ image — Play requires ${spec.label} on every '
-          'listing, at exactly ${spec.sizeDescription}',
-        ),
-      );
+      if (isFallback) {
+        problems.add(
+          ReleaseProblem(
+            where,
+            'no ${entry.key}/ image — Play requires ${spec.label} of the '
+            'listing every other locale falls back to, at exactly '
+            '${spec.sizeDescription}',
+          ),
+        );
+      }
       continue;
     }
     if (files.length > 1) {
@@ -355,6 +389,11 @@ List<ReleaseProblem> _checkLocale(
   }
 
   for (final type in requireScreenshotTypes) {
+    if (!isFallback) {
+      // Screenshots fall back to the default language too, so a translated
+      // listing that reuses them is ordinary rather than incomplete.
+      break;
+    }
     final files = locale.images[type];
     if (files == null || files.isEmpty) {
       problems.add(
@@ -394,14 +433,19 @@ List<ReleaseProblem> _checkLocale(
         ),
       );
     }
-    // This package's floor rather than Play's — see the constant.
-    if (files.length < playPolicyMinScreenshotsPerDeclaredType) {
+    // This package's floor rather than Play's — see the constant — and it
+    // applies only to a type the project *declared*. A directory that is
+    // merely present carries no promise: an undeclared `wearScreenshots/` with
+    // one image is a listing Play accepts, and failing it would be this
+    // package inventing a rule and enforcing it against a live store.
+    if (requireScreenshotTypes.contains(type) &&
+        files.length < playPolicyMinScreenshotsPerDeclaredType) {
       problems.add(
         ReleaseProblem(
           where,
           '$type holds ${files.length} image; a declared screenshot type with '
           'fewer than $playPolicyMinScreenshotsPerDeclaredType reads as '
-          'unfinished (this tool\'s floor, not a Play limit)',
+          "unfinished (this tool's floor, not a Play limit)",
         ),
       );
     }

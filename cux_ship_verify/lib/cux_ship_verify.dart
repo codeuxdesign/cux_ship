@@ -24,16 +24,14 @@ import 'metadata.dart';
 import 'release_notes.dart';
 import 'release_problem.dart';
 
-export 'data_safety.dart'
-    show checkDataSafety, checkDataSafetyFile, dataSafetyColumns, parseCsv;
-export 'play_metadata.dart'
-    show
-        checkPlayTree,
-        loadPlayMetadata,
-        playListingLimits,
-        playRequiredImages,
-        playScreenshotTypes;
-export 'release_problem.dart' show ReleaseProblem;
+// Exported as whole libraries rather than by `show`. An enumerated list gets
+// out of step the first time something is added — the first draft exported
+// `loadPlayMetadata` without its return type, and `playRequiredImages` without
+// the edge bounds beside it, so a caller could name a function and not the
+// thing it hands back.
+export 'data_safety.dart';
+export 'play_metadata.dart';
+export 'release_problem.dart';
 
 /// The platforms a release note is filtered for, and the cap each one carries.
 ///

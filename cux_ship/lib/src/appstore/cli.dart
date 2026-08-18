@@ -55,6 +55,7 @@ import 'package:cux_ship_verify/cux_ship_verify.dart';
 import 'package:cux_ship_verify/metadata.dart';
 import 'package:cux_ship_verify/release_notes.dart';
 
+import '../listing_requirements.dart';
 import '../reachable.dart';
 import 'app_store.dart';
 import 'asc_client.dart';
@@ -95,6 +96,12 @@ enum AscCommand {
   }.contains(this);
 }
 
+/// The App Store platforms this tool acts on.
+///
+/// One list, used both by `--platform` and by the config reader, so a platform
+/// name cannot be valid in a file and unknown to the flag.
+const ascPlatforms = ['ios', 'macos'];
+
 /// The locale the listing is written in.
 ///
 /// Apple spells it `en-US`, matching a Play listing's default language rather
@@ -129,7 +136,7 @@ ArgParser buildAscParser(AscCommand cmd) {
     ..addOption(
       'platform',
       defaultsTo: 'ios',
-      allowed: ['ios', 'macos'],
+      allowed: ascPlatforms,
       help: 'Which App Store platform to act on.',
     );
 
@@ -250,23 +257,6 @@ ArgParser buildAscParser(AscCommand cmd) {
 ///
 /// Passed in rather than read here, because knowing what a Flutter project
 /// looks like is not this package's business — it talks to App Store Connect.
-/// What a repository declares its listing must carry.
-///
-/// Passed in rather than read here, because this library does not know about
-/// `.cux-ship.yaml` and should not: the runner resolves flag, then file, then
-/// inference, and hands down the answer.
-class ListingRequirements {
-  const ListingRequirements({
-    this.locales = const {},
-    this.screenshotTypes = const {},
-  });
-
-  final Set<String> locales;
-  final Set<String> screenshotTypes;
-
-  bool get isEmpty => locales.isEmpty && screenshotTypes.isEmpty;
-}
-
 class AscDefaults {
   const AscDefaults({
     this.bundleId,
@@ -487,7 +477,15 @@ Future<void> runAsc(
     // Reported, never fatal. A URL can be legitimately dead at exactly one
     // release — a policy site deployed after the app it belongs to — and a
     // gate there would fail correctly and teach the bypass. See reachable.dart.
-    for (final locale in metadata.locales) {
+    //
+    // **Not under --dry-run.** The block above promises that
+    // `--metadata --dry-run` validates a tree "with no network access at all",
+    // which is what makes it usable as an offline lint on a laptop with no
+    // secrets. A reachability check there would break that promise and, worse,
+    // print "could not be reached" about a URL that is fine — a false alarm
+    // this file's own reasoning says is the thing to avoid, since it is what
+    // teaches people to ignore the check.
+    for (final locale in dryRun ? const <LocaleMetadata>[] : metadata.locales) {
       final urls = <String, String>{
         for (final field in const [
           'privacyPolicyUrl',

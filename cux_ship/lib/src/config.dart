@@ -24,6 +24,7 @@ import 'dart:io';
 
 import 'package:yaml/yaml.dart';
 
+import 'appstore/cli.dart';
 import 'project.dart';
 
 /// The name every consumer uses. Not configurable — a config file whose
@@ -221,9 +222,17 @@ class ProjectConfig {
   /// and is preserved: it says the project publishes there and has declared
   /// nothing, which the commands refuse rather than treat as no requirements.
   static StoreConfig? _store(YamlMap document, String key) {
+    // containsKey rather than a null test. `appstore:` with nothing under it is
+    // the most natural way to write "this project publishes there", and reading
+    // it as absent would classify it as "does not publish" and then report that
+    // it was never declared — while the reader is looking at the line that
+    // declares it.
+    if (!document.containsKey(key)) {
+      return null;
+    }
     final block = document[key];
     if (block == null) {
-      return null;
+      return const StoreConfig();
     }
     if (block is! YamlMap) {
       throw ProjectException(
@@ -243,11 +252,21 @@ class ProjectConfig {
       );
     } else if (declared is YamlMap) {
       // The App Store's shape: per platform, because one tree serves both and
-      // the required types differ. Platform names are checked by the caller
-      // against the same values --platform takes, so the flag and the file
-      // cannot drift apart.
+      // the required types differ.
       for (final entry in declared.entries) {
         final platform = '${entry.key}';
+        // Checked against the values --platform takes, so the flag and the file
+        // cannot drift apart — and so a typo is refused rather than silently
+        // requiring nothing, which is the failure this file's header vows to
+        // refuse everywhere. An earlier revision claimed this check existed
+        // elsewhere; it did not, and a misspelt platform key parsed cleanly and
+        // was ignored.
+        if (!ascPlatforms.contains(platform)) {
+          throw ProjectException(
+            '$cuxShipConfigFile: $key.screenshots.$platform is not a platform '
+            '(${(ascPlatforms.toList()..sort()).join(', ')})',
+          );
+        }
         final value = entry.value;
         if (value is! YamlList) {
           throw ProjectException(

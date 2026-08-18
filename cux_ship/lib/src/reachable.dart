@@ -76,7 +76,10 @@ Future<List<UrlCheck>> unreachableUrls(
   try {
     for (final entry in urls.entries) {
       final uri = Uri.tryParse(entry.value);
-      if (uri == null || !uri.hasScheme) {
+      // http(s) only. `HttpClient.openUrl` throws ArgumentError on any other
+      // scheme, and this function promises never to throw — a promise that
+      // would otherwise hold only because one caller happens to pre-filter.
+      if (uri == null || (!uri.isScheme('http') && !uri.isScheme('https'))) {
         continue; // Not a reachability question; the loader already refused it.
       }
       final detail = await _ask(http, uri, timeout);
@@ -123,6 +126,9 @@ Future<int> _status(
   final request = await http.openUrl(method, uri).timeout(timeout);
   request.followRedirects = true;
   final response = await request.close().timeout(timeout);
-  await response.drain<void>();
+  // Timed like everything else. A server that sends headers and then stalls the
+  // body would otherwise hang the upload forever, which is the opposite of what
+  // a non-blocking check is for.
+  await response.drain<void>().timeout(timeout);
   return response.statusCode;
 }

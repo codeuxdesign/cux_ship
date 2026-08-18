@@ -60,9 +60,12 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:args/args.dart';
+import 'package:cux_ship_verify/cux_ship_verify.dart';
 import 'package:cux_ship_verify/release_notes.dart';
 import 'package:googleapis/androidpublisher/v3.dart';
 import 'package:googleapis_auth/auth_io.dart';
+
+import '../listing_requirements.dart';
 
 const _serviceAccountVar = 'GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_PATH';
 
@@ -914,6 +917,7 @@ class PlayDefaults {
     this.changelog,
     this.metadata,
     this.dataSafety,
+    this.listingRequirements,
   });
 
   /// Empty, for a caller that wants nothing inferred.
@@ -924,6 +928,11 @@ class PlayDefaults {
   final String? changelog;
   final String? metadata;
   final String? dataSafety;
+
+  /// What the repository declares the listing must carry, or null when it
+  /// declares nothing. Resolved by the runner, which knows about
+  /// `.cux-ship.yaml`; this library does not and should not.
+  final ListingRequirements? listingRequirements;
 }
 
 /// Called once, immediately before the edit is committed, with a summary of it.
@@ -1055,6 +1064,25 @@ Future<void> runPlay(
   // at Play, so everything that can be checked locally is checked first.
   final metadata = metadataPath == null ? null : _loadMetadata(metadataPath);
 
+  // What the repository declares its listing must carry, applied on the path
+  // that publishes it rather than only in `verify`. A requirement that is a
+  // property of the repository and is honoured by one command out of two reads
+  // as a standing fact and is not one.
+  final requirements = defaults.listingRequirements;
+  if (metadataPath != null && requirements != null) {
+    final problems = checkPlayTree(
+      metadataPath,
+      requireScreenshotTypes: requirements.screenshotTypes,
+      requireLocales: requirements.locales,
+    );
+    if (problems.isNotEmpty) {
+      _fail(
+        'the listing does not satisfy what this repository declares:\n'
+        '${problems.map((ReleaseProblem p) => '    $p').join('\n')}',
+      );
+    }
+  }
+
   String? dataSafetyCsv;
   if (dataSafetyPath != null) {
     final f = File(dataSafetyPath);
@@ -1064,6 +1092,19 @@ Future<void> runPlay(
     dataSafetyCsv = f.readAsStringSync();
     if (dataSafetyCsv.trim().isEmpty) {
       _fail('$dataSafetyPath is empty');
+    }
+    // **This is the one input whose failure lands after the release is
+    // public.** It is sent by a separate POST, deliberately after the commit,
+    // and `--dry-run` does not send it at all — so this is the last moment
+    // anything can refuse a broken declaration. Structure only; whether the
+    // answers are true is not a question this can ask.
+    final problems = checkDataSafety(dataSafetyCsv, where: dataSafetyPath);
+    if (problems.isNotEmpty) {
+      _fail(
+        'the data safety declaration would be sent after the release is '
+        'committed, and it is not well formed:\n'
+        '${problems.map((ReleaseProblem p) => '    $p').join('\n')}',
+      );
     }
   }
 

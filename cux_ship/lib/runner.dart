@@ -29,6 +29,7 @@ import 'src/config.dart';
 import 'src/confirm.dart';
 import 'src/deps.dart';
 import 'src/keychain.dart';
+import 'src/listing_requirements.dart';
 import 'src/placed.dart';
 import 'src/play/cli.dart';
 import 'src/project.dart';
@@ -240,6 +241,7 @@ class _PlaySubcommand extends Command<void> {
   @override
   Future<void> run() {
     final project = _project(this);
+    final store = ProjectConfig.read(project.root).play;
     return runPlay(
       cmd,
       argResults!,
@@ -249,6 +251,15 @@ class _PlaySubcommand extends Command<void> {
         changelog: project.changelog,
         metadata: project.playMetadata,
         dataSafety: project.dataSafety,
+        // Play's screenshot vocabulary is directory names, so it comes from
+        // play.screenshots and nowhere else — there is nothing to derive it
+        // from, and the App Store's flag names a different vocabulary.
+        listingRequirements: store == null
+            ? null
+            : ListingRequirements(
+                locales: store.locales,
+                screenshotTypes: store.screenshotsFor(StoreConfig.anyPlatform),
+              ),
       ),
       confirm: (summary) => confirmOrExit(summary, assumeYes: _assumeYes(this)),
     );
@@ -1465,14 +1476,19 @@ Set<String> _requiredLocales(ArgResults args, StoreConfig? store) {
   return flag.isNotEmpty ? flag : (store?.locales ?? const {});
 }
 
-/// The screenshot types a listing must carry.
+/// The screenshot types an **App Store** listing must carry.
 ///
 /// Precedence is the tool's usual one — flag, then file, then inference — and
-/// the inference step is what makes the App Store side work with nothing
-/// declared. Play has nothing to infer from, so an undeclared Play list simply
-/// requires no types; the icon and feature graphic are checked regardless,
-/// because they are Play's rules rather than a project's choice.
-Set<String> _requiredScreenshotTypes(
+/// the inference step is what makes this work with nothing declared.
+///
+/// **`--require-screenshot-type` is App Store only, and deliberately.** Its
+/// values are `ScreenshotDisplayType` names; Play's are directory names like
+/// `phoneScreenshots`, and the two vocabularies are disjoint. One unscoped flag
+/// feeding both checks meant the flag's own documented example —
+/// `--require-screenshot-type APP_IPAD_PRO_3GEN_129` — made the Play check
+/// demand a directory by that name and fail. Play's requirements come from
+/// `play.screenshots` only.
+Set<String> _appStoreScreenshotTypes(
   ArgResults args,
   StoreConfig? store,
   ProjectContext project, {
@@ -1483,10 +1499,37 @@ Set<String> _requiredScreenshotTypes(
     return flag;
   }
   final declared = store?.screenshotsFor(platform) ?? const <String>{};
-  if (declared.isNotEmpty || platform == StoreConfig.anyPlatform) {
+  if (declared.isNotEmpty) {
     return declared;
   }
   return project.requiredScreenshotTypes(platform) ?? const {};
+}
+
+/// Why the App Store screenshot requirement could not be derived, when nothing
+/// declared it either.
+///
+/// Without this the refusal built into [ProjectContext] is dead: an ambiguous
+/// project yields no derived set, the caller falls back to requiring nothing,
+/// and a carefully worded problem string is set and never read. Requiring
+/// nothing *silently* is the shape this release exists to remove, so the
+/// inability to derive is itself reported.
+ReleaseProblem? _derivationProblem(
+  ArgResults args,
+  StoreConfig? store,
+  ProjectContext project, {
+  String platform = 'ios',
+}) {
+  if (args.multiOption('require-screenshot-type').isNotEmpty) {
+    return null;
+  }
+  if ((store?.screenshotsFor(platform) ?? const <String>{}).isNotEmpty) {
+    return null;
+  }
+  final problem = project.targetedDeviceFamilyProblem;
+  if (problem == null || project.requiredScreenshotTypes(platform) != null) {
+    return null;
+  }
+  return ReleaseProblem('appstore.screenshots.$platform', problem);
 }
 
 /// The offline checks, against a consuming repository's own files.
@@ -1570,13 +1613,16 @@ class VerifyCommand extends Command<void> {
     final play = args.option('play') ?? project.playMetadata;
     final dataSafety = args.option('data-safety') ?? project.dataSafety;
 
+    final derivation = _derivationProblem(args, config.appstore, project);
+
     final problems = <ReleaseProblem>[
       ..._declarationProblems(config, args, appstore, play),
+      if (appstore != null && derivation != null) derivation,
       if (changelog != null) ...checkChangelogFile(changelog),
       if (appstore != null)
         ...checkAppStoreTree(
           appstore,
-          requireScreenshotTypes: _requiredScreenshotTypes(
+          requireScreenshotTypes: _appStoreScreenshotTypes(
             args,
             config.appstore,
             project,
@@ -1586,12 +1632,10 @@ class VerifyCommand extends Command<void> {
       if (play != null)
         ...checkPlayTree(
           play,
-          requireScreenshotTypes: _requiredScreenshotTypes(
-            args,
-            config.play,
-            project,
-            platform: StoreConfig.anyPlatform,
-          ),
+          // Play's own vocabulary, from the config only — see
+          // _appStoreScreenshotTypes for why the flag does not reach here.
+          requireScreenshotTypes:
+              config.play?.screenshotsFor(StoreConfig.anyPlatform) ?? const {},
           requireLocales: _requiredLocales(args, config.play),
         ),
       if (dataSafety != null) ...checkDataSafetyFile(dataSafety),
@@ -1600,12 +1644,15 @@ class VerifyCommand extends Command<void> {
     // Refused rather than passed: checking nothing and reporting success is the
     // failure this command exists to prevent, so having nothing to check is
     // itself the finding.
-    if (changelog == null && appstore == null && play == null) {
+    if (changelog == null &&
+        appstore == null &&
+        play == null &&
+        dataSafety == null) {
       stderr.writeln(
-        'cux_ship verify: nothing to check — no CHANGELOG.md, and '
-        '$cuxShipConfigFile declares neither appstore: nor play:, so no '
-        'listing tree was looked for. Declare the store this project '
-        'publishes to, or name a tree with --appstore or --play.',
+        'cux_ship verify: nothing to check — no CHANGELOG.md, no App Store or '
+        'Play metadata tree, and no data safety declaration were found, and '
+        'none was named. Name one with --changelog, --appstore, --play or '
+        '--data-safety.',
       );
       exitCode = 1;
       return;
