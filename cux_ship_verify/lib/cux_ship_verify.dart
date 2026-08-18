@@ -22,25 +22,18 @@ import 'dart:io';
 
 import 'metadata.dart';
 import 'release_notes.dart';
+import 'release_problem.dart';
 
-/// One thing wrong with a repository's release inputs.
-///
-/// Returned rather than thrown, and in a list, because a caller checking a
-/// whole changelog wants every over-long section named at once. Being told
-/// about them one release at a time is how a limit gets hit twice.
-class ReleaseProblem {
-  const ReleaseProblem(this.where, this.message);
-
-  /// What was being checked, in terms a reader can go and look at — a version
-  /// heading and a platform, or a locale and a screenshot directory.
-  final String where;
-
-  /// What is wrong, and where possible what to do instead.
-  final String message;
-
-  @override
-  String toString() => '$where: $message';
-}
+export 'data_safety.dart'
+    show checkDataSafety, checkDataSafetyFile, dataSafetyColumns, parseCsv;
+export 'play_metadata.dart'
+    show
+        checkPlayTree,
+        loadPlayMetadata,
+        playListingLimits,
+        playRequiredImages,
+        playScreenshotTypes;
+export 'release_problem.dart' show ReleaseProblem;
 
 /// The platforms a release note is filtered for, and the cap each one carries.
 ///
