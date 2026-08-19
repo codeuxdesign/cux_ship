@@ -14,13 +14,44 @@ jobs:
   # A matrix over every package here. Adding a package means adding it to this
   # list *and* to the root pubspec's `workspace:` — two places, and pub fails
   # loudly on the second, which is what keeps them in step.
+  # **The matrix is read from the workspace list rather than written out here.**
+  #
+  # It used to be a literal `[cux_ship_verify, cux_ship]`, six lines above a
+  # comment explaining that the test step keys off the directory existing
+  # "so a suite added to either one runs from the moment it is written and
+  # cannot be silently skipped". That reasoning was right and was applied one
+  # level too low: adding a *package* skipped it entirely, and the board stayed
+  # green while nothing checked it. Which is what happened — `cux_buildnumber`
+  # landed with format, analyze and 30 tests, and CI reported success without
+  # running any of them.
+  #
+  # A package cannot now be added without being checked, because the same list
+  # that makes it part of the workspace is the list this reads.
+  packages:
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.read.outputs.list }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: read
+        run: |
+          set -euo pipefail
+          list=$(awk '/^workspace:/{f=1;next} f&&/^  - /{print $2; next} f&&NF&&!/^ /{exit}' pubspec.yaml |
+            python3 -c "import sys,json; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))")
+          # Loudly, because an empty matrix is a workflow that passes having run
+          # nothing — the same shape as the bug this job exists to prevent.
+          [ "$list" != "[]" ] || { echo "no workspace members found in pubspec.yaml" >&2; exit 1; }
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+          echo "checking: $list"
+
   package:
     name: ${{ matrix.package }}
+    needs: packages
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        package: [cux_ship_verify, cux_ship]
+        package: ${{ fromJSON(needs.packages.outputs.list) }}
     steps:
       - uses: actions/checkout@v5
       # **Pinned, and pinned to what Flutter ships rather than to latest.**
