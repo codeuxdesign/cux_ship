@@ -348,9 +348,54 @@ class _PlaySubcommand extends Command<void> {
 
 // ----------------------------------------------------------------- release
 
+/// Teaches this clone to fetch the refs a build-number allocator keeps.
+///
+/// **A separate command rather than something a release does silently**, and
+/// the reason is that it edits `.git/config`, which is the one piece of state a
+/// release command has no business changing on its own. Run once per clone —
+/// and per worktree only if that worktree has its own remote configuration,
+/// which the ordinary one does not.
+class _RefspecsCommand extends Command<void> {
+  _RefspecsCommand() {
+    argParser
+      ..addOption(
+        'remote',
+        defaultsTo: 'origin',
+        help: 'The remote whose fetch refspecs are extended.',
+      )
+      ..addFlag(
+        'dry-run',
+        negatable: false,
+        help: 'Say what would change, and change nothing.',
+      );
+  }
+
+  @override
+  String get name => 'refspecs';
+
+  @override
+  String get description =>
+      'Configure this clone to fetch refs/buildnumbers/* and the build-number '
+      'notes ref, which a default clone ignores.';
+
+  @override
+  void run() {
+    final project = _project(this);
+    final log = configureBuildnumberRefspecs(
+      Git(project.root),
+      remote: argResults!.option('remote')!,
+      dryRun: argResults!.flag('dry-run'),
+    );
+    for (final line in log) {
+      stdout.writeln('==> $line');
+    }
+  }
+}
+
 class _ReleaseCommand extends Command<void> {
   _ReleaseCommand() {
     addSubcommand(_FinishCommand());
+    addSubcommand(_RefspecsCommand());
   }
 
   @override

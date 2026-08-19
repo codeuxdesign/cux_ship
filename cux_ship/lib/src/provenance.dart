@@ -261,6 +261,56 @@ UploadRecordResult? recordUploadIfConfigured(
   );
 }
 
+/// The refs a build-number allocator keeps, and what `remote.origin.fetch` has
+/// to carry for an ordinary `git fetch` to bring them.
+///
+/// **A clone does not get these.** `refs/buildnumbers/*` and
+/// `refs/notes/buildnumbers` are outside `refs/heads` and `refs/tags`, so the
+/// default refspec ignores them entirely: a fresh clone has no allocation
+/// history until something fetches it explicitly, and the allocator is the only
+/// thing that does. That is survivable while the allocator is the only reader —
+/// and it stops being survivable the moment the chain is what keeps built
+/// commits alive, because then a clone that never fetched the chain is a clone
+/// whose `git gc` sees nothing holding them.
+const buildnumberFetchRefspecs = <String>[
+  '+refs/buildnumbers/*:refs/buildnumbers/*',
+  '+refs/notes/buildnumbers:refs/notes/buildnumbers',
+];
+
+/// Adds [buildnumberFetchRefspecs] to `remote.<remote>.fetch`, and says what it
+/// did. Idempotent.
+///
+/// **Added rather than replaced**, and with `--add`, because the branch refspec
+/// already there is the one every other git operation depends on — a plain
+/// `git config remote.origin.fetch <value>` overwrites the whole multi-valued
+/// key and would leave a repository that can fetch build numbers and not
+/// branches.
+List<String> configureBuildnumberRefspecs(
+  Git git, {
+  String remote = 'origin',
+  bool dryRun = false,
+}) {
+  final key = 'remote.$remote.fetch';
+  final existing = git
+      .run(['config', '--get-all', key], allowFailure: true)
+      .split('\n')
+      .where((line) => line.isNotEmpty)
+      .toSet();
+
+  final log = <String>[];
+  for (final refspec in buildnumberFetchRefspecs) {
+    if (existing.contains(refspec)) {
+      log.add('already configured: $refspec');
+      continue;
+    }
+    if (!dryRun) {
+      git.run(['config', '--add', key, refspec]);
+    }
+    log.add('${dryRun ? 'would add' : 'added'}: $refspec');
+  }
+  return log;
+}
+
 /// Whether the tag is a tag *object* rather than a ref pointing straight at a
 /// commit. Only an annotated tag has a body, and the body is the record.
 bool _isAnnotated(Git git, String name) =>
