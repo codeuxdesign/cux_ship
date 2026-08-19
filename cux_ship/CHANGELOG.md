@@ -1,5 +1,71 @@
 # Changelog
 
+## 3.4.0-dev.1
+
+**A pre-release**, published so the repository that drove these changes can use
+them before they are settled. The three additions below are in use but not yet
+proven by a second consumer; treat the flag names as provisional until 3.4.0.
+
+### `--manifest` — name the build once, and check it
+
+```bash
+cux_ship appstore upload --platform ios --manifest dist/ios/manifest.json
+==> how-it-went-1.1.0-51.ipa — build 51 of 1.1.0 from fef65ce, digest verified
+```
+
+Supplies `--artifact` (or `--aab`), `--build-number`, `--version-name` and
+`--commit` from a build manifest written beside the artifact. Explicit flags
+still win — a manifest is inference, and inference loses to what was typed.
+
+It **verifies the artifact against the digest the manifest records**, which is
+the part no flag can give you: every argument can be correct while the bytes
+belong to a different build — a `dist/` edited, half-written, or left from an
+earlier build whose manifest was replaced without its artifact being rewritten.
+A manifest recording a dirty tree is refused unless `--allow-dirty`.
+
+Schema 1; an unknown schema is refused rather than read optimistically.
+
+This reverses a stated decision — both store libraries said they knew nothing
+about manifests, on the grounds that a project's upload script had already
+checked one. That held while every project had such a script. It stopped when
+provenance moved into this tool in 3.3.0, since a record of which commit shipped
+cannot be written by a command forbidden to know the commit; and it never held
+for the Apple side, where no such script has ever existed.
+
+### Recording which commit an upload came from
+
+`play upload` and `appstore upload` can write an annotated tag naming the commit
+an artifact was **built from**, before contacting the store. Off unless declared:
+
+```yaml
+# .cux-ship.yaml
+provenance:
+  record-uploads: true
+```
+
+Off by default because recording pushes a tag to `origin`, so enabling it for
+every consumer would turn a missing push credential into a total upload block
+rather than a skipped record.
+
+The default name is `uploaded/v{version}+{build}`, and the namespace is a
+correctness property rather than a preference: a release guard that asks "has
+this version shipped" by taking the highest `v*` tag reads a bare `v1.0.4+56` as
+a released 1.0.4 — `sort -V` ranks build metadata *above* the version it
+annotates — and then refuses to build 1.0.4, naming a release that never
+happened. Override with `provenance.tag`, which must contain `{build}`.
+
+The tag records an upload **attempted**, not accepted: it is written before the
+store is contacted, so a signature refusal leaves it standing over an artifact
+nobody received. That is the right trade — the alternative failure mode is
+*shipped but unprovable* — but consumers must read these as attempts.
+
+### `release refspecs`
+
+`refs/buildnumbers/*` and the build-number notes ref sit outside `refs/heads`
+and `refs/tags`, so a clone's default refspec ignores them and a fresh clone has
+no allocation history until something fetches it explicitly. Run once per clone.
+It appends to `remote.<remote>.fetch` and never replaces it.
+
 ## 3.3.0
 
 **`release finish` now refuses a tag that names a different commit, and pushes
