@@ -246,8 +246,23 @@ List<String> finishRelease(Git git, FinishOptions options) {
   // ------------------------------------------------------------------ the tag
 
   if (options.tag) {
-    if (git.run(['tag', '-l', tagName]).isNotEmpty) {
-      log.add('$tagName already exists — leaving it alone');
+    // **Existence is not the question — where it points is.** Leaving an
+    // existing tag alone is right when it already names this release, and is
+    // how a half-finished run is safely repeated. It is wrong when the name
+    // names a *different* commit: that is one version recorded against two
+    // commits, and carrying on would leave whichever is wrong standing as the
+    // record of what shipped.
+    final tagged = _taggedCommit(git, tagName);
+    if (tagged != null && tagged != options.commit) {
+      throw ReleaseException(
+        'Tag $tagName already names a different commit.\n'
+        '  it points at:  $tagged\n'
+        '  this release:  ${options.commit}\n'
+        'Retag deliberately or pick another version; nothing was changed.',
+      );
+    }
+    if (tagged != null) {
+      log.add('$tagName already exists at ${_short(tagged)} — leaving it alone');
     } else if (options.dryRun) {
       log.add('would tag $tagName at ${_short(options.commit)}');
     } else {
@@ -342,3 +357,15 @@ List<String> finishRelease(Git git, FinishOptions options) {
 }
 
 String _short(String sha) => sha.length > 8 ? sha.substring(0, 8) : sha;
+
+/// The commit a tag resolves to, or null when the tag is absent.
+///
+/// `^{commit}` because these are annotated tags: plain `rev-parse <tag>` yields
+/// the tag object, which never equals a commit SHA and would report every
+/// re-run as a collision with itself.
+String? _taggedCommit(Git git, String name) {
+  if (!git.ok(['rev-parse', '--verify', '--quiet', 'refs/tags/$name'])) {
+    return null;
+  }
+  return git.run(['rev-parse', 'refs/tags/$name^{commit}']);
+}

@@ -194,13 +194,51 @@ void main() {
       final afterFirst = read('pubspec.yaml');
 
       final second = finishRelease(_git, options);
-      expect(second, contains('v1.0.3 already exists — leaving it alone'));
+      expect(second, anyElement(startsWith('v1.0.3 already exists at ')));
+      expect(second, anyElement(contains('leaving it alone')));
       expect(
         second,
         contains('pubspec.yaml is already past 1.0.3 — not bumping'),
       );
       expect(read('pubspec.yaml'), afterFirst);
       expect('\n${read('CHANGELOG.md')}'.split('\n## 1.0.4').length - 1, 1);
+    });
+
+    test('refuses when the tag already names a different commit', () {
+      // Leaving an existing tag alone is right when it names this release —
+      // that is what makes a retry safe. It is wrong when the same version has
+      // been recorded against a different commit, because carrying on leaves
+      // whichever one is wrong standing as the record of what shipped.
+      repo();
+      final first = _git.run(['rev-parse', 'HEAD']);
+      finishRelease(
+        _git,
+        FinishOptions(commit: first, version: '1.0.3', push: false),
+      );
+
+      write('another.txt', 'more work');
+      _git.run(['add', '-A']);
+      _git.run(['commit', '-q', '-m', 'second']);
+      final second = _git.run(['rev-parse', 'HEAD']);
+
+      expect(
+        () => finishRelease(
+          _git,
+          FinishOptions(commit: second, version: '1.0.3', push: false),
+        ),
+        throwsA(
+          isA<ReleaseException>().having(
+            (e) => e.toString(),
+            'message',
+            allOf(contains(first), contains(second)),
+          ),
+        ),
+      );
+      expect(
+        _git.run(['rev-parse', 'refs/tags/v1.0.3^{commit}']),
+        first,
+        reason: 'the refusal must not move the tag it refused to overwrite',
+      );
     });
 
     test('a branch already past the released version is not bumped', () {
