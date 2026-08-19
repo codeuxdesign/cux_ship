@@ -195,13 +195,66 @@ void main() {
 
       final second = finishRelease(_git, options);
       expect(second, anyElement(startsWith('v1.0.3 already exists at ')));
-      expect(second, anyElement(contains('leaving it alone')));
       expect(
         second,
         contains('pubspec.yaml is already past 1.0.3 — not bumping'),
       );
       expect(read('pubspec.yaml'), afterFirst);
       expect('\n${read('CHANGELOG.md')}'.split('\n## 1.0.4').length - 1, 1);
+    });
+
+    test('a repeat pushes a tag the first run created but failed to push', () {
+      // The tag existing *locally* says nothing about the remote holding it,
+      // and the release tag is what a later reader resolves a version against.
+      // Pushing only on the run that created the tag means one failed push is
+      // permanent: every repeat finds it locally and finishes green.
+      repo();
+      final head = _git.run(['rev-parse', 'HEAD']);
+      final origin = Directory.systemTemp.createTempSync('cux_ship_origin');
+      addTearDown(() => origin.deleteSync(recursive: true));
+      Process.runSync('git', ['init', '-q', '--bare', origin.path]);
+      _git.run(['remote', 'add', 'origin', '${origin.path}-does-not-exist']);
+
+      final options = FinishOptions(commit: head, version: '1.0.3');
+      expect(
+        () => finishRelease(_git, options),
+        throwsA(isA<ReleaseException>()),
+      );
+
+      _git.run(['remote', 'set-url', 'origin', origin.path]);
+      expect(
+        finishRelease(_git, options),
+        anyElement(contains('pushed v1.0.3')),
+      );
+      expect(
+        Git(origin.path).run(['rev-parse', 'refs/tags/v1.0.3^{commit}']),
+        head,
+      );
+    });
+
+    test('a short sha names the same release as the full one', () {
+      // Whatever the caller passes is compared against `rev-parse` output, so
+      // without normalizing it the *repeat* is the thing that breaks, and it
+      // breaks by accusing the release of naming a second commit.
+      repo();
+      final head = _git.run(['rev-parse', 'HEAD']);
+
+      finishRelease(
+        _git,
+        FinishOptions(commit: head, version: '1.0.3', push: false),
+      );
+
+      expect(
+        finishRelease(
+          _git,
+          FinishOptions(
+            commit: head.substring(0, 8),
+            version: '1.0.3',
+            push: false,
+          ),
+        ),
+        anyElement(startsWith('v1.0.3 already exists at ')),
+      );
     });
 
     test('refuses when the tag already names a different commit', () {

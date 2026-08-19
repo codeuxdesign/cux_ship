@@ -35,7 +35,7 @@
 // that will do the upload, and tagging afterwards makes the failure mode
 // "shipped but unprovable" — an artifact in front of users whose commit nobody
 // can name.
-import 'release.dart' show Git, ReleaseException;
+import 'release.dart' show Git, ReleaseException, resolveCommit, taggedCommit;
 
 /// The tag recording that [commit] reached a store.
 ///
@@ -67,7 +67,7 @@ class UploadRecord {
 
 /// Outcome of [recordUpload], so a caller can report without re-deriving it.
 enum UploadRecordResult {
-  /// The tag did not exist and now does.
+  /// The tag did not exist, and now does — or under `dryRun`, would.
   created,
 
   /// The tag already pointed at this commit. Re-running an upload is ordinary —
@@ -92,48 +92,78 @@ UploadRecordResult recordUpload(
   bool push = true,
   bool dryRun = false,
 }) {
-  final existing = _taggedCommit(git, record.name);
+  // "The whole tag name" means the name, not the ref path — and the difference
+  // is invisible without this, because every use here is consistent. `git tag`
+  // would create `refs/tags/refs/tags/…`, lookups would find it, pushes would
+  // publish it, and the run would be green while the record sat under a name
+  // nobody will ever look up.
+  if (record.name.startsWith('refs/')) {
+    throw ReleaseException(
+      'Tag name "${record.name}" starts with refs/, which git would nest '
+      'under refs/tags/ rather than treat as a path. Pass the name only.',
+    );
+  }
 
-  if (existing != null) {
-    if (existing == record.commit) {
-      return UploadRecordResult.alreadyRecorded;
-    }
+  final commit = resolveCommit(git, record.commit);
+  final existing = taggedCommit(git, record.name);
+
+  if (existing != null && existing != commit) {
     throw ReleaseException(
       'Tag ${record.name} already names a different commit.\n'
       '  it points at:   $existing\n'
-      '  this artifact:  ${record.commit}\n'
+      '  this artifact:  $commit\n'
       'One build number has been used for two commits, so publishing this '
       'would leave the record naming the wrong one. Nothing was uploaded.',
     );
   }
 
-  if (dryRun) {
-    return UploadRecordResult.created;
+  if (existing != null && !_isAnnotated(git, record.name)) {
+    throw ReleaseException(
+      'Tag ${record.name} exists at the right commit but is lightweight, so '
+      'it carries no annotation — the build number, the checksum and which '
+      'store took it are all absent, and treating it as the record would put '
+      'an empty one in the repository. This tool only writes annotated tags, '
+      'so something else created it. Delete it and re-run, or annotate it by '
+      'hand. Nothing was uploaded.',
+    );
   }
 
-  git.run(['tag', '-a', record.name, record.commit, '-m', record.annotation]);
+  final result = existing == null
+      ? UploadRecordResult.created
+      : UploadRecordResult.alreadyRecorded;
+
+  if (dryRun) {
+    return result;
+  }
+
+  if (existing == null) {
+    git.run(['tag', '-a', record.name, commit, '-m', record.annotation]);
+  }
 
   if (push) {
+    // **Pushed on both paths, not only the one that created the tag.** A local
+    // tag is not a record — the machine that will read it is the next CI job,
+    // and that one clones. So the run whose push failed must be repairable by
+    // the retry, and it is not if the retry sees a local tag, calls that
+    // `alreadyRecorded` and returns without pushing: the artifact then uploads
+    // against a record that exists nowhere but the machine that has since been
+    // torn down. A retried job after a network failure is the ordinary case,
+    // not the exotic one.
+    //
+    // Pushing a tag the remote already holds at this commit is a no-op, and one
+    // it holds at a different commit is rejected — which is the collision this
+    // function exists to refuse, arriving from the side it cannot see locally.
+    //
     // Deliberately not `allowFailure`. Elsewhere a failed tag push is a warning
     // because the release has already gone out and the tag is bookkeeping; here
-    // nothing has gone out yet, and an unpushed tag protects nothing on the
-    // machine that will do the upload.
+    // nothing has gone out yet, and an unpushed tag protects nothing.
     git.run(['push', 'origin', 'refs/tags/${record.name}']);
   }
 
-  return UploadRecordResult.created;
+  return result;
 }
 
-/// The commit an existing tag resolves to, or null when the tag is absent.
-///
-/// **`^{commit}` is load-bearing.** These are annotated tags, so plain
-/// `rev-parse <tag>` yields the *tag object* rather than the commit. Compared
-/// against a manifest's `gitSha` that mismatches on every legitimate repeat,
-/// turning the idempotent case into a hard error — the inverse of the bug the
-/// comparison exists to catch, and one that only shows on the happy path.
-String? _taggedCommit(Git git, String name) {
-  if (!git.ok(['rev-parse', '--verify', '--quiet', 'refs/tags/$name'])) {
-    return null;
-  }
-  return git.run(['rev-parse', 'refs/tags/$name^{commit}']);
-}
+/// Whether the tag is a tag *object* rather than a ref pointing straight at a
+/// commit. Only an annotated tag has a body, and the body is the record.
+bool _isAnnotated(Git git, String name) =>
+    git.run(['cat-file', '-t', 'refs/tags/$name'], allowFailure: true) == 'tag';

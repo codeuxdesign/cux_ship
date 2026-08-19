@@ -62,8 +62,10 @@ void main() {
       'tag',
       reason: 'a lightweight tag has nowhere to record the build number',
     );
-    expect(_git.run(['tag', '-l', '-n99', 'uploaded/v1.0.0+49']),
-        contains('build 49'));
+    expect(
+      _git.run(['tag', '-l', '-n99', 'uploaded/v1.0.0+49']),
+      contains('build 49'),
+    );
   });
 
   test('re-recording the same artifact is not an error', () {
@@ -103,7 +105,11 @@ void main() {
         isA<ReleaseException>().having(
           (e) => e.toString(),
           'message',
-          allOf(contains(first), contains(second), contains('Nothing was uploaded')),
+          allOf(
+            contains(first),
+            contains(second),
+            contains('Nothing was uploaded'),
+          ),
         ),
       ),
       reason: 'one build number reaching two commits must stop the upload',
@@ -131,7 +137,12 @@ void main() {
   test('a dry run writes nothing', () {
     final built = _commit('built here');
 
-    final result = recordUpload(_git, _record(built), push: false, dryRun: true);
+    final result = recordUpload(
+      _git,
+      _record(built),
+      push: false,
+      dryRun: true,
+    );
 
     expect(result, UploadRecordResult.created);
     expect(_git.run(['tag', '-l', 'uploaded/v1.0.0+49']), isEmpty);
@@ -155,5 +166,116 @@ void main() {
     recordUpload(_git, _record(built, name: 'v1.0.0'), push: false);
 
     expect(_git.run(['tag', '-l', 'v1.0.0']), 'v1.0.0');
+  });
+
+  test('refuses a name given as a ref path', () {
+    final built = _commit('built here');
+
+    // git would nest this under refs/tags/ rather than read it as one, and
+    // because every use here is consistent the run would be green with the
+    // record under a name nothing will look up.
+    expect(
+      () => recordUpload(
+        _git,
+        _record(built, name: 'refs/tags/uploaded/v1.0.0+49'),
+        push: false,
+      ),
+      throwsA(
+        isA<ReleaseException>().having(
+          (e) => e.toString(),
+          'message',
+          contains('nest'),
+        ),
+      ),
+    );
+  });
+
+  test('a retry after a failed push publishes the tag', () {
+    final built = _commit('built here');
+    final origin = Directory.systemTemp.createTempSync('cux_ship_origin');
+    addTearDown(() => origin.deleteSync(recursive: true));
+    Process.runSync('git', ['init', '-q', '--bare', origin.path]);
+
+    // The first attempt cannot reach its remote — a network failure, a token
+    // that had expired, a runner without the route. The tag is created locally
+    // and the caller is told.
+    _git.run(['remote', 'add', 'origin', '${origin.path}-does-not-exist']);
+    expect(
+      () => recordUpload(_git, _record(built)),
+      throwsA(isA<ReleaseException>()),
+    );
+    expect(_git.run(['tag', '-l', 'uploaded/v1.0.0+49']), isNotEmpty);
+
+    // The job is retried once the cause is gone. Finding its own tag locally
+    // must not be read as the record already existing: nothing has reached the
+    // remote, and the machine holding this one is about to be torn down.
+    _git.run(['remote', 'set-url', 'origin', origin.path]);
+    final again = recordUpload(_git, _record(built));
+
+    expect(again, UploadRecordResult.alreadyRecorded);
+    expect(
+      Git(
+        origin.path,
+      ).run(['rev-parse', 'refs/tags/uploaded/v1.0.0+49^{commit}']),
+      built,
+      reason: 'the retry is the only chance this record has of being published',
+    );
+  });
+
+  test('accepts a commit that is not written as a full sha', () {
+    final built = _commit('built here');
+
+    // Callers pass what their manifest or their CI happens to hold. The tag
+    // side of the comparison is always `rev-parse` output, so anything short of
+    // normalizing this side reports the *repeat* as a collision — the first
+    // call succeeds and the ordinary retry is accused of naming a second
+    // commit, which is the loudest error here and would be false.
+    recordUpload(_git, _record('HEAD'), push: false);
+
+    expect(
+      recordUpload(_git, _record(built.substring(0, 8)), push: false),
+      UploadRecordResult.alreadyRecorded,
+    );
+    expect(
+      recordUpload(_git, _record('HEAD'), push: false),
+      UploadRecordResult.alreadyRecorded,
+    );
+  });
+
+  test('refuses a commit this clone does not have', () {
+    _commit('built here');
+    const absent = '1234567890123456789012345678901234567890';
+
+    // A shallow clone, or an upload job triggered separately from the build.
+    // git's own words for this are `fatal: bad object type.`
+    expect(
+      () => recordUpload(_git, _record(absent), push: false),
+      throwsA(
+        isA<ReleaseException>().having(
+          (e) => e.toString(),
+          'message',
+          allOf(contains(absent), contains('shallow')),
+        ),
+      ),
+    );
+  });
+
+  test('refuses an existing lightweight tag, even at the right commit', () {
+    final built = _commit('built here');
+    _git.run(['tag', 'uploaded/v1.0.0+49', built]);
+
+    // The commit matches, so a comparison by commit alone calls this recorded.
+    // It is not: a lightweight tag has no body, so the build number, the
+    // checksum and the store are absent from the thing standing as the record.
+    expect(
+      () => recordUpload(_git, _record(built), push: false),
+      throwsA(
+        isA<ReleaseException>().having(
+          (e) => e.toString(),
+          'message',
+          allOf(contains('lightweight'), contains('Nothing was uploaded')),
+        ),
+      ),
+    );
   });
 }
