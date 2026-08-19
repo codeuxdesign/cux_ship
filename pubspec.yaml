@@ -20,5 +20,6 @@ environment:
   sdk: ^3.12.2
 
 workspace:
+  - cux_buildnumber
   - cux_ship
   - cux_ship_verify

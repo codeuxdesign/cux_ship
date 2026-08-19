@@ -1,0 +1,27 @@
+name: cux_buildnumber
+description: >-
+  Monotonic build numbers shared through git refs — a Dart port of
+  git-buildnumber.sh v1.3. A library plus a bin/ entrypoint; the only runtime
+  dependency is git on PATH.
+repository: https://github.com/codeuxdesign/cux_ship
+issue_tracker: https://github.com/codeuxdesign/cux_ship/issues
+version: 0.1.0
+
+topics:
+  - git
+  - release
+  - ci
+
+# **No package dependencies, and that is the design.** The tool's one real
+# dependency is `git` on PATH. Everything the port adds over the shell script
+# is that the git argument lists — above all the push argv, where a `+` on a
+# refspec silently overrides `--force-with-lease` — are pure functions a unit
+# test can read, instead of strings interpolated at the call site.
+environment:
+  sdk: ^3.12.2
+
+resolution: workspace
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.25.0
