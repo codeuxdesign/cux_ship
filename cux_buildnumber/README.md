@@ -99,6 +99,24 @@ fatal in every command. Stricter than the original, invisible to the shared
 acceptance suite, and said out loud here so it is a choice rather than a
 discovery.
 
+## If this ever grows a salvage command
+
+Repositories that allocated before the chain carried reachability have commits
+no ref points at, and recovering them is a natural thing to want here. The trap
+is worth writing down before anyone implements it, because it is silent:
+
+**A pass that detects orphans by reachability must compute the whole set before
+it writes anything.** Tagging one orphan makes every commit it can reach
+reachable too, so a `--contains` test inside the same loop stops seeing the
+orphans it has not got to yet. Two abandoned consecutive builds is enough — no
+shared commit is required, only shared ancestry, which is the ordinary shape
+when consecutive builds are abandoned together.
+
+Both failure modes have been observed, in two repositories on the same
+afternoon: one loop skipped a second build number sharing a commit with the
+first, and the other would have skipped an ancestor had it tagged in the other
+order. Neither reported anything; the output looked complete.
+
 ## Testing
 
 `test/acceptance/test.sh` is the shell project's own suite, vendored unchanged

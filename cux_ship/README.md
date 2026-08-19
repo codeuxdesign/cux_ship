@@ -179,7 +179,13 @@ inference loses to what was typed.
 
 It also **verifies the artifact against the digest the manifest records**, which
 catches a `dist/` that was edited, half-written, or left over from an earlier
-build whose manifest was replaced without its artifact being rewritten. Every
+build whose manifest was replaced without its artifact being rewritten.
+
+**Hash the artifact you are going to upload, after signing.** If a producer
+records the digest before the signature is applied, this check fails on every
+real release rather than never — which is the sort of thing found at the worst
+possible moment. The reference producer copies the signed artifact into `dist/`
+and hashes that copy. Every
 flag correct and the bytes belonging to a different build is not a failure that
 announces itself. A build the manifest marks as coming from a dirty tree is
 refused unless you pass `--allow-dirty`, because the commit it names does not
