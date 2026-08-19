@@ -163,6 +163,39 @@ anywhere a later reader looks.
 --no-tag / --no-bump / --no-push / --dry-run
 ```
 
+### `--manifest` — name the build once
+
+If your build script writes a manifest beside its artifact, hand that over
+instead of retyping what is in it:
+
+```bash
+cux_ship appstore upload --platform ios --manifest dist/ios/manifest.json
+==> how-it-went-1.1.0-51.ipa — build 51 of 1.1.0 from fef65ce, digest verified
+```
+
+It supplies `--artifact` (or `--aab`), `--build-number`, `--version-name` and
+`--commit`. **Explicit flags still win** — a manifest is inference, and
+inference loses to what was typed.
+
+It also **verifies the artifact against the digest the manifest records**, which
+catches a `dist/` that was edited, half-written, or left over from an earlier
+build whose manifest was replaced without its artifact being rewritten. Every
+flag correct and the bytes belonging to a different build is not a failure that
+announces itself. A build the manifest marks as coming from a dirty tree is
+refused unless you pass `--allow-dirty`, because the commit it names does not
+then describe what is inside the artifact.
+
+Schema 1, and an unknown schema is refused rather than read optimistically —
+every value the upload is named by comes from this file:
+
+```json
+{ "schema": 1, "platform": "ios", "versionName": "1.1.0", "buildNumber": 51,
+  "gitSha": "fef65ce", "dirty": false, "artifact": "how-it-went-1.1.0-51.ipa",
+  "sha256": "…" }
+```
+
+`artifact` is relative to the manifest, so a `dist/` tree stays movable.
+
 ### Recording which commit an upload came from
 
 Off unless a repository asks for it:

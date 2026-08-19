@@ -26,6 +26,7 @@ import 'package:path/path.dart' as p;
 import 'src/appstore/cli.dart';
 import 'src/appstore/flatten_cli.dart';
 import 'src/asc_platforms.dart';
+import 'src/build_manifest.dart';
 import 'src/config.dart';
 import 'src/confirm.dart';
 import 'src/deps.dart';
@@ -88,6 +89,33 @@ CommandRunner<void> buildRunner() {
 bool _assumeYes(Command<void> command) =>
     command.globalResults?.flag('yes') ?? false;
 
+/// The build manifest `--manifest` names, read and verified, or null.
+///
+/// **Read once here rather than in each place that wants a value from it.** The
+/// verification hashes the artifact — 69 MB on one of these projects — so doing
+/// it per-consumer would be paid twice for no reason, and worse, two reads
+/// could disagree if `dist/` changed underneath.
+BuildManifest? _manifest(Command<void> command) {
+  final args = command.argResults!;
+  if (!args.options.contains('manifest')) {
+    return null;
+  }
+  final path = args.option('manifest');
+  if (path == null || path.isEmpty) {
+    return null;
+  }
+  final manifest = BuildManifest.read(path)
+    ..verify(
+      allowDirty:
+          args.options.contains('allow-dirty') && args.flag('allow-dirty'),
+    );
+  stderr.writeln(
+    '==> ${manifest.artifact} — build ${manifest.buildNumber} of '
+    '${manifest.versionName} from ${manifest.gitSha}, digest verified',
+  );
+  return manifest;
+}
+
 /// Writes the upload record, when the repository has asked for one.
 ///
 /// **Before the store command runs, not after.** A record written afterwards
@@ -106,6 +134,7 @@ void _recordUploadIfAsked(
   required ProjectConfig config,
   required String store,
   required String? Function() versionName,
+  BuildManifest? manifest,
 }) {
   final args = command.argResults!;
   if (command.name != 'upload' || !args.options.contains('commit')) {
@@ -118,10 +147,12 @@ void _recordUploadIfAsked(
     project.root,
     config.provenance,
     store: store,
-    version: opt('version-name') ?? versionName(),
-    build: opt('build-number'),
-    commit: opt('commit'),
-    checksum: null,
+    version: opt('version-name') ?? manifest?.versionName ?? versionName(),
+    build: opt('build-number') ?? manifest?.buildNumber,
+    // The manifest's gitSha is the whole reason --commit exists, so a caller
+    // that passed one has already answered the question the flag asks.
+    commit: opt('commit') ?? manifest?.gitSha,
+    checksum: manifest?.sha256Digest,
     // A dry run must not write a record: it deletes its store edit rather than
     // committing, so nothing is published and there is nothing to record.
     dryRun: args.options.contains('dry-run') && args.flag('dry-run'),
@@ -220,12 +251,14 @@ class _AscSubcommand extends Command<void> {
     final platform = argResults!.option('platform') ?? 'ios';
     final config = ProjectConfig.read(project.root);
     final store = config.appstore;
+    final manifest = _manifest(this);
     _recordUploadIfAsked(
       this,
       project: project,
       config: config,
       store: 'appstore/$platform',
       versionName: () => project.versionName,
+      manifest: manifest,
     );
     return runAsc(
       cmd,
@@ -233,7 +266,9 @@ class _AscSubcommand extends Command<void> {
       defaults: AscDefaults(
         bundleId: project.bundleIdFor(platform),
         bundleIdProblem: project.bundleIdProblemFor(platform),
-        versionName: project.versionName,
+        versionName: manifest?.versionName ?? project.versionName,
+        artifact: manifest?.artifactPath,
+        buildNumber: manifest?.buildNumber,
         changelog: project.changelog,
         metadata: project.appStoreMetadata,
         // Why the requirement could not be derived, when nothing declared one
@@ -315,19 +350,23 @@ class _PlaySubcommand extends Command<void> {
     final project = _project(this);
     final config = ProjectConfig.read(project.root);
     final store = config.play;
+    final manifest = _manifest(this);
     _recordUploadIfAsked(
       this,
       project: project,
       config: config,
       store: 'play',
       versionName: () => project.versionName,
+      manifest: manifest,
     );
     return runPlay(
       cmd,
       argResults!,
       defaults: PlayDefaults(
         packageName: project.androidPackage,
-        versionName: project.versionName,
+        versionName: manifest?.versionName ?? project.versionName,
+        artifact: manifest?.artifactPath,
+        buildNumber: manifest?.buildNumber,
         changelog: project.changelog,
         metadata: project.playMetadata,
         dataSafety: project.dataSafety,

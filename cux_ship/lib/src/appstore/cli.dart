@@ -11,10 +11,17 @@
 // now, which is why [runAsc] takes the mode as an argument instead of reading it
 // back out of [ArgResults].
 //
-// Invoked by a project's upload script, which has already checked the manifest,
-// the artifact digest and the provenance rules. This program does the API work
-// and nothing else — everything it needs arrives as an argument or, for the API
-// key, as an environment variable. It knows nothing about SOPS or manifests.
+// This program does the API work and nothing else: everything it needs arrives
+// as an argument or, for the API key, as an environment variable. It still
+// knows nothing about SOPS.
+//
+// **It used to know nothing about manifests either, and that has changed.** The
+// rule was that a project's upload script had already checked the manifest, the
+// artifact digest and the provenance rules. That held while every project had
+// such a script — and on this side no such script has ever existed, so an Apple
+// upload meant eight flags typed by hand, which in one afternoon produced three
+// consecutive failed uploads and a fourth where iOS went up as build 51 while
+// macOS went up as 52. `--manifest` is optional and an explicit flag still wins.
 //
 // The Apple counterpart of cux_ship_play, and deliberately shaped like it,
 // with one difference that is not cosmetic: **App Store Connect has no edit
@@ -202,6 +209,21 @@ ArgParser buildAscParser(AscCommand cmd) {
               'read when the repository declares provenance.record-uploads.',
         )
         ..addOption(
+          'manifest',
+          help:
+              'A build manifest to take --artifact, --build-number, '
+              '--version-name and --commit from, instead of typing them. The '
+              'artifact is verified against the digest it records. Explicit '
+              'flags still win.',
+        )
+        ..addFlag(
+          'allow-dirty',
+          negatable: false,
+          help:
+              'Upload a manifest whose build came from a dirty tree, where the '
+              'commit it names does not describe what is in the artifact.',
+        )
+        ..addOption(
           'beta-group',
           help:
               'TestFlight group to give the build to. An internal group needs '
@@ -263,6 +285,8 @@ class AscDefaults {
   const AscDefaults({
     this.bundleId,
     this.versionName,
+    this.artifact,
+    this.buildNumber,
     this.changelog,
     this.metadata,
     this.bundleIdProblem,
@@ -277,6 +301,12 @@ class AscDefaults {
   final String? versionName;
   final String? changelog;
   final String? metadata;
+
+  /// The artifact and build number a build manifest recorded, when the caller
+  /// resolved one. Both are overridden by an explicit flag — a manifest is
+  /// inference, and inference loses to what was typed.
+  final String? artifact;
+  final String? buildNumber;
 
   /// Why [bundleId] is null, when the caller knows something worth saying.
   ///
@@ -374,7 +404,7 @@ Future<void> runAsc(
   // Inference applies only where it makes sense. An upload publishes the
   // listing when there is one to publish; a promote never does, so the
   // metadata default is not offered to it.
-  final ipaPath = opt('artifact');
+  final ipaPath = opt('artifact') ?? defaults.artifact;
   // `--no-metadata` turns the inference off; it does not merely decline to add
   // one. Omitting `--metadata` never disabled the listing publish, because the
   // inference fills it from `store/appstore` whenever that directory exists —
@@ -398,7 +428,7 @@ Future<void> runAsc(
   }
 
   final versionName = opt('version-name') ?? defaults.versionName;
-  final buildNumber = opt('build-number');
+  final buildNumber = opt('build-number') ?? defaults.buildNumber;
   File? artifact;
   if (ipaPath != null) {
     if (buildNumber == null || versionName == null) {
