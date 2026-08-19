@@ -11,11 +11,18 @@
 // `--list-tracks` — are subcommands now, which is why [runPlay] takes the mode
 // as an argument instead of reading it back out of [ArgResults].
 //
-// Invoked by a project's upload script, which has already checked the manifest,
-// the artifact digest and the provenance rules. This program does the API work
-// and nothing else — everything it needs arrives as an argument or, for the
-// service account, as an environment variable. It knows nothing about SOPS or
-// manifests.
+// This program does the API work and nothing else: everything it needs arrives
+// as an argument or, for the service account, as an environment variable. It
+// still knows nothing about SOPS.
+//
+// **It used to know nothing about manifests either, and that has changed.** The
+// rule was that a project's upload script had already checked the manifest, the
+// artifact digest and the provenance rules — which held while every project had
+// such a script. It stopped holding when provenance moved into `cux_ship`, since
+// a record of which commit shipped cannot be written by a command forbidden to
+// know the commit; and it never held for the Apple side, where the script it
+// delegated to does not exist. `--manifest` is optional and an explicit flag
+// still wins, so a project with its own script is unaffected.
 //
 // The Play edit is a transaction: open one, attach a bundle, point a track at
 // it, commit. Nothing is visible to anyone until the commit, which is what
@@ -863,6 +870,28 @@ ArgParser buildPlayParser(PlayCommand cmd) {
       parser
         ..addOption('aab', help: 'Path to the signed app bundle.')
         ..addOption(
+          'commit',
+          help:
+              'The commit this artifact was BUILT from — a build manifest\'s '
+              'gitSha, never a commit found by searching for a version. Only '
+              'read when the repository declares provenance.record-uploads.',
+        )
+        ..addOption(
+          'manifest',
+          help:
+              'A build manifest to take --aab, --build-number, --version-name '
+              'and --commit from, instead of typing them. The artifact is '
+              'verified against the digest it records. Explicit flags still '
+              'win.',
+        )
+        ..addFlag(
+          'allow-dirty',
+          negatable: false,
+          help:
+              'Upload a manifest whose build came from a dirty tree, where the '
+              'commit it names does not describe what is in the artifact.',
+        )
+        ..addOption(
           'build-number',
           help: 'Expected versionCode; verified against the bundle.',
         )
@@ -914,6 +943,8 @@ class PlayDefaults {
   const PlayDefaults({
     this.packageName,
     this.versionName,
+    this.artifact,
+    this.buildNumber,
     this.changelog,
     this.metadata,
     this.dataSafety,
@@ -928,6 +959,12 @@ class PlayDefaults {
   final String? changelog;
   final String? metadata;
   final String? dataSafety;
+
+  /// The artifact and build number a build manifest recorded, when the caller
+  /// resolved one. Both are overridden by an explicit flag — a manifest is
+  /// inference, and inference loses to what was typed.
+  final String? artifact;
+  final String? buildNumber;
 
   /// What the repository declares the listing must carry, or null when it
   /// declares nothing. Resolved by the runner, which knows about
@@ -988,8 +1025,8 @@ Future<void> runPlay(
   // Inference applies only where it makes sense. An upload publishes the
   // listing and the data-safety declaration when the project has them; a
   // promote touches neither, so those defaults are not offered to it.
-  final aabPath = opt('aab');
-  final buildNumber = opt('build-number');
+  final aabPath = opt('aab') ?? defaults.artifact;
+  final buildNumber = opt('build-number') ?? defaults.buildNumber;
   final upload = cmd == PlayCommand.upload;
   final metadataPath = upload ? (opt('metadata') ?? defaults.metadata) : null;
   final dataSafetyPath = upload

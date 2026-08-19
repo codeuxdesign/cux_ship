@@ -46,6 +46,7 @@
 // that will do the upload, and tagging afterwards makes the failure mode
 // "shipped but unprovable" — an artifact in front of users whose commit nobody
 // can name.
+import 'config.dart' show ProvenanceConfig;
 import 'release.dart' show Git, ReleaseException, resolveCommit, taggedCommit;
 
 /// The tag recording that [commit] reached a store.
@@ -195,6 +196,119 @@ UploadRecordResult recordUpload(
   }
 
   return result;
+}
+
+/// Records an upload if the repository asked for it, and does nothing if not.
+///
+/// **Called before the store is contacted, from the command that contacts it.**
+/// An earlier design had each consuming repository write its own record from a
+/// shell wrapper for one store and let `cux_ship` do the other — one guarantee
+/// implemented twice, in two languages, and skipped entirely by any CI job that
+/// called the uploader directly. The refusal in [recordUpload] only protects
+/// anything from the path that actually uploads.
+///
+/// Returns null when recording is off, which is the default: writing pushes a
+/// tag to `origin`, so a repository that has not asked for it would suddenly
+/// need push credentials on its upload job.
+UploadRecordResult? recordUploadIfConfigured(
+  String repoRoot,
+  ProvenanceConfig config, {
+  required String store,
+  required String? version,
+  required String? build,
+  required String? commit,
+  required String? checksum,
+  bool dryRun = false,
+}) {
+  if (!config.recordUploads) {
+    return null;
+  }
+
+  // Named individually rather than as "missing arguments", because the fix
+  // differs: --commit is the caller's to pass, while a missing version or build
+  // usually means the artifact was not described to this command at all.
+  if (commit == null || commit.isEmpty) {
+    throw ReleaseException(
+      'provenance.record-uploads is on and --commit was not given.\n'
+      'Pass the commit the artifact was BUILT from — your build manifest\'s '
+      'gitSha. It is not inferred from HEAD on purpose: an upload job often '
+      'runs on a different checkout from the build, and a record naming the '
+      'wrong commit is worse than none.',
+    );
+  }
+  if (version == null || build == null) {
+    throw ReleaseException(
+      'provenance.record-uploads is on, and the ${version == null ? 'version' : 'build number'} '
+      'is not known here — pass --version-name and --build-number so the tag '
+      'can be named.',
+    );
+  }
+
+  return recordUpload(
+    Git(repoRoot),
+    UploadRecord(
+      name: config.tagFor(version: version, build: build),
+      commit: commit,
+      annotation: <String>[
+        'build $build of $version',
+        'store: $store',
+        if (checksum != null) ...<String>['sha256 $checksum'],
+        // Deliberately not a timestamp: the tag object carries its own, and a
+        // second one in the body is a thing that can disagree with it.
+      ].join('\n'),
+    ),
+    dryRun: dryRun,
+  );
+}
+
+/// The refs a build-number allocator keeps, and what `remote.origin.fetch` has
+/// to carry for an ordinary `git fetch` to bring them.
+///
+/// **A clone does not get these.** `refs/buildnumbers/*` and
+/// `refs/notes/buildnumbers` are outside `refs/heads` and `refs/tags`, so the
+/// default refspec ignores them entirely: a fresh clone has no allocation
+/// history until something fetches it explicitly, and the allocator is the only
+/// thing that does. That is survivable while the allocator is the only reader —
+/// and it stops being survivable the moment the chain is what keeps built
+/// commits alive, because then a clone that never fetched the chain is a clone
+/// whose `git gc` sees nothing holding them.
+const buildnumberFetchRefspecs = <String>[
+  '+refs/buildnumbers/*:refs/buildnumbers/*',
+  '+refs/notes/buildnumbers:refs/notes/buildnumbers',
+];
+
+/// Adds [buildnumberFetchRefspecs] to `remote.<remote>.fetch`, and says what it
+/// did. Idempotent.
+///
+/// **Added rather than replaced**, and with `--add`, because the branch refspec
+/// already there is the one every other git operation depends on — a plain
+/// `git config remote.origin.fetch <value>` overwrites the whole multi-valued
+/// key and would leave a repository that can fetch build numbers and not
+/// branches.
+List<String> configureBuildnumberRefspecs(
+  Git git, {
+  String remote = 'origin',
+  bool dryRun = false,
+}) {
+  final key = 'remote.$remote.fetch';
+  final existing = git
+      .run(['config', '--get-all', key], allowFailure: true)
+      .split('\n')
+      .where((line) => line.isNotEmpty)
+      .toSet();
+
+  final log = <String>[];
+  for (final refspec in buildnumberFetchRefspecs) {
+    if (existing.contains(refspec)) {
+      log.add('already configured: $refspec');
+      continue;
+    }
+    if (!dryRun) {
+      git.run(['config', '--add', key, refspec]);
+    }
+    log.add('${dryRun ? 'would add' : 'added'}: $refspec');
+  }
+  return log;
 }
 
 /// Whether the tag is a tag *object* rather than a ref pointing straight at a

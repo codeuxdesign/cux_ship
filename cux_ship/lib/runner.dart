@@ -26,6 +26,7 @@ import 'package:path/path.dart' as p;
 import 'src/appstore/cli.dart';
 import 'src/appstore/flatten_cli.dart';
 import 'src/asc_platforms.dart';
+import 'src/build_manifest.dart';
 import 'src/config.dart';
 import 'src/confirm.dart';
 import 'src/deps.dart';
@@ -34,6 +35,7 @@ import 'src/listing_requirements.dart';
 import 'src/placed.dart';
 import 'src/play/cli.dart';
 import 'src/project.dart';
+import 'src/provenance.dart';
 import 'src/release.dart';
 import 'src/secrets.dart';
 
@@ -86,6 +88,82 @@ CommandRunner<void> buildRunner() {
 /// The `--yes` flag, read off the top-level results a subcommand can reach.
 bool _assumeYes(Command<void> command) =>
     command.globalResults?.flag('yes') ?? false;
+
+/// The build manifest `--manifest` names, read and verified, or null.
+///
+/// **Read once here rather than in each place that wants a value from it.** The
+/// verification hashes the artifact — 69 MB on one of these projects — so doing
+/// it per-consumer would be paid twice for no reason, and worse, two reads
+/// could disagree if `dist/` changed underneath.
+BuildManifest? _manifest(Command<void> command) {
+  final args = command.argResults!;
+  if (!args.options.contains('manifest')) {
+    return null;
+  }
+  final path = args.option('manifest');
+  if (path == null || path.isEmpty) {
+    return null;
+  }
+  final manifest = BuildManifest.read(path)
+    ..verify(
+      allowDirty:
+          args.options.contains('allow-dirty') && args.flag('allow-dirty'),
+    );
+  stderr.writeln(
+    '==> ${manifest.artifact} — build ${manifest.buildNumber} of '
+    '${manifest.versionName} from ${manifest.gitSha}, digest verified',
+  );
+  return manifest;
+}
+
+/// Writes the upload record, when the repository has asked for one.
+///
+/// **Before the store command runs, not after.** A record written afterwards
+/// makes the failure mode "shipped but unprovable" — an artifact in front of
+/// users whose commit nobody can name — while a record written first fails the
+/// upload it could not vouch for. The second is recoverable and the first is
+/// not.
+///
+/// Only for `upload`; a promote moves a build the store already holds and is
+/// not the moment anything was published *from* this repository. Only when the
+/// subcommand actually carries the options, so a parser that never declared
+/// `--commit` is skipped rather than interrogated.
+void _recordUploadIfAsked(
+  Command<void> command, {
+  required ProjectContext project,
+  required ProjectConfig config,
+  required String store,
+  required String? Function() versionName,
+  BuildManifest? manifest,
+}) {
+  final args = command.argResults!;
+  if (command.name != 'upload' || !args.options.contains('commit')) {
+    return;
+  }
+  String? opt(String name) =>
+      args.options.contains(name) ? args.option(name) : null;
+
+  final result = recordUploadIfConfigured(
+    project.root,
+    config.provenance,
+    store: store,
+    version: opt('version-name') ?? manifest?.versionName ?? versionName(),
+    build: opt('build-number') ?? manifest?.buildNumber,
+    // The manifest's gitSha is the whole reason --commit exists, so a caller
+    // that passed one has already answered the question the flag asks.
+    commit: opt('commit') ?? manifest?.gitSha,
+    checksum: manifest?.sha256Digest,
+    // A dry run must not write a record: it deletes its store edit rather than
+    // committing, so nothing is published and there is nothing to record.
+    dryRun: args.options.contains('dry-run') && args.flag('dry-run'),
+  );
+  if (result != null) {
+    stderr.writeln(switch (result) {
+      UploadRecordResult.created => '==> recorded this upload',
+      UploadRecordResult.alreadyRecorded => '==> upload already recorded',
+    });
+  }
+}
 
 /// The `--app-dir` option, falling back to `CUX_SHIP_APP_DIR`.
 ///
@@ -171,14 +249,26 @@ class _AscSubcommand extends Command<void> {
   Future<void> run() {
     final project = _project(this);
     final platform = argResults!.option('platform') ?? 'ios';
-    final store = ProjectConfig.read(project.root).appstore;
+    final config = ProjectConfig.read(project.root);
+    final store = config.appstore;
+    final manifest = _manifest(this);
+    _recordUploadIfAsked(
+      this,
+      project: project,
+      config: config,
+      store: 'appstore/$platform',
+      versionName: () => project.versionName,
+      manifest: manifest,
+    );
     return runAsc(
       cmd,
       argResults!,
       defaults: AscDefaults(
         bundleId: project.bundleIdFor(platform),
         bundleIdProblem: project.bundleIdProblemFor(platform),
-        versionName: project.versionName,
+        versionName: manifest?.versionName ?? project.versionName,
+        artifact: manifest?.artifactPath,
+        buildNumber: manifest?.buildNumber,
         changelog: project.changelog,
         metadata: project.appStoreMetadata,
         // Why the requirement could not be derived, when nothing declared one
@@ -258,13 +348,25 @@ class _PlaySubcommand extends Command<void> {
   @override
   Future<void> run() {
     final project = _project(this);
-    final store = ProjectConfig.read(project.root).play;
+    final config = ProjectConfig.read(project.root);
+    final store = config.play;
+    final manifest = _manifest(this);
+    _recordUploadIfAsked(
+      this,
+      project: project,
+      config: config,
+      store: 'play',
+      versionName: () => project.versionName,
+      manifest: manifest,
+    );
     return runPlay(
       cmd,
       argResults!,
       defaults: PlayDefaults(
         packageName: project.androidPackage,
-        versionName: project.versionName,
+        versionName: manifest?.versionName ?? project.versionName,
+        artifact: manifest?.artifactPath,
+        buildNumber: manifest?.buildNumber,
         changelog: project.changelog,
         metadata: project.playMetadata,
         dataSafety: project.dataSafety,
@@ -285,9 +387,54 @@ class _PlaySubcommand extends Command<void> {
 
 // ----------------------------------------------------------------- release
 
+/// Teaches this clone to fetch the refs a build-number allocator keeps.
+///
+/// **A separate command rather than something a release does silently**, and
+/// the reason is that it edits `.git/config`, which is the one piece of state a
+/// release command has no business changing on its own. Run once per clone —
+/// and per worktree only if that worktree has its own remote configuration,
+/// which the ordinary one does not.
+class _RefspecsCommand extends Command<void> {
+  _RefspecsCommand() {
+    argParser
+      ..addOption(
+        'remote',
+        defaultsTo: 'origin',
+        help: 'The remote whose fetch refspecs are extended.',
+      )
+      ..addFlag(
+        'dry-run',
+        negatable: false,
+        help: 'Say what would change, and change nothing.',
+      );
+  }
+
+  @override
+  String get name => 'refspecs';
+
+  @override
+  String get description =>
+      'Configure this clone to fetch refs/buildnumbers/* and the build-number '
+      'notes ref, which a default clone ignores.';
+
+  @override
+  void run() {
+    final project = _project(this);
+    final log = configureBuildnumberRefspecs(
+      Git(project.root),
+      remote: argResults!.option('remote')!,
+      dryRun: argResults!.flag('dry-run'),
+    );
+    for (final line in log) {
+      stdout.writeln('==> $line');
+    }
+  }
+}
+
 class _ReleaseCommand extends Command<void> {
   _ReleaseCommand() {
     addSubcommand(_FinishCommand());
+    addSubcommand(_RefspecsCommand());
   }
 
   @override
