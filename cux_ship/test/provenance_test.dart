@@ -168,6 +168,67 @@ void main() {
     expect(_git.run(['tag', '-l', 'v1.0.0']), 'v1.0.0');
   });
 
+  test('refuses a collision raised on another machine', () {
+    // **The case the push exists for, and the only one the local comparison
+    // cannot see.** Concurrent CI on two runners, one build number allocated
+    // twice: this clone has no tag at all, so every local check passes and the
+    // tag is created cleanly. What stops the upload is the remote rejecting a
+    // tag it already holds at a different commit. Without this test the push is
+    // covered only by the happy path, where a no-op and a guard look identical.
+    final origin = Directory.systemTemp.createTempSync('cux_ship_origin');
+    addTearDown(() => origin.deleteSync(recursive: true));
+    Process.runSync('git', ['init', '-q', '--bare', origin.path]);
+    _git.run(['remote', 'add', 'origin', origin.path]);
+
+    final ours = _commit('our artifact');
+    final theirs = _commit('their artifact');
+
+    // The other runner got there first. Only origin knows.
+    _git.run(['tag', '-a', 'uploaded/v1.0.0+49', theirs, '-m', 'theirs']);
+    _git.run(['push', '-q', 'origin', 'refs/tags/uploaded/v1.0.0+49']);
+    _git.run(['tag', '-d', 'uploaded/v1.0.0+49']);
+
+    expect(
+      () => recordUpload(_git, _record(ours)),
+      throwsA(isA<ReleaseException>()),
+      reason: 'the remote holds this name at another commit',
+    );
+
+    expect(
+      Git(
+        origin.path,
+      ).run(['rev-parse', 'refs/tags/uploaded/v1.0.0+49^{commit}']),
+      theirs,
+      reason: 'and the record that was already published must not move',
+    );
+  });
+
+  test('a collision is its own exception type, so a wrapper can tell', () {
+    // Release scripts tolerate a store refusing a build it already holds — the
+    // upload runs under `|| exitCode=$?` so a re-run is a no-op. A collision
+    // exiting through that same path is reported as the tolerable kind and the
+    // release finishes green, which turns the loudest error here into the
+    // quietest. The type is what lets a wrapper distinguish them.
+    final first = _commit('first artifact');
+    recordUpload(_git, _record(first), push: false);
+    final second = _commit('second artifact');
+
+    expect(
+      () => recordUpload(_git, _record(second), push: false),
+      throwsA(isA<UploadCollisionException>()),
+    );
+
+    // The refusals that are *not* collisions must stay ordinary, or the
+    // distinction buys nothing.
+    expect(
+      () =>
+          recordUpload(_git, _record(first, name: 'refs/tags/x'), push: false),
+      throwsA(
+        allOf(isA<ReleaseException>(), isNot(isA<UploadCollisionException>())),
+      ),
+    );
+  });
+
   test('refuses a name given as a ref path', () {
     final built = _commit('built here');
 

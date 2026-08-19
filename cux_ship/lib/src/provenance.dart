@@ -11,8 +11,19 @@
 //
 // That half is fixed upstream in git-buildnumber, by giving the allocation chain
 // the built commit as a parent. This file is the other half: **an annotated tag
-// written when an artifact actually reaches a store**, so the repository records
+// written when an artifact is handed to a store**, so the repository records
 // what was published rather than only what was built.
+//
+// **What the tag means, stated precisely, because it is not what the name
+// suggests.** It is written *before* the store is contacted — see the third
+// decision below — so it means "an upload was attempted, with this artifact, at
+// this commit". It does not mean the store accepted. A signature refusal or an
+// API validation failure leaves the tag standing over an artifact that never
+// reached anyone. That is the right trade, because the alternative failure mode
+// is "shipped but unprovable", but anything reading these tags — a promotion
+// script, a person scanning the tag list — has to read them as attempts. A
+// consumer that treats the tag as proof of acceptance is making an assumption
+// this file does not support.
 //
 // Three decisions, each of which has a failure behind it.
 //
@@ -65,6 +76,21 @@ class UploadRecord {
   final String annotation;
 }
 
+/// One build number naming two commits — the thing [recordUpload] exists to
+/// refuse.
+///
+/// **Its own type so a wrapper can tell it apart from an ordinary upload
+/// failure**, which matters more than it looks. Release scripts routinely
+/// tolerate a store refusing a build it already has — re-running a release is
+/// meant to be a no-op, so the upload is called under `|| exitCode=$?` and the
+/// pipeline carries on. A collision exiting through that same path is reported
+/// as the tolerable kind and the release finishes green, which turns the
+/// loudest error here into the quietest. A distinct type gives the CLI a
+/// distinct exit code, and the wrapper something to match on.
+class UploadCollisionException extends ReleaseException {
+  UploadCollisionException(super.message);
+}
+
 /// Outcome of [recordUpload], so a caller can report without re-deriving it.
 enum UploadRecordResult {
   /// The tag did not exist, and now does — or under `dryRun`, would.
@@ -86,6 +112,14 @@ enum UploadRecordResult {
 /// success will publish one artifact while the record names another. Where a
 /// build number can be allocated twice — concurrent CI on different commits, or
 /// a forced number — that is precisely how it happens.
+/// **[push] is for tests, and an upload path must never pass false.** The push
+/// is not bookkeeping here — it is the only guard that sees a collision raised
+/// on another machine. Locally this function can compare against a tag this
+/// clone happens to have; the concurrent-CI case it exists for is precisely the
+/// one where the other allocation is on a different runner, and the *only* way
+/// this process learns of it is the remote rejecting the push. Passing false to
+/// save a network round trip keeps every local check and silently forfeits the
+/// cross-machine one, with nothing to indicate the guarantee is gone.
 UploadRecordResult recordUpload(
   Git git,
   UploadRecord record, {
@@ -108,7 +142,7 @@ UploadRecordResult recordUpload(
   final existing = taggedCommit(git, record.name);
 
   if (existing != null && existing != commit) {
-    throw ReleaseException(
+    throw UploadCollisionException(
       'Tag ${record.name} already names a different commit.\n'
       '  it points at:   $existing\n'
       '  this artifact:  $commit\n'
