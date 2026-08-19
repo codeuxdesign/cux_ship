@@ -194,13 +194,104 @@ void main() {
       final afterFirst = read('pubspec.yaml');
 
       final second = finishRelease(_git, options);
-      expect(second, contains('v1.0.3 already exists — leaving it alone'));
+      expect(second, anyElement(startsWith('v1.0.3 already exists at ')));
       expect(
         second,
         contains('pubspec.yaml is already past 1.0.3 — not bumping'),
       );
       expect(read('pubspec.yaml'), afterFirst);
       expect('\n${read('CHANGELOG.md')}'.split('\n## 1.0.4').length - 1, 1);
+    });
+
+    test('a repeat pushes a tag the first run created but failed to push', () {
+      // The tag existing *locally* says nothing about the remote holding it,
+      // and the release tag is what a later reader resolves a version against.
+      // Pushing only on the run that created the tag means one failed push is
+      // permanent: every repeat finds it locally and finishes green.
+      repo();
+      final head = _git.run(['rev-parse', 'HEAD']);
+      final origin = Directory.systemTemp.createTempSync('cux_ship_origin');
+      addTearDown(() => origin.deleteSync(recursive: true));
+      Process.runSync('git', ['init', '-q', '--bare', origin.path]);
+      _git.run(['remote', 'add', 'origin', '${origin.path}-does-not-exist']);
+
+      final options = FinishOptions(commit: head, version: '1.0.3');
+      expect(
+        () => finishRelease(_git, options),
+        throwsA(isA<ReleaseException>()),
+      );
+
+      _git.run(['remote', 'set-url', 'origin', origin.path]);
+      expect(
+        finishRelease(_git, options),
+        anyElement(contains('pushed v1.0.3')),
+      );
+      expect(
+        Git(origin.path).run(['rev-parse', 'refs/tags/v1.0.3^{commit}']),
+        head,
+      );
+    });
+
+    test('a short sha names the same release as the full one', () {
+      // Whatever the caller passes is compared against `rev-parse` output, so
+      // without normalizing it the *repeat* is the thing that breaks, and it
+      // breaks by accusing the release of naming a second commit.
+      repo();
+      final head = _git.run(['rev-parse', 'HEAD']);
+
+      finishRelease(
+        _git,
+        FinishOptions(commit: head, version: '1.0.3', push: false),
+      );
+
+      expect(
+        finishRelease(
+          _git,
+          FinishOptions(
+            commit: head.substring(0, 8),
+            version: '1.0.3',
+            push: false,
+          ),
+        ),
+        anyElement(startsWith('v1.0.3 already exists at ')),
+      );
+    });
+
+    test('refuses when the tag already names a different commit', () {
+      // Leaving an existing tag alone is right when it names this release —
+      // that is what makes a retry safe. It is wrong when the same version has
+      // been recorded against a different commit, because carrying on leaves
+      // whichever one is wrong standing as the record of what shipped.
+      repo();
+      final first = _git.run(['rev-parse', 'HEAD']);
+      finishRelease(
+        _git,
+        FinishOptions(commit: first, version: '1.0.3', push: false),
+      );
+
+      write('another.txt', 'more work');
+      _git.run(['add', '-A']);
+      _git.run(['commit', '-q', '-m', 'second']);
+      final second = _git.run(['rev-parse', 'HEAD']);
+
+      expect(
+        () => finishRelease(
+          _git,
+          FinishOptions(commit: second, version: '1.0.3', push: false),
+        ),
+        throwsA(
+          isA<ReleaseException>().having(
+            (e) => e.toString(),
+            'message',
+            allOf(contains(first), contains(second)),
+          ),
+        ),
+      );
+      expect(
+        _git.run(['rev-parse', 'refs/tags/v1.0.3^{commit}']),
+        first,
+        reason: 'the refusal must not move the tag it refused to overwrite',
+      );
     });
 
     test('a branch already past the released version is not bumped', () {

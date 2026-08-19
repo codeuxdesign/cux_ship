@@ -246,10 +246,26 @@ List<String> finishRelease(Git git, FinishOptions options) {
   // ------------------------------------------------------------------ the tag
 
   if (options.tag) {
-    if (git.run(['tag', '-l', tagName]).isNotEmpty) {
-      log.add('$tagName already exists — leaving it alone');
+    // **Existence is not the question — where it points is.** Leaving an
+    // existing tag alone is right when it already names this release, and is
+    // how a half-finished run is safely repeated. It is wrong when the name
+    // names a *different* commit: that is one version recorded against two
+    // commits, and carrying on would leave whichever is wrong standing as the
+    // record of what shipped.
+    final commit = resolveCommit(git, options.commit);
+    final tagged = taggedCommit(git, tagName);
+    if (tagged != null && tagged != commit) {
+      throw ReleaseException(
+        'Tag $tagName already names a different commit.\n'
+        '  it points at:  $tagged\n'
+        '  this release:  $commit\n'
+        'Retag deliberately or pick another version; nothing was changed.',
+      );
+    }
+    if (tagged != null) {
+      log.add('$tagName already exists at ${_short(tagged)}');
     } else if (options.dryRun) {
-      log.add('would tag $tagName at ${_short(options.commit)}');
+      log.add('would tag $tagName at ${_short(commit)}');
     } else {
       final build = options.buildNumber == null
           ? ''
@@ -258,15 +274,23 @@ List<String> finishRelease(Git git, FinishOptions options) {
         'tag',
         '-a',
         tagName,
-        options.commit,
+        commit,
         '-m',
         '${options.version}$build released to ${options.destination}',
       ]);
       log.add('tagged $tagName');
-      if (options.push && hasOrigin) {
-        git.run(['push', 'origin', tagName]);
-        log.add('pushed $tagName');
-      }
+    }
+    // **Outside the branch above, because the tag existing locally says nothing
+    // about the remote having it.** The previous shape pushed only on the run
+    // that created the tag, so a run whose push failed left a tag that no later
+    // run would ever try again: every repeat found it locally, reported
+    // "leaving it alone", and finished green while the remote stayed without
+    // it. Pushing a tag the remote already has at the same commit is a no-op,
+    // and pushing one it holds at a *different* commit is rejected — which is
+    // the collision above, caught on the one side of it this process cannot see.
+    if (options.push && hasOrigin && !options.dryRun) {
+      git.run(['push', 'origin', 'refs/tags/$tagName']);
+      log.add('pushed $tagName');
     }
   }
 
@@ -342,3 +366,47 @@ List<String> finishRelease(Git git, FinishOptions options) {
 }
 
 String _short(String sha) => sha.length > 8 ? sha.substring(0, 8) : sha;
+
+/// The commit a tag resolves to, or null when the tag is absent.
+///
+/// `^{commit}` because these are annotated tags: plain `rev-parse <tag>` yields
+/// the tag object, which never equals a commit SHA and would report every
+/// re-run as a collision with itself.
+String? taggedCommit(Git git, String name) {
+  if (!git.ok(['rev-parse', '--verify', '--quiet', 'refs/tags/$name'])) {
+    return null;
+  }
+  return git.run(['rev-parse', 'refs/tags/$name^{commit}']);
+}
+
+/// [spec] as the full 40-character SHA of a commit that exists here.
+///
+/// **Every comparison against a tag has to go through this**, because the other
+/// side of that comparison is `rev-parse` output and is therefore always full
+/// and always lowercase. Compare it against what a caller happened to pass —
+/// `HEAD`, a short SHA, a branch name, a SHA some tool upper-cased — and the
+/// first run succeeds while the legitimate repeat is accused of naming a second
+/// commit. That accusation is the loudest error either of these functions can
+/// raise, and it would be false.
+///
+/// It also converts the absent-commit case from git's `fatal: bad object type.`
+/// into something that says which commit and where to look. A commit missing
+/// from the checkout is the ordinary consequence of a shallow clone or of an
+/// upload job triggered separately from the build that produced the artifact.
+String resolveCommit(Git git, String spec) {
+  final result = git.run([
+    'rev-parse',
+    '--verify',
+    '--quiet',
+    '$spec^{commit}',
+  ], allowFailure: true);
+  if (result.isEmpty) {
+    throw ReleaseException(
+      '"$spec" does not name a commit in ${git.root}.\n'
+      'If this is a shallow or partial clone, or a job that did not check out '
+      'the branch the artifact was built from, the commit is simply not here '
+      'yet — deepen the clone rather than picking a different commit.',
+    );
+  }
+  return result;
+}
