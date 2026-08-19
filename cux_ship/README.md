@@ -32,13 +32,14 @@ note is too long.
 
 ```
 cux_ship appstore upload            play upload            release finish
-         appstore promote           play promote           screenshots flatten
-         appstore builds            play tracks            verify
-         appstore versions          play listing           secrets add
-         appstore screenshot-types  play version-code      secrets check
-         appstore build-number                             secrets list
-         appstore wait                                     secrets remove
-         appstore signing                                  secrets exec
+         appstore promote           play promote           release refspecs
+         appstore builds            play tracks            screenshots flatten
+         appstore versions          play listing           verify
+         appstore screenshot-types  play version-code      secrets add
+         appstore build-number                             secrets check
+         appstore wait                                     secrets list
+         appstore signing                                  secrets remove
+                                                           secrets exec
                                                            secrets place
                                                            secrets clean
                                                            secrets pack
@@ -140,16 +141,83 @@ means that state never exists.
 Always a patch bump, because it is the only choice that cannot be wrong before
 the work exists. Calling it a 1.1.0 instead is an ordinary commit afterwards.
 
-Everything about it is idempotent — an existing tag is left alone, and a branch
-already past the released version is not bumped — because a release is exactly
-the situation where something fails half way and gets run again.
+Repeating it is safe, because a release is exactly the situation where something
+fails half way and gets run again: a tag that already names **this** commit is
+fine, and a branch already past the released version is not bumped.
+
+**A tag that names a different commit is an error**, and so is the bump with it,
+`--dry-run` included. That is one version recorded against two commits, so one
+of them is wrong and this refuses rather than choosing; retag deliberately.
+
+**A repeat also pushes a tag an earlier run created but failed to push.** That
+used to be permanent: the push ran only on the run that created the tag, so
+every later run found it locally, said it was leaving it alone, and finished
+green while the remote never received it — leaving the release untagged
+anywhere a later reader looks.
 
 ```
---commit       what to tag; defaults to HEAD
+--commit       what to tag; defaults to HEAD. Any commit-ish; resolved before
+               it is compared, so a short sha or HEAD names what you meant
 --version      what was released; defaults to that commit's pubspec.yaml
 --branch       where the bump belongs; defaults to main
 --no-tag / --no-bump / --no-push / --dry-run
 ```
+
+### Recording which commit an upload came from
+
+Off unless a repository asks for it:
+
+```yaml
+# .cux-ship.yaml
+provenance:
+  record-uploads: true
+```
+
+With it on, `play upload` and `appstore upload` write an annotated tag naming
+the commit the artifact was **built from**, before contacting the store:
+
+```bash
+cux_ship play upload --commit "$(jq -r .gitSha dist/android/manifest.json)"
+```
+
+**`--commit` is not optional and is not inferred.** An upload job routinely runs
+on a different checkout from the build — a `workflow_run` trigger, a repackaging
+step, a retry hours later — so `HEAD` is not the answer, and a record naming the
+wrong commit is worse than no record at all. It is your build manifest's
+`gitSha`.
+
+**Before the store rather than after**, because a record written afterwards
+makes the failure mode *shipped but unprovable* — an artifact in front of users
+whose commit nobody can name. Written first, a failure fails an upload that had
+not happened yet. It follows that the tag records an upload **attempted**, not
+accepted: a signature refusal leaves it standing over an artifact nobody
+received. Read them as attempts.
+
+The same name at a different commit is a hard error — one build number reaching
+two commits — and it raises `UploadCollisionException`, distinct from an
+ordinary failure so a wrapper that tolerates "this build is already uploaded"
+does not tolerate this too.
+
+The default name is `uploaded/v{version}+{build}`, and the namespace is a
+correctness property rather than a preference: a release guard that asks "has
+this version shipped" by taking the highest `v*` tag reads a bare `v1.0.4+56` as
+a released 1.0.4 — `sort -V` ranks build metadata *above* the version it
+annotates — and then refuses to build 1.0.4, naming a release that never
+happened. Override with `provenance.tag`, which must contain `{build}`.
+
+### `release refspecs` — so a clone can see the build numbers
+
+`refs/buildnumbers/*` and `refs/notes/buildnumbers` are outside `refs/heads` and
+`refs/tags`, so a clone's default refspec ignores them: a fresh clone has no
+allocation history until something fetches it explicitly.
+
+```bash
+cux_ship release refspecs        # once per clone
+```
+
+It appends to `remote.origin.fetch` and never replaces it — the branch refspec
+already there is what every other git operation depends on. `--remote` names a
+different remote, `--dry-run` says what it would do.
 
 ### `appstore signing` reads the account, not the app
 
