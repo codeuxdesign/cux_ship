@@ -1,9 +1,19 @@
 # Changelog
 
-## 0.1.0
+## 0.1.0-dev.1
 
-First release. A Dart port of [`git-buildnumber.sh`][gbn] v1.3, and a drop-in
-replacement for it — same refs, same commands, same stdout.
+First publish, and a pre-release twice over. A Dart port of
+[`git-buildnumber.sh`][gbn] v1.3, and a drop-in replacement for it — same refs,
+same commands, same stdout.
+
+**Published so a second repository can try it**, which is the thing it most
+needs and the thing its own test suite cannot supply. The acceptance suite is
+the shell project's own, so it proves this behaves like the script on the cases
+the script's authors thought to write down; it cannot prove the port behaves
+like the script in a repository neither of them has seen. Until it has run
+somewhere else, treat `0.1.0-dev.1` as an invitation rather than a
+recommendation — and keep the shell script available to fall back to, which
+costs nothing, since both write the same refs and can be alternated freely.
 
 [gbn]: https://github.com/hpoul/git-buildnumber
 
