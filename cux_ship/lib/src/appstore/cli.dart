@@ -195,6 +195,13 @@ ArgParser buildAscParser(AscCommand cmd) {
           help: 'CFBundleVersion; verified against what Apple reports.',
         )
         ..addOption(
+          'commit',
+          help:
+              'The commit this artifact was BUILT from — a build manifest\'s '
+              'gitSha, never a commit found by searching for a version. Only '
+              'read when the repository declares provenance.record-uploads.',
+        )
+        ..addOption(
           'beta-group',
           help:
               'TestFlight group to give the build to. An internal group needs '

@@ -46,6 +46,7 @@
 // that will do the upload, and tagging afterwards makes the failure mode
 // "shipped but unprovable" — an artifact in front of users whose commit nobody
 // can name.
+import 'config.dart' show ProvenanceConfig;
 import 'release.dart' show Git, ReleaseException, resolveCommit, taggedCommit;
 
 /// The tag recording that [commit] reached a store.
@@ -195,6 +196,69 @@ UploadRecordResult recordUpload(
   }
 
   return result;
+}
+
+/// Records an upload if the repository asked for it, and does nothing if not.
+///
+/// **Called before the store is contacted, from the command that contacts it.**
+/// An earlier design had each consuming repository write its own record from a
+/// shell wrapper for one store and let `cux_ship` do the other — one guarantee
+/// implemented twice, in two languages, and skipped entirely by any CI job that
+/// called the uploader directly. The refusal in [recordUpload] only protects
+/// anything from the path that actually uploads.
+///
+/// Returns null when recording is off, which is the default: writing pushes a
+/// tag to `origin`, so a repository that has not asked for it would suddenly
+/// need push credentials on its upload job.
+UploadRecordResult? recordUploadIfConfigured(
+  String repoRoot,
+  ProvenanceConfig config, {
+  required String store,
+  required String? version,
+  required String? build,
+  required String? commit,
+  required String? checksum,
+  bool dryRun = false,
+}) {
+  if (!config.recordUploads) {
+    return null;
+  }
+
+  // Named individually rather than as "missing arguments", because the fix
+  // differs: --commit is the caller's to pass, while a missing version or build
+  // usually means the artifact was not described to this command at all.
+  if (commit == null || commit.isEmpty) {
+    throw ReleaseException(
+      'provenance.record-uploads is on and --commit was not given.\n'
+      'Pass the commit the artifact was BUILT from — your build manifest\'s '
+      'gitSha. It is not inferred from HEAD on purpose: an upload job often '
+      'runs on a different checkout from the build, and a record naming the '
+      'wrong commit is worse than none.',
+    );
+  }
+  if (version == null || build == null) {
+    throw ReleaseException(
+      'provenance.record-uploads is on, and the ${version == null ? 'version' : 'build number'} '
+      'is not known here — pass --version-name and --build-number so the tag '
+      'can be named.',
+    );
+  }
+
+  return recordUpload(
+    Git(repoRoot),
+    UploadRecord(
+      name: config.tagFor(version: version, build: build),
+      commit: commit,
+      annotation: <String>[
+        'build $build of $version',
+        'store: $store',
+        if (checksum != null) ...<String>['sha256 $checksum'],
+        // Deliberately not a timestamp: the tag object carries its own, and a
+        // second one in the body is a thing that can disagree with it.
+      ].join('\n'),
+    ),
+    dryRun: dryRun,
+  );
 }
 
 /// Whether the tag is a tag *object* rather than a ref pointing straight at a

@@ -34,6 +34,7 @@ import 'src/listing_requirements.dart';
 import 'src/placed.dart';
 import 'src/play/cli.dart';
 import 'src/project.dart';
+import 'src/provenance.dart';
 import 'src/release.dart';
 import 'src/secrets.dart';
 
@@ -86,6 +87,52 @@ CommandRunner<void> buildRunner() {
 /// The `--yes` flag, read off the top-level results a subcommand can reach.
 bool _assumeYes(Command<void> command) =>
     command.globalResults?.flag('yes') ?? false;
+
+/// Writes the upload record, when the repository has asked for one.
+///
+/// **Before the store command runs, not after.** A record written afterwards
+/// makes the failure mode "shipped but unprovable" — an artifact in front of
+/// users whose commit nobody can name — while a record written first fails the
+/// upload it could not vouch for. The second is recoverable and the first is
+/// not.
+///
+/// Only for `upload`; a promote moves a build the store already holds and is
+/// not the moment anything was published *from* this repository. Only when the
+/// subcommand actually carries the options, so a parser that never declared
+/// `--commit` is skipped rather than interrogated.
+void _recordUploadIfAsked(
+  Command<void> command, {
+  required ProjectContext project,
+  required ProjectConfig config,
+  required String store,
+  required String? Function() versionName,
+}) {
+  final args = command.argResults!;
+  if (command.name != 'upload' || !args.options.contains('commit')) {
+    return;
+  }
+  String? opt(String name) =>
+      args.options.contains(name) ? args.option(name) : null;
+
+  final result = recordUploadIfConfigured(
+    project.root,
+    config.provenance,
+    store: store,
+    version: opt('version-name') ?? versionName(),
+    build: opt('build-number'),
+    commit: opt('commit'),
+    checksum: null,
+    // A dry run must not write a record: it deletes its store edit rather than
+    // committing, so nothing is published and there is nothing to record.
+    dryRun: args.options.contains('dry-run') && args.flag('dry-run'),
+  );
+  if (result != null) {
+    stderr.writeln(switch (result) {
+      UploadRecordResult.created => '==> recorded this upload',
+      UploadRecordResult.alreadyRecorded => '==> upload already recorded',
+    });
+  }
+}
 
 /// The `--app-dir` option, falling back to `CUX_SHIP_APP_DIR`.
 ///
@@ -171,7 +218,15 @@ class _AscSubcommand extends Command<void> {
   Future<void> run() {
     final project = _project(this);
     final platform = argResults!.option('platform') ?? 'ios';
-    final store = ProjectConfig.read(project.root).appstore;
+    final config = ProjectConfig.read(project.root);
+    final store = config.appstore;
+    _recordUploadIfAsked(
+      this,
+      project: project,
+      config: config,
+      store: 'appstore/$platform',
+      versionName: () => project.versionName,
+    );
     return runAsc(
       cmd,
       argResults!,
@@ -258,7 +313,15 @@ class _PlaySubcommand extends Command<void> {
   @override
   Future<void> run() {
     final project = _project(this);
-    final store = ProjectConfig.read(project.root).play;
+    final config = ProjectConfig.read(project.root);
+    final store = config.play;
+    _recordUploadIfAsked(
+      this,
+      project: project,
+      config: config,
+      store: 'play',
+      versionName: () => project.versionName,
+    );
     return runPlay(
       cmd,
       argResults!,
