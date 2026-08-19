@@ -1,5 +1,72 @@
 # Changelog
 
+## 3.3.0
+
+**`release finish` now refuses a tag that names a different commit, and pushes
+one it finds already there.** Both are behavior changes on a path every release
+runs, so read this before upgrading — nothing else in this release is reachable
+from the command line yet.
+
+### A failed tag push used to be permanent
+
+The tag was pushed only on the run that *created* it. So a run whose push failed
+— an expired token, a runner without the route, a network blip — left a tag that
+no later run would ever publish: every repeat found it locally, logged
+`v1.0.3 already exists at abc1234 — leaving it alone`, and finished green while
+the remote never got it. The release then had no tag anywhere a later reader
+would look, and nothing said so.
+
+The push now runs whether or not this invocation created the tag. Pushing a tag
+the remote already holds at the same commit is a no-op; pushing one it holds at
+a *different* commit is rejected, which is the collision below arriving from the
+side a local check cannot see. The `— leaving it alone` half of that log line is
+gone, because it was no longer true.
+
+### An existing tag at another commit is now an error
+
+It used to log and carry on, **including the version bump**. One version
+recorded against two commits is one of them being wrong, and continuing left
+whichever it was standing as the record of what shipped. It now throws, in
+`--dry-run` too, and the bump does not happen.
+
+If you have a release in that state, the fix is to decide which commit shipped
+and retag deliberately. This refuses rather than choosing for you.
+
+### Commit arguments are resolved before they are compared
+
+`--commit HEAD` and `--commit abc1234` used to work on the first run and fail on
+the second. The tag side of the comparison is `rev-parse` output — always a full
+40-character SHA — while the other side was whatever you passed, so the
+*legitimate repeat* was reported as a version naming two commits. That
+accusation is the loudest error this command can raise and it was false.
+
+Both sides now go through the same resolution, which also turns a commit that is
+simply absent from a shallow clone into a message saying so, instead of git's
+`fatal: bad object type.`
+
+### Internal: recording what reached a store
+
+`recordUpload` writes an annotated tag naming the commit an artifact was **built
+from**, so a build number still resolves to a commit after `git gc` has taken
+the branch that contained it. It is not wired into `play upload` or `appstore
+upload` yet and there is no way to reach it from the CLI in this release; it is
+published now so the repositories that will call it can be built against it.
+
+Two things worth knowing before that wiring lands, because both change how a
+caller has to behave:
+
+- **The tag records an upload *attempted*, not accepted.** It is written before
+  the store is contacted — tagging afterwards would make the failure mode
+  "shipped but unprovable" — so a signature refusal leaves the tag standing over
+  an artifact nobody received. Anything reading these tags must read them as
+  attempts.
+- **A collision throws `UploadCollisionException`**, distinct from an ordinary
+  `ReleaseException`, so a wrapper can tell it apart. Release scripts routinely
+  call the upload under `|| exitCode=$?` so that re-running a release for a
+  build the store already holds is a no-op. A collision exiting through that
+  same path would be downgraded to a tolerated failure and the release would
+  finish green with the loudest error unreported.
+
 ## 3.2.1
 
 **Every `appstore` subcommand crashed in 3.2.0 if the repository declared an
