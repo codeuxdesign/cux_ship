@@ -123,8 +123,24 @@ consumption point already exists — `appstore promote` creates the new
 `appStoreVersion`, which is when version-scoped fields can be written without
 meeting the lock.
 
-After it the two-store workflow is one sentence: **the release action reasserts
-the listing; the upload action never touches it.**
+**Play's listing stays where it is — on every upload — and the asymmetry is
+forced rather than chosen.** The two stores' listings have different lifetimes.
+Play has *one* listing per app, always writable, so every upload is a fine
+moment to reassert it. App Store Connect's description, keywords and screenshots
+are scoped to an `appStoreVersion`, a record that does not exist until promote
+and is locked during review — so upload is not a poor moment there, it is an
+impossible one.
+
+The rule that covers both is therefore about *lateness*, not about which command:
+
+> **Each store reasserts the committed listing at the last moment its own model
+> allows.** For Play that is every upload; for the App Store, promote.
+
+An earlier draft of this section said "the release action reasserts the listing;
+the upload action never touches it", which reads well and is false for Play — it
+would have moved Play's listing off the every-upload cadence that the section
+below argues is the whole drift-prevention mechanism. Two paragraphs of this
+document contradicted each other and neither reviewer caught it.
 
 ### 3. Build nothing else until a need is named
 
