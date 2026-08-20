@@ -164,6 +164,42 @@ void main() {
     expect(() => read.verify(allowDirty: true), returnsNormally);
   });
 
+  test('a placeholder build number is refused on verify', () {
+    // The refusal the field was specified for. It was read, written and shown
+    // as UNASSIGNED for a whole release cycle while nothing acted on it — the
+    // only guard was a shell `if` in one consuming repository, so every other
+    // --manifest caller would have shipped build 0.
+    final artifact = _artifact();
+    final path = writeBuildManifest(
+      artifactPath: artifact,
+      versionName: '1.1.0',
+      buildNumber: '0',
+      buildNumberAssigned: false,
+      gitSha: _sha,
+      dirty: false,
+      platform: 'android',
+      producerName: 'cux_ship',
+      producerVersion: '3.4.0-dev.1',
+      builtAt: '2026-08-19T14:22:00Z',
+    );
+
+    expect(
+      () => BuildManifest.read(path).verify(),
+      throwsA(
+        isA<ReleaseException>().having(
+          (e) => e.toString(),
+          'message',
+          contains('placeholder'),
+        ),
+      ),
+    );
+    expect(
+      () => BuildManifest.read(path).verify(allowDirty: true),
+      throwsA(isA<ReleaseException>()),
+      reason: '--allow-dirty must not wave through an unnumbered build',
+    );
+  });
+
   test('a schema 1 manifest still reads, and its variant becomes format', () {
     // Two producers write schema 1 today. Refusing it the day 2 lands would
     // strand every dist/ already on disk.

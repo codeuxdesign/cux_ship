@@ -219,6 +219,28 @@ class BuildManifest {
   /// manifest was replaced without its artifact being rewritten — a state in
   /// which every flag is correct and the bytes are not.
   void verify({bool allowDirty = false}) {
+    // **The refusal this field was added for, which it did not have.**
+    //
+    // `buildNumberAssigned: false` says allocation failed and the number is a
+    // placeholder — build-manifest.md introduced it saying in as many words
+    // that "an upload must be able to refuse a placeholder". It was read,
+    // written, and printed as UNASSIGNED, and then nothing refused on it: the
+    // only guard anywhere was a shell `if` in one consuming repository's upload
+    // script, so any other `--manifest` caller would have shipped build 0.
+    //
+    // A specified refusal that exists everywhere except in the code is the
+    // worst version of this: the field's presence reads as the check being
+    // handled. No override, deliberately — `--allow-dirty` exists because a
+    // dirty tree still produces a real artifact, while an unnumbered one cannot
+    // be told apart from any other unnumbered build by any store.
+    if (!buildNumberAssigned) {
+      throw ReleaseException(
+        'build number $buildNumber is a placeholder — allocation failed when '
+        'this was built, so nothing distinguishes it from any other unnumbered '
+        'build. Rebuild with the allocator reachable.',
+      );
+    }
+
     if (dirty && !allowDirty) {
       throw ReleaseException(
         'built from a dirty tree ($gitSha), so the commit this records does '

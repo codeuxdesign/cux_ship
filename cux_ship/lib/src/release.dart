@@ -33,6 +33,8 @@
 // alone, and a branch already past the released version is not bumped.
 import 'dart:io';
 
+import 'package:pub_semver/pub_semver.dart';
+
 /// Something wrong that the caller should report rather than a bug.
 class ReleaseException implements Exception {
   ReleaseException(this.message);
@@ -47,10 +49,20 @@ class ReleaseException implements Exception {
 ///
 /// Returns null when there is no version line at all, which a caller may treat
 /// as "not a pubspec" rather than an error.
-String? pubspecVersion(String pubspec) => RegExp(
-  r'^version:\s*(\d+\.\d+\.\d+)',
-  multiLine: true,
-).firstMatch(pubspec)?.group(1);
+///
+/// **A [Version] rather than the string that was matched**, so a caller
+/// comparing it against something compares versions and not text. The regex
+/// stays because it is doing the *extraction* — finding the line and dropping
+/// the `+build` a pubspec is allowed to carry — and only what it extracted is
+/// handed to the parser. Its three capture groups are numeric by construction,
+/// so the parse cannot fail on anything the match accepted.
+Version? pubspecVersion(String pubspec) {
+  final matched = RegExp(
+    r'^version:\s*(\d+\.\d+\.\d+)',
+    multiLine: true,
+  ).firstMatch(pubspec)?.group(1);
+  return matched == null ? null : Version.parse(matched);
+}
 
 /// Where `pubspec.yaml` sits relative to the repository root, for an app in
 /// [appDir].
@@ -68,22 +80,51 @@ String? pubspecBuildSuffix(String pubspec) => RegExp(
   multiLine: true,
 ).firstMatch(pubspec)?.group(1);
 
-/// The next patch version after [version].
+/// [version] as a [Version] this tool is willing to bump, or a [ReleaseException]
+/// saying why not.
 ///
-/// Refuses anything that is not three numeric components. A pre-release or
-/// build-metadata version has no obviously correct patch bump, and guessing one
-/// during a release is worse than stopping.
-String nextPatchVersion(String version) {
-  final match = RegExp(r'^(\d+)\.(\d+)\.(\d+)$').firstMatch(version);
-  if (match == null) {
+/// **Two questions the old regex answered as one.** `^(\d+)\.(\d+)\.(\d+)$` both
+/// parsed and enforced a policy, so "is this a version" and "is this a version
+/// we will bump" were the same match — and the second is deliberately stricter
+/// than the first. `1.0.3-beta` and `1.0.3+41` are perfectly good semver; they
+/// are refused here because a pre-release or a build-metadata version has no
+/// obviously correct patch bump, and guessing one during a release is worse
+/// than stopping.
+///
+/// Stating that as a check on `isPreRelease` and `build` rather than as a
+/// pattern that happens to exclude them means the reason survives in the code.
+/// It also means the *parse* is the library's, which matters for the ordering
+/// this type brings with it: `1.0.10` sorts above `1.0.9`, and build metadata
+/// is excluded from precedence — the rule the `vX.Y.Z+<build>` tag scheme rests
+/// on, held by something that implements semver rather than by a comment.
+Version parseBumpableVersion(String version) {
+  final Version parsed;
+  try {
+    parsed = Version.parse(version);
+  } on FormatException {
     throw ReleaseException(
-      'cannot bump the patch level of "$version" — edit the version by hand '
-      'and pass --no-bump',
+      'cannot bump "$version" — it is not a version number. Edit the version '
+      'by hand and pass --no-bump',
     );
   }
-  final patch = int.parse(match.group(3)!) + 1;
-  return '${match.group(1)}.${match.group(2)}.$patch';
+  if (parsed.isPreRelease || parsed.build.isNotEmpty) {
+    throw ReleaseException(
+      'cannot bump the patch level of "$version" — a '
+      '${parsed.isPreRelease ? 'pre-release' : 'build-metadata'} version has no '
+      'obviously correct next patch. Edit the version by hand and pass '
+      '--no-bump',
+    );
+  }
+  return parsed;
 }
+
+/// The next patch version after [version].
+///
+/// `Version.nextPatch` rather than arithmetic on captured groups — same answer,
+/// and it is the package's job to know that the next patch of a release version
+/// is not the same question as the next patch of a pre-release.
+Version nextPatchVersion(String version) =>
+    parseBumpableVersion(version).nextPatch;
 
 /// Rewrites the `version:` line of [pubspec] to [next], keeping any `+build`.
 ///
@@ -95,7 +136,7 @@ String nextPatchVersion(String version) {
 /// bump is that the version *changes*; a pattern that quietly stopped matching
 /// would leave the file alone, report success, and hand the branch a version
 /// that is already public — which is the exact failure this exists to prevent.
-String bumpPubspecVersion(String pubspec, String next) {
+String bumpPubspecVersion(String pubspec, Version next) {
   final pattern = RegExp(r'^version:.*$', multiLine: true);
   if (!pattern.hasMatch(pubspec)) {
     throw ReleaseException('no version: line in pubspec.yaml');
@@ -119,7 +160,7 @@ String bumpPubspecVersion(String pubspec, String next) {
 /// Empty because nothing has happened in it yet — and an empty section is a
 /// real answer that publishes a "nothing you can see changed" note, not a
 /// placeholder somebody has to remember to fill in.
-String insertChangelogSection(String changelog, String version) {
+String insertChangelogSection(String changelog, Version version) {
   final heading = RegExp(r'^##\s+\d', multiLine: true);
   final match = heading.firstMatch(changelog);
   if (match == null) {
@@ -132,7 +173,7 @@ String insertChangelogSection(String changelog, String version) {
       '## $version\n\n'
       '${changelog.substring(match.start)}';
   if (!RegExp(
-    '^## ${RegExp.escape(version)}\$',
+    '^## ${RegExp.escape('$version')}\$',
     multiLine: true,
   ).hasMatch(result)) {
     throw ReleaseException('inserting the $version section did not take');
@@ -188,7 +229,12 @@ class FinishOptions {
   final String appDir;
 
   /// The marketing version that was released.
-  final String version;
+  /// The version that was published.
+  ///
+  /// A [Version] rather than a string, so `current != options.version` compares
+  /// versions and the tag name is rendered from a parsed value rather than
+  /// echoed from an argument.
+  final Version version;
 
   /// Only used in messages, so a tag says which build it was.
   final String? buildNumber;
@@ -316,7 +362,7 @@ List<String> finishRelease(Git git, FinishOptions options) {
     return log;
   }
 
-  final next = nextPatchVersion(options.version);
+  final next = nextPatchVersion('${options.version}');
   final changelogFile = File('${git.root}/CHANGELOG.md');
   if (!changelogFile.existsSync()) {
     throw ReleaseException('no CHANGELOG.md in ${git.root}');
