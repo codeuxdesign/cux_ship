@@ -20,8 +20,8 @@ patterns, and the pattern decides when metadata freezes.**
 | **Baked into the artifact** | snap, deb, AppStream, msix | **at build, by construction** | the metadata is *inside* the artifact |
 | *(no listing model)* | packagecloud, fosshub | — | artifact hosts |
 
-This dissolves an argument three of us were having. Two positions had proposed
-freezing release notes into the build, and one had proposed reading them from
+This dissolves an argument three of us were having. One position had proposed
+freezing release notes into the build, and two had proposed reading them from
 committed state at upload; the correct number of freeze points is **three**, and
 which applies is a property of the channel rather than a policy anyone chooses.
 Freeze-at-build is not a position for snap and deb — it is physics.
@@ -29,9 +29,34 @@ Freeze-at-build is not a position for snap and deb — it is physics.
 **The second load-bearing distinction is source format versus wire format.**
 Humans author version-keyed, per-store-family sources. Renderers emit whatever
 each channel eats: `changelogs/<versionCode>.txt` for F-Droid, a `whatsNew`
-string for Play, a `<release>` block for AppStream. Arguing about *the* key for
+string for App Store Connect, a `releaseNotes` text on the track release for
+Play, a `<release>` block for AppStream. Arguing about *the* key for
 *the* metadata is what produced the disagreement; there are two representations
 with different owners.
+
+## What is shared, and what can never be
+
+One workflow across nine surfaces is achievable only as one **authoring and
+verification** workflow. Transport degrades into per-store adapters,
+irreducibly — the auth models alone guarantee it (a Google service account, an
+Apple JWT, Entra ID, Login with Amazon, a Samsung-signed JWT, an AGC token)
+before the resource models differ at all.
+
+The genuinely shared core: the field/locale/limits model and its offline
+validation, changelog resolution and platform filtering, rendering to wire
+formats, the ownership rule — present means owned, absent means left alone,
+deletion is explicit — the provenance record, and the locale-code table below.
+Transport is not in it, and neither is anything under *rejected*.
+
+And the count deflates on inspection. Of the surfaces examined: two are live
+today; one (F-Droid) is satisfied by AuthPass's existing tree plus one rendered
+file; snap is half a surface — `snapcraft upload-metadata` pushes exactly
+summary, description and icon, and screenshots have no API or CLI at all; two
+(packagecloud, fosshub) have no listing model; the remaining four — Microsoft,
+Amazon, Samsung, Huawei — wait on a shipping decision. All four do have real
+submission APIs that can edit listing text and screenshots programmatically —
+none can create an app, and Microsoft's `msstore` CLI currently updates free
+products only — so D6 below is a choice, not a limitation.
 
 ## Decisions
 
@@ -132,7 +157,7 @@ remain the right artifact.
 **A screenshot capture pipeline.** Screenshots are the real scaling cost —
 per-locale times per-device-class, and they rot: a listing screenshot here was
 publishing a fixed grammar bug within two days. But capture is the expensive
-half and it is a *build* problem, not a store problem. Keep the
+half, and it is an authoring problem, not an upload problem. Keep the
 debug-build-plus-seed recipe per repository.
 
 ## If nothing above is done
@@ -145,7 +170,9 @@ the image re-upload and the working-tree changelog read — D1 and D2, a dedupe
 and a dozen lines.
 
 That argument wins against everything in the future tense and loses to D1–D3,
-which fix defects rather than hypotheticals.
+which fix defects rather than hypotheticals. D4 and D5 it defers rather than
+defeats: each is bought at a named need — AuthPass's migration onto this
+tooling, and the next App Store submission.
 
 ## Later, at a named need
 
@@ -165,6 +192,6 @@ because a source of truth nothing routinely pushes drifts from the console with
 nobody noticing, and the store replaces rather than merges.
 
 snapcraft supplies the cautionary tale from the other direction: one manual
-web-UI edit permanently disables its metadata-push-on-release, silently. That is
+web-UI edit silently disables its metadata-push-on-release. That is
 the failure this cadence exists to prevent, observed in a system that chose the
 other default.

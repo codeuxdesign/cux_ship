@@ -57,8 +57,9 @@ artifact *and* travel inside it. Those cannot be the same document:
 Schema 1 is one file per platform directory. That does not survive AuthPass: six
 Android flavors from one commit in mutually blind CI jobs, plus iOS, a MAS
 `.pkg`, a notarized Developer ID build, a tarball, a snap, a deb, three Windows
-shapes and web. The schema-1 layout is a special case of a sidecar, so a reader
-that finds one needs no per-repository configuration.
+shapes and web. A reader is handed an explicit manifest path in both schemas,
+so telling a schema-1 `manifest.json` from a sidecar needs no per-repository
+configuration — the `schema` field, not the filename, says which rules apply.
 
 **An artifact is a single file.** Directory outputs — `web` — are archived
 first. A required digest of a directory is not a thing.
@@ -196,6 +197,9 @@ uploader off the shared reader's books.
   for.
 - Adding an optional field does not bump the schema. Adding a required one, or
   changing an existing one's meaning, does.
+- `cux_ship` reads schema 1 and schema 2 for as long as any repository writes 1.
+  Schema 1 has exactly two producers, both in repositories we control, so that
+  window is short by construction.
 - Migration from schema 1: `variant → format`, `artifactKind` dropped,
   `buildNumberAssigned` promoted from repo-local. That migration is the one
   moment those meanings can silently shift, which is why they are named here.
