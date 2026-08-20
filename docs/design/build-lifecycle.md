@@ -1,243 +1,159 @@
-# The manifest as two moments: `begin` and `seal`
+# Verify the manifest by reading the artifact, not by reordering the write
 
-Status: **specified, deliberately unimplemented.** The trigger is in §11. Nothing
-here exists; `cux_ship manifest write` is what ships today and stays.
+Status: **proposed**, and it replaced a different design that occupied this file
+for about an hour. That one split the write into `manifest begin` before the
+build and `manifest seal` after it; it is at `ec62f18` in this repository's
+history, and [build-lifecycle-review.md](build-lifecycle-review.md) is the
+review that dismantled it. Both are kept because the argument is more useful
+than the conclusion: the superseded design rested on a rule stated exactly
+backwards, and §1 below is that rule the right way around.
+
+One cost question gates one row of the table in §2; everything else is buildable
+against code that ships today. No new commands, no schema change, no state
+between commands.
 
 This extends [build-manifest.md](build-manifest.md), which specifies the file.
-This specifies *when it is written*, and the answer turns out to change what can
-be checked.
+This specifies *what is checked against the artifact*, and the answer is: more
+than the digest, in the same two places the digest is checked now.
 
-## 1. The defect
+## 1. The defect, stated the right way around
 
-`manifest write` runs after a build and is told what the build did. Fourteen
-flags, of which four are facts the caller must supply because nothing else can
-know them:
+The manifest's fields fall into two classes, and the split decides everything:
 
-```
---version-name 1.1.0 --build-number 61 --git-sha 76ca8f2… --no-dirty
-```
+- **Recorded facts** — `gitSha`, `dirty`. Knowable only at build time, from the
+  tree. No reader of the artifact can ever confirm them; no ordering of
+  commands changes that. They are producer obligations (build-manifest.md,
+  Producer requirements 1) and stay that way.
+- **Baked facts** — `versionName`, `buildNumber`. Compiled into the artifact,
+  therefore recoverable *from* the artifact by anyone, at any time. That they
+  cannot be re-derived from the repository afterwards — pubspec moves, tags
+  move — is true and irrelevant: the artifact is the source, and it is sitting
+  next to the manifest.
 
-The rule that makes those four unavoidable is worth stating precisely, because a
-weaker version of it — "the tree might have moved between building and writing" —
-is true but not the point:
+Today the baked facts are taken on trust, and the trust has already failed in
+the way that matters: a bundle containing versionCode 0 beside a manifest
+claiming 62, discovered by Play after the upload (`play/cli.dart` 1479). The
+defect class is "the build did not honor the values the script passed" — an
+export step rewriting `CFBundleVersion`, a Gradle override, a variable that
+evaluated empty, a stale artifact copied over a fresh manifest's neighbor. The
+digest check cannot see any of these, because the manifest honestly describes
+the wrong artifact.
 
-> **The manifest describes the artifact. Values baked *into* the artifact are
-> knowable only by the thing that baked them.**
+The fix is not to reorder the write. It is to **read the baked facts back out
+of the bytes and refuse a manifest that disagrees with its artifact.**
 
-`versionName` is `CFBundleShortVersionString` and Gradle's `versionName`.
-`buildNumber` is `CFBundleVersion` and `versionCode`. Both are compiled in. A
-tool that read them from `pubspec.yaml` afterwards would report what the
-repository says *now*, which under a tagged release is not necessarily what was
-compiled — this repository's build script takes the version name from the git
-tag, not from the pubspec.
+## 2. The check, per format
 
-The consequence is that the writer cannot verify its own most important claims.
-It verifies the digest, because it holds the bytes. It takes `buildNumber` on
-trust, and that is the field an upload is *named* by.
+| Format | Read from | How | Cost |
+|---|---|---|---|
+| `ipa` | `Payload/*.app/Info.plist` → `CFBundleVersion`, `CFBundleShortVersionString` | zip entry + `plutil` (Apple artifacts are only produced on macOS) | trivial |
+| `aab` | `base/manifest/AndroidManifest.xml` → `versionCode`, `versionName` | zip entry + a minimal aapt2-proto walker, **§5** | to be priced |
+| `apk` | binary XML (axml), a different encoding than the `.aab`'s proto | separate reader | deferred until a producer ships `.apk` — AuthPass's sideload and Amazon flavors will, so the deferral has a known end |
+| `pkg`, `dmg`, `msix`, `snap`, `deb`, archives | — | none | **trusted, and said out loud** — see below |
 
-**And the divergence is real rather than theoretical.** If allocation fails
-during a build, `0` is compiled in and `buildNumberAssigned: false` records it.
-A later successful `generate` on the same commit would return a real number. So
-"ask the allocator again" is wrong in exactly the case that matters, which is
-why `manifest write` deliberately does not.
+**A format without a reader is trusted loudly, never silently.** The check
+prints its effective coverage — `cross-check: versionCode ok, versionName ok`
+or `cross-check: none for format pkg — buildNumber taken on trust` — so absence
+of verification is a visible state, not the same line as success. This is the
+consuming project's own rule (print effective configuration, never intended)
+applied here.
 
-## 2. The inversion
+The macOS `.pkg` is the notable trusted case, and it is acceptable: the
+producer's own read-back from the xcarchive (`build.sh` 617–622) covers the
+defect class at build time, and a pkg is a xar of a signed app whose plist is
+several layers deep — a reader there is real work for a platform whose check
+already exists upstream of it. If that producer-side check ever proves
+insufficient, this table is where the reader goes.
 
-Have cux_ship *decide* the values and hand them to the build, rather than be told
-them afterwards.
+## 3. Where it runs: both existing chokepoints
 
-Then it knows them by construction. `versionName` and `buildNumber` stop being
-inputs it must trust, and become outputs it can hold the artifact to.
+**At `manifest write`.** The writer already holds the artifact's bytes — it
+digests them. Reading two more values out of the same file catches the defect
+at the earliest moment it exists, minutes after the build, before an upload is
+attempted and before anyone walks away believing `dist/` is good. A mismatch is
+a refusal: the manifest is not written, and the message names both values and
+both sources.
 
-```
-cux_ship manifest begin   →  allocates, resolves, writes an unsealed manifest,
-                             prints the values the build must use
-        (the build runs, owned by whoever builds)
-cux_ship manifest seal    →  digests the artifact, checks it against what begin
-                             handed out, marks the manifest complete
-```
+**At `BuildManifest.verify()`.** Every `--manifest` upload already calls it
+(`runner.dart`, `_manifest()`), holding the artifact and every claimed value at
+the same instant. Re-checking here catches what write-time cannot: a `dist/`
+whose artifact was swapped for another *correctly built* one — same digest
+discipline, wrong build — and it makes the check hold for manifests written by
+older writers or by hand. The digest is verified once (it is the expensive
+half, 69 MB on one project); the baked-fact read costs one zip entry.
 
-The cross-check is the point. Everything else here is bookkeeping that follows
-from getting the ordering right.
+Play's post-upload comparison (`play/cli.dart` 1479) stays. It is the check of
+record against what Play *itself* parsed, and it becomes the backstop it should
+have been rather than the first line.
 
-## 3. Why not `prepare-build`
+Nothing about the interface changes: same flags, same schema 2, same sidecar.
+A producer that lies about `--build-number` now gets refused; that is the whole
+observable difference.
 
-The obvious name for `begin` is `prepare-build`, and it is the wrong one:
-cux_ship does not build anything, and a name that says it does is how a boundary
-erodes. Six months later something is passing `--gradle-args` through it.
+## 4. What is deliberately not built
 
-`manifest begin` and `manifest seal` say what is true — cux_ship owns the
-manifest across two moments, and the build happens in between, owned by someone
-else.
+- **No `begin`, no `seal`, no unsealed state, no schema 3.** The cross-check
+  was the stated point of the split, and it lands above without any of it. The
+  durable record of an allocation is `cux_buildnumber`'s refs, which is where
+  it already lives; a half-written JSON file in a directory the build script
+  `rm -rf`s is not a record, it is a reconciliation problem.
+- **No wrapping the build** (`cux_ship build -- …`). cux_ship owns release
+  identity, not builds — build-lifecycle.md §3 argued this correctly and it
+  survives the replacement. A wrapper also proves nothing a read-back does not:
+  owning the invocation still cannot show the child consumed the values.
+- **No consolidation of the 68 lines yet.** The version-name decision, the
+  already-shipped refusal and the allocation call are genuinely duplicated
+  intent — and consolidating them is exactly the shape the manifest-write
+  episode just graded: parameters moving house, 22 lines to 20. If a shared
+  home is ever justified, its shape must come from AuthPass's real build
+  scripts (six flavors, mutually blind CI jobs, cross-machine `dist/`), not be
+  guessed ahead of them, and it is a *value-resolver* concern, separate from
+  the manifest. Deferred on the same trigger build-lifecycle.md §11 names — a
+  real release survived, a second consumer migrated — which this design keeps
+  for that question and dissolves for the verification one.
 
-**This does not breach the boundary the pubspec comment in the consuming
-repository states** ("everything in cux_ship acts on an artifact that exists").
-That was always a loose statement of a real rule: `release finish` tags and bumps
-with no artifact anywhere. The rule is that cux_ship owns **release identity** —
-which version, which number, which commit — and identity is decided before an
-artifact exists, by necessity. `begin` is that rule applied honestly rather than
-a new exception to it.
+## 5. The one gate: price the `.aab` reader
 
-## 4. What `begin` does
+Inherited from build-lifecycle.md §10, scoped down. The manifest inside an
+`.aab` is aapt2's protobuf XML (`Resources.proto` — `XmlNode`, public, stable
+across AGP versions because bundletool itself depends on it). The walk needed
+is: one zip entry, descend to the `manifest` element, read two attributes —
+`versionCode` is a compiled int, `versionName` a string. That is a
+minimal-proto reader on the order of a hundred lines of Dart with no new
+dependency; for the zip entry, shelling out to `unzip -p` follows the
+repository's own precedent of preferring a host tool over a library
+(`deps.dart` shells to `tar`, with its reason in a comment).
 
-In order, because the ordering is a guard:
+The gate is honest verification, not feasibility: **write the walker, point it
+at a real signed `.aab`, and confirm the two values against what
+`bundletool dump manifest` says**, before the check is allowed to refuse
+anything. If that experiment fails — the proto layout surprises, the walk is
+brittle — the `aab` row degrades to "trusted loudly" like `pkg`, and the design
+loses one row rather than its reason to exist. That is the difference from
+`begin`/`seal`, where the same open question put the whole ordering at stake
+("the design is worth materially less").
 
-1. Resolve the repository — root, app directory, `.cux-ship.yaml`.
-2. Read `gitSha`, `gitTag`, and the dirty state. **Before the build**, which is
-   the only time the answer describes the source the artifact came from.
-3. Decide `versionName`: from the tag under `--release`, from the pubspec
-   otherwise. One place, rather than the same twenty lines in three build
-   scripts.
-4. Refuse a release whose version already shipped, by reading the tags. This is
-   generic and currently lives in each build script.
-5. Allocate the build number via `cux_buildnumber`, or fall back to `0` with
-   `buildNumberAssigned: false` under a non-release build.
-6. Write the unsealed manifest.
-7. Print the values for the build to consume.
+## 6. What stays unverifiable, so nobody re-litigates it
 
-Steps 2 through 5 are the 68 non-comment lines this replaces in one consuming
-repository's `build.sh`, and none of them are about that app.
+`gitSha` and `dirty` are trusted in every design, including the one this
+replaces. `begin` would have recorded the tree at begin time; nothing proves
+the build compiled that tree, and nothing can — a signed artifact carries no
+commit. The mitigations are the ones already in force: producer obligation 1
+(capture before the first mutating step), the writer's dirty-recheck warning,
+and the provenance record at upload. A future embedded card (build-manifest.md,
+cards) narrows it further; no command ordering does.
 
-## 5. Two handoffs, and both earn their place
+## 7. Consumer fixes needed before any of this matters
 
-**The unsealed manifest is the durable record.** It exists on disk between the
-two calls, so a build that dies in the middle leaves evidence of what was
-allocated and for which commit.
+Both found while reviewing, both independent of this design, both blocking the
+first real release through `manifest write`:
 
-**`--shell` prints assignments, for ergonomics:**
-
-```bash
-eval "$(cux_ship manifest begin --shell --platform android ${RELEASE:+--release})"
-flutter build appbundle \
-  --build-name="$VERSION_NAME" --build-number="$BUILD_NUMBER" $(knobs_define)
-cux_ship manifest seal --artifact "dist/android/$name"
-```
-
-`eval` of tool output is acceptable here for the same reason `tool/ship` exists:
-the tool is pinned by a lockfile, and every value it prints is a semver, a hex
-sha, an integer or a boolean. It should validate each against that shape before
-printing, so an unexpected value fails at the source rather than becoming shell.
-
-A `--json` form should exist too, for a producer that is not a shell script.
-
-## 6. `sealed` is an explicit field, never an absence
-
-An unsealed manifest must not read as a complete one. So:
-
-```json
-{ "schema": 3, "sealed": false, … }
-```
-
-**Not** "`sha256` is missing, therefore it is incomplete." Absence-as-signal is
-the failure mode this project keeps meeting — an optional parameter whose null
-default makes "no photographs" and "the caller forgot to load them" the same
-state. A build that dies between `begin` and `seal` should leave a file that
-*says* it died there, and every reader should refuse it by name.
-
-`seal` sets it true. `BuildManifest.verify()` refuses false.
-
-**And this forces a schema bump to 3, which is worth arguing rather than
-assuming.** An optional field that reads as `true` when absent is normally
-backward compatible — that is exactly how `buildNumberAssigned` was added inside
-schema 2. It does not work here, and the difference is which way the ignorance
-cuts.
-
-A reader that does not know `buildNumberAssigned` treats every manifest as
-assigned, which is what schema 1 manifests actually were. A reader that does not
-know `sealed` treats an **unsealed** manifest as complete — and an unsealed
-manifest is precisely the document that must not be uploaded from. So the field
-cannot be introduced silently: it has to arrive with a number that makes an older
-reader refuse the whole document rather than read the parts it recognizes.
-
-Schema 1 and 2 documents remain complete by construction and keep reading as
-sealed. Only a document that *could* be unsealed declares 3.
-
-## 7. What `seal` checks
-
-The digest, as today. Then the cross-check, which is new and is the reason for
-the whole design:
-
-| Claim | Read from | Failure means |
-|---|---|---|
-| `buildNumber` | `versionCode` / `CFBundleVersion` | the artifact is not the one this build produced |
-| `versionName` | `versionName` / `CFBundleShortVersionString` | same |
-
-That check exists today, in the wrong place: Play parses the uploaded bundle and
-cux_ship compares afterwards, reporting `versionCode mismatch: the bundle
-contains 0 but the build says 62`. Correct, and it costs a 25 MB upload to
-learn. `seal` holds the artifact and the claimed values at the same instant.
-
-**The cost is not known and is the main open question — §10.**
-
-## 8. What stays with the build script
-
-Deliberately, and this is the split that keeps the design honest:
-
-- The actual `flutter build` / `xcodebuild` / `gradle` invocation.
-- Signing-material presence checks, which are toolchain-specific.
-- **Knobs** — the `--dart-define` values a particular app bakes in. The
-  *mechanism* generalizes (read env var, validate shape, fold into JSON,
-  warn-or-die by release mode); the per-knob sentence explaining why a release
-  cannot ship without it does not, and that sentence is the whole value of the
-  check. If it ever moves, it moves as a declarative table where each entry
-  carries its own consequence, not as shared code that prints `KNOB_X is not
-  set`.
-
-## 9. `manifest write` survives
-
-Not everything has a `begin`. A `.deb` repackaged from a tarball, a `.snap` built
-from a `.deb` — the derivation cases in build-manifest.md §Derivation — have no
-build to precede them, and their inputs genuinely are known only afterwards.
-`write` is the single-shot form and remains correct for them.
-
-So: `write` for a producer that describes something already made, `begin`/`seal`
-for one that owns the build. Two commands, one schema, and the second is not a
-deprecation of the first.
-
-## 10. Open questions
-
-- **What does reading `versionCode` out of an `.aab` cost?** It is protobuf
-  inside `base/manifest/AndroidManifest.xml`, and needing `bundletool` or `aapt2`
-  is exactly why one consuming build script punted on it. If it needs a Java
-  toolchain, §7's cross-check is Apple-only in practice and the design is worth
-  materially less. **Price this before writing any code.** The `.ipa` half is a
-  zip and a plist and is cheap.
-- **Does `begin` refuse a dirty tree, or record it?** Today's build script
-  records it and lets the upload refuse. Keeping that is probably right, but
-  `begin` allocating a number against a tree that then changes is a new wrinkle.
-- **What reconciles a stale unsealed manifest?** A second `begin` on the same
-  commit should overwrite it. A second `begin` on a *different* commit, with an
-  unsealed one present, is either a mistake or an abandoned build, and the two
-  are indistinguishable from the file alone.
-- **Does the build script still need `--platform`?** `begin` needs it to name
-  the output directory; `seal` could infer it from the artifact's extension.
-  Inference is acceptable where it is printed — the report line already names
-  `android/aab` — but two sources for one value invites disagreement.
-
-## 11. When to build it
-
-**Not yet, and the trigger is two things rather than a date.**
-
-1. **`manifest write` has survived a real release.** As of 20 August 2026 it has
-   run only against synthetic artifacts. The first genuine Android and Apple
-   release through it will say more than another round of design.
-2. **A second producer has adopted it.** The argument for `begin`/`seal` is that
-   68 lines are duplicated across repositories — which is an argument about
-   repositories in the plural, and one of them has not migrated. Building the
-   improved shape before the second consumer touches the current one means they
-   migrate onto something already being replaced, and their flavors, `.deb` and
-   `.snap` are exactly the cases that would test whether the split holds.
-
-**The precedent is worth stating because it is recent and it went the other
-way.** build-manifest.md said to wait for the third producer; the writer was
-built ahead of that trigger anyway, and the first review of the result was that
-it had not made much easier — the call site went from 22 lines to 20, because
-the parameters that stayed are the ones no tool can remove. That judgment was
-correct, and it is evidence that the trigger was too.
-
-The difference here is that the payoff is not shorter code. It is a check that
-cannot be written at all in the current ordering. That is a better reason to
-build something, and it is still a reason to build it when the two conditions
-above hold rather than now.
-
-Until then this document is the artifact.
+1. **`tool/build.sh` passes a short sha to a writer that refuses one.** Line
+   103 is `git rev-parse --short HEAD`; `writeBuildManifest` requires 40
+   characters. Every real build dies at `write_manifest`, after the build
+   number is spent and the build is done. Capture the full sha; shorten only in
+   display strings.
+2. **`buildNumber`'s JSON type.** The spec says integer; the writer emits a
+   string. Pick one — the writer emitting an integer matches the spec and what
+   schema-1 heredocs wrote — and pin it with a test on the raw JSON, before
+   AuthPass writes anything against the prose.
