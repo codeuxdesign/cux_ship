@@ -1770,32 +1770,39 @@ class VerifyCommand extends Command<void> {
       // consumer is the package that pins it rather than the repository.
       ..addOption(
         'changelog',
+        valueHelp: 'path',
         help:
             'CHANGELOG.md to check every version section of. Defaults to the '
-            "repository's, when it has one.",
+            "repository's, so plain `cux_ship verify` already checks it.",
       )
       ..addOption(
         'appstore',
+        valueHelp: 'path',
         help:
-            'App Store metadata tree to validate. Defaults to store/appstore '
-            'when .cux-ship.yaml declares an appstore: block.',
+            'One App Store metadata tree to validate, instead of the ones '
+            'found. Defaults to store/appstore/<platform> when the tree is '
+            'split per platform and store/appstore when it is flat — both '
+            'trees are checked, so this is for a tree kept somewhere else.',
       )
       ..addOption(
         'platform',
         allowed: ascPlatforms,
         help:
-            'Which App Store platform --appstore names. Chooses among '
-            'appstore.screenshots. Defaults to ios when only one platform is '
-            'declared; with two, this has to say which tree is being checked.',
+            'Which App Store platform to check, and which platform --appstore '
+            'names. Chooses among appstore.screenshots. Omit it to check every '
+            'tree the repository has; required alongside --appstore when two '
+            'platforms are declared, because one path cannot say which it is.',
       )
       ..addOption(
         'play',
+        valueHelp: 'path',
         help:
             'Play metadata tree to validate. Defaults to store/play when '
             '.cux-ship.yaml declares a play: block.',
       )
       ..addOption(
         'data-safety',
+        valueHelp: 'path',
         help:
             "Play's data safety CSV. Defaults to store/play/data-safety.csv. "
             'Checked for structure, never for whether the answers are true.',
@@ -1841,58 +1848,74 @@ class VerifyCommand extends Command<void> {
     // checks less than the version before it is the failure this change exists
     // to remove, committed on the way in. An undeclared tree is reported, and
     // a declared one additionally has to satisfy what it declared.
-    final appstore = args.option('appstore') ?? project.appStoreMetadata;
     final play = args.option('play') ?? project.playMetadata;
     final dataSafety = args.option('data-safety') ?? project.dataSafety;
 
-    // **Which platform's requirements `--appstore` is being checked against.**
+    // **Which platform's requirements each App Store tree is checked against.**
     //
-    // `--appstore` takes a path, and a path carries no platform, so without
-    // this there is nothing for `appstore.screenshots.macos` to be selected
-    // *by* — and an earlier revision silently applied `ios:` to every tree,
-    // failing a macOS listing Apple holds for lacking iPhone screenshots. A
-    // declared requirement enforcing the *other* platform's rules is worse
-    // than one enforcing nothing.
+    // A path carries no platform, so without this there is nothing for
+    // `appstore.screenshots.macos` to be selected *by* — and an earlier
+    // revision silently applied `ios:` to every tree, failing a macOS listing
+    // Apple holds for lacking iPhone screenshots. A declared requirement
+    // enforcing the *other* platform's rules is worse than one enforcing none.
     //
-    // `appstore upload` has had `--platform` all along and selects correctly;
-    // this is the same axis, given to the command that lacked it.
-    final declaredPlatforms =
-        config.appstore?.screenshots.keys.toSet() ?? const <String>{};
+    // What changed is where the platform comes from when nobody says. It used
+    // to be a refusal — "pass --platform to say which tree this is" — and that
+    // was right while `--appstore` was the only way to reach a tree, because
+    // one path genuinely cannot be two platforms. It is wrong when the paths
+    // are *derived*, because `store/appstore/macos` is not ambiguous about
+    // which platform it holds. So a repository with a split layout gets every
+    // tree checked, each against its own rules, in one run.
+    //
+    // The refusal survives for `--appstore`, which is still one path.
     final platform = args.option('platform');
-    if (platform == null && declaredPlatforms.length > 1) {
-      stderr.writeln(
-        'cux_ship verify: $cuxShipConfigFile declares appstore.screenshots '
-        'for ${(declaredPlatforms.toList()..sort()).join(' and ')}, and '
-        '--appstore names one tree — pass --platform to say which of them it '
-        'is, or the wrong platform\'s requirements would be applied.',
-      );
-      exitCode = 1;
-      return;
+    final named = args.option('appstore');
+    final Map<String, String> appStoreTrees;
+    if (named != null) {
+      final declaredPlatforms =
+          config.appstore?.screenshots.keys.toSet() ?? const <String>{};
+      if (platform == null && declaredPlatforms.length > 1) {
+        stderr.writeln(
+          'cux_ship verify: $cuxShipConfigFile declares appstore.screenshots '
+          'for ${(declaredPlatforms.toList()..sort()).join(' and ')}, and '
+          '--appstore names one tree — pass --platform to say which of them '
+          'it is, or the wrong platform\'s requirements would be applied.',
+        );
+        exitCode = 1;
+        return;
+      }
+      appStoreTrees = {platform ?? 'ios': named};
+    } else {
+      appStoreTrees = project.appStoreTrees(platform: platform);
     }
-    final appStorePlatform = platform ?? 'ios';
-
-    final derivation = _derivationProblem(
-      args.multiOption('require-screenshot-type').toSet(),
-      config.appstore,
-      project,
-      platform: appStorePlatform,
-    );
 
     final problems = <ReleaseProblem>[
-      ..._declarationProblems(config, args, appstore, play),
-      if (appstore != null && derivation != null) derivation,
+      ..._declarationProblems(
+        config,
+        args,
+        appStoreTrees.isEmpty ? null : appStoreTrees.values.first,
+        play,
+      ),
       if (changelog != null) ...checkChangelogFile(changelog),
-      if (appstore != null)
+      for (final MapEntry(key: platform, value: tree)
+          in appStoreTrees.entries) ...[
+        ?_derivationProblem(
+          args.multiOption('require-screenshot-type').toSet(),
+          config.appstore,
+          project,
+          platform: platform,
+        ),
         ...checkAppStoreTree(
-          appstore,
+          tree,
           requireScreenshotTypes: _appStoreScreenshotTypes(
             args,
             config.appstore,
             project,
-            platform: appStorePlatform,
+            platform: platform,
           ),
           requireLocales: _requiredLocales(args, config.appstore),
         ),
+      ],
       if (play != null)
         ...checkPlayTree(
           play,
@@ -1909,7 +1932,7 @@ class VerifyCommand extends Command<void> {
     // failure this command exists to prevent, so having nothing to check is
     // itself the finding.
     if (changelog == null &&
-        appstore == null &&
+        appStoreTrees.isEmpty &&
         play == null &&
         dataSafety == null) {
       stderr.writeln(
@@ -1931,7 +1954,9 @@ class VerifyCommand extends Command<void> {
     // coverage. Every artifact says so itself.
     for (final line in [
       if (changelog != null) 'changelog  $changelog',
-      if (appstore != null) 'appstore   $appstore ($appStorePlatform)',
+      for (final tree in appStoreTrees.entries) ...[
+        'appstore   ${tree.value} (${tree.key})',
+      ],
       if (play != null) 'play       $play',
       if (dataSafety != null) 'data safe  $dataSafety',
     ]) {

@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### `verify` finds a split App Store tree, and checks both halves
+
+A repository shipping to both Apple platforms keeps `store/appstore/ios` and
+`store/appstore/macos`. The default resolved to their *parent*, which holds a
+README and two subdirectories and nothing a validator recognizes — so a bare
+`cux_ship verify` reported `store/appstore holds no info/, no listings/ and no
+age-rating.json — nothing to publish` on a repository that was entirely fine.
+
+**A check that cries wolf on a healthy repository is how people learn to skip
+the check**, which is the failure the offline verifier exists to prevent,
+committed by the verifier. Reported by a second project hitting it during a
+real release, where the workaround was three invocations naming each tree.
+
+Now: a split layout is found and **every tree is checked in one run**, each
+against its own platform's rules. `--platform` narrows to one, and is still
+required alongside `--appstore` when two platforms are declared — one path
+cannot say which platform it is, and applying the wrong one refuses a macOS
+listing for lacking iPhone screenshots.
+
+`--changelog`, `--appstore`, `--play` and `--data-safety` now render as
+`--changelog=<path>` in the usage, and the stale "Defaults to store/appstore"
+help texts say what the defaults now do.
+
 ### `cux_ship manifest write` — one producer for the file every upload is named by
 
 ```bash
