@@ -64,6 +64,7 @@ import 'package:cux_ship_verify/release_notes.dart';
 
 import '../asc_platforms.dart';
 import '../listing_requirements.dart';
+import '../notes_source.dart';
 import '../reachable.dart';
 import 'app_store.dart';
 import 'asc_client.dart';
@@ -556,6 +557,7 @@ Future<void> runAsc(
     if (changelogPath == null) {
       return literalNotes;
     }
+    requireCommittedNotes([changelogPath]);
     final notes = changelogNotesOf(
       changelogPath,
       forVersion,
@@ -776,7 +778,26 @@ Future<void> runAsc(
 
     // ---------------------------------------------------------- the listing
 
-    if (metadata != null) {
+    // **An upload carrying an artifact does not write the listing.**
+    //
+    // The writes below reach `appStoreVersionLocalizations` through
+    // `ensureVersion`, which *creates* the version record — so publishing the
+    // listing alongside a TestFlight build brings an App Store version into
+    // existence for a release nobody has decided to make, and fills it with
+    // whatever the working tree says. The store-metadata design puts listing
+    // publication at the promotion to the public audience for exactly that
+    // reason.
+    //
+    // A listing-only invocation — `--metadata` with no artifact — is the
+    // deliberate exception, the same one Play's `--listing-only` is: nothing is
+    // being shipped for the copy to be ahead of, and moving the live page now
+    // is the entire purpose of the command.
+    if (metadata != null && ipaPath != null) {
+      stdout.writeln(
+        '==> listing: untouched — an upload does not publish it.\n'
+        '    Publish deliberately with --metadata and no artifact.',
+      );
+    } else if (metadata != null) {
       final appInfo = await store.editableAppInfo(app);
 
       final contentRights = metadata.contentRights;

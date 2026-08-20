@@ -74,6 +74,7 @@ import 'package:googleapis/androidpublisher/v3.dart';
 import 'package:googleapis_auth/auth_io.dart';
 
 import '../listing_requirements.dart';
+import '../notes_source.dart';
 
 const _serviceAccountVar = 'GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_PATH';
 
@@ -1314,6 +1315,7 @@ Future<void> runPlay(
     if (changelogPath == null) {
       return releaseNotes;
     }
+    requireCommittedNotes([changelogPath]);
     final notes = changelogNotesOf(
       changelogPath,
       forVersion,
