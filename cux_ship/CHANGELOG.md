@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### `manifest write --derived-from` — a repackaged artifact inherits its provenance
+
+```bash
+cux_ship manifest write --artifact authpass_1.9.15_amd64.deb \
+  --platform linux --format deb \
+  --derived-from authpass-1.9.15.tar.gz.manifest.json \
+  --packaging gitSha=bbbb1111 --packaging repo=authpass-deb
+```
+
+No build facts retyped. The `.deb`'s manifest carries the *tarball's* `gitSha`,
+`dirty`, `versionName` and `buildNumber` as its own, because build-manifest.md
+requires inherited facts hoisted to top level always — a reader that knows
+nothing about derivation must still get true answers from the fields it already
+reads.
+
+**The flag takes the parent's manifest, not a hand-assembled entry.** The spec
+says a repackager writes `[parent] + parent's own derivedFrom`; making each
+producer implement that is how one producer's version of it ends up subtly
+wrong. Pointing at the parent lets the chain build itself, and it stays flat and
+nearest-first through however many steps — a `.snap` from a `.deb` from a
+tarball records both ancestors and still reports the tarball's commit.
+
+**The parent is digest-checked when its artifact sits beside its manifest**,
+which is the normal case after downloading both. An artifact and its sidecar
+upload non-atomically, so a fetch can straddle the two; this turns that skew
+into a loud refusal rather than a chain that records a derivation from bytes
+nobody has.
+
+Explicit flags still win, so a repackager that genuinely knows better can say
+so — but it has to say so.
+
+
 ### The manifest is checked against the artifact, not only against its digest
 
 ```
