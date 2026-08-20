@@ -328,6 +328,26 @@ succeeds**, so at write time the other stores' text does not exist yet, and
 embedding one store's notes would silently imply it was all of them. "The
 published text" is not one thing to record.
 
+**Play store listing experiments — not because we chose to skip them.** There
+is no API. Checked in the generated `androidpublisher` v3 surface rather than
+inferred: **zero occurrences of "experiment"**, and the edit resources are apks,
+bundles, countryavailability, deobfuscationfiles, details, expansionfiles,
+images, listings, testers and tracks. Console only, and a long-standing request
+rather than an oversight — the Play developer community carries a thread titled
+*"Where is the API for store listing A/B tests?"*.
+
+**The interaction is what matters, and it is the shape this document already
+distrusts.** A running experiment is console-owned state the repository cannot
+see, exactly like Play's managed-publishing toggle and snapcraft's metadata
+switch. What `promote` publishing the committed listing does to a live
+experiment is unknown and unqueryable, because there is nothing to ask.
+
+That is an argument for the read-only diff rather than against anything: an
+experiment *is* drift — the console holding something the repository does not —
+so `listing: console holds an edit not in the repository` is the line that
+surfaces one. The failure to avoid is somebody running an experiment for two
+weeks, promoting a release, and never learning which of the two ended it.
+
 **A screenshot capture pipeline.** Screenshots are the real scaling cost —
 per-locale times per-device-class, and they rot: a listing screenshot here was
 publishing a fixed grammar bug within two days. But capture is the expensive
