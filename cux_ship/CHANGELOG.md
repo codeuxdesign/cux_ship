@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+### The manifest is checked against the artifact, not only against its digest
+
+```
+==> how-it-went-1.1.0-65.aab — build 65 of 1.1.0 from bd8d32f…, digest verified
+    cross-check: build number and version name agree with base/manifest/AndroidManifest.xml
+```
+
+The digest proves the bytes are the ones the manifest was written for. It cannot
+notice that the *build* disagreed with the values the script passed — an export
+step rewriting `CFBundleVersion`, a Gradle override, a variable that evaluated
+empty, a stale artifact copied over a fresh manifest's neighbor. In all of those
+the manifest honestly describes the wrong artifact and every upload flag is
+correct.
+
+That check existed, at the store: Play parses an uploaded bundle and reports its
+versionCode, and `play upload` compares afterwards. Right answer, learned after
+transferring 69 MB. `verify()` now reads the values out of the artifact it is
+already holding — **0.77 s including VM startup**, on a real 69 MB bundle.
+
+| Format | Read from | How |
+|---|---|---|
+| `aab` | `base/manifest/AndroidManifest.xml` | zip entry + a minimal aapt2-proto walk |
+| `ipa` | `Payload/*.app/Info.plist` | zip entry + `plutil` |
+| everything else | — | **trusted, and said so out loud** |
+
+**A format with no reader prints that it was trusted.** `cross-check: no reader
+for pkg — build number and version name taken on trust` is a different line from
+success, because "not checked" and "checked and fine" must not render the same.
+
+The `.aab` walk needed no `bundletool` and no Java. Neither that nor `aapt2` is
+necessarily installed, and `aapt2 dump xmltree` refuses an `.aab` outright, so a
+hundred lines of Dart is not a shortcut around a heavier tool — it is the only
+local option. The walk is two levels deep rather than five: `XmlAttribute.value`
+already carries `"65"` as a string beside the compiled integer, so nothing
+decodes `Item` or `Primitive`.
+
+Reading and deciding are separate functions. Getting bytes out of a zip needs a
+zip; deciding what a disagreement means does not, and a test that must build an
+`.aab` to assert on a comparison is one nobody writes the third case for.
+
+
 ### Two defects a real upload found, and one refactor
 
 **A placeholder build number is refused.** `buildNumberAssigned: false` says

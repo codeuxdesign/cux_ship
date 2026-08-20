@@ -116,6 +116,10 @@ BuildManifest? _manifest(Command<void> command) {
     '==> ${manifest.artifact} — build ${manifest.buildNumber} of '
     '${manifest.versionName} from ${manifest.gitSha}, digest verified',
   );
+  // Said out loud on its own line, including when the answer is "not checked".
+  // A format with no reader is trusted, and a trusted format that printed
+  // nothing would read exactly like a verified one.
+  stderr.writeln('    ${manifest.crossCheck()}');
   return manifest;
 }
 
