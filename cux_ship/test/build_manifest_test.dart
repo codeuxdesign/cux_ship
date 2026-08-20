@@ -108,15 +108,31 @@ void main() {
     // Every value an upload is named by comes from this file, so reading an
     // unknown layout optimistically means publishing an artifact described by
     // whatever happened to parse.
+    //
+    // Derived from the constant rather than written out. This case said
+    // `schema: 2` while 2 was the future, and went red the day 2 arrived —
+    // which is the right outcome for a test that has to be re-read, but only
+    // once. "One past what we understand" is the thing being asserted.
+    final next = supportedManifestSchema + 1;
     expect(
-      () => BuildManifest.read(_manifest(schema: 2)),
+      () => BuildManifest.read(_manifest(schema: next)),
       throwsA(
         isA<ReleaseException>().having(
           (e) => e.toString(),
           'message',
-          allOf(contains('schema 2'), contains('Refusing')),
+          allOf(contains('schema $next'), contains('Refusing')),
         ),
       ),
+    );
+  });
+
+  test('still reads schema 1, which two producers write today', () {
+    // The reader has to span the migration. Refusing 1 the day 2 landed would
+    // strand every dist/ already on disk, and a reader that cannot read
+    // yesterday's build is one nobody can adopt one repository at a time.
+    expect(
+      () => BuildManifest.read(_manifest(schema: 1)).verify(),
+      returnsNormally,
     );
   });
 

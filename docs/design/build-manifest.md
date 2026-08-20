@@ -328,18 +328,33 @@ own record. That is not a duplicate of the card: the changelog is user-facing
 listing content, the card is machine provenance, and a `.deb` carrying both is
 correct.
 
-## When to build it
+## Status
 
-**When the third producer is real** — written as part of AuthPass's migration
-onto `cux_ship`, in the same change, so the writer is born with two honest
-consumers and the derivation block is specified against an actual chain rather
-than a guess about one.
+**Built, ahead of the trigger this section originally named.** The plan was to
+wait for the third producer — to write it as part of AuthPass's migration onto
+`cux_ship`, so the writer would be born with two honest consumers and the
+derivation block specified against a real chain. The owner chose to start it
+once AuthPass's migration was down to its final PR merge, which is close enough
+to that condition to act on and far enough from it to be worth recording.
 
-The case for never building it is weaker than for the metadata model but real:
-schema 1 plus per-flavor directories survives AuthPass's six flavors without a
-schema change, and the tarball problem is solvable with five lines writing a sha
-beside `version.txt`. What that forgoes is the single writer and a derivation
-record that chains rather than patching one workflow.
+So the honest state, field by field:
 
-Until then this document is the artifact: a spec with its load-bearing questions
-answered and deliberately unimplemented.
+- **`manifest write` exists and is tested**, including the round trip through
+  this package's own reader. That is the part that ends two hand-rolled
+  producers, and it did not need a third repository to be worth having.
+- **Schema 2 reads and writes.** Schema 1 still reads, unchanged.
+- **`derivedFrom` and `packaging` are written but unexercised.** Nothing in
+  either consuming repository repackages an artifact yet — the tarball → `.deb`
+  → `.snap` chain that motivated them is AuthPass's, and their migration has not
+  reached it. The fields are specified above and round-trip in tests; they have
+  never described a real derivation. Expect the first real chain to correct
+  something here, and prefer correcting it to working around it.
+- **`flavor` is written but this repository has one flavor.** Its six-flavor
+  justification is AuthPass's too.
+
+The case for never building it, kept because it was real and may yet be right
+about the parts above: schema 1 plus per-flavor directories survives six flavors
+without a schema change, and the tarball problem is solvable with five lines
+writing a sha beside `version.txt`. What that forgoes is the single writer —
+which is now the half that shipped — and a derivation record that chains rather
+than patching one workflow, which is the half still on paper.

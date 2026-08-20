@@ -32,6 +32,7 @@ import 'src/confirm.dart';
 import 'src/deps.dart';
 import 'src/keychain.dart';
 import 'src/listing_requirements.dart';
+import 'src/manifest_cli.dart';
 import 'src/placed.dart';
 import 'src/play/cli.dart';
 import 'src/project.dart';
@@ -78,6 +79,7 @@ CommandRunner<void> buildRunner() {
     ..addCommand(_AppstoreCommand())
     ..addCommand(_PlayCommand())
     ..addCommand(_ReleaseCommand())
+    ..addCommand(_ManifestCommand())
     ..addCommand(_ScreenshotsCommand())
     ..addCommand(_SecretsCommand())
     ..addCommand(_KeychainCommand())
@@ -569,6 +571,52 @@ class _FinishCommand extends Command<void> {
       // by this point the repository root has been read and the message names
       // real paths, which is more use than the usage text would be.
       stderr.writeln('cux_ship release finish: --app-dir: ${e.message}');
+      exitCode = 1;
+    }
+  }
+}
+
+// ---------------------------------------------------------------- manifest
+
+class _ManifestCommand extends Command<void> {
+  _ManifestCommand() {
+    addSubcommand(_ManifestWriteCommand());
+  }
+
+  @override
+  String get name => 'manifest';
+
+  @override
+  String get description =>
+      'The sidecar file a build writes beside its artifact, and that every '
+      'upload is named by.';
+}
+
+class _ManifestWriteCommand extends Command<void> {
+  _ManifestWriteCommand() : argParser = buildManifestWriteParser();
+
+  @override
+  final ArgParser argParser;
+
+  @override
+  String get name => 'write';
+
+  @override
+  String get description =>
+      'Write the manifest for a built artifact. Run it after signing: the '
+      'digest is taken from the bytes as they stand.';
+
+  @override
+  String get invocation =>
+      'cux_ship manifest write --artifact <path> --platform <p> '
+      '--version-name <v> --build-number <n> --git-sha <sha> --no-dirty';
+
+  @override
+  void run() {
+    try {
+      runManifestWrite(argResults!);
+    } on ReleaseException catch (e) {
+      stderr.writeln('cux_ship manifest write: ${e.message}');
       exitCode = 1;
     }
   }
