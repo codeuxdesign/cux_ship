@@ -1,8 +1,15 @@
 # The build manifest, schema 2
 
-Status: **proposed**, not built, and deliberately so — see *When to build it*.
-Schema 1 exists and is read by `cux_ship` 3.4.0-dev.1; nothing writes it but
-hand-rolled shell in two repositories.
+Status: **built**, 20 August 2026 — `cux_ship manifest write`, and the reader
+takes schema 1 and 2 alike. Parts of it are still unexercised; *Status* at the
+end says which and is the honest account.
+
+This document specifies **the file**. When it is written is
+[build-lifecycle.md](build-lifecycle.md), which proposes splitting the write into
+a `begin` before the build and a `seal` after it — because the four fields this
+document requires a producer to supply are exactly the ones nothing can verify
+in the current ordering. That is specified and unimplemented; this is what
+ships.
 
 ## What it is for
 
