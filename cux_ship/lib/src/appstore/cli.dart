@@ -64,6 +64,7 @@ import 'package:cux_ship_verify/release_notes.dart';
 
 import '../asc_platforms.dart';
 import '../listing_requirements.dart';
+import '../notes_source.dart';
 import '../reachable.dart';
 import 'app_store.dart';
 import 'asc_client.dart';
@@ -253,6 +254,23 @@ ArgParser buildAscParser(AscCommand cmd) {
     case AscCommand.promote:
       parser
         ..addOption(
+          'beta-group',
+          help:
+              'Give the build to this TestFlight group instead of submitting '
+              'it for review. Widening the audience of a build that already '
+              'exists is what promotion means, and a group is an audience — so '
+              'this needs no upload, creates no App Store version, and '
+              'publishes no listing.',
+        )
+        ..addOption(
+          'metadata',
+          help:
+              'Directory of store listing text and screenshots to publish. '
+              'Submitting for review is when the listing becomes what a '
+              'shopper reads, so this is where the committed tree is '
+              'asserted; an upload never publishes it.',
+        )
+        ..addOption(
           'build-number',
           help:
               'Which processed build to submit. Defaults to the newest Apple '
@@ -340,6 +358,127 @@ typedef AscConfirm = void Function(String summary);
 /// [args] comes from [buildAscParser] for the same [cmd], so an option that
 /// belongs to another subcommand is simply absent rather than null — hence the
 /// `opt`/`flag` readers below. Anything still missing falls back to [defaults].
+/// Publishes the App Store listing from a metadata tree.
+///
+/// **Its own function because two commands need it, for opposite reasons.** A
+/// listing-only invocation publishes deliberately. A promotion publishes
+/// because that is the moment the listing becomes what a shopper reads. An
+/// upload carrying an artifact does neither: these writes reach
+/// `appStoreVersionLocalizations` through `ensureVersion`, which *creates* the
+/// version record, so publishing beside a TestFlight build would bring an App
+/// Store version into existence for a release nobody had decided to make.
+Future<void> _publishAscListing(
+  AppStore store,
+  App app,
+  AppStoreMetadata metadata,
+  String locale,
+  String? versionName,
+  // Passed rather than reached for: the caller's closure names the subcommand
+  // in its message, and a listing failure should say whether it came from an
+  // upload or a promote.
+  Never Function(String) fail,
+) async {
+  final appInfo = await store.editableAppInfo(app);
+
+  final contentRights = metadata.contentRights;
+  if (contentRights != null) {
+    stdout.writeln('==> content rights');
+    await store.writeContentRights(app, contentRights);
+  }
+
+  if (metadata.categories.isNotEmpty) {
+    stdout.writeln('==> categories');
+    await store.writeCategories(appInfo, metadata.categories);
+  }
+  final ageRating = metadata.ageRating;
+  if (ageRating != null) {
+    stdout.writeln('==> age rating');
+    await store.writeAgeRating(appInfo, ageRating);
+  }
+
+  for (final localeMetadata in metadata.locales) {
+    if (localeMetadata.appInfo.isNotEmpty) {
+      stdout.writeln('==> ${localeMetadata.locale}: name and subtitle');
+      await store.writeAppInfoLocalization(
+        appInfo,
+        localeMetadata.locale,
+        localeMetadata.appInfo,
+      );
+    }
+  }
+
+  // The version-scoped half needs a version to hang off. Created when
+  // absent, because a listing push before the first release is exactly
+  // when there is nothing there yet.
+  final needsVersion =
+      metadata.reviewNotes != null ||
+      metadata.locales.any(
+        (l) => l.version.isNotEmpty || l.screenshots.isNotEmpty,
+      );
+  if (needsVersion) {
+    if (versionName == null) {
+      fail(
+        'pushing descriptions or screenshots needs --version-name, because '
+        'Apple scopes them to a version rather than to the app',
+      );
+    }
+    final version = await store.ensureVersion(app, versionName, create: true);
+    if (version == null) {
+      stdout.writeln(
+        '    (dry run created no version, so the fields below are skipped)',
+      );
+    } else {
+      final copyright = metadata.copyright;
+      if (copyright != null) {
+        stdout.writeln('==> copyright');
+        await store.writeVersionAttributes(version, {'copyright': copyright});
+      }
+
+      final reviewNotes = metadata.reviewNotes;
+      if (reviewNotes != null) {
+        stdout.writeln('==> review notes');
+        await store.writeReviewDetails(
+          version,
+          reviewNotes,
+          contact: ReviewContact.fromEnvironment(),
+        );
+      }
+
+      for (final localeMetadata in metadata.locales) {
+        if (localeMetadata.version.isNotEmpty) {
+          stdout.writeln('==> ${localeMetadata.locale}: listing text');
+          await store.writeVersionLocalization(
+            version,
+            localeMetadata.locale,
+            localeMetadata.version,
+          );
+        }
+        if (localeMetadata.screenshots.isNotEmpty) {
+          final localization = await store.versionLocalization(
+            version,
+            localeMetadata.locale,
+          );
+          if (localization == null) {
+            stdout.writeln(
+              '    (no ${localeMetadata.locale} localization yet, so its '
+              'screenshots are skipped)',
+            );
+            continue;
+          }
+          for (final entry in localeMetadata.screenshots.entries) {
+            stdout.writeln('==> ${localeMetadata.locale}: ${entry.key}');
+            await store.replaceScreenshots(
+              localization,
+              entry.key,
+              entry.value,
+            );
+          }
+        }
+      }
+    }
+  }
+}
+
 Future<void> runAsc(
   AscCommand cmd,
   ArgResults args, {
@@ -413,11 +552,15 @@ Future<void> runAsc(
   // or IN_REVIEW — both ordinary states) made that fail after the binary and
   // the notes had already gone up. A command that did everything asked and then
   // exited non-zero, which invites the one response that is wrong: run it again.
+  // Promote resolves metadata as well as upload. It did not, which made the
+  // listing publishable only by a listing-only invocation — so the design's
+  // publication point had no code behind it.
   final noMetadata = cmd == AscCommand.upload && flag('no-metadata');
   if (noMetadata && opt('metadata') != null) {
     fail('--metadata and --no-metadata ask for opposite things');
   }
-  final metadataPath = cmd == AscCommand.upload && !noMetadata
+  final metadataPath =
+      (cmd == AscCommand.upload || cmd == AscCommand.promote) && !noMetadata
       ? (opt('metadata') ?? defaults.metadata)
       : null;
   final promote = cmd == AscCommand.promote;
@@ -442,7 +585,10 @@ Future<void> runAsc(
       fail('no such file: $ipaPath');
     }
   }
-  if (promote && versionName == null) {
+  // A promotion to a beta group is exempt: it creates no App Store version, so
+  // there is nothing for a version name to name. Requiring one would be asking
+  // for a fact about a record the command deliberately does not make.
+  if (promote && versionName == null && opt('beta-group') == null) {
     fail(
       'no version name — none could be read from pubspec.yaml, so pass '
       '--version-name to say which version to submit',
@@ -556,6 +702,7 @@ Future<void> runAsc(
     if (changelogPath == null) {
       return literalNotes;
     }
+    requireCommittedNotes([changelogPath]);
     final notes = changelogNotesOf(
       changelogPath,
       forVersion,
@@ -776,123 +923,32 @@ Future<void> runAsc(
 
     // ---------------------------------------------------------- the listing
 
-    if (metadata != null) {
-      final appInfo = await store.editableAppInfo(app);
-
-      final contentRights = metadata.contentRights;
-      if (contentRights != null) {
-        stdout.writeln('==> content rights');
-        await store.writeContentRights(app, contentRights);
-      }
-
-      if (metadata.categories.isNotEmpty) {
-        stdout.writeln('==> categories');
-        await store.writeCategories(appInfo, metadata.categories);
-      }
-      final ageRating = metadata.ageRating;
-      if (ageRating != null) {
-        stdout.writeln('==> age rating');
-        await store.writeAgeRating(appInfo, ageRating);
-      }
-
-      for (final localeMetadata in metadata.locales) {
-        if (localeMetadata.appInfo.isNotEmpty) {
-          stdout.writeln('==> ${localeMetadata.locale}: name and subtitle');
-          await store.writeAppInfoLocalization(
-            appInfo,
-            localeMetadata.locale,
-            localeMetadata.appInfo,
-          );
-        }
-      }
-
-      // The version-scoped half needs a version to hang off. Created when
-      // absent, because a listing push before the first release is exactly
-      // when there is nothing there yet.
-      final needsVersion =
-          metadata.reviewNotes != null ||
-          metadata.locales.any(
-            (l) => l.version.isNotEmpty || l.screenshots.isNotEmpty,
-          );
-      if (needsVersion) {
-        if (versionName == null) {
-          fail(
-            'pushing descriptions or screenshots needs --version-name, because '
-            'Apple scopes them to a version rather than to the app',
-          );
-        }
-        final version = await store.ensureVersion(
-          app,
-          versionName,
-          create: true,
-        );
-        if (version == null) {
-          stdout.writeln(
-            '    (dry run created no version, so the fields below are skipped)',
-          );
-        } else {
-          final copyright = metadata.copyright;
-          if (copyright != null) {
-            stdout.writeln('==> copyright');
-            await store.writeVersionAttributes(version, {
-              'copyright': copyright,
-            });
-          }
-
-          final reviewNotes = metadata.reviewNotes;
-          if (reviewNotes != null) {
-            stdout.writeln('==> review notes');
-            await store.writeReviewDetails(
-              version,
-              reviewNotes,
-              contact: ReviewContact.fromEnvironment(),
-            );
-          }
-
-          for (final localeMetadata in metadata.locales) {
-            if (localeMetadata.version.isNotEmpty) {
-              stdout.writeln('==> ${localeMetadata.locale}: listing text');
-              await store.writeVersionLocalization(
-                version,
-                localeMetadata.locale,
-                localeMetadata.version,
-              );
-            }
-            if (localeMetadata.screenshots.isNotEmpty) {
-              final localization = await store.versionLocalization(
-                version,
-                localeMetadata.locale,
-              );
-              if (localization == null) {
-                stdout.writeln(
-                  '    (no ${localeMetadata.locale} localization yet, so its '
-                  'screenshots are skipped)',
-                );
-                continue;
-              }
-              for (final entry in localeMetadata.screenshots.entries) {
-                stdout.writeln('==> ${localeMetadata.locale}: ${entry.key}');
-                await store.replaceScreenshots(
-                  localization,
-                  entry.key,
-                  entry.value,
-                );
-              }
-            }
-          }
-        }
-      }
+    // **An upload carrying an artifact does not write the listing.**
+    //
+    // The writes below reach `appStoreVersionLocalizations` through
+    // `ensureVersion`, which *creates* the version record — so publishing the
+    // listing alongside a TestFlight build brings an App Store version into
+    // existence for a release nobody has decided to make, and fills it with
+    // whatever the working tree says. The store-metadata design puts listing
+    // publication at the promotion to the public audience for exactly that
+    // reason.
+    //
+    // A listing-only invocation — `--metadata` with no artifact — is the
+    // deliberate exception, the same one Play's `--listing-only` is: nothing is
+    // being shipped for the copy to be ahead of, and moving the live page now
+    // is the entire purpose of the command.
+    if (metadata != null && ipaPath != null) {
+      stdout.writeln(
+        '==> listing: untouched — an upload does not publish it.\n'
+        '    Publish deliberately with --metadata and no artifact.',
+      );
+    } else if (metadata != null) {
+      await _publishAscListing(store, app, metadata, locale, versionName, fail);
     }
 
     // -------------------------------------------------------------- promote
 
     if (promote) {
-      final version = await store.ensureVersion(
-        app,
-        versionName!,
-        create: true,
-      );
-
       // Read rather than assumed. The point of promoting is that what goes to
       // review is what testers ran, and that only holds if the build comes
       // from what Apple says it has.
@@ -928,6 +984,41 @@ Future<void> runAsc(
               ),
             );
 
+      // **A group is an audience, so giving a build to one is a promotion.**
+      // It is the same operation Play calls promotion — an existing build, no
+      // upload, a wider audience — and spelling it this way is what makes the
+      // listing rule derived rather than asserted: promotions to the public
+      // audience publish, promotions to a group do not, on both stores for one
+      // reason.
+      //
+      // No `--version-name` is required and no version is created. An App
+      // Store version is the public artefact; a TestFlight group is not, and
+      // conflating them is how a version record appears for a release nobody
+      // has decided to make.
+      final betaGroup = opt('beta-group');
+      if (betaGroup != null) {
+        final number =
+            (chosen['attributes'] as Map<String, dynamic>?)?['version'];
+        stdout.writeln('==> giving build $number to "$betaGroup"');
+        await store.addToBetaGroup(app, chosen, betaGroup);
+        stdout.writeln(
+          '==> done — not submitted for review, and the listing is untouched',
+        );
+        if (dryRun) {
+          // Said here because this path returns before the closing notice, and
+          // a dry run that printed "done" and nothing else would read as a
+          // write that happened.
+          stdout.writeln('==> dry run — nothing was written');
+        }
+        return;
+      }
+
+      final version = await store.ensureVersion(
+        app,
+        versionName!,
+        create: true,
+      );
+
       if (version != null) {
         await store.attachBuild(version, chosen);
 
@@ -956,6 +1047,22 @@ Future<void> runAsc(
           stdout.writeln('==> phased release');
           await store.enablePhasedRelease(version);
         }
+        // **The listing publishes here, and only here.** This is the moment
+        // it becomes what a shopper reads, and the version record it hangs
+        // off exists by now — which is what makes it possible at all. Before
+        // the submission, so a review sees the copy that was meant to
+        // accompany it rather than the previous release's.
+        if (metadata != null) {
+          await _publishAscListing(
+            store,
+            app,
+            metadata,
+            locale,
+            versionName,
+            fail,
+          );
+        }
+
         stdout.writeln('==> submitting for review');
         await store.submitForReview(app, version);
       }

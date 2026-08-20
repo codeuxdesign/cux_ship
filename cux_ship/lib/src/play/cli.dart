@@ -67,12 +67,14 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:args/args.dart';
+import 'package:crypto/crypto.dart';
 import 'package:cux_ship_verify/cux_ship_verify.dart';
 import 'package:cux_ship_verify/release_notes.dart';
 import 'package:googleapis/androidpublisher/v3.dart';
 import 'package:googleapis_auth/auth_io.dart';
 
 import '../listing_requirements.dart';
+import '../notes_source.dart';
 
 const _serviceAccountVar = 'GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_PATH';
 
@@ -704,6 +706,106 @@ int _be32(List<int> b, int o) =>
 /// Everything here rides the same transaction as the bundle, so a listing that
 /// Play rejects halfway through leaves the live one untouched rather than
 /// half-updated.
+/// Whether the images Play holds are byte-identical to the ones committed, in
+/// the same order.
+///
+/// **Its own function so it can be tested without a Play account.** The
+/// comparison decides whether a release costs a handful of image operations or
+/// hundreds, and buried inside an API call it would be checkable only by
+/// running a real upload and watching what it did — which is how a defect that
+/// looks like a working release survives.
+///
+/// Ordered rather than set-wise: Play shows screenshots in upload order, so the
+/// same files rearranged is a real change.
+/// [held] is nullable because Play's `Image.sha256` is: a digest it does not
+/// report cannot be proven equal, so it counts as a difference and the type is
+/// re-uploaded. Failing toward the extra upload is right — the alternative is
+/// skipping a change because the store declined to describe what it holds.
+bool imagesMatch(List<String> committed, List<String?> held) =>
+    committed.length == held.length &&
+    List.generate(
+      committed.length,
+      (i) => held[i] != null && committed[i] == held[i],
+    ).every((same) => same);
+
+/// Says how the committed listing differs from what Play holds, and writes
+/// nothing.
+///
+/// **Drift prevention needs frequent observation, not frequent writing.** An
+/// earlier design reasserted the listing on every upload, which on Play is a
+/// publication: the listing takes no track parameter, so an internal-track
+/// upload would push copy describing a version nobody can download yet to the
+/// public store page. Reading costs nothing, catches the same drift, and
+/// reports it instead of silently resolving it in the repository's favour.
+///
+/// A console edit shows up here as a difference. That includes a running store
+/// listing experiment, which has no API at all and is otherwise invisible —
+/// somebody should know before a promote publishes over it.
+Future<void> _reportListingDiff(
+  AndroidPublisherApi api,
+  String packageName,
+  String editId,
+  _Metadata metadata,
+) async {
+  final differences = <String>[];
+
+  for (final locale in metadata.locales) {
+    if (locale.text.isNotEmpty) {
+      final held = await api.edits.listings.get(
+        packageName,
+        editId,
+        locale.locale,
+      );
+      for (final field in const [
+        'title',
+        'shortDescription',
+        'fullDescription',
+      ]) {
+        final want = locale.text[field];
+        final have = switch (field) {
+          'title' => held.title,
+          'shortDescription' => held.shortDescription,
+          _ => held.fullDescription,
+        };
+        if (want != null && want != have) {
+          differences.add('${locale.locale} $field');
+        }
+      }
+    }
+
+    for (final entry in locale.images.entries) {
+      final want = [
+        for (final file in entry.value)
+          sha256.convert(file.readAsBytesSync()).toString(),
+      ];
+      final have =
+          ((await api.edits.images.list(
+                    packageName,
+                    editId,
+                    locale.locale,
+                    entry.key,
+                  )).images ??
+                  const <Image>[])
+              .map((i) => i.sha256)
+              .toList();
+      if (!imagesMatch(want, have)) {
+        differences.add('${locale.locale} ${entry.key}');
+      }
+    }
+  }
+
+  if (differences.isEmpty) {
+    stdout.writeln('==> listing: matches the console');
+    return;
+  }
+  stdout.writeln(
+    '==> listing: repository differs from the console in '
+    '${differences.join(", ")}\n'
+    '    Not published by an upload. It goes live on a promote to production '
+    'carrying --metadata.',
+  );
+}
+
 Future<void> _publishMetadata(
   AndroidPublisherApi api,
   String packageName,
@@ -744,6 +846,36 @@ Future<void> _publishMetadata(
     }
 
     for (final entry in locale.images.entries) {
+      // **Skip the whole type when the bytes already match.** Play reports a
+      // sha256 per image, so the comparison is exact rather than a heuristic —
+      // and this is the difference between a release costing a handful of image
+      // operations and costing hundreds. At 23 locales the old unconditional
+      // delete-and-reupload is over a hundred of each, every release, to
+      // replace files with themselves.
+      //
+      // Ordered rather than set-wise: Play shows screenshots in upload order,
+      // so the same files in a different order is a real change.
+      final want = [
+        for (final file in entry.value)
+          sha256.convert(file.readAsBytesSync()).toString(),
+      ];
+      final have =
+          ((await api.edits.images.list(
+                    packageName,
+                    editId,
+                    locale.locale,
+                    entry.key,
+                  )).images ??
+                  const <Image>[])
+              .map((i) => i.sha256)
+              .toList();
+      if (imagesMatch(want, have)) {
+        stdout.writeln(
+          '==> ${locale.locale}: ${entry.value.length} ${entry.key} unchanged',
+        );
+        continue;
+      }
+
       // upload *adds*. Without clearing first, every run appends, and the
       // listing ends up carrying eight copies of the same three screenshots —
       // at which point the repository is no longer the source of truth.
@@ -913,6 +1045,14 @@ ArgParser buildPlayParser(PlayCommand cmd) {
     case PlayCommand.promote:
       parser
         ..addOption(
+          'metadata',
+          help:
+              'Directory of store listing text and images to publish. A '
+              'promotion to production is where the listing goes public, so '
+              'this is where the committed tree is asserted; an upload only '
+              'reports how it differs.',
+        )
+        ..addOption(
           'from',
           defaultsTo: 'internal',
           help:
@@ -1028,7 +1168,12 @@ Future<void> runPlay(
   final aabPath = opt('aab') ?? defaults.artifact;
   final buildNumber = opt('build-number') ?? defaults.buildNumber;
   final upload = cmd == PlayCommand.upload;
-  final metadataPath = upload ? (opt('metadata') ?? defaults.metadata) : null;
+  // **Resolved for promote as well as upload**, which it was not: the gate
+  // below reads `track == 'production'`, and with metadata null on every
+  // promotion that branch could never be taken. A correct condition guarding
+  // an unreachable path is worse than a wrong one, because it reads as
+  // implemented.
+  final metadataPath = opt('metadata') ?? (upload ? defaults.metadata : null);
   final dataSafetyPath = upload
       ? (opt('data-safety') ?? defaults.dataSafety)
       : null;
@@ -1185,6 +1330,7 @@ Future<void> runPlay(
     if (changelogPath == null) {
       return releaseNotes;
     }
+    requireCommittedNotes([changelogPath]);
     final notes = changelogNotesOf(
       changelogPath,
       forVersion,
@@ -1422,7 +1568,24 @@ Future<void> runPlay(
     // details patch that moves defaultLanguage elsewhere — and both are in this
     // one edit, so ordering within it is all there is to get right.
     if (metadata != null) {
-      await _publishMetadata(api, packageName, editId, metadata);
+      // **Only a promotion to the public audience writes the listing.**
+      //
+      // Play's listing takes no track parameter — one per app per locale,
+      // shared by production and every test track — so a write is a
+      // publication. Writing it on an internal-track upload publishes copy for
+      // a version nobody can download; writing it on a promote to `beta`
+      // publishes it for open testing, which is the same defect one audience
+      // over. `production` is the only track that is the public page.
+      //
+      // A listing-only push is the deliberate exception: no artifact, nothing
+      // to be ahead of, and the whole point of the invocation is to move the
+      // live page now.
+      final goingPublic = promoteFrom != null && track == 'production';
+      if (goingPublic || aab == null) {
+        await _publishMetadata(api, packageName, editId, metadata);
+      } else {
+        await _reportListingDiff(api, packageName, editId, metadata);
+      }
     }
 
     for (final locale in deleteLocales) {
