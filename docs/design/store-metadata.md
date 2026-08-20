@@ -111,63 +111,77 @@ from another still takes the publishing clone's committed notes. That is the
 requirement — committed means reviewed — and chasing the cross-machine case is
 where the deleted decisions came from.
 
-### 2. Close the one workflow gap: publish the App Store listing at promote
+### 2. Only promote touches the public listing — on both stores
 
-`--no-metadata` on upload is correct, because publishing a listing reads the
-`appInfos` record that App Store Connect locks during review — which would make
-giving testers a build mid-review impossible.
+**A listing write on Play is a publication.** `edits.listings.update` and
+`edits.images.upload` take `(packageName, editId, locale)` and **no track**:
+there is one listing per app per locale, shared by production and every test
+track, and committing the edit makes it public. Only `releaseNotes` is
+per-track.
 
-But "published deliberately, by hand" means in practice *never*, and the listing
-drifts by default: the exact failure the Play side is engineered against. The
-consumption point already exists — `appstore promote` creates the new
-`appStoreVersion`, which is when version-scoped fields can be written without
-meeting the lock.
+**So reasserting it on every upload has exactly two states**, and neither is
+good. Either the committed listing already equals what production should say —
+in which case the write does nothing — or it differs, in which case an
+internal-track upload publishes copy describing a version nobody can download.
+The cadence is safe precisely when it is useless.
 
-**And `play promote` should reassert the listing too, which it does not today.**
-That cell is an accident of implementation rather than a store constraint:
-promote already opens an edit for the track assignment, and publishing the
-committed listing in the same edit is straightforward. It is also the most
-valuable moment to do it, because promote is what reaches the public — today a
-listing fix committed between an upload and a promote waits for the *next*
-upload to ship.
+Worse, the convention that would make it safe — *the listing always describes
+production, never stage it* — forbids committing listing copy alongside the
+feature that motivates it, and reinstates the keep-two-things-in-step-by-
+remembering this tooling exists to remove. It is not an edge case either: it is
+the first release cycle that overlaps another one. 1.1 in beta, 1.2 uploaded to
+internal, and the public page now describes 1.2.
 
-With that one cell flipped, the whole thing becomes a default with a single
-exception:
+**The rule, and it is one bit:**
 
-> **Every command that talks to a store reasserts the committed listing. The one
-> exception is `appstore upload`, because Apple locks the listing during review
-> and a TestFlight build must never collide with it.**
+> **Only `promote` writes the public listing, on both stores. Uploads validate
+> and report; they never write it.**
 
-That is the memorable form, and it is memorable structurally rather than by
-being shorter: people retain defaults with motivated exceptions and do not
-retain patternless tables. The exception carries its own reason, and the reason
-is a fact about App Store Connect rather than a convention someone chose.
+"Will this touch the public listing?" — "Is it a promote?" Nothing else to
+remember, and no exception to motivate.
 
-**How this section read before.** It closed with *"the release action reasserts
-the listing; the upload action never touches it"* — which is false for Play,
-whose listing goes up on every upload, and which contradicted the cadence
-section below arguing that the every-upload push is the whole drift-prevention
-mechanism. Two reviewers and a consistency pass briefed on internal
-contradictions all read past it; it survived because it sat where a document
-earns its summary, which is where readers stop verifying. The repair that
-replaced it — *each store reasserts at the last moment its model allows* — was
-accurate and unusable: correct for a designer, no help to someone at a terminal
-asking whether the command they are about to run will touch the listing.
-
-**Whatever the rule, the tool should say it rather than rely on anyone
-remembering.** Every store command states its listing action, and the reason,
-in the plan it prints before sending anything:
+**Uploads observe rather than write, which is stronger than the cadence it
+replaces.** Every upload runs a read-only diff of the committed tree against
+what the store holds — `listings.get`, and `images.list` with the digest
+comparison decision 1 already buys — and says so in its plan:
 
 ```
-listing: reasserting store/play — 3 texts, 6 images (2 changed)
-listing: untouched — App Store Connect locks it during review; it publishes at promote
+listing: repo differs from console in fullDescription (en-US) — publishes at next promote
+listing: console holds an edit not in the repository
 ```
 
-The reason belongs in the message, because the message is where the rule gets
-re-taught at exactly the moment somebody is about to "fix the inconsistency" in
-the wrong direction. `upload.sh` already works this way — *"the plan below says
-so before anything is sent"* — so this extends a surface rather than adding
-one.
+Drift prevention needed frequent **observation**; the old design gave it
+frequent **writing**, and the whole defect lives in that gap. Observation costs
+nothing and publishes nothing. It is also strictly better at the job: the old
+cadence silently overwrote a console edit, where this names it and leaves
+someone to decide which side is right.
+
+**The stores agree more than this document assumed.** App Store Connect
+*mandates* promote-time — the listing is `appStoreVersionLocalizations` under an
+`appStoreVersion` that does not exist until then. Play merely *permitted*
+earlier, and permission was never obligation. TestFlight has no listing at all;
+`appstore upload` writes `betaBuildLocalizations` — `whatsNew`, per build — which
+is release notes, not a listing.
+
+**Two things stay on upload, deliberately.** `--listing-only` remains the
+explicit escape for *fix the live page now* — an act rather than a cadence. And
+the **data-safety declaration** stays, because the distinction is real: marketing
+copy ahead of production is wrong, while a data-safety declaration ahead of
+production is the *compliant* direction. `upload.sh` already gives that reason.
+
+**The residual case, which is the same defect one hop later.** Promoting 1.1
+while trunk's listing already describes 1.2 republishes the skew at promote
+time. The listing is trunk-owned, like the changelog, so this is the ordinary
+state-against-a-shipped-version situation and takes the ordinary escape:
+promote from the release branch or tag. Two things make it survivable — promote
+is already interactive, and its confirmation should show the listing state it is
+about to publish, so skew is visible before the yes; and release notes never
+skew, being version-keyed.
+
+Rejected: version-keying the listing source (`store/play/1.2/…`). It grafts a
+version dimension onto app-state to solve a rare case the release-branch
+mechanism already covers, at the cost of a merge burden on every release
+forever.
 
 ### 3. Build nothing else until a need is named
 
@@ -293,13 +307,28 @@ decision 3 is to build none of it. It loses to decision 1, which fixes defects
 rather than hypotheticals, and it defers rather than defeats decision 2 — bought
 at the next App Store submission.
 
-## Why the default is "reassert", and not "push when it changed"
+## Observe on every contact, write only at promote
 
-**Reassert the committed listing on every release.** Not because it changed —
-because a source of truth nothing routinely pushes drifts from the console with
-nobody noticing, and the store replaces rather than merges.
+**Drift prevention needs frequent observation, not frequent writing.** An
+earlier shape of this document asked for the committed listing to be reasserted
+on every release — not because it changed, but because a source of truth nothing
+routinely pushes drifts from the console with nobody noticing, and the store
+replaces rather than merges.
 
-snapcraft supplies the cautionary tale from the other direction: one manual
-web-UI edit silently disables its metadata-push-on-release. That is
-the failure this cadence exists to prevent, observed in a system that chose the
-other default.
+The instinct was right and the mechanism was wrong. Writing frequently is
+publishing frequently, and on Play that means publishing whatever trunk happens
+to say to a public page serving a version that may be two releases behind.
+Reading frequently costs nothing, catches the same drift, and reports it instead
+of silently resolving it in trunk's favor.
+
+snapcraft still supplies the cautionary tale, and its lesson survives intact:
+one manual web-UI edit silently disables its metadata-push-on-release, so the
+publish path had a silent off-switch. Promote-time publishing has none — it is
+automatic at promote and toggled by nothing.
+
+Worth knowing and deliberately not used: Play's **managed publishing** console
+toggle can hold listing changes for manual release. It changes the semantics of
+every edit commit app-wide, it is console state the repository cannot see, and
+internal-track releases bypass it regardless. A silent console toggle governing
+publication is the snap failure wearing Play's colors, and this design needs
+nothing from it.
