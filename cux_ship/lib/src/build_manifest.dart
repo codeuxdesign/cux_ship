@@ -50,6 +50,22 @@ const supportedManifestSchema = 2;
 /// can adopt incrementally.
 const readableManifestSchemas = {1, 2};
 
+/// A full git commit id — 40 lowercase hex characters in a sha1 repository, 64
+/// in a sha256 one.
+///
+/// Hoisted and named because an inline `RegExp(...)` inside a function is
+/// recompiled on every call and reads as a magic string; the name is what says
+/// which of several 64-hex-character things this is.
+///
+/// **Deliberately not shared with `deps.dart`'s sha256 pin pattern.** That one
+/// is the same shape and a different fact: a content digest of a binary this
+/// tool is about to download and run, where this is an identifier for a commit.
+/// Unifying them would mean that relaxing the commit check — for a shorter form,
+/// a new hash, an uppercase tolerance — silently relaxes the one guarding what
+/// gets executed on the machine. Two facts that share a regex today will not
+/// share one for the reasons they change.
+final _fullCommitId = RegExp(r'^([0-9a-f]{40}|[0-9a-f]{64})$');
+
 Map<String, String>? _stringMap(dynamic value) => value is Map
     ? {for (final e in value.entries) '${e.key}': '${e.value}'}
     : null;
@@ -297,11 +313,34 @@ String writeBuildManifest({
       'accept this and hand the next tool something it cannot count with.',
     );
   }
-  if (!RegExp(r'^[0-9a-f]{40}$').hasMatch(gitSha)) {
+  // **40 for SHA-1, 64 for SHA-256, and both because git has two object
+  // formats.** SHA-256 repositories have existed since git 2.29; a check that
+  // only knew 40 would refuse a perfectly good commit id and insist, wrongly,
+  // that it was the wrong length. That is the same defect as accepting a short
+  // sha, from the other side: encoding "what our repositories happen to use" as
+  // "what is correct".
+  //
+  // What is actually being enforced is *full* rather than abbreviated, because
+  // a reader that resolves whatever it is given makes an abbreviation work
+  // right up until something reads the file without a repository to resolve
+  // against. Any length between the two is an abbreviation of one of them.
+  //
+  // **A regex rather than a decoder, and specifically never base64.** Decoding
+  // reads like the cleaner idea, so here is why it is not. A git sha *is* valid
+  // base64 — hex characters are a subset of the base64 alphabet and 40 is a
+  // multiple of 4 — so `base64.decode` returns 30 bytes of noise and never
+  // throws. It would accept every sha, accept plenty of non-shas, and look like
+  // it was working. `hex.decode` is honest by comparison and says 20 bytes, but
+  // it also accepts UPPERCASE, which git never emits and which would then fail
+  // every string comparison against `git rev-parse` output — so it needs a
+  // lowercase guard and a FormatException catch beside it. Three checks and two
+  // throw sites to say what one pattern says: lowercase, hex only, full length.
+  if (!_fullCommitId.hasMatch(gitSha)) {
     throw ReleaseException(
-      'gitSha must be the full 40-character lowercase sha, and is "$gitSha". '
-      'A reader normalizes whatever it is given, which is exactly what lets a '
-      'short sha survive here and break a tool that does not.',
+      'gitSha must be a full lowercase commit id — 40 hex characters for a '
+      'sha1 repository, 64 for sha256 — and is "$gitSha" (${gitSha.length}). '
+      'A reader normalizes whatever it is given, which is exactly what lets an '
+      'abbreviated sha survive here and break a tool that does not.',
     );
   }
 

@@ -97,9 +97,48 @@ void main() {
         isA<ReleaseException>().having(
           (e) => e.toString(),
           'message',
-          contains('40-character'),
+          contains('full lowercase commit id'),
         ),
       ),
+    );
+  });
+
+  test('a sha256 repository commit id is accepted', () {
+    // git has had a sha256 object format since 2.29, where a commit id is 64
+    // hex characters. A check that knew only 40 would refuse a valid id and
+    // insist it was the wrong length — the short-sha defect from the other
+    // side, encoding "what our repositories use" as "what is correct".
+    final path = writeBuildManifest(
+      artifactPath: _artifact(),
+      versionName: '1.1.0',
+      buildNumber: '53',
+      gitSha: 'd' * 64,
+      dirty: false,
+      platform: 'android',
+      producerName: 'cux_ship',
+      producerVersion: '3.4.0-dev.1',
+      builtAt: '2026-08-19T14:22:00Z',
+    );
+
+    expect(BuildManifest.read(path).gitSha, 'd' * 64);
+  });
+
+  test('a length between the two formats is still an abbreviation', () {
+    // 48 characters is not a shorter sha256 — it is a truncated one, and the
+    // point of the check is full rather than any particular length.
+    expect(
+      () => writeBuildManifest(
+        artifactPath: _artifact(),
+        versionName: '1.1.0',
+        buildNumber: '53',
+        gitSha: 'd' * 48,
+        dirty: false,
+        platform: 'android',
+        producerName: 'cux_ship',
+        producerVersion: '3.4.0-dev.1',
+        builtAt: '2026-08-19T14:22:00Z',
+      ),
+      throwsA(isA<ReleaseException>()),
     );
   });
 

@@ -125,13 +125,49 @@ repository's own precedent of preferring a host tool over a library
 (`deps.dart` shells to `tar`, with its reason in a comment).
 
 The gate is honest verification, not feasibility: **write the walker, point it
-at a real signed `.aab`, and confirm the two values against what
-`bundletool dump manifest` says**, before the check is allowed to refuse
-anything. If that experiment fails — the proto layout surprises, the walk is
-brittle — the `aab` row degrades to "trusted loudly" like `pkg`, and the design
-loses one row rather than its reason to exist. That is the difference from
-`begin`/`seal`, where the same open question put the whole ordering at stake
-("the design is worth materially less").
+at a real signed `.aab`, and confirm the two values against an independent
+decoder**, before the check is allowed to refuse anything.
+
+### Run, 20 August 2026 — the gate is passed, and the estimate was pessimistic
+
+Against the first real signed bundle this project has produced: 69 MB,
+`how-it-went-1.1.0-65.aab`, AGP with `compileSdkVersion 36`.
+
+```
+versionCode = 65        versionName = 1.1.0
+```
+
+Confirmed against `protoc --decode_raw`, which needs no schema and shares no
+code with the walker. Two further attributes were read in the same pass —
+`package` (no namespace, exercising that branch) and `compileSdkVersion` — and a
+name that does not exist came back absent rather than fabricated, so the walk is
+parsing rather than returning two lucky hits.
+
+Three corrections to what this section assumed:
+
+- **The walk is two levels, not five.** `XmlAttribute.value` (field 3) already
+  carries `"65"` as a rendered string, *alongside* the compiled
+  `compiled_item → prim → int_decimal_value`. Nothing needs to decode `Item` or
+  `Primitive`. The walk is: `XmlNode.element` (1) → repeated
+  `XmlElement.attribute` (4) → `namespace_uri` (1), `name` (2), `value` (3).
+- **~130 lines including a `main()` and two wire types the walk never meets.**
+  The production reader is smaller. No new dependency; `unzip -p` for the zip
+  entry as proposed.
+- **`bundletool` was never the alternative, and neither is `aapt2`.** Neither is
+  installed here, and `aapt2 dump xmltree` *refuses an `.aab` outright* — "could
+  not identify format of APK" — so the hand-rolled reader is not a shortcut
+  around a heavier tool, it is the only local option short of installing a Java
+  toolchain to answer a question a hundred lines answers.
+
+So the `aab` row of §2 graduates from "to be priced" to priced and cheap, and
+the design's main check covers both stores rather than Apple alone.
+
+**One assumption is untested and should be said.** This is one bundle from one
+AGP version. The layout is expected to be stable because bundletool itself
+depends on `Resources.proto`, but that is an argument rather than a measurement.
+The first `.aab` from a different AGP that this refuses will say whether the
+argument held — and the failure mode is a loud refusal, not a wrong answer,
+which is the right way round.
 
 ## 6. What stays unverifiable, so nobody re-litigates it
 
