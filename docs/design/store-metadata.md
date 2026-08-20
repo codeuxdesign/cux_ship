@@ -146,6 +146,12 @@ reproduce the defect one track over. On Play the public audience is
 `production`; on the App Store it is the review submission. A promotion into
 closed or open testing observes and reports exactly as an upload does.
 
+One bootstrap case sits outside the rule and is named here rather than left to
+be discovered: before the first production release — an app living in open
+testing only — no qualifying promotion exists, yet Play requires a complete
+listing before an open track can publish at all. The first listing goes up by
+the explicit act, `--listing-only`, not by a cadence.
+
 **Uploads observe rather than write, which is stronger than the cadence it
 replaces.** Every upload runs a read-only diff of the committed tree against
 what the store holds — `listings.get`, and `images.list` with the digest
@@ -179,7 +185,10 @@ only the app, the build and the group.
 
 Spelling it as a promotion buys three things. The stores stop needing separate
 mental models — *promote widens the audience of a build that already exists*,
-everywhere. A build can be given to an external group days after upload without
+everywhere. The shared model is that verb and nothing below it: Apple's groups
+are membership a build can hold several of at once, where Play's tracks carry a
+release that supersedes its predecessor, and promote must not paper over that
+difference the day someone asks it to "replace" a build in a group. A build can be given to an external group days after upload without
 re-uploading, which is not expressible today. And the listing rule falls out of
 it rather than being asserted: promotions to the public audience publish,
 promotions to a group do not, on both stores and for the same reason.
@@ -192,7 +201,11 @@ Review**, which is separate from App Store review and appears nowhere in this
 tooling.
 
 **Two things stay on upload, deliberately.** `--listing-only` remains the
-explicit escape for *fix the live page now* — an act rather than a cadence. And
+explicit escape for *fix the live page now* — an act rather than a cadence. On
+the App Store that act is bounded by the store rather than the tooling: outside
+a version in preparation, only promotional text and app-info fields can change
+without shipping a new version, which is why the `store/appstore/` README
+routes seasonal copy through `promotional_text`. And
 the **data-safety declaration** stays, because the distinction is real: marketing
 copy ahead of production is wrong, while a data-safety declaration ahead of
 production is the *compliant* direction. `upload.sh` already gives that reason.
