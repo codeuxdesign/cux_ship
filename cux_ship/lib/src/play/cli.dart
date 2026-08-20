@@ -800,7 +800,9 @@ Future<void> _reportListingDiff(
   }
   stdout.writeln(
     '==> listing: repository differs from the console in '
-    '${differences.join(", ")} — publishes at the next promote to production',
+    '${differences.join(", ")}\n'
+    '    Not published by an upload. It goes live on a promote to production '
+    'carrying --metadata.',
   );
 }
 
@@ -1043,6 +1045,14 @@ ArgParser buildPlayParser(PlayCommand cmd) {
     case PlayCommand.promote:
       parser
         ..addOption(
+          'metadata',
+          help:
+              'Directory of store listing text and images to publish. A '
+              'promotion to production is where the listing goes public, so '
+              'this is where the committed tree is asserted; an upload only '
+              'reports how it differs.',
+        )
+        ..addOption(
           'from',
           defaultsTo: 'internal',
           help:
@@ -1158,7 +1168,12 @@ Future<void> runPlay(
   final aabPath = opt('aab') ?? defaults.artifact;
   final buildNumber = opt('build-number') ?? defaults.buildNumber;
   final upload = cmd == PlayCommand.upload;
-  final metadataPath = upload ? (opt('metadata') ?? defaults.metadata) : null;
+  // **Resolved for promote as well as upload**, which it was not: the gate
+  // below reads `track == 'production'`, and with metadata null on every
+  // promotion that branch could never be taken. A correct condition guarding
+  // an unreachable path is worse than a wrong one, because it reads as
+  // implemented.
+  final metadataPath = opt('metadata') ?? (upload ? defaults.metadata : null);
   final dataSafetyPath = upload
       ? (opt('data-safety') ?? defaults.dataSafety)
       : null;
@@ -1565,7 +1580,8 @@ Future<void> runPlay(
       // A listing-only push is the deliberate exception: no artifact, nothing
       // to be ahead of, and the whole point of the invocation is to move the
       // live page now.
-      if (track == 'production' || aab == null) {
+      final goingPublic = promoteFrom != null && track == 'production';
+      if (goingPublic || aab == null) {
         await _publishMetadata(api, packageName, editId, metadata);
       } else {
         await _reportListingDiff(api, packageName, editId, metadata);

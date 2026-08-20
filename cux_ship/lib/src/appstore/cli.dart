@@ -254,6 +254,14 @@ ArgParser buildAscParser(AscCommand cmd) {
     case AscCommand.promote:
       parser
         ..addOption(
+          'metadata',
+          help:
+              'Directory of store listing text and screenshots to publish. '
+              'Submitting for review is when the listing becomes what a '
+              'shopper reads, so this is where the committed tree is '
+              'asserted; an upload never publishes it.',
+        )
+        ..addOption(
           'build-number',
           help:
               'Which processed build to submit. Defaults to the newest Apple '
@@ -341,6 +349,127 @@ typedef AscConfirm = void Function(String summary);
 /// [args] comes from [buildAscParser] for the same [cmd], so an option that
 /// belongs to another subcommand is simply absent rather than null — hence the
 /// `opt`/`flag` readers below. Anything still missing falls back to [defaults].
+/// Publishes the App Store listing from a metadata tree.
+///
+/// **Its own function because two commands need it, for opposite reasons.** A
+/// listing-only invocation publishes deliberately. A promotion publishes
+/// because that is the moment the listing becomes what a shopper reads. An
+/// upload carrying an artifact does neither: these writes reach
+/// `appStoreVersionLocalizations` through `ensureVersion`, which *creates* the
+/// version record, so publishing beside a TestFlight build would bring an App
+/// Store version into existence for a release nobody had decided to make.
+Future<void> _publishAscListing(
+  AppStore store,
+  App app,
+  AppStoreMetadata metadata,
+  String locale,
+  String? versionName,
+  // Passed rather than reached for: the caller's closure names the subcommand
+  // in its message, and a listing failure should say whether it came from an
+  // upload or a promote.
+  Never Function(String) fail,
+) async {
+  final appInfo = await store.editableAppInfo(app);
+
+  final contentRights = metadata.contentRights;
+  if (contentRights != null) {
+    stdout.writeln('==> content rights');
+    await store.writeContentRights(app, contentRights);
+  }
+
+  if (metadata.categories.isNotEmpty) {
+    stdout.writeln('==> categories');
+    await store.writeCategories(appInfo, metadata.categories);
+  }
+  final ageRating = metadata.ageRating;
+  if (ageRating != null) {
+    stdout.writeln('==> age rating');
+    await store.writeAgeRating(appInfo, ageRating);
+  }
+
+  for (final localeMetadata in metadata.locales) {
+    if (localeMetadata.appInfo.isNotEmpty) {
+      stdout.writeln('==> ${localeMetadata.locale}: name and subtitle');
+      await store.writeAppInfoLocalization(
+        appInfo,
+        localeMetadata.locale,
+        localeMetadata.appInfo,
+      );
+    }
+  }
+
+  // The version-scoped half needs a version to hang off. Created when
+  // absent, because a listing push before the first release is exactly
+  // when there is nothing there yet.
+  final needsVersion =
+      metadata.reviewNotes != null ||
+      metadata.locales.any(
+        (l) => l.version.isNotEmpty || l.screenshots.isNotEmpty,
+      );
+  if (needsVersion) {
+    if (versionName == null) {
+      fail(
+        'pushing descriptions or screenshots needs --version-name, because '
+        'Apple scopes them to a version rather than to the app',
+      );
+    }
+    final version = await store.ensureVersion(app, versionName, create: true);
+    if (version == null) {
+      stdout.writeln(
+        '    (dry run created no version, so the fields below are skipped)',
+      );
+    } else {
+      final copyright = metadata.copyright;
+      if (copyright != null) {
+        stdout.writeln('==> copyright');
+        await store.writeVersionAttributes(version, {'copyright': copyright});
+      }
+
+      final reviewNotes = metadata.reviewNotes;
+      if (reviewNotes != null) {
+        stdout.writeln('==> review notes');
+        await store.writeReviewDetails(
+          version,
+          reviewNotes,
+          contact: ReviewContact.fromEnvironment(),
+        );
+      }
+
+      for (final localeMetadata in metadata.locales) {
+        if (localeMetadata.version.isNotEmpty) {
+          stdout.writeln('==> ${localeMetadata.locale}: listing text');
+          await store.writeVersionLocalization(
+            version,
+            localeMetadata.locale,
+            localeMetadata.version,
+          );
+        }
+        if (localeMetadata.screenshots.isNotEmpty) {
+          final localization = await store.versionLocalization(
+            version,
+            localeMetadata.locale,
+          );
+          if (localization == null) {
+            stdout.writeln(
+              '    (no ${localeMetadata.locale} localization yet, so its '
+              'screenshots are skipped)',
+            );
+            continue;
+          }
+          for (final entry in localeMetadata.screenshots.entries) {
+            stdout.writeln('==> ${localeMetadata.locale}: ${entry.key}');
+            await store.replaceScreenshots(
+              localization,
+              entry.key,
+              entry.value,
+            );
+          }
+        }
+      }
+    }
+  }
+}
+
 Future<void> runAsc(
   AscCommand cmd,
   ArgResults args, {
@@ -414,11 +543,15 @@ Future<void> runAsc(
   // or IN_REVIEW — both ordinary states) made that fail after the binary and
   // the notes had already gone up. A command that did everything asked and then
   // exited non-zero, which invites the one response that is wrong: run it again.
+  // Promote resolves metadata as well as upload. It did not, which made the
+  // listing publishable only by a listing-only invocation — so the design's
+  // publication point had no code behind it.
   final noMetadata = cmd == AscCommand.upload && flag('no-metadata');
   if (noMetadata && opt('metadata') != null) {
     fail('--metadata and --no-metadata ask for opposite things');
   }
-  final metadataPath = cmd == AscCommand.upload && !noMetadata
+  final metadataPath =
+      (cmd == AscCommand.upload || cmd == AscCommand.promote) && !noMetadata
       ? (opt('metadata') ?? defaults.metadata)
       : null;
   final promote = cmd == AscCommand.promote;
@@ -798,111 +931,7 @@ Future<void> runAsc(
         '    Publish deliberately with --metadata and no artifact.',
       );
     } else if (metadata != null) {
-      final appInfo = await store.editableAppInfo(app);
-
-      final contentRights = metadata.contentRights;
-      if (contentRights != null) {
-        stdout.writeln('==> content rights');
-        await store.writeContentRights(app, contentRights);
-      }
-
-      if (metadata.categories.isNotEmpty) {
-        stdout.writeln('==> categories');
-        await store.writeCategories(appInfo, metadata.categories);
-      }
-      final ageRating = metadata.ageRating;
-      if (ageRating != null) {
-        stdout.writeln('==> age rating');
-        await store.writeAgeRating(appInfo, ageRating);
-      }
-
-      for (final localeMetadata in metadata.locales) {
-        if (localeMetadata.appInfo.isNotEmpty) {
-          stdout.writeln('==> ${localeMetadata.locale}: name and subtitle');
-          await store.writeAppInfoLocalization(
-            appInfo,
-            localeMetadata.locale,
-            localeMetadata.appInfo,
-          );
-        }
-      }
-
-      // The version-scoped half needs a version to hang off. Created when
-      // absent, because a listing push before the first release is exactly
-      // when there is nothing there yet.
-      final needsVersion =
-          metadata.reviewNotes != null ||
-          metadata.locales.any(
-            (l) => l.version.isNotEmpty || l.screenshots.isNotEmpty,
-          );
-      if (needsVersion) {
-        if (versionName == null) {
-          fail(
-            'pushing descriptions or screenshots needs --version-name, because '
-            'Apple scopes them to a version rather than to the app',
-          );
-        }
-        final version = await store.ensureVersion(
-          app,
-          versionName,
-          create: true,
-        );
-        if (version == null) {
-          stdout.writeln(
-            '    (dry run created no version, so the fields below are skipped)',
-          );
-        } else {
-          final copyright = metadata.copyright;
-          if (copyright != null) {
-            stdout.writeln('==> copyright');
-            await store.writeVersionAttributes(version, {
-              'copyright': copyright,
-            });
-          }
-
-          final reviewNotes = metadata.reviewNotes;
-          if (reviewNotes != null) {
-            stdout.writeln('==> review notes');
-            await store.writeReviewDetails(
-              version,
-              reviewNotes,
-              contact: ReviewContact.fromEnvironment(),
-            );
-          }
-
-          for (final localeMetadata in metadata.locales) {
-            if (localeMetadata.version.isNotEmpty) {
-              stdout.writeln('==> ${localeMetadata.locale}: listing text');
-              await store.writeVersionLocalization(
-                version,
-                localeMetadata.locale,
-                localeMetadata.version,
-              );
-            }
-            if (localeMetadata.screenshots.isNotEmpty) {
-              final localization = await store.versionLocalization(
-                version,
-                localeMetadata.locale,
-              );
-              if (localization == null) {
-                stdout.writeln(
-                  '    (no ${localeMetadata.locale} localization yet, so its '
-                  'screenshots are skipped)',
-                );
-                continue;
-              }
-              for (final entry in localeMetadata.screenshots.entries) {
-                stdout.writeln('==> ${localeMetadata.locale}: ${entry.key}');
-                await store.replaceScreenshots(
-                  localization,
-                  entry.key,
-                  entry.value,
-                );
-              }
-            }
-          }
-        }
-      }
+      await _publishAscListing(store, app, metadata, locale, versionName, fail);
     }
 
     // -------------------------------------------------------------- promote
@@ -977,6 +1006,22 @@ Future<void> runAsc(
           stdout.writeln('==> phased release');
           await store.enablePhasedRelease(version);
         }
+        // **The listing publishes here, and only here.** This is the moment
+        // it becomes what a shopper reads, and the version record it hangs
+        // off exists by now — which is what makes it possible at all. Before
+        // the submission, so a review sees the copy that was meant to
+        // accompany it rather than the previous release's.
+        if (metadata != null) {
+          await _publishAscListing(
+            store,
+            app,
+            metadata,
+            locale,
+            versionName,
+            fail,
+          );
+        }
+
         stdout.writeln('==> submitting for review');
         await store.submitForReview(app, version);
       }
