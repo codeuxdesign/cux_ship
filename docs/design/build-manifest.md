@@ -61,8 +61,65 @@ shapes and web. A reader is handed an explicit manifest path in both schemas,
 so telling a schema-1 `manifest.json` from a sidecar needs no per-repository
 configuration — the `schema` field, not the filename, says which rules apply.
 
-**An artifact is a single file.** Directory outputs — `web` — are archived
-first. A required digest of a directory is not a thing.
+**An artifact is a single file.** A required digest of a directory is not a
+thing, so directory outputs are archived first — but see the archaeology below
+before assuming that is free.
+
+### What schema 1's fields actually meant
+
+Established by the repository that wrote them, in the one commit that introduced
+both (`48639f2`), against a claim of mine that was false.
+
+**`artifactKind` is the file-versus-directory distinction, and it is used.** I
+asserted it means `file` in every manifest either repository has written. True
+here — this `build.sh` handles android, ios and macos and writes `file` from two
+call sites — and false there, where the web build writes `directory`. I had no
+way to check the second half and stated it anyway.
+
+That makes "directory outputs are archived first" a requirement rather than a
+restatement. That repository's web artifact is digested with a tree hash and
+`rsync`ed to the host; there is no archive anywhere in the path. So dropping
+`artifactKind` is not a field deletion for them, it is a change to how web is
+built *and* shipped, from tree-sync to archive-and-unpack.
+
+**`variant` is two axes, not one, and `format` only covers one of them.**
+
+| platform | `variant` | what it is |
+|---|---|---|
+| android | `aab` | artifact format |
+| ios | `ipa` | artifact format |
+| web | `js` \| `wasm` | **compile target** |
+
+`js` and `wasm` are not formats — the output is a directory either way, and what
+varies is whether it went through dart2wasm, which decides whether the host must
+serve COOP/COEP headers. Renaming `variant` to `format` would put `wasm` in a
+field whose enum does not contain it, **and it would still parse**: the
+information does not error, it becomes wrong.
+
+**Schema 2 does not model compile targets.** A repository that needs one puts it
+under `x` until a second repository needs it too, at which point it earns a real
+field with a name — `target` — chosen deliberately rather than inherited.
+
+### What the migration actually costs
+
+Scored by the repository that inherits it, rather than estimated from here:
+
+| | |
+|---|---|
+| `buildNumberAssigned` promoted | mechanical — already written, same meaning |
+| `variant → format` | **not mechanical** — lossy for web, needs a new home |
+| `artifactKind` dropped | **not mechanical** — requires archiving the web output |
+
+One of three. An earlier draft said schema 1 has exactly two producers, both in
+repositories we control, so the migration window is short by construction. True
+about ownership and misleading about cost: the window is short only if migrating
+is cheap, and for the platform neither repository was thinking about, it is not.
+
+**And a test this document proposes, applied backwards.** Every record should
+name the question it answers and who asked. `artifactKind` and `variant` both
+fail it seven months after they were written, which is why the wrong answer
+about one of them could be inferred from another repository. Schema 2's fields
+should carry their askers, or their descendants will be guessed at the same way.
 
 ## Fields
 
@@ -71,7 +128,7 @@ first. A required digest of a directory is not a thing.
 | `schema` | yes | `2`. Anything unrecognized is refused. |
 | `artifact` | sidecar only | Filename, relative to the manifest. Keeps a `dist/` tree movable. |
 | `sha256` | sidecar only | Of the artifact **as it will be uploaded** — after signing, over the container including its card. |
-| `format` | no | `aab`, `apk`, `ipa`, `pkg`, `dmg`, `msix`, `snap`, `deb`, `tar.gz`, `zip`. Replaces schema 1's `variant`, which collides with Gradle's meaning — *variant* there is flavor-plus-buildType, and the repository that motivated this schema has six Gradle flavors, so `flavor: playstore, variant: aab` would be misread by every Android-literate reader. Also replaces `artifactKind`. |
+| `format` | no | `aab`, `apk`, `ipa`, `pkg`, `dmg`, `msix`, `exe`, `snap`, `deb`, `tar.gz`, `zip`. Named `format` rather than schema 1's `variant`, which collides with Gradle's meaning — *variant* there is flavor-plus-buildType, and the repository that motivated this schema has six Gradle flavors, so `flavor: playstore, variant: aab` would be misread by every Android-literate reader. **It does not absorb `variant`** — see below. |
 | `gitSha` | yes | `^[0-9a-f]{40}$`, validated rather than trusted. |
 | `dirty` | yes | No default; absent must not read as clean. Defined as a non-empty `git status --porcelain` at the repository root, untracked non-ignored files counting. |
 | `versionName` | yes | Marketing version. |
@@ -110,15 +167,32 @@ stated as obligations rather than left to a reference implementation.
 
 ## Consistency across one release
 
-Sidecars make disagreement between platforms *more* representable, not less —
-and the 51/52 incident is this document's own motivating story. No field fixes
-that; a consumer rule does:
+> **Advice to a future implementer, not a rule anything enforces.** Any
+> operation consuming more than one manifest for a single release should refuse
+> manifests that disagree on `gitSha`, `versionName` or `buildNumber`.
 
-> **Any operation consuming more than one manifest for a single release refuses
-> manifests that disagree on `gitSha`, `versionName` or `buildNumber`.**
+**Nothing enforces it today and nothing can**: `upload.sh` handles one platform
+per invocation, so no consumer ever holds two manifests at once. It is stated
+here as an obligation waiting for a consumer, which is honest, rather than as a
+rule, which would read as protection that does not exist.
 
-Without that sentence the schema records the incident beautifully and prevents
-it never.
+**The invariant it wants belongs upstream anyway — one commit, one build number,
+for every platform in a release.** That is an allocator property, true before
+any artifact exists, and a manifest can only observe its violation after the
+fact.
+
+**What the 51/52 incident actually was, since this document keeps citing it:**
+two platforms built from *different commits* — `fef65ce` and `bd420ec` — because
+a documentation commit landed between the iOS build and the macOS rebuild. Not a
+lost concurrent allocation, which is the other candidate and which v1.3's
+refspec split already fixed at source. Each manifest was individually correct;
+the disagreement was upstream of all of them.
+
+That matters for what would be worth building. Because it was different commits,
+a **release-level pre-flight** — one command reading every sidecar before any
+upload runs — would have caught it, and is the only shape that could. Because it
+was not a lost allocation, nothing in the allocator needs changing. Neither is
+built, and neither should be until the incident recurs with v1.3 in place.
 
 ## Derivation
 
@@ -150,14 +224,35 @@ files from the repackaging checkout, so "the deb's commit is the tarball's"
 answers the question provenance exists to answer — what code do users run — and
 is not the whole truth.
 
-> **OPEN — does the packaging step earn its own record?** An optional
-> `derivation: {gitSha, dirty}` describing the repackaging tree would close it.
-> AuthPass owns this: they have the only real chain. Shipping the approximation
-> with this sentence is better than pretending the question does not exist,
-> which is how the field gets added later with two producers already disagreeing
-> about it.
+**Closed: the packaging step gets its own record.** Optional
+`packaging: {gitSha, dirty}`, written by the repackager, describing the tree its
+packaging files came from. AuthPass closed this, owning the only real chain, and
+it passes both of this document's own tests: the repackaging checkout is
+default-branch-HEAD-at-trigger-time, recoverable from nothing once the run is
+gone; and it answers a question with an asker — *which commit's packaging files
+built this deb?*, asked by whoever debugs a broken `Depends:` line or a
+`postinst`, since the control file and maintainer scripts come entirely from the
+packaging tree and a packaging defect is a real shipping defect.
+
+Named `packaging` rather than `derivation`, which sits one edit-distance from
+`derivedFrom` while meaning something else.
+
+**On a derived manifest the top-level event fields are the repackager's.**
+`builtAt` is the repackage time and `producer` is the repackager; only the
+*identity* facts — `gitSha`, `dirty`, `versionName`, `buildNumber` — are
+inherited. Said explicitly because the hoist list names those four and not
+`builtAt`, and two producers would otherwise disagree about it exactly as they
+would have about the field above.
 
 ## Where a card sits inside a container
+
+**Two cards in one container is the expected shape, not a mistake to
+deduplicate.** AuthPass's `make_deb` extracts the tarball *into*
+`debian/opt/authpass/`, so the tarball's archive-root card lands at
+`/opt/authpass/.cux-manifest.json` in the installed package by construction —
+the deb ships its parent's card for free, with nobody doing anything. The deb's
+*own* card, carrying the hoisted facts plus `derivedFrom` and `packaging`, is a
+second file. An implementer who "tidies" one of them away destroys the chain.
 
 **Normative, because it has a consumer today:** `.cux-manifest.json` at the
 archive root for tar and zip shapes, embedded before compression. That is the
@@ -167,7 +262,11 @@ cost.
 
 **Informative and unverified**, not to be made normative until someone has
 shipped one: `/usr/share/doc/<package>/cux-manifest.json` for deb, a
-payload-root file added pre-pack for msix and snap. Derivation is the only
+payload-root file added pre-pack for msix and snap. An msix is a zip whose
+payload files are hashed into the `AppxBlockMap` at pack time, so
+add-before-pack-and-sign works; the constraint is avoiding the reserved names —
+`AppxManifest.xml`, `AppxBlockMap.xml`, `AppxSignature.p7x`,
+`[Content_Types].xml`, and the `AppxMetadata` directory. Derivation is the only
 requirement that *needs* embedding and tarballs are the only derivation that
 exists, so the spec loses nothing by scoping these out.
 
