@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 3.4.0
+
+**The pre-release becomes a release.** `3.4.0-dev.1` was published so the
+repository driving these changes could use them before the flag names settled;
+they have settled, and a second project has now wired the same commands into its
+own release path. Everything below landed under that pre-release or after it.
 
 ### `manifest write --derived-from` — a repackaged artifact inherits its provenance
 

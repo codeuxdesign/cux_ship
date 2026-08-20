@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.0
+
+**Same code as `0.1.0-dev.1`, promoted after use.** The port has allocated build
+numbers on two projects since — including a run where allocation failed on
+missing credentials *after* taking a number, and the retry on the same commit
+handed the same number back rather than burning the next one. That per-commit
+idempotency is the property the whole design rests on, and it had only ever been
+exercised deliberately before.
+
+Documents that build numbers are **allocation-ordered, not history-ordered**: a
+higher number does not mean a later commit, because allocation happens on demand
+when somebody builds. Building a parent after its descendant gives the parent the
+higher number. That is the design working — what is guaranteed is that a number
+is never reused and never goes backwards as a counter, which is what the stores
+require — but it reads as a bug to whoever meets it first.
+
 ## 0.1.0-dev.1
 
 First publish, and a pre-release twice over. A Dart port of
