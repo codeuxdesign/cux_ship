@@ -721,6 +721,30 @@ int _be32(List<int> b, int o) =>
 /// report cannot be proven equal, so it counts as a difference and the type is
 /// re-uploaded. Failing toward the extra upload is right — the alternative is
 /// skipping a change because the store declined to describe what it holds.
+/// The marketing version to publish under — `1.1.0`, never `65`.
+///
+/// **A function with two named parameters rather than an inline `??` chain, and
+/// the signature is the point.** This resolution was
+/// `opt('version-name') ?? buildNumber ?? defaults.versionName ?? ''`, so with
+/// `--version-name` omitted the *build number* became the version name. Play
+/// would have been handed a release named `65 (65)`, and the changelog lookup
+/// went looking for a section headed 65 — failing with "CHANGELOG.md has no
+/// section for 65", which reads as a missing changelog entry rather than as
+/// this.
+///
+/// It survived because every caller passed `--version-name` explicitly. The
+/// fallback became reachable the moment a consumer switched to `--manifest`,
+/// which supplies exactly that value — and it surfaced on the first real upload
+/// through the new path, not in any test.
+///
+/// A version name and a build number are different kinds of fact: one is
+/// chosen and human-facing, the other is allocated and monotonic, and neither
+/// is ever a sensible substitute for the other. So the fix is not a corrected
+/// chain that could be miscorrected again — it is a signature that has nowhere
+/// to put a build number.
+String resolveVersionName({String? explicit, String? fromManifest}) =>
+    explicit ?? fromManifest ?? '';
+
 bool imagesMatch(List<String> committed, List<String?> held) =>
     committed.length == held.length &&
     List.generate(
@@ -1292,8 +1316,10 @@ Future<void> runPlay(
 
   final dryRun = flag('dry-run');
   final track = opt('track')!;
-  final versionName =
-      opt('version-name') ?? buildNumber ?? defaults.versionName ?? '';
+  final versionName = resolveVersionName(
+    explicit: opt('version-name'),
+    fromManifest: defaults.versionName,
+  );
 
   final notesPath = opt('release-notes');
   // The changelog default applies only when no literal notes were given;
