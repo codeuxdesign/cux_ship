@@ -56,87 +56,104 @@ summary, description and icon, and screenshots have no API or CLI at all; two
 Amazon, Samsung, Huawei — wait on a shipping decision. All four do have real
 submission APIs that can edit listing text and screenshots programmatically —
 none can create an app, and Microsoft's `msstore` CLI currently updates free
-products only — so D6 below is a choice, not a limitation.
+products only — so decision 3 below is a choice, not a limitation.
 
-## Decisions
+## Three decisions
 
-### D1 — Skip unchanged images on the Play push. **Recommend: yes.**
+An earlier shape of this document had six. Three of them were one mistake in
+three costumes — coupling the *release record* to the notes text, when the text
+already has two authoritative homes: **the store is the record of what it
+showed, git is the record of what we wrote, and the tag only joins the artifact
+to its commit.** What follows is what survived being read by someone who had not
+watched it accrete.
 
-Today every upload calls `images.deleteall` per image type per locale and
-re-uploads every file, with no comparison. Six deletes and six uploads here at
-one locale; **138 and 138 at AuthPass's 23**. Play's `Image` resource carries
-`sha1`/`sha256` and `cux_ship` already calls `images.list` and discards the
-result.
+### 1. Fix the two measured defects
 
-The open question — whether Play's returned digest matches the bytes sent or a
-re-encoding — **is already answered**: fastlane's `supply` ships
-`sync_image_upload` doing exactly this comparison in production. If it ever does
-not match, the check degrades to today's behavior and is no worse.
+**Skip unchanged images on the Play push.** Every upload calls
+`images.deleteall` per image type per locale and re-uploads every file, with no
+comparison — six deletes and six uploads here at one locale, **138 and 138 at
+AuthPass's 23**. Play's `Image` resource carries `sha1`/`sha256` and `cux_ship`
+already calls `images.list` and discards the result. Whether Play's digest
+matches the bytes sent is already answered: fastlane's `supply` ships
+`sync_image_upload` doing this comparison in production. If it ever fails to
+match, the check degrades to today's behavior and is no worse.
 
-This needs no format, no model and no decision about any other store.
+**Refuse to publish release notes from a dirty `CHANGELOG.md`.** `upload.sh` and
+`promote.sh` both read the working tree, under a header stating *"the working
+tree is not consulted at all"* — so unreviewed text can ship, and `promote.sh`
+is the path that reaches real users.
 
-### D2 — Read release notes from committed state, refusing a dirty file. **Recommend: yes.**
+The guard is the whole fix, and reading from `git show HEAD:CHANGELOG.md`
+instead would be over-specification: the two are byte-identical whenever the
+file is clean, and the refusal makes the dirty case unreachable. Scope it to
+that one file, give it no override — committing costs seconds and an override
+reopens the hole — and put it inside `cux_ship` beside where the changelog is
+already loaded and length-checked. One implementation for three repositories,
+and `upload.sh`'s header becomes *true* rather than deleted.
 
-`upload.sh` and `promote.sh` both pass the **working-tree** `CHANGELOG.md`,
-under a header stating *"the working tree is not consulted at all"*. Uncommitted,
-unreviewed text can ship; a `dist/` built on another machine publishes this
-machine's notes against that artifact. `promote.sh` is the worse of the two,
-being the path that reaches real users.
+What it deliberately does not fix: a `dist/` built on one machine and published
+from another still takes the publishing clone's committed notes. That is the
+requirement — committed means reviewed — and chasing the cross-machine case is
+where the deleted decisions came from.
 
-Read from `HEAD`'s committed copy, refuse when `git status -- CHANGELOG.md` is
-non-empty. Late-written notes stay possible — which is the workflow — and
-unreviewed notes stop being possible.
+### 2. Close the one workflow gap: publish the App Store listing at promote
 
-### D3 — Record the notes' source commit in the `uploaded/` annotation. **Recommend: yes.**
+`--no-metadata` on upload is correct, because publishing a listing reads the
+`appInfos` record that App Store Connect locks during review — which would make
+giving testers a build mid-review impossible.
 
-Two facts about one release, both auditable: `builtSha` — what was built — and
-`notesSha` — where its description came from. AuthPass proposed this; it is a
-record without a mechanism until D2 exists, and trivial once it does.
+But "published deliberately, by hand" means in practice *never*, and the listing
+drifts by default: the exact failure the Play side is engineered against. The
+consumption point already exists — `appstore promote` creates the new
+`appStoreVersion`, which is when version-scoped fields can be written without
+meeting the lock.
 
-Scope: the second commit names where the **notes** came from. Listing changes
-are ordinary git history and need no place in a build's provenance record. A
-listing-only push gets a log line, not a tag.
+After it the two-store workflow is one sentence: **the release action reasserts
+the listing; the upload action never touches it.**
 
-### D4 — Teach the Play loader the fastlane layout. **Recommend: yes.**
-
-`metadata/android/<locale>/…` is a de-facto interchange format: F-Droid and
-IzzyOnDroid scan it, the Amazon and Huawei fastlane plugins mirror it, Crowdin
-configs target it, and AuthPass already uses it as its source. One loader with
-two dialects is cheaper than migrating AuthPass or rendering one tree into the
-other on every push.
-
-This repository keeps `store/play/`, which nothing external reads and which
-carries things the fastlane layout has no place for — `details/`,
-`data-safety.csv`, and a stricter present-means-owned validation.
-
-### D5 — Publish the App Store listing at promote. **Recommend: yes, before the next App Store submission.**
-
-`--no-metadata` on upload is correct: publishing a listing reads the `appInfos`
-record that App Store Connect locks during review, which would make giving
-testers a build mid-review impossible.
-
-But "published deliberately, by hand" means in practice *never*, and the App
-Store listing drifts by default — the exact failure the Play side is engineered
-against. The consumption point already exists: `appstore promote` creates the
-new `appStoreVersion`, which is when version-scoped fields can be written
-without meeting the review lock.
-
-**This closes the one real gap in "one workflow for both stores."** After it the
-rule is symmetric and sayable in a line: *the release action reasserts the
-listing; the upload action never touches it.*
-
-### D6 — Build no store adapters, and no cross-store canonical format. **Recommend: yes — that is, build nothing.**
+### 3. Build nothing else until a need is named
 
 Not now, and not until a shipping decision names a store. Every adapter is a
 standing liability exercised twice a year against a schema somebody else
-changes. Fastlane, with hundreds of contributors, still ships its App Store
+changes; fastlane, with hundreds of contributors, still ships its App Store
 screenshot sync marked beta.
 
-When a store does arrive, the honest bridge is a **rendered submission pack** —
-per-field text pre-validated against that store's limits, images pre-validated
-against its dimensions, and a paste order — not an API client. Manual paste from
-a validated pack is most of the value at a fraction of the cost, and for a store
-that never justifies an adapter it is the permanent answer rather than a stopgap.
+When a need does arrive, the honest bridge for a new store is a **rendered
+submission pack** — per-field text pre-validated against that store's limits,
+images against its dimensions, and a paste order — not an API client. For a
+store that never justifies an adapter, that is the permanent answer rather than
+a stopgap.
+
+The named needs, each conditional on an event rather than standing:
+
+- **Teach the Play loader the fastlane dialect** — when AuthPass migrates onto
+  this tooling. `metadata/android/<locale>/…` is a de-facto interchange format:
+  F-Droid and IzzyOnDroid scan it, the Amazon and Huawei fastlane plugins mirror
+  it, Crowdin configs target it. This repository keeps `store/play/` either way;
+  nothing external reads it and it carries `details/`, `data-safety.csv` and a
+  stricter present-means-owned validation that the fastlane layout has no place
+  for.
+- **`listing render --target fdroid`** — when AuthPass's F-Droid path moves
+  over: resolve the version's notes per locale into
+  `changelogs/<versionCode>.txt`, committed before the `fdroid-v` tag is pushed.
+- **`listing render --target snap|deb|appstream`** — the baked-format category,
+  invoked from inside the build, because the channel freezes there.
+- **A locale-code table** — Crowdin's `%locale%`, Play's BCP-47, Apple's codes,
+  Samsung's `languagecode` and Huawei's do not agree, and every adapter would
+  otherwise rediscover it.
+
+## A test for anything proposed later
+
+**Every record should name the question it answers, and who asked it.**
+
+The image dedupe answers "why is every upload 138 image operations", measured at
+AuthPass. The dirty guard answers "how did unreviewed text reach a store", which
+happened here. A deleted decision — recording which commit the notes came from —
+answered "which commit did this text come from", and when finally pressed nobody
+had ever asked it and `git log -- CHANGELOG.md` could already answer it.
+
+That is the difference between the parts of this design that survived a first
+reading and the parts that did not.
 
 ## What is explicitly rejected
 
@@ -154,6 +171,24 @@ Apple-specific JSON, OARS exists only in the AppStream world. These stay
 per-store files, and the "what no API can set" tables in the store READMEs
 remain the right artifact.
 
+**Recording the notes' source commit in the `uploaded/` annotation.** Proposed,
+then deleted, and the reasoning is worth keeping. It is redundant in every case
+where it resolves — the tag's own tagger date plus `CHANGELOG.md` reconstructs
+the text — and useless in every case where it would have mattered, because a
+notes commit that reached nowhere is exactly the one whose sha dangles, and a
+dangling sha in annotation text recovers nothing. It also cost more than it
+weighed: it produced a confusion about whether two tags existed and a
+false-alarm about garbage collection, both questions *about the field* rather
+than about anything it protected.
+
+**Embedding the published notes text in that annotation.** The repair for the
+dangling sha, and worse. The resolved text already differs per store — Apple
+strips emoji, Play does not — and would differ per locale, 23 of them at
+AuthPass. Decisively: the `uploaded/` tag is written by the **first store that
+succeeds**, so at write time the other stores' text does not exist yet, and
+embedding one store's notes would silently imply it was all of them. "The
+published text" is not one thing to record.
+
 **A screenshot capture pipeline.** Screenshots are the real scaling cost —
 per-locale times per-device-class, and they rot: a listing screenshot here was
 publishing a fixed grammar bug within two days. But capture is the expensive
@@ -166,24 +201,13 @@ The strongest case against all of it, stated at full strength because most of it
 survives: two of the three repositories have one locale and two stores, and the
 cross-store problem exists in production only as AuthPass's F-Droid-plus-Crowdin
 arrangement, which works today without `cux_ship`. The only *measured* pain is
-the image re-upload and the working-tree changelog read — D1 and D2, a dedupe
-and a dozen lines.
+the image re-upload and the working-tree changelog read — decision 1, a dedupe
+and a guard.
 
-That argument wins against everything in the future tense and loses to D1–D3,
-which fix defects rather than hypotheticals. D4 and D5 it defers rather than
-defeats: each is bought at a named need — AuthPass's migration onto this
-tooling, and the next App Store submission.
-
-## Later, at a named need
-
-- `listing render --target fdroid` — resolve the version's notes per locale into
-  `changelogs/<versionCode>.txt`, before the `fdroid-v` tag is pushed. Needed
-  when AuthPass's uploads move onto this provenance path.
-- `listing render --target snap|deb|appstream` — the baked-format category,
-  invoked from inside the build because the channel freezes there.
-- A locale-code table. Crowdin's `%locale%`, Play's BCP-47, Apple's codes,
-  Samsung's `languagecode` and Huawei's do not agree, and every adapter would
-  otherwise rediscover that.
+That argument wins outright against everything in the future tense, which is why
+decision 3 is to build none of it. It loses to decision 1, which fixes defects
+rather than hypotheticals, and it defers rather than defeats decision 2 — bought
+at the next App Store submission.
 
 ## One cadence rule, everywhere it is possible
 
