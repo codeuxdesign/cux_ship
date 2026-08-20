@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+### Two defects a real upload found, and one refactor
+
+**A placeholder build number is refused.** `buildNumberAssigned: false` says
+allocation failed and the number is a stand-in. The field was read, written and
+printed as `UNASSIGNED`, and `verify()` never acted on it — so the only guard
+anywhere was a shell `if` in one consuming repository, and every other
+`--manifest` caller would have shipped build 0. A specified refusal that exists
+everywhere except in the code is the worst kind: the field's presence is what
+stops anyone looking. No override; `--allow-dirty` does not wave it through.
+
+**The build number could become the version name.** The Play path resolved
+`opt('version-name') ?? buildNumber ?? defaults.versionName`, so with the flag
+omitted Play would have taken a release named `65 (65)` — and the changelog
+lookup went after a section headed `65`, failing with *"CHANGELOG.md has no
+section for 65"*. The message named the wrong thing, so the fix an operator
+would reach for is adding a `## 65` heading. Unreachable while every caller
+passed `--version-name`; reachable the moment one switched to `--manifest`, and
+found on the first real upload through that path. Now
+`resolveVersionName({explicit, fromManifest})`, a signature with nowhere to put
+a build number.
+
+**Versions are parsed into `Version` (pub_semver).** The bump path hand-rolled
+`^(\d+)\.(\d+)\.(\d+)$` and answered two questions with one pattern: what is
+a version, and which versions this will bump. `1.0.3-beta` and `1.0.3+41` are
+valid semver and are still refused — that is policy, not parsing, and it now
+reads as a check on `isPreRelease` and `build`. The two failures report
+differently. `pubspecVersion` returns `Version?` and `FinishOptions.version` is
+a `Version`, which removed an `Object` inference in `runner.dart` where a
+`String?` and a `Version?` met in a `??` chain.
+
+Ordering comes with the type: `1.0.10` above `1.0.9`, and build metadata
+excluded from precedence — the rule `vX.Y.Z+<build>` tags depend on. The
+dependency was already in the lockfile transitively, so nothing new enters
+anyone's graph. `cux_ship_verify` stays zero-dependency.
+
+
 ### `verify` finds a split App Store tree, and checks both halves
 
 A repository shipping to both Apple platforms keeps `store/appstore/ios` and
