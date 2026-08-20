@@ -123,24 +123,51 @@ consumption point already exists — `appstore promote` creates the new
 `appStoreVersion`, which is when version-scoped fields can be written without
 meeting the lock.
 
-**Play's listing stays where it is — on every upload — and the asymmetry is
-forced rather than chosen.** The two stores' listings have different lifetimes.
-Play has *one* listing per app, always writable, so every upload is a fine
-moment to reassert it. App Store Connect's description, keywords and screenshots
-are scoped to an `appStoreVersion`, a record that does not exist until promote
-and is locked during review — so upload is not a poor moment there, it is an
-impossible one.
+**And `play promote` should reassert the listing too, which it does not today.**
+That cell is an accident of implementation rather than a store constraint:
+promote already opens an edit for the track assignment, and publishing the
+committed listing in the same edit is straightforward. It is also the most
+valuable moment to do it, because promote is what reaches the public — today a
+listing fix committed between an upload and a promote waits for the *next*
+upload to ship.
 
-The rule that covers both is therefore about *lateness*, not about which command:
+With that one cell flipped, the whole thing becomes a default with a single
+exception:
 
-> **Each store reasserts the committed listing at the last moment its own model
-> allows.** For Play that is every upload; for the App Store, promote.
+> **Every command that talks to a store reasserts the committed listing. The one
+> exception is `appstore upload`, because Apple locks the listing during review
+> and a TestFlight build must never collide with it.**
 
-An earlier draft of this section said "the release action reasserts the listing;
-the upload action never touches it", which reads well and is false for Play — it
-would have moved Play's listing off the every-upload cadence that the section
-below argues is the whole drift-prevention mechanism. Two paragraphs of this
-document contradicted each other and neither reviewer caught it.
+That is the memorable form, and it is memorable structurally rather than by
+being shorter: people retain defaults with motivated exceptions and do not
+retain patternless tables. The exception carries its own reason, and the reason
+is a fact about App Store Connect rather than a convention someone chose.
+
+**How this section read before.** It closed with *"the release action reasserts
+the listing; the upload action never touches it"* — which is false for Play,
+whose listing goes up on every upload, and which contradicted the cadence
+section below arguing that the every-upload push is the whole drift-prevention
+mechanism. Two reviewers and a consistency pass briefed on internal
+contradictions all read past it; it survived because it sat where a document
+earns its summary, which is where readers stop verifying. The repair that
+replaced it — *each store reasserts at the last moment its model allows* — was
+accurate and unusable: correct for a designer, no help to someone at a terminal
+asking whether the command they are about to run will touch the listing.
+
+**Whatever the rule, the tool should say it rather than rely on anyone
+remembering.** Every store command states its listing action, and the reason,
+in the plan it prints before sending anything:
+
+```
+listing: reasserting store/play — 3 texts, 6 images (2 changed)
+listing: untouched — App Store Connect locks it during review; it publishes at promote
+```
+
+The reason belongs in the message, because the message is where the rule gets
+re-taught at exactly the moment somebody is about to "fix the inconsistency" in
+the wrong direction. `upload.sh` already works this way — *"the plan below says
+so before anything is sent"* — so this extends a surface rather than adding
+one.
 
 ### 3. Build nothing else until a need is named
 
@@ -266,7 +293,7 @@ decision 3 is to build none of it. It loses to decision 1, which fixes defects
 rather than hypotheticals, and it defers rather than defeats decision 2 — bought
 at the next App Store submission.
 
-## One cadence rule, everywhere it is possible
+## Why the default is "reassert", and not "push when it changed"
 
 **Reassert the committed listing on every release.** Not because it changed —
 because a source of truth nothing routinely pushes drifts from the console with
