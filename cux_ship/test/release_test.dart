@@ -8,6 +8,7 @@
 import 'dart:io';
 
 import 'package:cux_ship/src/release.dart';
+import 'package:pub_semver/pub_semver.dart';
 import 'package:test/test.dart';
 
 late Directory _root;
@@ -36,6 +37,10 @@ void write(String name, String contents) {
 
 String read(String name) => File('${_root.path}/$name').readAsStringSync();
 
+/// A version literal, parsed. These functions take a `Version` now rather than
+/// its spelling, so the tests say which they mean.
+Version _v(String s) => Version.parse(s);
+
 void main() {
   setUp(() {
     _root = Directory.systemTemp.createTempSync('cux_ship_release_test');
@@ -48,20 +53,50 @@ void main() {
 
   group('nextPatchVersion', () {
     test('increments the patch level', () {
-      expect(nextPatchVersion('1.0.3'), '1.0.4');
-      expect(nextPatchVersion('1.9.9'), '1.9.10');
-      expect(nextPatchVersion('0.0.0'), '0.0.1');
+      expect(nextPatchVersion('1.0.3'), _v('1.0.4'));
+      expect(nextPatchVersion('1.9.9'), _v('1.9.10'));
+      expect(nextPatchVersion('0.0.0'), _v('0.0.1'));
     });
 
-    test('refuses anything it cannot bump unambiguously', () {
-      // Guessing the next version during a release is worse than stopping.
-      for (final bad in ['1.0', '1.0.3-beta', '1.0.3+41', 'v1.0.3', '']) {
+    test('refuses what is not a version at all', () {
+      for (final bad in ['1.0', 'v1.0.3', '', 'sixty-five']) {
         expect(
           () => nextPatchVersion(bad),
-          throwsA(isA<ReleaseException>()),
+          throwsA(
+            isA<ReleaseException>().having(
+              (e) => e.message,
+              'message',
+              contains('is not a version number'),
+            ),
+          ),
           reason: 'accepted "$bad"',
         );
       }
+    });
+
+    test('refuses valid semver it has no unambiguous next patch for', () {
+      // **The half a library cannot decide.** `Version.parse` accepts both of
+      // these — they are correct semver — so refusing them is this tool's
+      // policy rather than a parse failure, and the two now report differently.
+      // Guessing the next version during a release is worse than stopping.
+      for (final bad in ['1.0.3-beta', '1.0.3+41']) {
+        expect(
+          () => nextPatchVersion(bad),
+          throwsA(
+            isA<ReleaseException>().having(
+              (e) => e.message,
+              'message',
+              contains('obviously correct next patch'),
+            ),
+          ),
+          reason: 'accepted "$bad"',
+        );
+      }
+      expect(
+        Version.parse('1.0.3-beta'),
+        isA<Version>(),
+        reason: 'the library accepts it; the refusal above is ours',
+      );
     });
   });
 
@@ -71,14 +106,14 @@ void main() {
       // never mattered — but rewriting it would look like it did.
       const pubspec = 'name: an_app\nversion: 1.0.3+41\n';
       expect(
-        bumpPubspecVersion(pubspec, '1.0.4'),
+        bumpPubspecVersion(pubspec, _v('1.0.4')),
         'name: an_app\nversion: 1.0.4+41\n',
       );
     });
 
     test('works with no build suffix', () {
       expect(
-        bumpPubspecVersion('name: a\nversion: 1.0.3\n', '1.0.4'),
+        bumpPubspecVersion('name: a\nversion: 1.0.3\n', _v('1.0.4')),
         'name: a\nversion: 1.0.4\n',
       );
     });
@@ -92,7 +127,7 @@ void main() {
           'dependencies:\n'
           '  something:\n'
           '    version: 9.9.9\n';
-      final result = bumpPubspecVersion(pubspec, '1.0.4');
+      final result = bumpPubspecVersion(pubspec, _v('1.0.4'));
       expect(result, contains('version: 1.0.4+41'));
       // A nested `version:` under a dependency must not be touched.
       expect(result, contains('    version: 9.9.9'));
@@ -100,7 +135,7 @@ void main() {
 
     test('refuses a pubspec with no version line', () {
       expect(
-        () => bumpPubspecVersion('name: an_app\n', '1.0.4'),
+        () => bumpPubspecVersion('name: an_app\n', _v('1.0.4')),
         throwsA(isA<ReleaseException>()),
       );
     });
@@ -110,7 +145,7 @@ void main() {
     test('inserts above the newest version section', () {
       const changelog = '# Changelog\n\n## 1.0.3\n\n- Something\n';
       expect(
-        insertChangelogSection(changelog, '1.0.4'),
+        insertChangelogSection(changelog, _v('1.0.4')),
         '# Changelog\n\n## 1.0.4\n\n## 1.0.3\n\n- Something\n',
       );
     });
@@ -120,13 +155,16 @@ void main() {
       // belongs below those and above the newest release.
       const changelog =
           '# Changelog\n\n## Tone\n\nBe brief.\n\n## 1.0.3\n\n- Something\n';
-      final result = insertChangelogSection(changelog, '1.0.4');
+      final result = insertChangelogSection(changelog, _v('1.0.4'));
       expect(result, contains('## Tone\n\nBe brief.\n\n## 1.0.4\n\n## 1.0.3'));
     });
 
     test('refuses a changelog with no version sections', () {
       expect(
-        () => insertChangelogSection('# Changelog\n\nNothing yet.\n', '1.0.4'),
+        () => insertChangelogSection(
+          '# Changelog\n\nNothing yet.\n',
+          _v('1.0.4'),
+        ),
         throwsA(isA<ReleaseException>()),
       );
     });
@@ -141,7 +179,7 @@ void main() {
         _git,
         FinishOptions(
           commit: head,
-          version: '1.0.3',
+          version: _v('1.0.3'),
           buildNumber: '41',
           push: false,
         ),
@@ -166,7 +204,7 @@ void main() {
         _git,
         FinishOptions(
           commit: _git.run(['rev-parse', 'HEAD']),
-          version: '1.0.3',
+          version: _v('1.0.3'),
           buildNumber: '41',
           destination: 'the App Store',
           push: false,
@@ -186,7 +224,7 @@ void main() {
       final head = _git.run(['rev-parse', 'HEAD']);
       final options = FinishOptions(
         commit: head,
-        version: '1.0.3',
+        version: _v('1.0.3'),
         push: false,
       );
 
@@ -215,7 +253,7 @@ void main() {
       Process.runSync('git', ['init', '-q', '--bare', origin.path]);
       _git.run(['remote', 'add', 'origin', '${origin.path}-does-not-exist']);
 
-      final options = FinishOptions(commit: head, version: '1.0.3');
+      final options = FinishOptions(commit: head, version: _v('1.0.3'));
       expect(
         () => finishRelease(_git, options),
         throwsA(isA<ReleaseException>()),
@@ -241,7 +279,7 @@ void main() {
 
       finishRelease(
         _git,
-        FinishOptions(commit: head, version: '1.0.3', push: false),
+        FinishOptions(commit: head, version: _v('1.0.3'), push: false),
       );
 
       expect(
@@ -249,7 +287,7 @@ void main() {
           _git,
           FinishOptions(
             commit: head.substring(0, 8),
-            version: '1.0.3',
+            version: _v('1.0.3'),
             push: false,
           ),
         ),
@@ -266,7 +304,7 @@ void main() {
       final first = _git.run(['rev-parse', 'HEAD']);
       finishRelease(
         _git,
-        FinishOptions(commit: first, version: '1.0.3', push: false),
+        FinishOptions(commit: first, version: _v('1.0.3'), push: false),
       );
 
       write('another.txt', 'more work');
@@ -277,7 +315,7 @@ void main() {
       expect(
         () => finishRelease(
           _git,
-          FinishOptions(commit: second, version: '1.0.3', push: false),
+          FinishOptions(commit: second, version: _v('1.0.3'), push: false),
         ),
         throwsA(
           isA<ReleaseException>().having(
@@ -300,7 +338,7 @@ void main() {
         _git,
         FinishOptions(
           commit: _git.run(['rev-parse', 'HEAD']),
-          version: '1.0.3',
+          version: _v('1.0.3'),
           push: false,
         ),
       );
@@ -316,7 +354,7 @@ void main() {
           _git,
           FinishOptions(
             commit: _git.run(['rev-parse', 'HEAD']),
-            version: '1.0.3',
+            version: _v('1.0.3'),
             push: false,
           ),
         ),
@@ -340,7 +378,7 @@ void main() {
           _git,
           FinishOptions(
             commit: _git.run(['rev-parse', 'HEAD']),
-            version: '1.0.3',
+            version: _v('1.0.3'),
             push: false,
           ),
         ),
@@ -361,7 +399,7 @@ void main() {
         _git,
         FinishOptions(
           commit: _git.run(['rev-parse', 'HEAD']),
-          version: '1.0.3',
+          version: _v('1.0.3'),
           bump: false,
           push: false,
         ),
@@ -376,7 +414,7 @@ void main() {
         _git,
         FinishOptions(
           commit: _git.run(['rev-parse', 'HEAD']),
-          version: '1.0.3',
+          version: _v('1.0.3'),
           tag: false,
           push: false,
         ),
@@ -392,7 +430,7 @@ void main() {
         _git,
         FinishOptions(
           commit: before,
-          version: '1.0.3',
+          version: _v('1.0.3'),
           dryRun: true,
           push: false,
         ),
@@ -415,7 +453,7 @@ void main() {
         _git,
         FinishOptions(
           commit: head,
-          version: '1.0.3',
+          version: _v('1.0.3'),
           buildNumber: '41',
           appDir: 'app',
           push: false,
@@ -447,7 +485,7 @@ void main() {
           _git,
           FinishOptions(
             commit: _git.run(['rev-parse', 'HEAD']),
-            version: '1.0.3',
+            version: _v('1.0.3'),
             appDir: 'app',
             push: false,
           ),
@@ -471,7 +509,7 @@ void main() {
           _git,
           FinishOptions(
             commit: _git.run(['rev-parse', 'HEAD']),
-            version: '1.0.3',
+            version: _v('1.0.3'),
             appDir: 'apps',
             push: false,
           ),
@@ -496,7 +534,7 @@ void main() {
           _git,
           FinishOptions(
             commit: _git.run(['rev-parse', 'HEAD']),
-            version: '1.0.3',
+            version: _v('1.0.3'),
             dryRun: true,
             push: false,
           ),

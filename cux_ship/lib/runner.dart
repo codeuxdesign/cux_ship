@@ -22,6 +22,7 @@ import 'package:args/args.dart';
 import 'package:args/command_runner.dart';
 import 'package:cux_ship_verify/cux_ship_verify.dart';
 import 'package:path/path.dart' as p;
+import 'package:pub_semver/pub_semver.dart';
 
 import 'src/appstore/cli.dart';
 import 'src/appstore/flatten_cli.dart';
@@ -538,12 +539,27 @@ class _FinishCommand extends Command<void> {
       // Read off the released commit rather than the working tree: the tree
       // may already have moved on, and the version that was published is a
       // property of what was published.
-      final version =
-          args.option('version') ??
-          pubspecVersion(git.run(['show', '$commit:$pubspecPath'])) ??
-          (throw ReleaseException(
-            'no version in $pubspecPath at $commit — pass --version',
-          ));
+      //
+      // Parsed here rather than carried as text. `--version` is a string from
+      // a command line and `pubspecVersion` returns a `Version`; leaving the
+      // two to meet as `Object` is how a version ends up compared with `==` on
+      // its spelling. A `--version` that is not a version is a usage error and
+      // says so at the boundary, not four calls later.
+      final explicit = args.option('version');
+      final Version version;
+      if (explicit != null) {
+        try {
+          version = Version.parse(explicit);
+        } on FormatException {
+          throw ReleaseException('--version "$explicit" is not a version');
+        }
+      } else {
+        version =
+            pubspecVersion(git.run(['show', '$commit:$pubspecPath'])) ??
+            (throw ReleaseException(
+              'no version in $pubspecPath at $commit — pass --version',
+            ));
+      }
 
       final log = finishRelease(
         git,

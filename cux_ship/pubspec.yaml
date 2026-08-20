@@ -75,6 +75,19 @@ dependencies:
   # slashes and symlinks wrong, and a wrong answer there is a `git commit`
   # naming a path that does not exist.
   path: ^1.9.0
+  # **Versions are parsed into `Version`, not compared as strings.** The bump
+  # path hand-rolled `^(\d+)\.(\d+)\.(\d+)$` and did its own arithmetic, which
+  # works and says nothing about ordering — 1.0.10 against 1.0.9 is a string
+  # comparison away from being wrong, and the `+build` metadata this project's
+  # tag scheme depends on being excluded from precedence is a semver rule rather
+  # than something to reimplement.
+  #
+  # Parsing at the boundary also separates two things the regex conflated: what
+  # is a valid version, and which valid versions this tool will bump. The second
+  # is stricter than semver on purpose and is now stated as a policy on typed
+  # fields rather than as a pattern that happens to exclude them.
+  pub_semver: ^2.1.4
+
   # For .cux-ship.yaml and for the decrypted secrets file. A hand-written parser
   # would do for one flat key, but both are read before a command does anything
   # and both report their own syntax errors with a line number, which is the
