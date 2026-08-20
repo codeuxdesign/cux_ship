@@ -23,6 +23,7 @@
 import 'dart:io';
 
 import 'package:args/args.dart';
+import 'package:crypto/crypto.dart';
 
 import 'build_manifest.dart';
 import 'release.dart';
@@ -46,6 +47,17 @@ ArgParser buildManifestWriteParser() => ArgParser()
         "in the artifact's own directory — a build with one artifact per "
         'directory wants a fixed manifest.json its uploader can name without '
         'globbing.',
+  )
+  ..addOption(
+    'derived-from',
+    valueHelp: 'parent manifest',
+    help:
+        "The manifest of the artifact this was repackaged from — a tarball's, "
+        'when building a .deb from it. Supplies the build facts (git sha, '
+        'dirty, version name, build number) so they are inherited rather than '
+        'retyped, and builds the derivedFrom chain including the parent\'s own. '
+        'Explicit flags still win. The parent artifact is digest-checked when '
+        'it sits beside its manifest.',
   )
   ..addOption('platform', help: 'android, ios, macos, web, linux, windows.')
   ..addOption('version-name', help: 'The marketing version, e.g. 1.1.0.')
@@ -120,15 +132,55 @@ ArgParser buildManifestWriteParser() => ArgParser()
 
 /// Writes one manifest, or exits non-zero saying which argument is missing.
 void runManifestWrite(ArgResults args) {
-  String need(String option) {
-    final value = args.option(option);
+  // **The parent supplies what a repackaged artifact inherits.**
+  //
+  // build-manifest.md's derivation rules say two things a producer would
+  // otherwise implement itself, once each, differently: the parent's build
+  // facts are hoisted to top level *always*, and the chain is
+  // `[parent] + parent's own derivedFrom` so multi-step chains survive. Both
+  // are done here, because "the repackager writes" is the shape that gets one
+  // producer's version of it subtly wrong.
+  //
+  // Explicit flags still win, so a repackager that genuinely knows better can
+  // say so — but it has to say so.
+  final parentPath = args.option('derived-from');
+  final BuildManifest? parent;
+  if (parentPath == null) {
+    parent = null;
+  } else {
+    parent = BuildManifest.read(parentPath);
+    // The digest of the bytes actually consumed is the whole value of a
+    // derivation record. Checked here when the artifact is beside its manifest
+    // — which is the normal case after downloading both — so a truncated or
+    // skewed fetch is a loud failure rather than a chain that records a lie.
+    if (File(parent.artifactPath).existsSync()) {
+      final actual = sha256
+          .convert(File(parent.artifactPath).readAsBytesSync())
+          .toString();
+      if (actual != parent.sha256Digest) {
+        throw ReleaseException(
+          'the parent artifact does not match the manifest that describes it, '
+          'so this would record a derivation from bytes nobody has:\n'
+          '  ${parent.artifactPath}\n'
+          '  manifest  ${parent.sha256Digest}\n'
+          '  actual    $actual',
+        );
+      }
+    }
+  }
+
+  String need(String option, [String? inherited]) {
+    final value = args.option(option) ?? inherited;
     if (value == null || value.isEmpty) {
-      throw ReleaseException('manifest write needs --$option');
+      throw ReleaseException(
+        'manifest write needs --$option'
+        '${parent == null ? '' : ', and --derived-from did not supply one'}',
+      );
     }
     return value;
   }
 
-  if (!args.wasParsed('dirty')) {
+  if (!args.wasParsed('dirty') && parent == null) {
     throw ReleaseException(
       'manifest write needs --dirty or --no-dirty. It has no default on '
       'purpose: a build script that forgot it would record every dirty build '
@@ -139,10 +191,10 @@ void runManifestWrite(ArgResults args) {
   final path = writeBuildManifest(
     artifactPath: need('artifact'),
     outPath: args.option('out'),
-    versionName: need('version-name'),
-    buildNumber: need('build-number'),
-    gitSha: need('git-sha'),
-    dirty: args.flag('dirty'),
+    versionName: need('version-name', parent?.versionName),
+    buildNumber: need('build-number', parent?.buildNumber),
+    gitSha: need('git-sha', parent?.gitSha),
+    dirty: args.wasParsed('dirty') ? args.flag('dirty') : parent!.dirty,
     platform: need('platform'),
     producerName: 'cux_ship',
     producerVersion: cuxShipVersion,
@@ -151,10 +203,25 @@ void runManifestWrite(ArgResults args) {
     format: args.option('format'),
     flavor: args.option('flavor'),
     gitTag: args.option('git-tag'),
-    buildNumberAssigned: args.flag('build-number-assigned'),
+    buildNumberAssigned: args.wasParsed('build-number-assigned')
+        ? args.flag('build-number-assigned')
+        : parent?.buildNumberAssigned ?? true,
     toolchain: _pairs(args, 'toolchain'),
     packaging: _pairs(args, 'packaging'),
     extra: _pairs(args, 'x') ?? const {},
+    // `[parent] + parent's own derivedFrom`, so a chain of repackagings
+    // stays flat and nearest-first however many steps it took.
+    derivedFrom: parent == null
+        ? const []
+        : [
+            {
+              'artifact': parent.artifact,
+              'sha256': parent.sha256Digest,
+              'builtAt': ?parent.builtAt,
+              'producer': ?parent.producer?['name'],
+            },
+            ...parent.derivedFrom,
+          ],
   );
 
   // Effective, not intended. A build log that says "wrote the manifest" is
