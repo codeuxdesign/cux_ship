@@ -31,6 +31,34 @@ or a squash makes it go **backwards** — so a repository that has already spent
 number cannot publish again until it grows past it. That is not a hypothetical:
 it is why this tool exists.
 
+## Numbers are allocation-ordered, not history-ordered
+
+**A higher build number does not mean a later commit**, and the ref log will
+eventually show a sequence that looks wrong to whoever reads it first.
+
+Allocation happens on demand, once per commit, when somebody builds it. So if
+`main` is built and then someone builds its parent — a bisect, a hotfix branch,
+a worktree that had not caught up — the parent gets the *higher* number:
+
+```
+60 -> 3f8403e
+61 -> 1d1f70d
+62 -> 76ca8f2   # the parent of 1d1f70d
+```
+
+That is the design working, not a defect. The property being guaranteed is that
+a number is **never reused for a different commit** and **never goes backwards
+as a counter** — which is what the stores require, since Play refuses a
+versionCode that does not increase. Nothing promises the numbers agree with
+`git log`, and nothing could: the tool cannot know a commit will be built before
+it is.
+
+The consequence worth stating, because it is the one that surprises people: a
+build of an old commit is publishable *ahead of* something already shipped from
+its descendant. If that matters for a given repository, the check belongs in
+that repository's release script — comparing the built commit against the
+shipped tag — rather than here, where the allocator has no idea what shipped.
+
 ## The one thing the port adds
 
 **The git argument lists are pure functions returning `List<String>`, and the

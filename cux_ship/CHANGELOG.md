@@ -65,6 +65,12 @@ refused: the artifact is recorded as a basename resolved against the manifest's
 directory — which is what keeps a `dist/` tree movable between machines — so a
 manifest written elsewhere parses cleanly and then cannot find its artifact.
 
+`buildNumber` is written as a **JSON integer**, which is what the schema always
+said and what the first writer got wrong — it emitted a string. Nothing failed,
+because the reader stringifies whatever it finds; that is exactly how a spec and
+its only implementation drift apart with every test green. A value that is not
+an integer is now refused rather than coerced.
+
 ### Manifest schema 2
 
 Read alongside schema 1, which stays readable for as long as anything writes
