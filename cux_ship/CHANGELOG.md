@@ -58,6 +58,13 @@ Three things it refuses, each earned:
 runs *after* the build: a tree that moved in between would be invisible here
 and wrong in the file. The build knows both when it starts and passes them down.
 
+`--out` renames the manifest **within the artifact's own directory**, for a
+build that keeps one artifact per platform directory and wants a fixed
+`manifest.json` its uploader can name without globbing. Anywhere else is
+refused: the artifact is recorded as a basename resolved against the manifest's
+directory — which is what keeps a `dist/` tree movable between machines — so a
+manifest written elsewhere parses cleanly and then cannot find its artifact.
+
 ### Manifest schema 2
 
 Read alongside schema 1, which stays readable for as long as anything writes

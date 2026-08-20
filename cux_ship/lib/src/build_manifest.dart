@@ -243,8 +243,17 @@ class BuildManifest {
 ///
 /// `builtAt` is likewise a parameter rather than a clock read: a caller that
 /// wants a build's real start time can give it, and a test can pin it.
+///
+/// [outPath] renames the manifest **within the artifact's own directory** — a
+/// build that puts one artifact per directory wants a fixed `manifest.json`
+/// its uploader can name without globbing, which is a better shape than the
+/// sidecar default and the reason this is not hardcoded. A path in any other
+/// directory is refused rather than accepted, because [artifact] is stored as
+/// a basename resolved against the manifest's directory: a manifest written
+/// elsewhere parses fine and then cannot find the file it describes.
 String writeBuildManifest({
   required String artifactPath,
+  String? outPath,
   required String versionName,
   required String buildNumber,
   required String gitSha,
@@ -298,7 +307,17 @@ String writeBuildManifest({
     if (extra.isNotEmpty) ...{'x': extra},
   };
 
-  final path = '$artifactPath.manifest.json';
+  final path = outPath ?? '$artifactPath.manifest.json';
+  final artifactDirectory = p.dirname(p.absolute(artifactPath));
+  if (p.dirname(p.absolute(path)) != artifactDirectory) {
+    throw ReleaseException(
+      'the manifest has to sit in the same directory as the artifact, and '
+      '--out names ${p.dirname(path)} while the artifact is in '
+      '${p.dirname(artifactPath)}. It records the artifact by basename so a '
+      'dist/ tree stays movable between machines, so one written elsewhere '
+      'would parse and then not find the file it describes.',
+    );
+  }
   File(path).writeAsStringSync(
     '${const JsonEncoder.withIndent('  ').convert(document)}\n',
   );
