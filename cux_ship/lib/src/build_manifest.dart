@@ -278,6 +278,25 @@ String writeBuildManifest({
       'exists, and writing one first would record a digest of nothing',
     );
   }
+  // **A JSON integer, because that is what the schema says**, and the first
+  // writer wrote a string — harmless to a reader that stringifies whatever it
+  // finds, which is exactly how a spec and its only implementation drift apart
+  // while every test passes. The second producer writes against the prose.
+  //
+  // Refused rather than coerced when it is not a number: both stores this
+  // targets count in integers (Play's versionCode is one by definition), and a
+  // value that is not one means the caller passed something else entirely.
+  // Apple's CFBundleVersion does permit a dotted form; nothing here produces
+  // one, and if something ever does this is the line that will say so rather
+  // than a manifest that quietly changes type.
+  final buildNumberValue = int.tryParse(buildNumber);
+  if (buildNumberValue == null) {
+    throw ReleaseException(
+      'buildNumber must be an integer and is "$buildNumber". The schema says '
+      'JSON integer, and a reader that stringifies whatever it finds would '
+      'accept this and hand the next tool something it cannot count with.',
+    );
+  }
   if (!RegExp(r'^[0-9a-f]{40}$').hasMatch(gitSha)) {
     throw ReleaseException(
       'gitSha must be the full 40-character lowercase sha, and is "$gitSha". '
@@ -291,7 +310,7 @@ String writeBuildManifest({
     'artifact': p.basename(artifactPath),
     'sha256': sha256.convert(artifact.readAsBytesSync()).toString(),
     'versionName': versionName,
-    'buildNumber': buildNumber,
+    'buildNumber': buildNumberValue,
     'buildNumberAssigned': buildNumberAssigned,
     'gitSha': gitSha,
     'dirty': dirty,

@@ -202,6 +202,40 @@ void main() {
     );
   });
 
+  test('buildNumber is a JSON integer, as the schema says', () {
+    // The first writer emitted a string. Nothing failed: the reader stringifies
+    // whatever it finds, so the spec and its only implementation drifted apart
+    // with every test green. A second producer writes against the prose.
+    final path = _write(_artifact());
+    final written = jsonDecode(File(path).readAsStringSync()) as Map;
+
+    expect(written['buildNumber'], 53);
+    expect(written['buildNumber'], isA<int>());
+  });
+
+  test('a non-integer buildNumber is refused, not coerced', () {
+    expect(
+      () => writeBuildManifest(
+        artifactPath: _artifact(),
+        versionName: '1.1.0',
+        buildNumber: '1.2.3',
+        gitSha: _sha,
+        dirty: false,
+        platform: 'ios',
+        producerName: 'cux_ship',
+        producerVersion: '3.4.0-dev.1',
+        builtAt: '2026-08-19T14:22:00Z',
+      ),
+      throwsA(
+        isA<ReleaseException>().having(
+          (e) => e.toString(),
+          'message',
+          contains('must be an integer'),
+        ),
+      ),
+    );
+  });
+
   test('repo-local keys go under x, where no shared tool reads them', () {
     final path = writeBuildManifest(
       artifactPath: _artifact(),
