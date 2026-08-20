@@ -150,6 +150,58 @@ void main() {
     expect(() => read.verify(), returnsNormally);
   });
 
+  test('--out renames within the directory, and stays readable', () {
+    // One artifact per directory wants a fixed name the uploader can state
+    // rather than glob for, which is a better shape than the sidecar default.
+    final artifact = _artifact();
+    final path = writeBuildManifest(
+      artifactPath: artifact,
+      outPath: '${_dist.path}/manifest.json',
+      versionName: '1.1.0',
+      buildNumber: '53',
+      gitSha: _sha,
+      dirty: false,
+      platform: 'android',
+      producerName: 'cux_ship',
+      producerVersion: '3.4.0-dev.1',
+      builtAt: '2026-08-19T14:22:00Z',
+    );
+
+    expect(path, '${_dist.path}/manifest.json');
+    expect(BuildManifest.read(path).artifactPath, artifact);
+    expect(() => BuildManifest.read(path).verify(), returnsNormally);
+  });
+
+  test('--out into another directory is refused', () {
+    // The artifact is stored as a basename, resolved against the manifest's
+    // own directory — that is what keeps a dist/ tree movable between
+    // machines. A manifest written somewhere else parses fine and then cannot
+    // find the file it describes, which is a failure at upload rather than
+    // here.
+    final elsewhere = Directory('${_dist.path}/elsewhere')..createSync();
+    expect(
+      () => writeBuildManifest(
+        artifactPath: _artifact(),
+        outPath: '${elsewhere.path}/manifest.json',
+        versionName: '1.1.0',
+        buildNumber: '53',
+        gitSha: _sha,
+        dirty: false,
+        platform: 'android',
+        producerName: 'cux_ship',
+        producerVersion: '3.4.0-dev.1',
+        builtAt: '2026-08-19T14:22:00Z',
+      ),
+      throwsA(
+        isA<ReleaseException>().having(
+          (e) => e.toString(),
+          'message',
+          contains('same directory'),
+        ),
+      ),
+    );
+  });
+
   test('repo-local keys go under x, where no shared tool reads them', () {
     final path = writeBuildManifest(
       artifactPath: _artifact(),

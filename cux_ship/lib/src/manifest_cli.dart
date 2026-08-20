@@ -38,6 +38,15 @@ ArgParser buildManifestWriteParser() => ArgParser()
         'bytes — so run this after signing, never before.',
     valueHelp: 'path',
   )
+  ..addOption(
+    'out',
+    valueHelp: 'path',
+    help:
+        'Write the manifest here instead of <artifact>.manifest.json. Must be '
+        "in the artifact's own directory — a build with one artifact per "
+        'directory wants a fixed manifest.json its uploader can name without '
+        'globbing.',
+  )
   ..addOption('platform', help: 'android, ios, macos, web, linux, windows.')
   ..addOption('version-name', help: 'The marketing version, e.g. 1.1.0.')
   ..addOption('build-number', help: 'The allocated build number.')
@@ -129,6 +138,7 @@ void runManifestWrite(ArgResults args) {
 
   final path = writeBuildManifest(
     artifactPath: need('artifact'),
+    outPath: args.option('out'),
     versionName: need('version-name'),
     buildNumber: need('build-number'),
     gitSha: need('git-sha'),
