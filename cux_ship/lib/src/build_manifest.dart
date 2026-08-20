@@ -33,6 +33,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
+import 'baked_facts.dart';
 import 'release.dart' show ReleaseException;
 
 /// The schema this understands. A manifest declaring anything else is refused
@@ -263,6 +264,41 @@ class BuildManifest {
         '  actual    $actual',
       );
     }
+
+    crossCheck();
+  }
+
+  /// Compares what this manifest claims against what the artifact says about
+  /// itself, and returns what was actually checked.
+  ///
+  /// **The digest cannot catch this class at all.** It proves the bytes are the
+  /// ones the manifest was written for; it says nothing about whether the build
+  /// honored the values the script passed it. An export step that rewrote
+  /// `CFBundleVersion`, a Gradle override, a variable that evaluated empty —
+  /// in each of those the manifest honestly describes the wrong artifact, and
+  /// every flag in the upload is correct.
+  ///
+  /// Until now the check happened at the store: Play parses an uploaded bundle
+  /// and reports its versionCode, and `play upload` compares afterwards. Right
+  /// answer, learned after transferring the whole artifact.
+  ///
+  /// Returns a sentence naming what was compared, or what was not and why —
+  /// never silence. A format with no reader is trusted, and the caller prints
+  /// that it was, because "not checked" and "checked and fine" must not look
+  /// the same.
+  String crossCheck() {
+    final BakedFacts? baked;
+    try {
+      baked = readBakedFacts(artifactPath, format);
+    } on ReleaseException catch (e) {
+      throw ReleaseException('$path: ${e.message}');
+    }
+    return describeCrossCheck(
+      versionName: versionName,
+      buildNumber: buildNumber,
+      format: format,
+      baked: baked,
+    );
   }
 }
 
@@ -402,4 +438,55 @@ String writeBuildManifest({
     '${const JsonEncoder.withIndent('  ').convert(document)}\n',
   );
   return path;
+}
+
+/// Compares what a manifest claims against what its artifact says, and returns
+/// the sentence describing what was checked.
+///
+/// **Pure, and separate from the reading, because this is where the decision
+/// is.** Getting bytes out of a zip needs a zip; deciding what a disagreement
+/// means does not, and a test that has to build an `.aab` to assert on a
+/// comparison is a test nobody writes the third case for.
+///
+/// A null [baked] means the format has no reader. That is a real answer and it
+/// is returned rather than swallowed — "not checked" must not render the same
+/// as "checked and fine".
+///
+/// A null field *within* [baked] means the artifact did not carry that one, and
+/// is skipped rather than treated as a mismatch: absent is not disagreement.
+String describeCrossCheck({
+  required String versionName,
+  required String buildNumber,
+  required String? format,
+  required BakedFacts? baked,
+}) {
+  if (baked == null) {
+    return 'cross-check: no reader for ${format ?? 'this format'} — '
+        'build number and version name taken on trust';
+  }
+
+  final mismatches = <String>[
+    if (baked.buildNumber != null && baked.buildNumber != buildNumber)
+      '  build number  manifest $buildNumber, artifact ${baked.buildNumber}',
+    if (baked.versionName != null && baked.versionName != versionName)
+      '  version name  manifest $versionName, artifact ${baked.versionName}',
+  ];
+  if (mismatches.isNotEmpty) {
+    throw ReleaseException(
+      'the artifact disagrees with the manifest that describes it, so this is '
+      'not the build this manifest was written for:\n'
+      '${mismatches.join('\n')}\n'
+      '  read from     ${baked.source}\n'
+      'dist/ is stale, or the build did not use the values it was given.',
+    );
+  }
+
+  final checked = <String>[
+    if (baked.buildNumber != null) 'build number',
+    if (baked.versionName != null) 'version name',
+  ];
+  if (checked.isEmpty) {
+    return 'cross-check: ${baked.source} carried neither value — taken on trust';
+  }
+  return 'cross-check: ${checked.join(' and ')} agree with ${baked.source}';
 }
