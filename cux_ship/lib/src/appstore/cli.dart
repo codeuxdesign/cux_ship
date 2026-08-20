@@ -254,6 +254,15 @@ ArgParser buildAscParser(AscCommand cmd) {
     case AscCommand.promote:
       parser
         ..addOption(
+          'beta-group',
+          help:
+              'Give the build to this TestFlight group instead of submitting '
+              'it for review. Widening the audience of a build that already '
+              'exists is what promotion means, and a group is an audience — so '
+              'this needs no upload, creates no App Store version, and '
+              'publishes no listing.',
+        )
+        ..addOption(
           'metadata',
           help:
               'Directory of store listing text and screenshots to publish. '
@@ -576,7 +585,10 @@ Future<void> runAsc(
       fail('no such file: $ipaPath');
     }
   }
-  if (promote && versionName == null) {
+  // A promotion to a beta group is exempt: it creates no App Store version, so
+  // there is nothing for a version name to name. Requiring one would be asking
+  // for a fact about a record the command deliberately does not make.
+  if (promote && versionName == null && opt('beta-group') == null) {
     fail(
       'no version name — none could be read from pubspec.yaml, so pass '
       '--version-name to say which version to submit',
@@ -937,12 +949,6 @@ Future<void> runAsc(
     // -------------------------------------------------------------- promote
 
     if (promote) {
-      final version = await store.ensureVersion(
-        app,
-        versionName!,
-        create: true,
-      );
-
       // Read rather than assumed. The point of promoting is that what goes to
       // review is what testers ran, and that only holds if the build comes
       // from what Apple says it has.
@@ -977,6 +983,41 @@ Future<void> runAsc(
                 'build $buildNumber is not a processed build of this app',
               ),
             );
+
+      // **A group is an audience, so giving a build to one is a promotion.**
+      // It is the same operation Play calls promotion — an existing build, no
+      // upload, a wider audience — and spelling it this way is what makes the
+      // listing rule derived rather than asserted: promotions to the public
+      // audience publish, promotions to a group do not, on both stores for one
+      // reason.
+      //
+      // No `--version-name` is required and no version is created. An App
+      // Store version is the public artefact; a TestFlight group is not, and
+      // conflating them is how a version record appears for a release nobody
+      // has decided to make.
+      final betaGroup = opt('beta-group');
+      if (betaGroup != null) {
+        final number =
+            (chosen['attributes'] as Map<String, dynamic>?)?['version'];
+        stdout.writeln('==> giving build $number to "$betaGroup"');
+        await store.addToBetaGroup(app, chosen, betaGroup);
+        stdout.writeln(
+          '==> done — not submitted for review, and the listing is untouched',
+        );
+        if (dryRun) {
+          // Said here because this path returns before the closing notice, and
+          // a dry run that printed "done" and nothing else would read as a
+          // write that happened.
+          stdout.writeln('==> dry run — nothing was written');
+        }
+        return;
+      }
+
+      final version = await store.ensureVersion(
+        app,
+        versionName!,
+        create: true,
+      );
 
       if (version != null) {
         await store.attachBuild(version, chosen);
