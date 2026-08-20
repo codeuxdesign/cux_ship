@@ -76,6 +76,23 @@ Needs **git 2.15 or newer** in practice — `push --atomic`,
 `--force-with-lease=<ref>:<value>` and `rev-parse --is-shallow-repository`.
 Older git is not refused; the shallow probe degrades, exactly as the shell does.
 
+## Shallow clones
+
+A shallow clone fetches the allocation chain with `--depth=1` — the tip entry
+and nothing behind it — because a chain entry names the commit it was allocated
+for, so a full fetch would drag the whole allocation history along with it.
+
+Measured on a real repository: a `--depth=1` clone with **2,152 allocations**
+behind it answered `get` in 2.6 seconds for a 184 KB fetch delta, and stayed
+shallow.
+
+**The consequence is worth knowing before it surprises you: in such a clone the
+chain is cut at the tip, so `find-commit` cannot walk back to an older build.**
+`get` and `generate` — everything CI does — are unaffected, because they work
+from the tip and the counter. It is looking up build 900 from a CI workspace
+that fails, and it fails there and not on a full clone, which is the sort of
+difference that reads as a bug in the tool.
+
 ## Concurrency
 
 Allocation is a race, and losing it is the ordinary case rather than the
