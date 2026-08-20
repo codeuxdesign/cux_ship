@@ -71,17 +71,29 @@ watched it accrete.
 
 **Skip unchanged images on the Play push.** Every upload calls
 `images.deleteall` per image type per locale and re-uploads every file, with no
-comparison — six deletes and six uploads here at one locale, **138 and 138 at
-AuthPass's 23**. Play's `Image` resource carries `sha1`/`sha256` and `cux_ship`
+comparison. Measured in **How It Went**: three image types and six files, so
+three deletes and six uploads, at one locale. **Hold the Wheel** carries five
+types and fourteen files. Multiply either by **AuthPass's 23 locales** and it is
+the deciding number — the exact figure there is theirs to state, and an earlier
+draft of this document invented one by applying How It Went's count to
+AuthPass's locales, which is the mistake this paragraph now exists to avoid. Play's `Image` resource carries `sha1`/`sha256` and `cux_ship`
 already calls `images.list` and discards the result. Whether Play's digest
 matches the bytes sent is already answered: fastlane's `supply` ships
 `sync_image_upload` doing this comparison in production. If it ever fails to
 match, the check degrades to today's behavior and is no worse.
 
-**Refuse to publish release notes from a dirty `CHANGELOG.md`.** `upload.sh` and
-`promote.sh` both read the working tree, under a header stating *"the working
-tree is not consulted at all"* — so unreviewed text can ship, and `promote.sh`
-is the path that reaches real users.
+**Refuse to publish release notes from a dirty changelog.** In **How It Went**,
+`upload.sh` and `promote.sh` both read the working tree under a header stating
+*"the working tree is not consulted at all"*; in **Hold the Wheel**, both do the
+same without the false header. Either way unreviewed text can ship, and
+`promote.sh` is the path that reaches real users.
+
+**Scope it to the files the notes were resolved from**, with `CHANGELOG.md` as
+the current instance rather than the definition. AuthPass's notes never come
+from a `CHANGELOG.md` at all — they resolve from per-locale
+`changelogs/<versionCode>.txt` and a cross-store CSV, 23 locales of them. Stating
+the guard in terms of one filename would need rewriting the day the fastlane
+dialect arrives.
 
 The guard is the whole fix, and reading from `git show HEAD:CHANGELOG.md`
 instead would be over-specification: the two are byte-identical whenever the
@@ -140,7 +152,32 @@ The named needs, each conditional on an event rather than standing:
   invoked from inside the build, because the channel freezes there.
 - **A locale-code table** — Crowdin's `%locale%`, Play's BCP-47, Apple's codes,
   Samsung's `languagecode` and Huawei's do not agree, and every adapter would
-  otherwise rediscover it.
+  otherwise rediscover it. The concrete breakers, from AuthPass's tree:
+  `zh-CN`/`zh-TW` where Apple wants `zh-Hans`/`zh-Hant`, and `he-IL` where
+  Play's API has historically wanted the legacy `iw`. `pt-BR`/`pt-PT` work
+  everywhere, but by the luck of BCP-47 agreeing rather than by anything
+  designed.
+
+## Two questions that only exist at many locales
+
+Neither is visible in a repository with one locale, and both are the first thing
+that happens at 23. Raised by AuthPass reading this from that side; **both are
+undecided.**
+
+**Partial translations are the steady state, not an edge case.** With Crowdin,
+a locale routinely has `title.txt` and no `short_description.txt`, or a
+half-translated update. Present-means-owned plus a partial locale means pushing
+gaps over a listing that was previously complete. The shared validation model
+needs a per-locale completeness rule — push a locale only when complete and
+skip-and-report otherwise, or something else, but *decided* rather than
+whatever the loader happens to do.
+
+**The ownership rule needs its grain stated.** *Present means owned, absent
+means left alone* — per store, per locale, or per field per locale? At 23
+locales there will eventually be console-managed locales beside repo-managed
+ones: a volunteer edits Samsung's Korean listing directly. Per-field-per-locale
+is probably the intent; one sentence would make it so, and its absence is the
+kind of thing that gets decided by accident on the first push that meets it.
 
 ## A test for anything proposed later
 
