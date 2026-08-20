@@ -128,7 +128,7 @@ should carry their askers, or their descendants will be guessed at the same way.
 | `schema` | yes | `2`. Anything unrecognized is refused. |
 | `artifact` | sidecar only | Filename, relative to the manifest. Keeps a `dist/` tree movable. |
 | `sha256` | sidecar only | Of the artifact **as it will be uploaded** — after signing, over the container including its card. |
-| `format` | no | `aab`, `apk`, `ipa`, `pkg`, `dmg`, `msix`, `exe`, `snap`, `deb`, `tar.gz`, `zip`. Named `format` rather than schema 1's `variant`, which collides with Gradle's meaning — *variant* there is flavor-plus-buildType, and the repository that motivated this schema has six Gradle flavors, so `flavor: playstore, variant: aab` would be misread by every Android-literate reader. **It does not absorb `variant`** — see below. |
+| `format` | no | `aab`, `apk`, `ipa`, `pkg`, `dmg`, `msix`, `exe`, `snap`, `deb`, `tar.gz`, `zip`. Named `format` rather than schema 1's `variant`, which collides with Gradle's meaning — *variant* there is flavor-plus-buildType, and the repository that motivated this schema has six Gradle flavors, so `flavor: playstore, variant: aab` would be misread by every Android-literate reader. **It does not absorb `variant`** — see the archaeology above. Its asker today is thin: the pre-upload confirmation line a human reads. Optional for that reason, and a consumer that ever branches on it should say so here. |
 | `gitSha` | yes | `^[0-9a-f]{40}$`, validated rather than trusted. |
 | `dirty` | yes | No default; absent must not read as clean. Defined as a non-empty `git status --porcelain` at the repository root, untracked non-ignored files counting. |
 | `versionName` | yes | Marketing version. |
@@ -136,7 +136,7 @@ should carry their askers, or their descendants will be guessed at the same way.
 | `buildNumberAssigned` | yes | False when allocation failed and the number is a placeholder. Promoted from a repo-local field: an upload must be able to refuse a placeholder. Kept as a *pair* rather than omitting `buildNumber` when unassigned, so the refusal reads "the number is a placeholder — rebuild with git-buildnumber reachable" rather than "has no buildNumber", and the manifest stays readable for every other purpose. |
 | `platform` | yes | `android`, `ios`, `macos`, `linux`, `windows`, `web`. |
 | `flavor` | no | `playstore`, `sideload`, `amazon`, … Six artifacts can share version *and* build number, so the filename must not be the only discriminator. |
-| `builtAt` | yes | UTC, ISO 8601, seconds. |
+| `builtAt` | no | UTC, ISO 8601, seconds. **Optional because it fails this document's own test**: nothing branches on it, the notes-reconstruction argument deliberately uses the tag's date instead, and its one real consumer is ordering a derivation chain — where it already appears as an optional entry field. Write it; do not depend on it. |
 | `producer` | yes | `{name, version}`. `version` is a **compiled-in constant of the writer**, never queried at runtime — two installs answering to one name is a lesson this project has already paid for. |
 | `toolchain` | no | `{flutter, dart}`. Answers "which SDK built the artifact users have", a recurring support question. |
 | `gitTag` | no | The exact tag at `gitSha`, when there is one. |
@@ -167,14 +167,18 @@ stated as obligations rather than left to a reference implementation.
 
 ## Consistency across one release
 
-> **Advice to a future implementer, not a rule anything enforces.** Any
-> operation consuming more than one manifest for a single release should refuse
-> manifests that disagree on `gitSha`, `versionName` or `buildNumber`.
+> **A conditional requirement — binding on a consumer that does not exist
+> yet.** Any operation that ever holds more than one manifest for a single
+> release **must** refuse manifests that disagree on `gitSha`, `versionName` or
+> `buildNumber`.
 
-**Nothing enforces it today and nothing can**: `upload.sh` handles one platform
-per invocation, so no consumer ever holds two manifests at once. It is stated
-here as an obligation waiting for a consumer, which is honest, rather than as a
-rule, which would read as protection that does not exist.
+**Nothing can enforce it today**: `upload.sh` handles one platform per
+invocation, so no consumer ever holds two manifests at once — which is why this
+must not be read as protection that exists. But stating it as *advice* would
+leave the first multi-manifest consumer free to skip it, and skipping it is
+exactly how the incident below happens again. Conditional-normative is the
+honest strength: it costs nothing until such a consumer is written, and binds it
+the day it is.
 
 **The invariant it wants belongs upstream anyway — one commit, one build number,
 for every platform in a release.** That is an allocator property, true before
@@ -191,8 +195,11 @@ the disagreement was upstream of all of them.
 That matters for what would be worth building. Because it was different commits,
 a **release-level pre-flight** — one command reading every sidecar before any
 upload runs — would have caught it, and is the only shape that could. Because it
-was not a lost allocation, nothing in the allocator needs changing. Neither is
-built, and neither should be until the incident recurs with v1.3 in place.
+was not a lost allocation, nothing in the allocator needs changing. The
+pre-flight is not built and waits for a second occurrence — and note that v1.3
+makes one no less likely, since it fixed the other candidate cause, not this
+one; a commit can still land between two platform builds tomorrow. The wait is
+restraint, not protection.
 
 ## Derivation
 
@@ -297,11 +304,14 @@ uploader off the shared reader's books.
 - Adding an optional field does not bump the schema. Adding a required one, or
   changing an existing one's meaning, does.
 - `cux_ship` reads schema 1 and schema 2 for as long as any repository writes 1.
-  Schema 1 has exactly two producers, both in repositories we control, so that
-  window is short by construction.
-- Migration from schema 1: `variant → format`, `artifactKind` dropped,
-  `buildNumberAssigned` promoted from repo-local. That migration is the one
-  moment those meanings can silently shift, which is why they are named here.
+  Both producers are in repositories we control, but the window is priced by the
+  migration table above rather than short by construction — short for android,
+  ios and macos, open for web until its output is archived.
+- Migration from schema 1: `buildNumberAssigned` promoted unchanged; mobile's
+  `variant` becomes `format`; web's `variant` is a compile target and moves
+  under `x` until `target` earns its name; `artifactKind` is dropped only when
+  web's output is archived. The migration is the one moment those meanings can
+  silently shift, which is why they are named here.
 
 ## Not in scope: release notes
 

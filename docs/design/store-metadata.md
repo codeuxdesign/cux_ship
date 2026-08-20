@@ -1,7 +1,8 @@
 # Store metadata and changelogs: what to build
 
-Status: **decisions pending**. The analysis is settled; six items below need a
-yes or a no. Nothing here is implemented.
+Status: **decisions pending**. The analysis is settled; three decisions below
+need a yes or a no, and two questions raised at 23 locales are undecided.
+Nothing here is implemented.
 
 The research behind it examined Play, App Store Connect, Microsoft Partner
 Center, Amazon, Samsung, Huawei, snapcraft, F-Droid, debian and fosshub, plus
@@ -60,12 +61,14 @@ products only — so decision 3 below is a choice, not a limitation.
 
 ## Three decisions
 
-An earlier shape of this document had six. Three of them were one mistake in
-three costumes — coupling the *release record* to the notes text, when the text
-already has two authoritative homes: **the store is the record of what it
-showed, git is the record of what we wrote, and the tag only joins the artifact
-to its commit.** What follows is what survived being read by someone who had not
-watched it accrete.
+An earlier shape of this document had six. One was deleted as a mistake that
+had worn three costumes — coupling the *release record* to the notes text,
+which also surfaced as an embedded-text payload and an over-specified read path
+before anyone pressed on it — because the text already has two authoritative
+homes: **the store is the record of what it showed, git is the record of what
+we wrote, and the tag only joins the artifact to its commit.** The other two
+merged into a neighbor or moved down to the named needs. What follows is what
+survived being read by someone who had not watched it accrete.
 
 ### 1. Fix the two measured defects
 
@@ -98,8 +101,8 @@ dialect arrives.
 The guard is the whole fix, and reading from `git show HEAD:CHANGELOG.md`
 instead would be over-specification: the two are byte-identical whenever the
 file is clean, and the refusal makes the dirty case unreachable. Scope it to
-that one file, give it no override — committing costs seconds and an override
-reopens the hole — and put it inside `cux_ship` beside where the changelog is
+those source files and nothing wider, give it no override — committing costs
+seconds and an override reopens the hole — and put it inside `cux_ship` beside where the changelog is
 already loaded and length-checked. One implementation for three repositories,
 and `upload.sh`'s header becomes *true* rather than deleted.
 
@@ -183,9 +186,10 @@ kind of thing that gets decided by accident on the first push that meets it.
 
 **Every record should name the question it answers, and who asked it.**
 
-The image dedupe answers "why is every upload 138 image operations", measured at
-AuthPass. The dirty guard answers "how did unreviewed text reach a store", which
-happened here. A deleted decision — recording which commit the notes came from —
+The image dedupe answers "why does every upload re-send every image" — measured
+here, and multiplied by 23 locales at AuthPass. The dirty guard answers "what
+stops unreviewed text from reaching a store" — today nothing does, an
+acknowledged defect in two repositories. A deleted decision — recording which commit the notes came from —
 answered "which commit did this text come from", and when finally pressed nobody
 had ever asked it and `git log -- CHANGELOG.md` could already answer it.
 
