@@ -111,7 +111,7 @@ from another still takes the publishing clone's committed notes. That is the
 requirement — committed means reviewed — and chasing the cross-machine case is
 where the deleted decisions came from.
 
-### 2. Only promote touches the public listing — on both stores
+### 2. Only a promotion to the public audience touches the listing
 
 **A listing write on Play is a publication.** `edits.listings.update` and
 `edits.images.upload` take `(packageName, editId, locale)` and **no track**:
@@ -134,11 +134,17 @@ internal, and the public page now describes 1.2.
 
 **The rule, and it is one bit:**
 
-> **Only `promote` writes the public listing, on both stores. Uploads validate
-> and report; they never write it.**
+> **Only a promotion to the public audience writes the listing. Every other
+> command validates and reports; none of them writes it.**
 
-"Will this touch the public listing?" — "Is it a promote?" Nothing else to
-remember, and no exception to motivate.
+"Will this touch the public listing?" — "Am I promoting to production?"
+
+**The qualifier is load-bearing and an earlier draft left it out.** `play
+promote --track beta` is a promote and reaches open testing, not production; a
+rule saying *any* promote publishes would republish the listing there and
+reproduce the defect one track over. On Play the public audience is
+`production`; on the App Store it is the review submission. A promotion into
+closed or open testing observes and reports exactly as an upload does.
 
 **Uploads observe rather than write, which is stronger than the cadence it
 replaces.** Every upload runs a read-only diff of the committed tree against
@@ -162,6 +168,28 @@ someone to decide which side is right.
 earlier, and permission was never obligation. TestFlight has no listing at all;
 `appstore upload` writes `betaBuildLocalizations` — `whatsNew`, per build — which
 is release notes, not a listing.
+
+**Adding a build to a TestFlight group is a promotion, and should be spelled as
+one.** Today it is `appstore upload --beta-group <name>`, which conflates *ship
+these bytes* with *give them to this audience*. But it is the same operation
+Play calls promotion — an existing build, no upload, a wider audience — and the
+machinery is already there: `appstore promote` resolves a build by
+`--build-number` or takes the newest Apple holds, and `addToBetaGroup` needs
+only the app, the build and the group.
+
+Spelling it as a promotion buys three things. The stores stop needing separate
+mental models — *promote widens the audience of a build that already exists*,
+everywhere. A build can be given to an external group days after upload without
+re-uploading, which is not expressible today. And the listing rule falls out of
+it rather than being asserted: promotions to the public audience publish,
+promotions to a group do not, on both stores and for the same reason.
+
+`--beta-group` at upload stays, as the convenience it is. What changes is that
+it stops being the *only* way to reach a group.
+
+Not modelled, and worth naming: external TestFlight groups require **Beta App
+Review**, which is separate from App Store review and appears nowhere in this
+tooling.
 
 **Two things stay on upload, deliberately.** `--listing-only` remains the
 explicit escape for *fix the live page now* — an act rather than a cadence. And
@@ -307,7 +335,7 @@ decision 3 is to build none of it. It loses to decision 1, which fixes defects
 rather than hypotheticals, and it defers rather than defeats decision 2 — bought
 at the next App Store submission.
 
-## Observe on every contact, write only at promote
+## Observe on every contact, write only when going public
 
 **Drift prevention needs frequent observation, not frequent writing.** An
 earlier shape of this document asked for the committed listing to be reasserted
