@@ -39,7 +39,20 @@ import 'release.dart' show ReleaseException;
 /// rather than read optimistically: the fields below are what an upload is
 /// named by, and guessing at an unknown layout would mean publishing an
 /// artifact described by whatever happened to parse.
-const supportedManifestSchema = 1;
+const supportedManifestSchema = 2;
+
+/// Schemas this can read.
+///
+/// **Both, for as long as anything writes 1.** Schema 1 has two producers and
+/// both are hand-rolled shell in repositories we control, so the window is
+/// bounded — but refusing 1 the day 2 lands would strand every `dist/` already
+/// on disk, and a reader that cannot read yesterday's build is a reader nobody
+/// can adopt incrementally.
+const readableManifestSchemas = {1, 2};
+
+Map<String, String>? _stringMap(dynamic value) => value is Map
+    ? {for (final e in value.entries) '${e.key}': '${e.value}'}
+    : null;
 
 /// A build manifest, as written beside the artifact it describes.
 class BuildManifest {
@@ -52,6 +65,15 @@ class BuildManifest {
     required this.dirty,
     required this.sha256Digest,
     required this.platform,
+    this.format,
+    this.flavor,
+    this.builtAt,
+    this.producer,
+    this.toolchain,
+    this.gitTag,
+    this.buildNumberAssigned = true,
+    this.packaging,
+    this.derivedFrom = const [],
   });
 
   /// Reads and validates, or throws [ReleaseException] saying which field.
@@ -73,10 +95,11 @@ class BuildManifest {
     }
 
     final schema = document['schema'];
-    if (schema != supportedManifestSchema) {
+    if (!readableManifestSchemas.contains(schema)) {
       throw ReleaseException(
         '$manifestPath declares schema $schema and this understands '
-        '$supportedManifestSchema. Refusing rather than guessing: every value '
+        '${readableManifestSchemas.join(" and ")}. Refusing rather than '
+        'guessing: every value '
         'an upload is named by comes from this file.',
       );
     }
@@ -98,6 +121,24 @@ class BuildManifest {
       dirty: document['dirty'] == true,
       sha256Digest: need('sha256'),
       platform: need('platform'),
+      // Schema 1 spelled this `variant`; schema 2 renames it because *variant*
+      // means flavor-plus-buildType in Gradle, and one consuming repository has
+      // six Gradle flavors. Both are read, so a schema-1 `dist/` still resolves.
+      format: (document['format'] ?? document['variant'])?.toString(),
+      flavor: document['flavor']?.toString(),
+      builtAt: document['builtAt']?.toString(),
+      producer: _stringMap(document['producer']),
+      toolchain: _stringMap(document['toolchain']),
+      gitTag: document['gitTag']?.toString(),
+      // Absent means assigned. A schema-1 manifest that never carried the field
+      // is not claiming a placeholder — but a schema-2 one that says `false`
+      // is, and an upload must be able to refuse it.
+      buildNumberAssigned: document['buildNumberAssigned'] != false,
+      packaging: _stringMap(document['packaging']),
+      derivedFrom: [
+        for (final entry in (document['derivedFrom'] as List<dynamic>? ?? []))
+          if (entry is Map<String, dynamic>) _stringMap(entry)!,
+      ],
     );
   }
 
@@ -120,6 +161,36 @@ class BuildManifest {
 
   final String sha256Digest;
   final String platform;
+
+  /// The artifact's container kind — `aab`, `ipa`, `pkg`, `msix`. Schema 1's
+  /// `variant` is read into it.
+  final String? format;
+
+  /// Which of several artifacts built from one commit this is. Six Android
+  /// flavors share a version *and* a build number, so a filename is not a
+  /// discriminator.
+  final String? flavor;
+
+  final String? builtAt;
+  final Map<String, String>? producer;
+  final Map<String, String>? toolchain;
+  final String? gitTag;
+
+  /// False when allocation failed and [buildNumber] is a placeholder.
+  ///
+  /// Absent reads as true, because a schema-1 manifest never carried it and is
+  /// not claiming otherwise.
+  final bool buildNumberAssigned;
+
+  /// The tree the *packaging* files came from, when this artifact was
+  /// repackaged from another. A `.deb` is tarball bytes plus a control file and
+  /// maintainer scripts from a different checkout, and a packaging defect is a
+  /// real shipping defect whose provenance is not the tarball's.
+  final Map<String, String>? packaging;
+
+  /// Ancestors, nearest first. Each names an artifact this was derived from and
+  /// the digest of the bytes actually consumed.
+  final List<Map<String, String>> derivedFrom;
 
   /// The artifact, resolved against the manifest's directory.
   String get artifactPath => p.join(p.dirname(p.absolute(path)), artifact);
@@ -155,4 +226,81 @@ class BuildManifest {
       );
     }
   }
+}
+
+/// Writes the sidecar manifest beside [artifactPath], and returns its path.
+///
+/// **The digest is computed here, from the artifact as it now stands.** That is
+/// the one thing a caller must not pass in: a digest recorded before signing
+/// fails verification on every real release rather than never, and taking it
+/// from the file we are describing makes that impossible to get wrong.
+///
+/// **`gitSha` and `dirty` are inputs and are never derived.** They describe the
+/// tree at *build* time, and this runs afterwards — anything that changed in
+/// between would be invisible. Only the build knows both at the moment it
+/// starts, so it passes them and a wrong value has to be supplied rather than
+/// drift in.
+///
+/// `builtAt` is likewise a parameter rather than a clock read: a caller that
+/// wants a build's real start time can give it, and a test can pin it.
+String writeBuildManifest({
+  required String artifactPath,
+  required String versionName,
+  required String buildNumber,
+  required String gitSha,
+  required bool dirty,
+  required String platform,
+  required String producerName,
+  required String producerVersion,
+  required String builtAt,
+  String? format,
+  String? flavor,
+  String? gitTag,
+  bool buildNumberAssigned = true,
+  Map<String, String>? toolchain,
+  Map<String, String>? packaging,
+  List<Map<String, String>> derivedFrom = const [],
+  Map<String, dynamic> extra = const {},
+}) {
+  final artifact = File(artifactPath);
+  if (!artifact.existsSync()) {
+    throw ReleaseException(
+      'no artifact at $artifactPath — a manifest describes something that '
+      'exists, and writing one first would record a digest of nothing',
+    );
+  }
+  if (!RegExp(r'^[0-9a-f]{40}$').hasMatch(gitSha)) {
+    throw ReleaseException(
+      'gitSha must be the full 40-character lowercase sha, and is "$gitSha". '
+      'A reader normalizes whatever it is given, which is exactly what lets a '
+      'short sha survive here and break a tool that does not.',
+    );
+  }
+
+  final document = <String, dynamic>{
+    'schema': supportedManifestSchema,
+    'artifact': p.basename(artifactPath),
+    'sha256': sha256.convert(artifact.readAsBytesSync()).toString(),
+    'versionName': versionName,
+    'buildNumber': buildNumber,
+    'buildNumberAssigned': buildNumberAssigned,
+    'gitSha': gitSha,
+    'dirty': dirty,
+    'platform': platform,
+    'builtAt': builtAt,
+    'producer': {'name': producerName, 'version': producerVersion},
+    if (format != null) ...{'format': format},
+    if (flavor != null) ...{'flavor': flavor},
+    if (gitTag != null) ...{'gitTag': gitTag},
+    if (toolchain != null) ...{'toolchain': toolchain},
+    if (packaging != null) ...{'packaging': packaging},
+    if (derivedFrom.isNotEmpty) ...{'derivedFrom': derivedFrom},
+    if (extra.isNotEmpty) ...{'x': extra},
+  };
+
+  final path = '$artifactPath.manifest.json';
+  File(path).writeAsStringSync(
+    '${const JsonEncoder.withIndent('  ').convert(document)}\n',
+  );
+  return path;
 }

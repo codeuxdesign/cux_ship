@@ -274,6 +274,75 @@ void main() {
     });
   });
 
+  group('App Store trees', () {
+    /// A repository whose listings differ per platform, which is what
+    /// `store/appstore/<platform>` means.
+    void split() {
+      write('store/appstore/README.md', 'The two trees below.\n');
+      write('store/appstore/ios/info/primary_category.txt', 'SPORTS');
+      write('store/appstore/macos/info/primary_category.txt', 'SPORTS');
+    }
+
+    test('a flat layout is one tree, and the caller says which platform', () {
+      write('store/appstore/info/primary_category.txt', 'SPORTS');
+
+      expect(read().appStoreTrees(), {
+        'ios': endsWith('store/appstore'),
+      }, reason: 'ios is the default a path cannot carry');
+      expect(read().appStoreTrees(platform: 'macos'), {
+        'macos': endsWith('store/appstore'),
+      });
+    });
+
+    test('a split layout offers every tree it holds', () {
+      split();
+
+      expect(read().appStoreTrees(), {
+        'ios': endsWith('store/appstore/ios'),
+        'macos': endsWith('store/appstore/macos'),
+      });
+    });
+
+    test('a split layout never offers the parent', () {
+      // The defect this exists to close, stated as the thing that must not
+      // happen. `store/appstore` holds a README and two subdirectories — no
+      // info/, no listings/, no age-rating.json — so a validator pointed at it
+      // reports a *problem* on a healthy repository. A check that cries wolf
+      // on a correct repository is how people learn to skip the check.
+      split();
+
+      expect(
+        read().appStoreTrees().values,
+        everyElement(isNot(endsWith('store/appstore'))),
+      );
+    });
+
+    test('narrowing a split layout picks that platform, not the first', () {
+      split();
+
+      expect(read().appStoreTrees(platform: 'macos'), {
+        'macos': endsWith('store/appstore/macos'),
+      });
+    });
+
+    test('a platform with no tree offers nothing rather than a wrong one', () {
+      write('store/appstore/ios/info/primary_category.txt', 'SPORTS');
+
+      expect(
+        read().appStoreTrees(platform: 'macos'),
+        isEmpty,
+        reason:
+            'falling back to the ios tree would check iPhone screenshots '
+            'against macOS rules, which is worse than checking nothing',
+      );
+    });
+
+    test('no store tree at all offers nothing', () {
+      expect(read().appStoreTrees(), isEmpty);
+      expect(read().appStoreTrees(platform: 'ios'), isEmpty);
+    });
+  });
+
   group('--app-dir', () {
     /// A monorepo: the Flutter app under `app/`, the release inputs at the top.
     void monorepo() {

@@ -1,5 +1,81 @@
 # Changelog
 
+## Unreleased
+
+### `verify` finds a split App Store tree, and checks both halves
+
+A repository shipping to both Apple platforms keeps `store/appstore/ios` and
+`store/appstore/macos`. The default resolved to their *parent*, which holds a
+README and two subdirectories and nothing a validator recognizes — so a bare
+`cux_ship verify` reported `store/appstore holds no info/, no listings/ and no
+age-rating.json — nothing to publish` on a repository that was entirely fine.
+
+**A check that cries wolf on a healthy repository is how people learn to skip
+the check**, which is the failure the offline verifier exists to prevent,
+committed by the verifier. Reported by a second project hitting it during a
+real release, where the workaround was three invocations naming each tree.
+
+Now: a split layout is found and **every tree is checked in one run**, each
+against its own platform's rules. `--platform` narrows to one, and is still
+required alongside `--appstore` when two platforms are declared — one path
+cannot say which platform it is, and applying the wrong one refuses a macOS
+listing for lacking iPhone screenshots.
+
+`--changelog`, `--appstore`, `--play` and `--data-safety` now render as
+`--changelog=<path>` in the usage, and the stale "Defaults to store/appstore"
+help texts say what the defaults now do.
+
+### `cux_ship manifest write` — one producer for the file every upload is named by
+
+```bash
+cux_ship manifest write --artifact dist/how-it-went-1.1.0-53.aab \
+  --platform android --format aab \
+  --version-name 1.1.0 --build-number 53 \
+  --git-sha "$SHA" --no-dirty
+==> wrote dist/how-it-went-1.1.0-53.aab.manifest.json
+      android/aab  1.1.0 (53)  d9c394b  sha256:8f3ac91b0d24
+```
+
+`--manifest` gave this package a reader in 3.4.0-dev.1. The file it reads was
+still written by a shell heredoc in each consuming repository — so the schema
+existed twice in prose and nowhere in code, and a field one of them omitted was
+invisible until an upload weeks later published an artifact described by the
+wrong numbers. The round trip is now a test rather than a convention.
+
+Three things it refuses, each earned:
+
+- **The digest is computed here, never passed in.** Taken from the artifact as
+  it stands, so a digest recorded before signing cannot be written at all.
+  Otherwise that fails verification on every real release rather than never.
+- **`--dirty` has no default.** It must be given as `--dirty` or `--no-dirty`,
+  because a build script that forgot the flag would certify every dirty build
+  as clean and nothing downstream could tell.
+- **A short `--git-sha` is refused.** The reader normalizes whatever it is
+  given, which is exactly what lets a seven-character sha survive here and
+  break a tool that does not.
+
+`--git-sha` and the dirty flag are inputs and are never derived, because this
+runs *after* the build: a tree that moved in between would be invisible here
+and wrong in the file. The build knows both when it starts and passes them down.
+
+### Manifest schema 2
+
+Read alongside schema 1, which stays readable for as long as anything writes
+it — refusing it would strand every `dist/` already on disk, and a reader that
+cannot read yesterday's build is one nobody can adopt one repository at a time.
+
+New fields, all optional: `flavor`, `builtAt`, `producer`, `toolchain`,
+`gitTag`, `buildNumberAssigned`, `packaging`, `derivedFrom`, and `x` for
+repo-local keys that no shared tool reads. Schema 1's `variant` is renamed
+`format` and both spellings are read — *variant* means flavor-plus-buildType in
+Gradle, and one consuming repository has six flavors that share a version *and*
+a build number, so the two needed separate names.
+
+`buildNumberAssigned: false` says the number is a placeholder because allocation
+failed, so an upload can refuse it rather than ship under a number that means
+nothing. Absent reads as true: a schema-1 manifest never carried the field and
+is not claiming otherwise.
+
 ## 3.4.0-dev.1
 
 **A pre-release**, published so the repository that drove these changes can use

@@ -36,6 +36,7 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import 'asc_platforms.dart';
 import 'config.dart';
 
 /// Something wrong with how the project was described, rather than a bug.
@@ -67,6 +68,7 @@ class ProjectContext {
     this.buildNumber,
     this.changelog,
     this.appStoreMetadata,
+    this.appStoreMetadataByPlatform = const {},
     this.playMetadata,
     this.dataSafety,
   }) : appDir = appDir ?? root;
@@ -162,6 +164,10 @@ class ProjectContext {
       buildNumber: buildNumber,
       changelog: path(rootPath, 'CHANGELOG.md'),
       appStoreMetadata: path(rootPath, 'store/appstore'),
+      appStoreMetadataByPlatform: {
+        for (final platform in ascPlatforms)
+          platform: ?path(rootPath, 'store/appstore/$platform'),
+      },
       playMetadata: path(rootPath, 'store/play'),
       dataSafety: path(rootPath, 'store/play/data-safety.csv'),
     );
@@ -318,7 +324,52 @@ class ProjectContext {
   final String? changelog;
 
   /// `store/appstore`, when there is one.
+  ///
+  /// **This is the directory, not necessarily a metadata tree.** A repository
+  /// shipping to both stores keeps `store/appstore/ios` and
+  /// `store/appstore/macos` under it, and then this names their parent — which
+  /// holds a README and two subdirectories and nothing a validator recognizes.
+  /// Use [appStoreTrees], which resolves that; this stays because a flat
+  /// single-platform layout is still the common case and still correct.
   final String? appStoreMetadata;
+
+  /// The per-platform trees, when the layout is split — `{'ios':
+  /// 'store/appstore/ios', 'macos': 'store/appstore/macos'}`. Empty when it is
+  /// flat.
+  final Map<String, String> appStoreMetadataByPlatform;
+
+  /// The App Store metadata trees to check, by platform.
+  ///
+  /// **The bare default naming a directory that is not a tree is worse than
+  /// having no default**, because the failure is a *problem report* on a
+  /// healthy repository — "holds no info/, no listings/ and no
+  /// age-rating.json" — and a check that cries wolf on a correct repository is
+  /// how people learn to skip the check. That is the same failure the offline
+  /// verifier exists to prevent, committed by the verifier.
+  ///
+  /// Split beats flat when both exist, because a split tree is a deliberate
+  /// statement that the two platforms have different listings, and the parent
+  /// then contains nothing to validate anyway.
+  ///
+  /// [platform] narrows to one, for a caller that already knows which it means.
+  /// Without it, every tree present is returned: `verify` checks a repository
+  /// rather than a platform, and a two-platform repository that can only be
+  /// checked one invocation at a time gets checked once.
+  Map<String, String> appStoreTrees({String? platform}) {
+    if (appStoreMetadataByPlatform.isNotEmpty) {
+      if (platform == null) {
+        return appStoreMetadataByPlatform;
+      }
+      final tree = appStoreMetadataByPlatform[platform];
+      return tree == null ? const {} : {platform: tree};
+    }
+    if (appStoreMetadata == null) {
+      return const {};
+    }
+    // Flat: one tree, and the platform is whatever the caller says it is —
+    // which is exactly why --platform exists, since a path carries none.
+    return {platform ?? 'ios': appStoreMetadata!};
+  }
 
   /// `store/play`, when there is one.
   final String? playMetadata;
