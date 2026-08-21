@@ -137,16 +137,29 @@ and silently stop refusing the exact case the check mostly exists for.
 
 ### The staggered-release lane, which the first pass got wrong
 
-A release tag is written **the day of the upload**, not the day of promotion.
-`build.sh` takes its tagged path only for a rebuild of the *identical* commit.
-And `SHIPPING.md` documents multi-store divergence as a deliberate workflow —
-same version, new build numbers, fixes from a release branch, per-platform tags
-recording it.
+**The lane is a property of when a consumer writes its release tag, not of the
+check** — and the two consumers answer differently. In How It Went the tag is
+written the day of the upload, by hand per `SHIPPING.md`; nothing there calls
+`release finish`. In Hold the Wheel it is written at promotion, by
+`release finish` from `promote.sh`. `build.sh` takes its tagged path only for a
+rebuild of the *identical* commit. And `SHIPPING.md` documents multi-store
+divergence as a deliberate workflow — same version, new build numbers, fixes
+from a release branch, per-platform tags specified for it (specified only —
+none has ever been written, §5).
 
-Those three together mean: **the moment 1.1.0 is submitted anywhere, every later
-build of 1.1.0 from a different commit is refused** — an RC2 after review
-feedback, a platform-scoped fix, the ordinary staggered rollout. And the refusal
-advises "bump past it", which is exactly what `SHIPPING.md` forbids in that lane.
+For a tag-at-upload consumer those together mean: **the moment 1.1.0 is
+submitted anywhere, every later build of 1.1.0 from a different commit is
+refused** — an RC2 after review feedback, a platform-scoped fix, the ordinary
+staggered rollout. And the refusal advises "bump past it", which is exactly
+what `SHIPPING.md` forbids in that lane.
+
+For a tag-at-promotion consumer the lane cannot arise: by the time `v1.1.0`
+exists, 1.1.0 has finished shipping, and a later build of it is exactly the
+mistake the refusal names. Hold the Wheel never has cause to pass the flag
+below. So the check stays neutral — it compares against tags, and what
+continuing a release *means* is decided by whoever writes them; encoding either
+consumer's answer here would encode a habit the other has not got
+(`release-tagging.md` §6 holds the same line from the writing side).
 
 This is latent in the shell today only because no version has yet shipped
 staggered. It is not hypothetical: the per-platform tag convention exists
