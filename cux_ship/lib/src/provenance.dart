@@ -46,7 +46,7 @@
 // that will do the upload, and tagging afterwards makes the failure mode
 // "shipped but unprovable" — an artifact in front of users whose commit nobody
 // can name.
-import 'config.dart' show ProvenanceConfig;
+import 'config.dart' show TagKindConfig;
 import 'release.dart' show Git, ReleaseException, resolveCommit, taggedCommit;
 
 /// The tag recording that [commit] reached a store.
@@ -212,7 +212,7 @@ UploadRecordResult recordUpload(
 /// need push credentials on its upload job.
 UploadRecordResult? recordUploadIfConfigured(
   String repoRoot,
-  ProvenanceConfig config, {
+  TagKindConfig config, {
   required String store,
   required String? version,
   required String? build,
@@ -220,7 +220,7 @@ UploadRecordResult? recordUploadIfConfigured(
   required String? checksum,
   bool dryRun = false,
 }) {
-  if (!config.recordUploads) {
+  if (!config.enabled) {
     return null;
   }
 
@@ -229,7 +229,7 @@ UploadRecordResult? recordUploadIfConfigured(
   // usually means the artifact was not described to this command at all.
   if (commit == null || commit.isEmpty) {
     throw ReleaseException(
-      'provenance.record-uploads is on and --commit was not given.\n'
+      'tag.upload.enabled is on and --commit was not given.\n'
       'Pass the commit the artifact was BUILT from — your build manifest\'s '
       'gitSha. It is not inferred from HEAD on purpose: an upload job often '
       'runs on a different checkout from the build, and a record naming the '
@@ -238,7 +238,7 @@ UploadRecordResult? recordUploadIfConfigured(
   }
   if (version == null || build == null) {
     throw ReleaseException(
-      'provenance.record-uploads is on, and the ${version == null ? 'version' : 'build number'} '
+      'tag.upload.enabled is on, and the ${version == null ? 'version' : 'build number'} '
       'is not known here — pass --version-name and --build-number so the tag '
       'can be named.',
     );
@@ -247,7 +247,7 @@ UploadRecordResult? recordUploadIfConfigured(
   return recordUpload(
     Git(repoRoot),
     UploadRecord(
-      name: config.tagFor(version: version, build: build),
+      name: config.nameFor(version: version, build: build),
       commit: commit,
       annotation: <String>[
         'build $build of $version',

@@ -159,7 +159,7 @@ void _recordUploadIfAsked(
 
   final result = recordUploadIfConfigured(
     project.root,
-    config.provenance,
+    config.uploadTag,
     store: store,
     version: opt('version-name') ?? manifest?.versionName ?? versionName(),
     build: opt('build-number') ?? manifest?.buildNumber,

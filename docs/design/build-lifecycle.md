@@ -8,9 +8,15 @@ review that dismantled it. Both are kept because the argument is more useful
 than the conclusion: the superseded design rested on a rule stated exactly
 backwards, and §1 below is that rule the right way around.
 
-One cost question gates one row of the table in §2; everything else is buildable
-against code that ships today. No new commands, no schema change, no state
-between commands.
+**Built, 21 August 2026, and shipped in `cux_ship` 3.4.0.** The cost question
+that gated §2's `aab` row was answered by writing the reader — §5 records the
+run, and the estimate was pessimistic in three ways. `verify()` now cross-checks
+every `--manifest` upload, and a format with no reader says so on its own line.
+
+Its first real use was a release: it read `versionCode 65` out of a 69 MB bundle
+in 0.77 s including VM startup, where the same check previously cost a transfer
+to Play. No new commands, no schema change, no state between commands, as
+designed.
 
 This extends [build-manifest.md](build-manifest.md), which specifies the file.
 This specifies *what is checked against the artifact*, and the answer is: more

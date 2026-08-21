@@ -47,19 +47,19 @@ void main() {
 
   group('config', () {
     test('absent means off', () {
-      expect(ProjectConfig.read(_root.path).provenance.recordUploads, isFalse);
+      expect(ProjectConfig.read(_root.path).uploadTag.enabled, isFalse);
     });
 
-    test('an empty provenance block is still off', () {
-      _config('provenance:\n');
-      expect(ProjectConfig.read(_root.path).provenance.recordUploads, isFalse);
+    test('an empty tag.upload block is still off', () {
+      _config('tag:\n  upload:\n');
+      expect(ProjectConfig.read(_root.path).uploadTag.enabled, isFalse);
     });
 
     test('declared on, with the namespaced default shape', () {
-      _config('provenance:\n  record-uploads: true\n');
-      final p = ProjectConfig.read(_root.path).provenance;
-      expect(p.recordUploads, isTrue);
-      expect(p.tagFor(version: '1.0.4', build: '56'), 'uploaded/v1.0.4+56');
+      _config('tag:\n  upload:\n    enabled: true\n');
+      final p = ProjectConfig.read(_root.path).uploadTag;
+      expect(p.enabled, isTrue);
+      expect(p.nameFor(version: '1.0.4', build: '56'), 'uploaded/v1.0.4+56');
     });
 
     test('the default tag cannot be read as a release tag', () {
@@ -67,22 +67,22 @@ void main() {
       // release guard taking the highest `v*` tag would read a bare
       // `v1.0.4+56` as a released 1.0.4 and refuse to build it. The namespace
       // is what keeps the record out of that glob.
-      _config('provenance:\n  record-uploads: true\n');
+      _config('tag:\n  upload:\n    enabled: true\n');
       final name = ProjectConfig.read(
         _root.path,
-      ).provenance.tagFor(version: '1.0.4', build: '56');
+      ).uploadTag.nameFor(version: '1.0.4', build: '56');
       expect(name.startsWith('v'), isFalse);
       expect(name, startsWith('uploaded/'));
     });
 
     test('an override is honored', () {
       _config(
-        'provenance:\n  record-uploads: true\n  tag: b/{version}-{build}\n',
+        'tag:\n  upload:\n    enabled: true\n    format: b/{version}-{build}\n',
       );
       expect(
         ProjectConfig.read(
           _root.path,
-        ).provenance.tagFor(version: '2.0.0', build: '7'),
+        ).uploadTag.nameFor(version: '2.0.0', build: '7'),
         'b/2.0.0-7',
       );
     });
@@ -93,7 +93,7 @@ void main() {
       // build number naming two commits — the loudest error here, raised
       // falsely, for as long as the configuration stands.
       _config(
-        'provenance:\n  record-uploads: true\n  tag: uploaded/v{version}\n',
+        'tag:\n  upload:\n    enabled: true\n    format: uploaded/v{version}\n',
       );
       expect(
         () => ProjectConfig.read(_root.path),
@@ -107,8 +107,34 @@ void main() {
       );
     });
 
-    test('an unknown key under provenance is refused', () {
-      _config('provenance:\n  record_uploads: true\n');
+    test('tag.release is refused rather than ignored', () {
+      // Named in the key set and not implemented. A block that parses and does
+      // nothing gives a release tagged the default way while the file says
+      // otherwise — the silent shape this feature exists to escape, and the one
+      // that made `provenance:` dead config for a whole release cycle.
+      _config('tag:\n  release:\n    format: rel/v{version}\n');
+      expect(
+        () => ProjectConfig.read(_root.path),
+        throwsA(
+          isA<ProjectException>().having(
+            (e) => e.toString(),
+            'message',
+            allOf(contains('tag.release'), contains('not implemented')),
+          ),
+        ),
+      );
+    });
+
+    test('an unrecognised tag kind is refused too', () {
+      _config('tag:\n  nonesuch:\n    enabled: true\n');
+      expect(
+        () => ProjectConfig.read(_root.path),
+        throwsA(isA<ProjectException>()),
+      );
+    });
+
+    test('an unknown key under tag.upload is refused', () {
+      _config('tag:\n  upload:\n    record_uploads: true\n');
       expect(() => ProjectConfig.read(_root.path), throwsA(isA<Exception>()));
     });
   });
@@ -118,7 +144,7 @@ void main() {
       final built = _commit('built');
       final result = recordUploadIfConfigured(
         _root.path,
-        const ProvenanceConfig(),
+        const TagKindConfig(enabled: false, format: defaultUploadTagFormat),
         store: 'play',
         version: '1.0.0',
         build: '49',
@@ -133,7 +159,7 @@ void main() {
       final built = _commit('built');
       final result = recordUploadIfConfigured(
         _root.path,
-        const ProvenanceConfig(recordUploads: true),
+        const TagKindConfig(enabled: true, format: defaultUploadTagFormat),
         store: 'play',
         version: '1.0.0',
         build: '49',
@@ -152,7 +178,7 @@ void main() {
       final built = _commit('built');
       recordUploadIfConfigured(
         _root.path,
-        const ProvenanceConfig(recordUploads: true),
+        const TagKindConfig(enabled: true, format: defaultUploadTagFormat),
         store: 'appstore/ios',
         version: '1.0.0',
         build: '49',
@@ -169,7 +195,7 @@ void main() {
       expect(
         () => recordUploadIfConfigured(
           _root.path,
-          const ProvenanceConfig(recordUploads: true),
+          const TagKindConfig(enabled: true, format: defaultUploadTagFormat),
           store: 'play',
           version: '1.0.0',
           build: '49',
@@ -194,7 +220,7 @@ void main() {
       expect(
         () => recordUploadIfConfigured(
           _root.path,
-          const ProvenanceConfig(recordUploads: true),
+          const TagKindConfig(enabled: true, format: defaultUploadTagFormat),
           store: 'play',
           version: '1.0.0',
           build: null,

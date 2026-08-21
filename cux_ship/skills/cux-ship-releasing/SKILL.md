@@ -40,9 +40,20 @@ default.
    `git add -A` commits ~55 MB of Go binaries.
 3. **Signing and credentials** (below).
 4. **Build, then upload** — and keep them separate. A failed upload should be
-   retried without a rebuild. The artifact goes to `appstore upload --artifact`
-   for both platforms; `--ipa` and `--pkg` are accepted spellings of it, so
-   neither platform's users need the other's file extension.
+   retried without a rebuild.
+
+   **Have the build write a manifest and the upload read it.**
+   `cux_ship manifest write` after signing, then `<store> upload --manifest`,
+   which supplies the artifact, build number, version name and commit from one
+   file. Typing those as flags is four chances to name the wrong build, and the
+   failure is not a refusal — it is uploading one artifact while telling the
+   store it is another. The upload also verifies the artifact against the
+   manifest's digest, and reads the build's own `versionCode` /
+   `CFBundleVersion` back out of an `.aab` or `.ipa` to check they agree.
+
+   Without a manifest the artifact goes to `appstore upload --artifact` for both
+   platforms; `--ipa` and `--pkg` are accepted spellings of it, so neither
+   platform's users need the other's file extension.
 5. **`cux_ship appstore wait <build-number>`** if something has to block on
    Apple finishing processing. It needs only the API key, so it belongs on a
    cheap runner rather than the macOS one that built the thing:
@@ -51,6 +62,14 @@ default.
 7. **`cux_ship release finish`** once per release, after every store — not once
    per store. It tags the released commit and moves the branch past the version
    that is now public.
+
+   **It is for step 7, not step 4.** Its `--destination` defaults to
+   `production`, because it is built for the end of a real release — so using it
+   to record an *upload* writes a tag saying "released to production" for a build
+   that went to internal testing. Nothing refuses it, and a tag message is not
+   read again until somebody is reconstructing what shipped where. If you want a
+   record of an upload, that is `tag.upload.enabled` in `.cux-ship.yaml`, which
+   `<store> upload` writes itself with the destination it actually used.
 
 ## What cannot be undone
 

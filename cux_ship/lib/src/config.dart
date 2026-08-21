@@ -33,13 +33,27 @@ const cuxShipConfigFile = '.cux-ship.yaml';
 
 /// Keys this version understands. Anything else stops the command and is
 /// reported against this list.
-const _knownKeys = {'app-dir', 'apple', 'appstore', 'play', 'provenance'};
+const _knownKeys = {'app-dir', 'apple', 'appstore', 'play', 'tag'};
 
 /// Keys understood inside `apple:`.
 const _knownAppleKeys = {'signing'};
 
-/// Keys understood inside `provenance:`.
-const _knownProvenanceKeys = {'record-uploads', 'tag'};
+/// Kinds of tag this tool writes, and therefore the keys inside `tag:`.
+///
+/// **`release` is named here and not implemented**, deliberately. A repository
+/// that configures it today must be told so, loudly — the alternative is a
+/// `tag.release.format` that parses, is ignored, and produces a release tagged
+/// the default way while the file says otherwise. That silent shape is what
+/// this whole feature is being rebuilt to escape.
+const _knownTagKeys = {'upload', 'release'};
+
+/// Keys understood inside `tag.upload:`, and eventually `tag.release:`.
+///
+/// One set for both kinds, because both answer the same two questions: do we
+/// write this tag, and what is it called. The *defaults* differ — an upload
+/// record is opt-in, a release tag is not — but a key valid in one and not the
+/// other would be a trap rather than a distinction.
+const _knownTagKindKeys = {'enabled', 'format'};
 
 /// The tag shape written when nothing overrides it.
 ///
@@ -50,7 +64,7 @@ const _knownProvenanceKeys = {'record-uploads', 'tag'};
 /// 1.0.4, naming a release that never happened. Under `uploaded/` no such glob
 /// matches. One of the repositories using this tool has that guard in its older
 /// form right now, which is how the trap was found.
-const defaultUploadTagTemplate = 'uploaded/v{version}+{build}';
+const defaultUploadTagFormat = 'uploaded/v{version}+{build}';
 
 /// Keys understood inside `appstore:` and `play:`.
 ///
@@ -122,25 +136,33 @@ class StoreConfig {
       screenshots[platform] ?? screenshots[anyPlatform] ?? const {};
 }
 
-/// What `.cux-ship.yaml` said, if a repository has one.
-/// Whether uploads are recorded in the repository, and under what name.
-class ProvenanceConfig {
-  const ProvenanceConfig({
-    this.recordUploads = false,
-    this.tagTemplate = defaultUploadTagTemplate,
-  });
+/// One kind of tag this tool writes: whether, and under what name.
+///
+/// **Named for the kind rather than for the concept.** This was `provenance:`,
+/// which is specialist vocabulary in two registers at once — the art world's
+/// word for an object's ownership history, and, in software, the supply-chain
+/// term for *signed* build attestations (npm `--provenance`, SLSA, sigstore).
+/// A reader arriving from the second expects Sigstore attestations in a
+/// transparency log and gets one annotated git tag. A name that promises more
+/// than it delivers is worse than one that says nothing.
+///
+/// Every comparable tool calls this a tag: fastlane's `add_git_tag`,
+/// semantic-release's `tagFormat`, Maven's `tagNameFormat`, npm's
+/// `git-tag-version`. `format` echoes those on purpose.
+class TagKindConfig {
+  const TagKindConfig({required this.enabled, required this.format});
 
-  /// Write a tag naming the commit an artifact was built from, when it reaches
-  /// a store. Off unless the repository asks for it — see `_provenance`.
-  final bool recordUploads;
+  /// Write this tag at all. The default differs by kind and lives at the parse
+  /// site: an upload record is opt-in, a release tag is not.
+  final bool enabled;
 
-  /// `{version}` and `{build}` are substituted. See
-  /// [defaultUploadTagTemplate] for why the default is namespaced.
-  final String tagTemplate;
+  /// `{version}` and `{build}` are substituted. See [defaultUploadTagFormat]
+  /// for why the upload default is namespaced.
+  final String format;
 
   /// The tag name for one artifact.
-  String tagFor({required String version, required String build}) =>
-      tagTemplate.replaceAll('{version}', version).replaceAll('{build}', build);
+  String nameFor({required String version, required String build}) =>
+      format.replaceAll('{version}', version).replaceAll('{build}', build);
 }
 
 class ProjectConfig {
@@ -149,7 +171,10 @@ class ProjectConfig {
     this.signing = AppleSigning.automatic,
     this.appstore,
     this.play,
-    this.provenance = const ProvenanceConfig(),
+    this.uploadTag = const TagKindConfig(
+      enabled: false,
+      format: defaultUploadTagFormat,
+    ),
   });
 
   /// Reads `<repoRoot>/.cux-ship.yaml`.
@@ -195,7 +220,7 @@ class ProjectConfig {
       signing: _apple(document),
       appstore: _store(document, 'appstore'),
       play: _store(document, 'play'),
-      provenance: _provenance(document),
+      uploadTag: _uploadTag(document),
     );
   }
 
@@ -209,45 +234,74 @@ class ProjectConfig {
   /// cannot name their built commit yet. Opting in is how they choose when.
   ///
   /// What is *not* configurable-by-default is the shape: a repository that
-  /// turns this on and says nothing gets [defaultUploadTagTemplate], because
+  /// turns this on and says nothing gets [defaultUploadTagFormat], because
   /// the namespace is a correctness property rather than a preference.
-  static ProvenanceConfig _provenance(YamlMap document) {
-    if (!document.containsKey('provenance')) {
-      return const ProvenanceConfig();
+  static TagKindConfig _uploadTag(YamlMap document) {
+    const off = TagKindConfig(enabled: false, format: defaultUploadTagFormat);
+    if (!document.containsKey('tag')) {
+      return off;
     }
-    final block = document['provenance'];
+    final tag = document['tag'];
+    if (tag == null) {
+      return off;
+    }
+    if (tag is! YamlMap) {
+      throw ProjectException(
+        '$cuxShipConfigFile: tag must be a mapping of tag kinds, and is a '
+        '${tag.runtimeType}',
+      );
+    }
+    _checkKeys(tag, _knownTagKeys, 'tag');
+
+    // **Named, known, and not built — so say so rather than ignore it.** A
+    // `tag.release.format` that parses and does nothing gives a release tagged
+    // the default way while the file says otherwise, which is the silent shape
+    // this feature exists to escape. It cost a release cycle once already: the
+    // upload record shipped with a guard that skipped it, and read as working
+    // for as long as nobody went looking for the tag.
+    if (tag.containsKey('release')) {
+      throw ProjectException(
+        '$cuxShipConfigFile: tag.release is not implemented yet — '
+        '`release finish` names its tag v<version> and cannot be configured. '
+        'Remove the block rather than leaving it to look effective; see '
+        'docs/BUILD-TAGS.prompt.md section 8.',
+      );
+    }
+
+    final block = tag['upload'];
     if (block == null) {
-      return const ProvenanceConfig();
+      return off;
     }
     if (block is! YamlMap) {
       throw ProjectException(
-        '$cuxShipConfigFile: provenance must be a mapping, and is a '
+        '$cuxShipConfigFile: tag.upload must be a mapping, and is a '
         '${block.runtimeType}',
       );
     }
-    _checkKeys(block, _knownProvenanceKeys, 'provenance');
+    _checkKeys(block, _knownTagKindKeys, 'tag.upload');
 
-    final record = block['record-uploads'];
-    if (record != null && record is! bool) {
+    final enabled = block['enabled'];
+    if (enabled != null && enabled is! bool) {
       throw ProjectException(
-        '$cuxShipConfigFile: provenance.record-uploads must be true or false, '
-        'and is $record',
+        '$cuxShipConfigFile: tag.upload.enabled must be true or false, and is '
+        '$enabled',
       );
     }
-    final template = _string(block, 'tag') ?? defaultUploadTagTemplate;
-    if (!template.contains('{build}')) {
+    final format = _string(block, 'format') ?? defaultUploadTagFormat;
+    if (!format.contains('{build}')) {
       // Without the build number two uploads of one version collide, and the
       // collision check then reports a genuine repeat as one number naming two
       // commits — the loudest error this tool has, raised falsely, on a
       // configuration mistake made once and paid for on every release after.
       throw ProjectException(
-        '$cuxShipConfigFile: provenance.tag must contain {build} — "$template" '
-        'would name every upload of one version the same thing',
+        '$cuxShipConfigFile: tag.upload.format must contain {build} — '
+        '"$format" would name every upload of one version the same thing',
       );
     }
-    return ProvenanceConfig(
-      recordUploads: (record as bool?) ?? false,
-      tagTemplate: template,
+    return TagKindConfig(
+      // Opt-in: a repository that has not asked for tags does not get them.
+      enabled: (enabled as bool?) ?? false,
+      format: format,
     );
   }
 
@@ -273,7 +327,7 @@ class ProjectConfig {
   /// The `provenance:` block, defaulted rather than nullable — "absent" and
   /// "declared but off" are the same instruction here, unlike the store blocks
   /// above, where absence says the project does not publish there at all.
-  final ProvenanceConfig provenance;
+  final TagKindConfig uploadTag;
 
   /// Reads and cross-checks the `apple:` block.
   ///

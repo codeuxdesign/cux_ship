@@ -2,6 +2,39 @@
 
 ## 3.4.1
 
+### `provenance:` is now `tag:` — **breaking, and free**
+
+```yaml
+tag:
+  upload:
+    enabled: true
+    format: uploaded/v{version}+{build}    # default
+```
+
+`provenance` was specialist vocabulary twice over: the art world's word for an
+object's ownership history, and — in software — the supply-chain term for
+*signed* attestations (npm `--provenance`, SLSA, sigstore). A reader arriving
+from the second expects a transparency log and gets one annotated git tag. A
+name that promises more than it delivers is worse than one that says nothing.
+Every comparable tool calls this a tag: fastlane's `add_git_tag`,
+semantic-release's `tagFormat`, Maven's `tagNameFormat`, npm's
+`git-tag-version`.
+
+**Breaking in name only, and safe to break**: the feature never worked (below),
+so no repository has it set in anger.
+
+`tag:` is a namespace for every kind of tag this tool writes, not just uploads —
+`release finish` hardcodes `v{version}` today and configuring it is planned.
+**`tag.release` is therefore named and refused**: writing it says "not
+implemented yet" rather than parsing and doing nothing, because a release tagged
+the default way while the config says otherwise is the silent shape this whole
+feature exists to escape.
+
+Singular `tag:` rather than `tags:` because the config's own convention is
+plural-holds-a-list (`locales`, `screenshots`), singular-holds-a-map (`play`,
+`appstore`).
+
+
 **`provenance.record-uploads` recorded nothing unless `--commit` was typed by
 hand** — which is every caller using `--manifest`, the flag whose whole purpose
 is supplying that commit. So the feature has never worked for its intended
