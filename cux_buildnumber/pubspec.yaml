@@ -20,6 +20,13 @@ topics:
 environment:
   sdk: ^3.12.2
 
+# **Consumers of the published package see a warning about this key, and it
+# stays.** Removing it is not a trade-off — pub refuses to resolve this
+# repository at all, because the root pubspec lists this directory as a
+# workspace member and this line is what makes it one. Moving it into a
+# committed pubspec_overrides.yaml does work and is rejected for a worse
+# failure mode. Verified, with what was run:
+# docs/design/publishing-from-a-workspace.md
 resolution: workspace
 
 dev_dependencies:
