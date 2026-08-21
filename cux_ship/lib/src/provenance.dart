@@ -47,7 +47,8 @@
 // "shipped but unprovable" — an artifact in front of users whose commit nobody
 // can name.
 import 'config.dart' show TagKindConfig;
-import 'release.dart' show Git, ReleaseException, resolveCommit, taggedCommit;
+import 'release.dart'
+    show Git, ReleaseException, remoteTaggedCommit, resolveCommit, taggedCommit;
 
 /// The tag recording that [commit] reached a store.
 ///
@@ -217,7 +218,7 @@ UploadRecordResult recordUpload(
     // nothing.
     final pushed = git.ok(['push', 'origin', 'refs/tags/${record.name}']);
     if (!pushed) {
-      final remote = _remoteTaggedCommit(git, record.name);
+      final remote = remoteTaggedCommit(git, record.name);
       if (remote == null) {
         // Rejected, and origin does not hold this tag — so the push failed for
         // some other reason (credentials, network, a hook). Re-run it without
@@ -248,25 +249,6 @@ UploadRecordResult recordUpload(
   }
 
   return result;
-}
-
-/// The commit origin's copy of [name] points at, or null if it has no such tag.
-///
-/// **`^{}` is load-bearing.** Without it `ls-remote` answers with the *tag
-/// object* id, and two clones that tagged the same commit have two different
-/// tag objects — so comparing those would report a collision on every parallel
-/// release and never on a real one. One network call, no fetch: answering what
-/// a remote tag names does not require having it locally.
-String? _remoteTaggedCommit(Git git, String name) {
-  final line = git.run([
-    'ls-remote',
-    'origin',
-    'refs/tags/$name^{}',
-  ], allowFailure: true);
-  if (line.isEmpty) {
-    return null;
-  }
-  return line.split(RegExp(r'\s+')).first;
 }
 
 /// Records an upload if the repository asked for it, and does nothing if not.

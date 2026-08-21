@@ -366,12 +366,47 @@ List<String> finishRelease(Git git, FinishOptions options) {
     // that created the tag, so a run whose push failed left a tag that no later
     // run would ever try again: every repeat found it locally, reported
     // "leaving it alone", and finished green while the remote stayed without
-    // it. Pushing a tag the remote already has at the same commit is a no-op,
-    // and pushing one it holds at a *different* commit is rejected — which is
-    // the collision above, caught on the one side of it this process cannot see.
+    // it.
+    //
+    // **A rejected push is not a collision**, and the sentence that used to be
+    // here said it was — that pushing a tag the remote already holds at this
+    // commit is a no-op. True for lightweight tags and byte-identical objects;
+    // false for the case that happens. A clone without the tag locally mints
+    // its own annotated object, with this run's timestamp and message, and git
+    // refuses to replace origin's with it. The rejection reads
+    // `! [rejected] ... (already exists)`.
+    //
+    // Read as a failure it was worse than a wrong error: the tag now existed
+    // locally, so every retry took the "already exists" branch, pushed, was
+    // rejected again, and failed again — stuck until somebody deleted the local
+    // tag, which nothing said to do.
+    //
+    // So origin is asked what its tag actually names. This also delivers what
+    // the old comment only claimed: a genuine cross-machine collision now gets
+    // the collision message and its exit code, rather than raw git output.
     if (options.push && hasOrigin && !options.dryRun) {
-      git.run(['push', 'origin', 'refs/tags/$tagName']);
-      log.add('pushed $tagName');
+      if (git.ok(['push', 'origin', 'refs/tags/$tagName'])) {
+        log.add('pushed $tagName');
+      } else {
+        final remote = remoteTaggedCommit(git, tagName);
+        if (remote == null) {
+          // Rejected, and origin does not hold this tag — the push failed for
+          // some other reason. Re-run it without `ok` so git's own message
+          // reaches the operator rather than one invented here.
+          git.run(['push', 'origin', 'refs/tags/$tagName']);
+          log.add('pushed $tagName');
+        } else if (remote != commit) {
+          throw ReleaseException(
+            'Tag $tagName already names a different commit on origin.\n'
+            '  origin points at:  $remote\n'
+            '  this release:      $commit\n'
+            'One version recorded against two commits. Retag deliberately or '
+            'pick another version; nothing was changed.',
+          );
+        } else {
+          log.add('$tagName already on origin at ${_short(commit)}');
+        }
+      }
     }
   }
 
@@ -458,6 +493,28 @@ String? taggedCommit(Git git, String name) {
     return null;
   }
   return git.run(['rev-parse', 'refs/tags/$name^{commit}']);
+}
+
+/// The commit origin's copy of [name] points at, or null if it has no such tag.
+///
+/// The remote counterpart of [taggedCommit], and deliberately beside it: the
+/// local answer alone is what let a clone without the tag mint its own and be
+/// refused by a remote that already had one.
+///
+/// **`^{}` is load-bearing.** Without it `ls-remote` answers with the *tag
+/// object* id, and two clones that tagged the same commit have two different
+/// tag objects — so comparing those would report a collision on every parallel
+/// run and never on a real one. One network call, no fetch.
+String? remoteTaggedCommit(Git git, String name) {
+  final line = git.run([
+    'ls-remote',
+    'origin',
+    'refs/tags/$name^{}',
+  ], allowFailure: true);
+  if (line.isEmpty) {
+    return null;
+  }
+  return line.split(RegExp(r'\s+')).first;
 }
 
 /// [spec] as the full 40-character SHA of a commit that exists here.
