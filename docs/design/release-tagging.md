@@ -82,12 +82,21 @@ cux_ship release tag --version 1.1.0 --target amazon --commit <sha>
 ```
 
 **The standalone form is not an afterthought; it is half the point.** `cux_ship`
-drives two stores. AuthPass ships to eight destinations, six of which it drives
-itself, and Hold the Wheel or How It Went may add a direct download, a Microsoft
-Store listing, an F-Droid build. A tag family that only works for the two stores
-that happen to have promote commands is a tag family that records a fraction of
-what shipped — and worse, records it *unevenly*, so the gaps look like versions
-that never went out.
+drives two stores, and a consumer's destinations outgrow that: Hold the Wheel
+or How It Went may add a direct download, a Microsoft Store listing, an F-Droid
+build, none of which will ever have a promote command. A tag family that only
+works for the two stores that happen to have promote commands is a tag family
+that records a fraction of what shipped — and worse, records it *unevenly*, so
+the gaps look like versions that never went out.
+
+AuthPass's eight destinations, six self-driven, are the extreme of that shape —
+but not this command's audience, and saying otherwise would contradict
+`release-check.md` §3: its release is per-destination, its git record is
+deliberately one tag per commit, and it has no moment at which a *version*
+becomes released for this command to record. Per-destination release names are
+exactly the record it declined for cost. That door reopens on the condition
+both documents already name — a real question that needs per-store records —
+and not before.
 
 Nothing about the standalone form touches a store. It is git only, needs no
 credentials, and is usable from any script that knows it just published
