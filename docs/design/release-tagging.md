@@ -235,10 +235,23 @@ is. Encoding one repository's answer would be encoding a habit — see
 
 ## 7. Open
 
+**Which promotions count.** `play promote` takes `--track`, defaulting to
+`production` but accepting any — and a promotion to `beta` widens an audience
+without releasing anything. Firing `recordRelease` on every promote encodes
+*any promotion is a release*, which is false for Play and unexamined here.
+Production only? A config key? This is §6's "what a release tag means"
+question arriving through the side door: refusing to answer it and then wiring
+the write to an event that takes a track parameter is not neutral yet, and
+§2's "no flag to remember" holds only once this is settled.
+
 **The target vocabulary.** `playstore` or `play`? `appstore` or `ios`/`macos` —
 noting iOS and macOS are separate targets on one store, with separate build
 numbers, which is the case that breaks a platform-shaped vocabulary. It must be
-settled with `tag.upload`'s, not separately.
+settled with `tag.upload`'s, not separately. And the qualified shape needs a
+home in config: §4 writes `<target>/vX.Y.Z` with the prefix pulled from thin
+air, while `tag.release` today holds only `enabled` and `format` — whether the
+qualified form is a second format key or a fixed derivation from the bare one
+is part of the same decision.
 
 **Whether `recordRelease` should also be reachable from `upload`.** It should
 not — an upload is not a release, and `uploaded/` already records it. Named here
