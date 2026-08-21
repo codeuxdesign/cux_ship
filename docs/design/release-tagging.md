@@ -35,11 +35,16 @@ That is the sentence deleted from `provenance.dart` in 3.4.2, false for the same
 reason: two clones minting annotated tags for one commit produce two different
 tag *objects*, and git rejects the second with wording that reads like a
 collision. The consequence here is milder than it was there — the retry path
-below it is written correctly — but the reasoning is wrong in two languages, in
-two repositories, and only one of them has been fixed.
+below it is written correctly — and the sentence stands in more places than
+this document first counted: **`release finish`'s own push path carries it
+too**, near-verbatim in the comment above the tag push
+(`cux_ship/lib/src/release.dart`), and that path still treats any rejected
+push as fatal without asking origin what its tag names. Three copies, two
+languages, two repositories; 3.4.2 fixed one.
 
-That is the argument for consolidating in one line: **a fix made once would
-already have reached here.**
+That is the argument for consolidating, sharpened by the count: the fix made
+once in 3.4.2 **did not even reach the other tag path in the same package**.
+One method is the only shape in which the next such fix reaches every writer.
 
 ## 2. What is proposed
 
