@@ -203,6 +203,52 @@ void main() {
     );
   });
 
+  test('two runners recording the same build is not a collision', () {
+    // **The half the test above could not see, and the one that happens.** It
+    // uses a *different* commit, which is the rare case; a release matrix
+    // sharing one commit and one build number is every release. Both jobs mint
+    // their own annotated tag object — different timestamp, different message —
+    // and git refuses to replace one with the other, rejecting the push with
+    // `! [rejected] ... (already exists)`: the same words as a real collision.
+    //
+    // Read as one, it blocked an upload that had done nothing wrong, and AuthPass
+    // found it by half-shipping a release: playstoredev pushed first, playstore
+    // was refused, and nothing was left to distinguish them but the commit the
+    // remote tag actually names.
+    final origin = Directory.systemTemp.createTempSync('cux_ship_origin');
+    addTearDown(() => origin.deleteSync(recursive: true));
+    Process.runSync('git', ['init', '-q', '--bare', origin.path]);
+    _git.run(['remote', 'add', 'origin', origin.path]);
+
+    final shared = _commit('one artifact, two jobs');
+
+    // The other runner recorded this exact build first, with its own wording.
+    _git.run([
+      'tag',
+      '-a',
+      'uploaded/v1.0.0+49',
+      shared,
+      '-m',
+      'build 49 of 1.0.0\nstore: playstoredev',
+    ]);
+    _git.run(['push', '-q', 'origin', 'refs/tags/uploaded/v1.0.0+49']);
+    _git.run(['tag', '-d', 'uploaded/v1.0.0+49']);
+
+    expect(
+      recordUpload(_git, _record(shared)),
+      UploadRecordResult.alreadyRecorded,
+      reason: 'same commit, someone else got there first — not a collision',
+    );
+
+    expect(
+      Git(
+        origin.path,
+      ).run(['rev-parse', 'refs/tags/uploaded/v1.0.0+49^{commit}']),
+      shared,
+      reason: 'and the published record still names the right commit',
+    );
+  });
+
   test('a collision is its own exception type, so a wrapper can tell', () {
     // Release scripts tolerate a store refusing a build it already holds — the
     // upload runs under `|| exitCode=$?` so a re-run is a no-op. A collision

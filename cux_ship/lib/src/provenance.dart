@@ -198,17 +198,68 @@ UploadRecordResult recordUpload(
     // torn down. A retried job after a network failure is the ordinary case,
     // not the exotic one.
     //
-    // Pushing a tag the remote already holds at this commit is a no-op, and one
-    // it holds at a different commit is rejected — which is the collision this
-    // function exists to refuse, arriving from the side it cannot see locally.
+    // **A rejected push does not mean a collision, and assuming it did broke
+    // every parallel release.** The sentence that used to be here said pushing
+    // a tag the remote already holds at this commit is a no-op. That is true
+    // for lightweight tags and for byte-identical objects, and false for the
+    // case that actually happens: two CI jobs sharing a commit and a build
+    // number each mint their *own* annotated tag object — different timestamp,
+    // different message — and git refuses to replace one with the other. The
+    // rejection reads `! [rejected] ... (already exists)`, which is the same
+    // words as the collision it is not.
     //
-    // Deliberately not `allowFailure`. Elsewhere a failed tag push is a warning
-    // because the release has already gone out and the tag is bookkeeping; here
-    // nothing has gone out yet, and an unpushed tag protects nothing.
-    git.run(['push', 'origin', 'refs/tags/${record.name}']);
+    // So the remote is asked what its tag actually names, exactly as the local
+    // path asks above.
+    //
+    // Deliberately not `allowFailure` beyond this. Elsewhere a failed tag push
+    // is a warning because the release has already gone out and the tag is
+    // bookkeeping; here nothing has gone out yet, and an unpushed tag protects
+    // nothing.
+    final pushed = git.ok(['push', 'origin', 'refs/tags/${record.name}']);
+    if (!pushed) {
+      final remote = _remoteTaggedCommit(git, record.name);
+      if (remote == null) {
+        // Rejected, and origin does not hold this tag — so the push failed for
+        // some other reason (credentials, network, a hook). Re-run it without
+        // `ok` to surface git's own message rather than inventing one.
+        git.run(['push', 'origin', 'refs/tags/${record.name}']);
+      }
+      if (remote != commit) {
+        throw UploadCollisionException(
+          'Tag ${record.name} already names a different commit on origin.\n'
+          '  origin points at:  $remote\n'
+          '  this artifact:     $commit\n'
+          'One build number has been used for two commits, so publishing this '
+          'would leave the record naming the wrong one. Nothing was uploaded.',
+        );
+      }
+      // Same commit, someone else's tag object. Another job recorded this exact
+      // build first, which is the ordinary outcome of a release matrix rather
+      // than an error: the record exists, on origin, naming the right commit.
+      return UploadRecordResult.alreadyRecorded;
+    }
   }
 
   return result;
+}
+
+/// The commit origin's copy of [name] points at, or null if it has no such tag.
+///
+/// **`^{}` is load-bearing.** Without it `ls-remote` answers with the *tag
+/// object* id, and two clones that tagged the same commit have two different
+/// tag objects — so comparing those would report a collision on every parallel
+/// release and never on a real one. One network call, no fetch: answering what
+/// a remote tag names does not require having it locally.
+String? _remoteTaggedCommit(Git git, String name) {
+  final line = git.run([
+    'ls-remote',
+    'origin',
+    'refs/tags/$name^{}',
+  ], allowFailure: true);
+  if (line.isEmpty) {
+    return null;
+  }
+  return line.split(RegExp(r'\s+')).first;
 }
 
 /// Records an upload if the repository asked for it, and does nothing if not.

@@ -1,5 +1,39 @@
 # Changelog
 
+## 3.4.2
+
+### Two runners recording the same build is no longer read as a collision
+
+**A release matrix could not record an upload.** Jobs that share a commit and a
+build number — playstore and playstoredev, ios and macos — each mint their *own*
+annotated tag object for the same name and the same commit: different timestamp,
+different message, therefore a different object id. Git refuses to replace one
+with the other and rejects the push as `! [rejected] ... (already exists)`,
+which is the same words as a genuine collision.
+
+The push treated any rejection as that collision, so the second job's upload was
+blocked having done nothing wrong — and because the record is written before the
+store is contacted, the release half-shipped: one store took the build and the
+others refused to start. AuthPass hit this on a real stable push.
+
+Origin is now asked what its tag actually names, exactly as the local path
+already asks:
+
+```
+git ls-remote origin 'refs/tags/<name>^{}'
+```
+
+The `^{}` is the fix. Without it `ls-remote` answers with the tag *object* id,
+and comparing those reports a collision on every parallel release and never on a
+real one. Same commit is `alreadyRecorded`; a different commit is still
+`UploadCollisionException` and still exit 3. A rejection with no remote tag at
+all — credentials, network, a hook — re-runs the push so git's own message
+reaches the operator rather than an invented one.
+
+The existing remote-collision test used a *different* commit, which is the rare
+case; a matrix sharing one commit is every release. The same-commit case has its
+own test now, and it fails against the old push.
+
 ## 3.4.1
 
 ### The fixes below have tests that die when the fix is removed
