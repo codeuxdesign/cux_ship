@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.4.1
+
+**`provenance.record-uploads` recorded nothing unless `--commit` was typed by
+hand** — which is every caller using `--manifest`, the flag whose whole purpose
+is supplying that commit. So the feature has never worked for its intended
+caller since it shipped in 3.3.0.
+
+The guard asked `ArgResults.options.contains('commit')`, which holds what was
+*provided or defaulted*. What it meant to ask — and what its own doc comment
+says — is whether the subcommand *declares* the option, so that a parser without
+it is skipped rather than interrogated. Those two disagree exactly when an
+option exists and was not given, which is the case that matters.
+
+Nothing failed. The guard returns early and silently, so `record-uploads: true`
+read as working for as long as nobody went looking for the tag. Found by turning
+it on in a real repository, uploading, and finding no tag.
+
 ## 3.4.0
 
 **The pre-release becomes a release.** `3.4.0-dev.1` was published so the

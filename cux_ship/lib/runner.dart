@@ -144,11 +144,18 @@ void _recordUploadIfAsked(
   BuildManifest? manifest,
 }) {
   final args = command.argResults!;
-  if (command.name != 'upload' || !args.options.contains('commit')) {
+  // **`argParser.options` is what was *declared*; `ArgResults.options` is what
+  // was *provided or defaulted*.** This asked the second and meant the first,
+  // so recording was skipped for every caller that did not type `--commit` —
+  // which is every caller using `--manifest`, the flag that exists to supply it.
+  // Nothing failed: the guard is the silent kind, and `record-uploads: true`
+  // read as working for as long as nobody looked for the tag.
+  if (command.name != 'upload' ||
+      !command.argParser.options.containsKey('commit')) {
     return;
   }
   String? opt(String name) =>
-      args.options.contains(name) ? args.option(name) : null;
+      command.argParser.options.containsKey(name) ? args.option(name) : null;
 
   final result = recordUploadIfConfigured(
     project.root,
