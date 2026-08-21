@@ -214,26 +214,30 @@ to confirm.
 ## 5. What counts as a release tag
 
 From `tag.release`. A tag is a release of version *V* when substituting *V* into
-a configured format reproduces the tag exactly — a literal template match, no
-globbing.
+the configured `format` reproduces the tag exactly — a literal template match,
+no globbing.
 
-**Reader and writer are different roles and need different keys.** `format`
-(singular) is what `release finish` *writes*, and stays exactly as it is. This
-adds `also` — a read-only list of further shapes that count as releases here:
+**No second key for per-platform tags, because there is nothing to read.** The
+first pass added `also:` — a read-only list of further shapes
+(`ios/v{version}`, `macos/v{version}`, …) that would additionally count as
+releases. But `SHIPPING.md` specifies those tags and records that **none has
+ever been written**: a shape that exists on paper, that nothing has written and
+nothing has read. Configuration for a tag family with zero members is a list
+nobody can check — and the platform-shaped names guessed for it were already
+the wrong vocabulary, since `release-tagging.md` §4 argues the qualifier must
+be a *target* (`playstore/`, `amazon/`), not a platform (`android/`). The day
+such tags exist, that document proposes the thing that writes them, and the
+reader's configuration should take its shapes from that writer rather than be
+guessed ahead of it. Two things make deferring safe: under that writer a
+qualified tag is only written when the bare `vX.Y.Z` already exists, so
+ignoring qualified tags cannot change the *highest release* this check answers
+with; and a hand-written set with no bare tag beside it is exactly what the
+near-miss report below surfaces.
 
-```yaml
-tag:
-  release:
-    format: v{version}          # what release finish writes. Unchanged.
-    also:                       # what release check additionally counts
-      - ios/v{version}          # written by hand from promote.sh when one
-      - macos/v{version}        # store ships a version the others did not
-      - android/v{version}
-```
-
-Naming them beats globbing: Hold the Wheel **declined** `*/v*` deliberately,
-because without a namespace strip it would make a future `uploaded/v1.0.5` count
-as a release of 1.0.5 and block builds of it. An explicit list cannot do that.
+Naming shapes beats globbing either way: Hold the Wheel **declined** `*/v*`
+deliberately, because without a namespace strip it would make a future
+`uploaded/v1.0.5` count as a release of 1.0.5 and block builds of it. An
+explicit format cannot do that.
 
 **Build metadata excludes a tag unless the format asks for it.** `v1.1.0+43` says
 build 43 of 1.1.0 went to a tester; the version is unreleased and the next build
@@ -241,13 +245,14 @@ of it must still be allowed. Both shell guards do this with `grep -v '+'`, and
 both peers said independently that *it is the metadata filter that saves us, not
 the glob*. So it is a rule of the parse rather than of the pattern.
 
-**A near-miss is reported, and this is what makes the list safe.** Any tag whose
-last path segment parses as `v<version>` without build metadata, and which
-matched no configured format, is named in the output as unconfigured and
-ignored. Without it, somebody hand-writes `windows/v1.2.0` next year, the list
-has no entry for it, and the tag is silently uncounted — the `v*`-only trap
-reproduced one level up, with a config file as the thing nobody maintained. With
-it, config rot is a visible state on every run.
+**A near-miss is reported, and this is what makes declining the config safe.**
+Any tag whose last path segment parses as `v<version>` without build metadata,
+and which matched no configured format, is named in the output as unconfigured
+and ignored. Without it, somebody hand-writes `windows/v1.2.0` next year and
+the tag is silently uncounted — the `v*`-only trap reproduced one level up.
+With it, an unconfigured tag family is a visible state on every run, and the
+report is the whole mechanism this section otherwise refuses to build: the
+pressure to configure arrives the day there is something to configure.
 
 ## 6. Where the tags come from, and what happens when they cannot be had
 
@@ -324,10 +329,12 @@ script that already knows the number it is continuing past,
 flag and this repository's philosophy agrees, but it is the owner's call and it
 is the one decision that changes what a caller has to type.
 
-**Whether `also` is the right shape** for per-platform release tags. It has the
-least evidence behind it: those tags are written by hand from `promote.sh` and
-nothing has ever read them programmatically. The near-miss report is what makes
-getting it wrong survivable.
+**What this reader owes per-target release tags once they exist.** §5 declines
+to configure shapes for tags that have never been written; `release-tagging.md`
+proposes the writer. When the first qualified tag lands, the near-miss warning
+on every run is the pressure to decide — count them, with shapes taken from
+that writer's vocabulary, or keep ignoring them because the bare tag already
+carries the version.
 
 **Whether this is worth building at all.** With origin as the oracle it does
 something shell cannot cheaply do — answer correctly in a tagless CI checkout,
