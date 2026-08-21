@@ -54,7 +54,7 @@ of the bytes and refuse a manifest that disagrees with its artifact.**
 |---|---|---|---|
 | `ipa` | `Payload/*.app/Info.plist` → `CFBundleVersion`, `CFBundleShortVersionString` | zip entry + `plutil` (Apple artifacts are only produced on macOS) | trivial |
 | `aab` | `base/manifest/AndroidManifest.xml` → `versionCode`, `versionName` | zip entry + a minimal aapt2-proto walker, **§5** | to be priced |
-| `apk` | binary XML (axml), a different encoding than the `.aab`'s proto | separate reader | deferred until a producer ships `.apk` — AuthPass's sideload and Amazon flavors will, so the deferral has a known end |
+| `apk` | `AndroidManifest.xml` → `versionCode`, `versionName` | zip entry + a binary-XML (axml) reader — **built**, ahead of the producer that needed it | ~170 lines: a string pool and one element's attributes |
 | `pkg`, `dmg`, `msix`, `snap`, `deb`, archives | — | none | **trusted, and said out loud** — see below |
 
 **A format without a reader is trusted loudly, never silently.** The check

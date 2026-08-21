@@ -129,6 +129,114 @@ void main() {
     });
   });
 
+  group('the binary XML walk', () {
+    // An `.apk` carries a chunked format with a string pool that every name and
+    // string value indexes into — structurally unlike the `.aab`'s protobuf, so
+    // the fixture is built too rather than shared. Verified against a real
+    // profile `.apk` and `aapt2 dump xmltree`, which agreed on versionCode 1
+    // and versionName "1.1.0-profile".
+
+    List<int> u16(int v) => [v & 0xff, (v >> 8) & 0xff];
+    List<int> u32(int v) => [
+      v & 0xff,
+      (v >> 8) & 0xff,
+      (v >> 16) & 0xff,
+      (v >> 24) & 0xff,
+    ];
+
+    /// A UTF-8 string pool: offsets, then each string with its two lengths.
+    List<int> pool(List<String> items) {
+      final blob = <int>[];
+      final offsets = <int>[];
+      for (final item in items) {
+        offsets.add(blob.length);
+        final bytes = utf8.encode(item);
+        blob
+          ..add(bytes.length)
+          ..add(bytes.length)
+          ..addAll(bytes)
+          ..add(0);
+      }
+      const header = 28;
+      final body = [
+        ...u32(items.length), ...u32(0),
+        ...u32(0x0100), // UTF-8
+        ...u32(header + items.length * 4), ...u32(0),
+        for (final o in offsets) ...u32(o),
+        ...blob,
+      ];
+      return [...u16(0x0001), ...u16(header), ...u32(8 + body.length), ...body];
+    }
+
+    /// One START_ELEMENT with the given attributes, as (ns, name, type, datum).
+    List<int> element(List<(int, int, int, int)> attributes) {
+      const header = 16;
+      final body = [
+        ...u32(0xFFFFFFFF), ...u32(0), // ns, name
+        ...u16(20), ...u16(20), ...u16(attributes.length),
+        ...u16(0), ...u16(0), ...u16(0),
+        for (final (ns, name, type, datum) in attributes) ...[
+          ...u32(ns),
+          ...u32(name),
+          ...u32(type == 0x03 ? datum : 0xFFFFFFFF),
+          ...u16(8),
+          0,
+          type,
+          ...u32(datum),
+        ],
+      ];
+      return [
+        ...u16(0x0102),
+        ...u16(header),
+        ...u32(8 + header - 8 + body.length + 8 - 8),
+        ...u32(1),
+        ...u32(0xFFFFFFFF),
+        ...body,
+      ];
+    }
+
+    Uint8List axml(List<String> strings, List<(int, int, int, int)> attrs) {
+      final p = pool(strings);
+      final e = element(attrs);
+      final body = [...p, ...e];
+      return Uint8List.fromList([
+        ...u16(0x0003),
+        ...u16(8),
+        ...u32(8 + body.length),
+        ...body,
+      ]);
+    }
+
+    test('an integer attribute is its datum, not a pool index', () {
+      // The trap this format sets: reading `data` for a *string* attribute
+      // yields a pool index printed as a number — a plausible wrong answer
+      // rather than a failure. So the type has to decide where to look.
+      final bytes = axml(['versionCode', _ns], [(1, 0, 0x10, 66)]);
+
+      expect(readBinaryXmlAttributes(bytes, {'versionCode'}), {
+        'versionCode': '66',
+      });
+    });
+
+    test('a string attribute comes from the pool', () {
+      final bytes = axml(['versionName', _ns, '1.1.0'], [(1, 0, 0x03, 2)]);
+
+      expect(readBinaryXmlAttributes(bytes, {'versionName'}), {
+        'versionName': '1.1.0',
+      });
+    });
+
+    test('bytes that are not binary XML are refused', () {
+      expect(
+        () => readBinaryXmlAttributes(
+          Uint8List.fromList([0, 0, 0, 0, 0, 0, 0, 0]),
+          {'versionCode'},
+        ),
+        throwsA(isA<FormatException>()),
+      );
+    });
+  });
+
   group('the comparison', () {
     test('agreement names what it compared and where it read it', () {
       expect(

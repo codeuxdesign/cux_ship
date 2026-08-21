@@ -577,6 +577,7 @@ class _FinishCommand extends Command<void> {
         FinishOptions(
           commit: commit,
           version: version,
+          releaseTag: ProjectConfig.read(git.root).releaseTag,
           buildNumber: args.option('build-number'),
           appDir: appDir,
           destination: args.option('destination')!,

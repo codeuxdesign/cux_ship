@@ -66,6 +66,13 @@ const _knownTagKindKeys = {'enabled', 'format'};
 /// form right now, which is how the trap was found.
 const defaultUploadTagFormat = 'uploaded/v{version}+{build}';
 
+/// The release tag shape when nothing overrides it.
+///
+/// No `{build}` on purpose, and that is the asymmetry with an upload record: a
+/// release names a *version*, which one build happens to carry, while a record
+/// names one upload of it. `{build}` is available if a repository wants it.
+const defaultReleaseTagFormat = 'v{version}';
+
 /// Keys understood inside `appstore:` and `play:`.
 ///
 /// One set for both, because both blocks answer the same two questions. What
@@ -161,8 +168,13 @@ class TagKindConfig {
   final String format;
 
   /// The tag name for one artifact.
-  String nameFor({required String version, required String build}) =>
-      format.replaceAll('{version}', version).replaceAll('{build}', build);
+  ///
+  /// [build] is optional because a release tag need not carry one — an upload
+  /// format is *required* to contain `{build}` and a release format is not, so
+  /// asking for it here would make the caller invent a value it does not have.
+  String nameFor({required String version, String? build}) => format
+      .replaceAll('{version}', version)
+      .replaceAll('{build}', build ?? '');
 }
 
 class ProjectConfig {
@@ -174,6 +186,10 @@ class ProjectConfig {
     this.uploadTag = const TagKindConfig(
       enabled: false,
       format: defaultUploadTagFormat,
+    ),
+    this.releaseTag = const TagKindConfig(
+      enabled: true,
+      format: defaultReleaseTagFormat,
     ),
   });
 
@@ -221,6 +237,7 @@ class ProjectConfig {
       appstore: _store(document, 'appstore'),
       play: _store(document, 'play'),
       uploadTag: _uploadTag(document),
+      releaseTag: _releaseTag(document),
     );
   }
 
@@ -236,6 +253,50 @@ class ProjectConfig {
   /// What is *not* configurable-by-default is the shape: a repository that
   /// turns this on and says nothing gets [defaultUploadTagFormat], because
   /// the namespace is a correctness property rather than a preference.
+  /// `tag.release:` — how `release finish` names the tag it writes.
+  ///
+  /// **Enabled by default, where an upload record is not.** A release tag is
+  /// what this tool has always written; a record of every upload is new and
+  /// opt-in. Same two keys either way, because a key valid in one kind and not
+  /// the other would be a trap rather than a distinction.
+  static TagKindConfig _releaseTag(YamlMap document) {
+    const on = TagKindConfig(enabled: true, format: defaultReleaseTagFormat);
+    final tag = document['tag'];
+    if (tag is! YamlMap) {
+      return on;
+    }
+    final block = tag['release'];
+    if (block == null) {
+      return on;
+    }
+    if (block is! YamlMap) {
+      throw ProjectException(
+        '$cuxShipConfigFile: tag.release must be a mapping, and is a '
+        '${block.runtimeType}',
+      );
+    }
+    _checkKeys(block, _knownTagKindKeys, 'tag.release');
+
+    final enabled = block['enabled'];
+    if (enabled != null && enabled is! bool) {
+      throw ProjectException(
+        '$cuxShipConfigFile: tag.release.enabled must be true or false, and '
+        'is $enabled',
+      );
+    }
+    final format = _string(block, 'format') ?? defaultReleaseTagFormat;
+    if (!format.contains('{version}')) {
+      // A release tag that does not name its version is not a release tag: two
+      // releases collide under one name, and `release finish` then refuses the
+      // second claiming one version reached two commits.
+      throw ProjectException(
+        '$cuxShipConfigFile: tag.release.format must contain {version} — '
+        '"$format" would name every release the same thing',
+      );
+    }
+    return TagKindConfig(enabled: (enabled as bool?) ?? true, format: format);
+  }
+
   static TagKindConfig _uploadTag(YamlMap document) {
     const off = TagKindConfig(enabled: false, format: defaultUploadTagFormat);
     if (!document.containsKey('tag')) {
@@ -252,21 +313,6 @@ class ProjectConfig {
       );
     }
     _checkKeys(tag, _knownTagKeys, 'tag');
-
-    // **Named, known, and not built — so say so rather than ignore it.** A
-    // `tag.release.format` that parses and does nothing gives a release tagged
-    // the default way while the file says otherwise, which is the silent shape
-    // this feature exists to escape. It cost a release cycle once already: the
-    // upload record shipped with a guard that skipped it, and read as working
-    // for as long as nobody went looking for the tag.
-    if (tag.containsKey('release')) {
-      throw ProjectException(
-        '$cuxShipConfigFile: tag.release is not implemented yet — '
-        '`release finish` names its tag v<version> and cannot be configured. '
-        'Remove the block rather than leaving it to look effective; see '
-        'docs/BUILD-TAGS.prompt.md section 8.',
-      );
-    }
 
     final block = tag['upload'];
     if (block == null) {
@@ -328,6 +374,9 @@ class ProjectConfig {
   /// "declared but off" are the same instruction here, unlike the store blocks
   /// above, where absence says the project does not publish there at all.
   final TagKindConfig uploadTag;
+
+  /// How `release finish` names its tag.
+  final TagKindConfig releaseTag;
 
   /// Reads and cross-checks the `apple:` block.
   ///

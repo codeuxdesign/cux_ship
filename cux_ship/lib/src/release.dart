@@ -35,6 +35,8 @@ import 'dart:io';
 
 import 'package:pub_semver/pub_semver.dart';
 
+import 'config.dart' show TagKindConfig, defaultReleaseTagFormat;
+
 /// Something wrong that the caller should report rather than a bug.
 class ReleaseException implements Exception {
   ReleaseException(this.message);
@@ -211,6 +213,10 @@ class FinishOptions {
     this.destination = 'production',
     this.branch = 'main',
     this.tag = true,
+    this.releaseTag = const TagKindConfig(
+      enabled: true,
+      format: defaultReleaseTagFormat,
+    ),
     this.bump = true,
     this.push = true,
     this.dryRun = false,
@@ -239,6 +245,15 @@ class FinishOptions {
   /// Only used in messages, so a tag says which build it was.
   final String? buildNumber;
 
+  /// How the tag is named, and whether it is written at all.
+  ///
+  /// **`tag: false` overrides `releaseTag.enabled: true`, and the log says
+  /// which won.** A flag and a config key answering the same question is how a
+  /// repository ends up with a setting that appears to do nothing — so one
+  /// wins, it is the one typed at the call site, and the reason is printed
+  /// rather than inferred.
+  final TagKindConfig releaseTag;
+
   /// Where it went, for the tag and commit messages.
   final String destination;
 
@@ -258,7 +273,13 @@ class FinishOptions {
 /// touching anything first, so "you are on the wrong branch" costs nothing.
 List<String> finishRelease(Git git, FinishOptions options) {
   final log = <String>[];
-  final tagName = 'v${options.version}';
+  // Was `v` plus the version, hardcoded. `tag.release.format` is the source
+  // now, defaulting to the same thing — so a repository whose releases are
+  // named `rel/1.2.3`, or carry a platform prefix, stops needing a fork.
+  final tagName = options.releaseTag.nameFor(
+    version: options.version.toString(),
+    build: options.buildNumber,
+  );
   final pubspecPath = pubspecPathFor(options.appDir);
 
   // Checked up front, both of them, because a half-finished release is worse
@@ -291,7 +312,17 @@ List<String> finishRelease(Git git, FinishOptions options) {
 
   // ------------------------------------------------------------------ the tag
 
-  if (options.tag) {
+  // Config decides, the flag overrides, and a skip says which asked for it —
+  // "nothing happened" must never be the same output as "nothing was asked".
+  final wantsTag = options.tag && options.releaseTag.enabled;
+  if (!wantsTag) {
+    log.add(
+      options.tag
+          ? 'not tagging: tag.release.enabled is false'
+          : 'not tagging: --no-tag',
+    );
+  }
+  if (wantsTag) {
     // **Existence is not the question — where it points is.** Leaving an
     // existing tag alone is right when it already names this release, and is
     // how a half-finished run is safely repeated. It is wrong when the name

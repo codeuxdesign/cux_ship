@@ -2,6 +2,50 @@
 
 ## 3.4.1
 
+### A collision now has an exit code a shell can see
+
+`UploadCollisionException` has existed since 3.3.0 with a doc comment promising
+it "gives the CLI a distinct exit code". Nothing mapped it, so the only thing a
+wrapper could observe was `1` — indistinguishable from the failure release
+scripts deliberately swallow (`|| exitCode=$?`, so re-running a release for a
+build the store already holds is a no-op). A collision exited through that same
+path and the release finished green having published nothing.
+
+`uploadCollisionExit` is **3**. A `ReleaseException` now also prints its sentence
+and exits 1 rather than escaping as an unhandled Dart error, because forty
+frames of stack bury the one line an operator needs.
+
+### `tag.release` — `release finish` stops hardcoding its tag name
+
+```yaml
+tag:
+  release:
+    enabled: true          # default, unlike upload
+    format: v{version}     # default
+```
+
+The name was `'v' + version`, in the source. A repository whose releases are
+named `rel/1.2.3`, or carry a platform prefix, needed a fork. `{build}` is
+optional here and *required* in `tag.upload.format` — a release names a version,
+an upload record names one upload of it.
+
+`--no-tag` overrides `enabled: true`, and the log says which asked: `not
+tagging: --no-tag` against `not tagging: tag.release.enabled is false`. A flag
+and a config key answering the same question is how a setting comes to appear
+inert.
+
+### `.apk` cross-check
+
+Binary XML (axml) — a chunked format with a string pool, structurally unlike the
+`.aab`'s protobuf, so a second reader rather than a tweak. Verified against a
+real profile `.apk` and `aapt2 dump xmltree`, which agreed on `versionCode 1`
+and `versionName 1.1.0-profile`.
+
+The trap it sets, and the reason the type has to decide where to look: reading
+the `data` word for a *string* attribute yields a pool index printed as a
+number — a plausible wrong answer rather than a failure.
+
+
 ### `provenance:` is now `tag:` — **breaking, and free**
 
 ```yaml

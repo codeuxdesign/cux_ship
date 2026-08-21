@@ -88,6 +88,19 @@ class UploadRecord {
 /// as the tolerable kind and the release finishes green, which turns the
 /// loudest error here into the quietest. A distinct type gives the CLI a
 /// distinct exit code, and the wrapper something to match on.
+/// What `cux_ship` exits with when [UploadCollisionException] is raised.
+///
+/// **A number, because a shell wrapper cannot match on a Dart type.** The class
+/// above has existed since 3.3.0 saying it "gives the CLI a distinct exit code";
+/// it did not, so the only thing a wrapper could see was 1 — the same as every
+/// other failure, including the tolerable one it deliberately swallows.
+///
+/// 3 rather than 1, and not 2, which `screenshots flatten --check` already uses
+/// for "there is work to do". Deliberately not 65 or any other sysexits value:
+/// those describe *categories* a caller might already be branching on, and this
+/// needs to be unmistakably one thing.
+const uploadCollisionExit = 3;
+
 class UploadCollisionException extends ReleaseException {
   UploadCollisionException(super.message);
 }

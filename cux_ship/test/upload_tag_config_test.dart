@@ -107,22 +107,54 @@ void main() {
       );
     });
 
-    test('tag.release is refused rather than ignored', () {
-      // Named in the key set and not implemented. A block that parses and does
-      // nothing gives a release tagged the default way while the file says
-      // otherwise — the silent shape this feature exists to escape, and the one
-      // that made `provenance:` dead config for a whole release cycle.
-      _config('tag:\n  release:\n    format: rel/v{version}\n');
+    test('tag.release defaults to what release finish always wrote', () {
+      // Enabled where an upload record is not: a release tag is what this tool
+      // has always written, and a record of every upload is new and opt-in.
+      final r = ProjectConfig.read(_root.path).releaseTag;
+
+      expect(r.enabled, isTrue);
+      expect(r.nameFor(version: '1.2.3'), 'v1.2.3');
+    });
+
+    test('tag.release.format is read, and needs no {build}', () {
+      // The asymmetry with an upload record, which *requires* {build}: a
+      // release names a version, and one build happens to carry it.
+      _config('tag:\n  release:\n    format: rel/{version}\n');
+      final r = ProjectConfig.read(_root.path).releaseTag;
+
+      expect(r.nameFor(version: '1.2.3'), 'rel/1.2.3');
+    });
+
+    test('tag.release.enabled false is read', () {
+      _config('tag:\n  release:\n    enabled: false\n');
+      expect(ProjectConfig.read(_root.path).releaseTag.enabled, isFalse);
+    });
+
+    test('a release format with no {version} is refused', () {
+      // Two releases would collide under one name, and `release finish` would
+      // then refuse the second claiming one version reached two commits — the
+      // loudest error this tool has, raised falsely, from a config typo.
+      _config('tag:\n  release:\n    format: released\n');
       expect(
         () => ProjectConfig.read(_root.path),
         throwsA(
           isA<ProjectException>().having(
             (e) => e.toString(),
             'message',
-            allOf(contains('tag.release'), contains('not implemented')),
+            contains('{version}'),
           ),
         ),
       );
+    });
+
+    test('the two kinds are independent', () {
+      // One block configured must not disturb the other's default, or a
+      // repository that sets a release format silently loses upload recording.
+      _config('tag:\n  release:\n    format: rel/{version}\n');
+      final c = ProjectConfig.read(_root.path);
+
+      expect(c.uploadTag.enabled, isFalse, reason: 'still opt-in');
+      expect(c.releaseTag.format, 'rel/{version}');
     });
 
     test('an unrecognised tag kind is refused too', () {

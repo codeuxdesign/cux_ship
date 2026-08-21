@@ -168,6 +168,147 @@ Map<String, String> readProtoManifestAttributes(
   return found;
 }
 
+/// The named attributes of the root element of an Android *binary* XML
+/// (`axml`) `AndroidManifest.xml`, as found inside an `.apk`.
+///
+/// **A different encoding from the `.aab`'s, not a variant of it.** A bundle
+/// carries aapt2's protobuf; an apk carries this — a chunked format with a
+/// string pool that every name and string value indexes into. Nothing is shared
+/// between the two readers but the question they answer.
+///
+/// Only what is needed is modelled: the string pool, and the first
+/// START_ELEMENT's attributes. Every other chunk is skipped by its own declared
+/// size without being understood, which is what keeps this short and is also
+/// why an unknown chunk cannot break it.
+Map<String, String> readBinaryXmlAttributes(
+  Uint8List axml,
+  Set<String> wanted,
+) {
+  final data = ByteData.sublistView(axml);
+  int u16(int at) => data.getUint16(at, Endian.little);
+  int u32(int at) => data.getUint32(at, Endian.little);
+
+  if (axml.length < 8 || u16(0) != 0x0003) {
+    throw const FormatException('not a binary XML chunk');
+  }
+
+  var strings = <String>[];
+  var offset = 8;
+  while (offset + 8 <= axml.length) {
+    final type = u16(offset);
+    final headerSize = u16(offset + 2);
+    final size = u32(offset + 4);
+    if (size < 8 || offset + size > axml.length) {
+      throw const FormatException('chunk runs past the end');
+    }
+
+    if (type == 0x0001) {
+      strings = _stringPool(data, axml, offset, headerSize);
+    } else if (type == 0x0102) {
+      // START_ELEMENT. Attributes follow the element header at an offset the
+      // chunk states rather than one this assumes, because the header has grown
+      // between platform versions.
+      final attributeStart = u16(offset + headerSize + 8);
+      final attributeSize = u16(offset + headerSize + 10);
+      final attributeCount = u16(offset + headerSize + 12);
+      final found = <String, String>{};
+      for (var i = 0; i < attributeCount; i++) {
+        final at = offset + headerSize + attributeStart + i * attributeSize;
+        if (at + 20 > axml.length) {
+          throw const FormatException('attribute runs past the end');
+        }
+        final namespace = _pooled(strings, u32(at));
+        final name = _pooled(strings, u32(at + 4));
+        if (name == null || !wanted.contains(name)) {
+          continue;
+        }
+        if (namespace != null && namespace != _androidNs) {
+          continue;
+        }
+        // A typed value where the type decides where the value lives: a string
+        // indexes the pool, an integer is the datum itself. Reading `data` for
+        // a string attribute yields a pool index printed as a number, which is
+        // a plausible-looking wrong answer rather than a failure.
+        final rawValue = u32(at + 8);
+        final dataType = data.getUint8(at + 15);
+        final datum = u32(at + 16);
+        final value = switch (dataType) {
+          0x03 => _pooled(strings, datum) ?? _pooled(strings, rawValue),
+          0x10 => '$datum',
+          0x11 => '0x${datum.toRadixString(16)}',
+          0x12 => datum == 0 ? 'false' : 'true',
+          _ => _pooled(strings, rawValue),
+        };
+        if (value != null) {
+          found[name] = value;
+        }
+      }
+      // The root element is the one that answers; nested ones are not the
+      // manifest's own attributes.
+      return found;
+    }
+    offset += size;
+  }
+  return const {};
+}
+
+/// [index] as a pool string, or null for the `-1` that means absent.
+String? _pooled(List<String> pool, int index) =>
+    index == 0xFFFFFFFF || index >= pool.length ? null : pool[index];
+
+/// The strings of a RES_STRING_POOL chunk at [offset].
+List<String> _stringPool(
+  ByteData data,
+  Uint8List bytes,
+  int offset,
+  int headerSize,
+) {
+  final count = data.getUint32(offset + 8, Endian.little);
+  final flags = data.getUint32(offset + 16, Endian.little);
+  final stringsStart = data.getUint32(offset + 20, Endian.little);
+  final utf8Pool = flags & 0x0100 != 0;
+
+  final out = <String>[];
+  for (var i = 0; i < count; i++) {
+    final at =
+        offset +
+        stringsStart +
+        data.getUint32(offset + headerSize + i * 4, Endian.little);
+    if (at >= bytes.length) {
+      throw const FormatException('string offset runs past the end');
+    }
+    if (utf8Pool) {
+      // Two lengths, each one or two bytes: the UTF-16 length then the UTF-8
+      // byte length. The first is skipped and the second is the one that
+      // measures these bytes — taking the first would truncate every string
+      // containing a character outside the BMP.
+      var p = at;
+      p += bytes[p] & 0x80 != 0 ? 2 : 1;
+      final byteLength = bytes[p] & 0x80 != 0
+          ? ((bytes[p] & 0x7f) << 8) | bytes[p + 1]
+          : bytes[p];
+      p += bytes[p] & 0x80 != 0 ? 2 : 1;
+      out.add(
+        utf8.decode(bytes.sublist(p, p + byteLength), allowMalformed: true),
+      );
+    } else {
+      var p = at;
+      var length = data.getUint16(p, Endian.little);
+      p += 2;
+      if (length & 0x8000 != 0) {
+        length = ((length & 0x7fff) << 16) | data.getUint16(p, Endian.little);
+        p += 2;
+      }
+      final units = <int>[];
+      for (var c = 0; c < length; c++) {
+        units.add(data.getUint16(p + c * 2, Endian.little));
+      }
+      out.add(String.fromCharCodes(units));
+    }
+  }
+  return out;
+}
+
 /// One entry out of a zip, as bytes.
 ///
 /// Shells to `unzip` rather than taking an archive dependency, which is this
@@ -285,9 +426,35 @@ BakedFacts? readIpaFacts(String path) {
 /// "not checked" from reading like "checked and fine". `apk` is deliberately
 /// absent — its manifest is binary XML, a different encoding from the `.aab`'s
 /// protobuf, and no producer here ships one yet.
+/// What an `.apk` says about itself, or null if it cannot be read.
+BakedFacts? readApkFacts(String path) {
+  const entry = 'AndroidManifest.xml';
+  final axml = _zipEntry(path, entry);
+  if (axml == null) {
+    return null;
+  }
+  final Map<String, String> attributes;
+  try {
+    attributes = readBinaryXmlAttributes(axml, {'versionCode', 'versionName'});
+  } on FormatException catch (e) {
+    throw ReleaseException(
+      'could not read $entry out of ${path.split('/').last}: ${e.message}',
+    );
+  }
+  if (attributes.isEmpty) {
+    return null;
+  }
+  return BakedFacts(
+    versionName: attributes['versionName'],
+    buildNumber: attributes['versionCode'],
+    source: entry,
+  );
+}
+
 BakedFacts? readBakedFacts(String artifactPath, String? format) =>
     switch (format) {
       'aab' => readAabFacts(artifactPath),
+      'apk' => readApkFacts(artifactPath),
       'ipa' => readIpaFacts(artifactPath),
       _ => null,
     };

@@ -278,8 +278,9 @@ step rewriting `CFBundleVersion`, a Gradle override, a variable that evaluated
 empty. In each of those the manifest honestly describes the wrong artifact and
 every flag is correct.
 
-`aab` is read from `base/manifest/AndroidManifest.xml`, `ipa` from
-`Payload/*.app/Info.plist`. **A format with no reader is trusted out loud** —
+`aab` is read from `base/manifest/AndroidManifest.xml` (aapt2 protobuf), `apk`
+from `AndroidManifest.xml` (binary XML — a different encoding, so a separate
+reader), and `ipa` from `Payload/*.app/Info.plist`. **A format with no reader is trusted out loud** —
 `cross-check: no reader for pkg — build number and version name taken on
 trust` — because "not checked" must not render the same as "checked and fine".
 
@@ -336,6 +337,19 @@ this version shipped" by taking the highest `v*` tag reads a bare `v1.0.4+56` as
 a released 1.0.4 — `sort -V` ranks build metadata *above* the version it
 annotates — and then refuses to build 1.0.4, naming a release that never
 happened. Override with `tag.upload.format`, which must contain `{build}`.
+
+**The namespace protects that guard and not every reader — check yours.** A
+consuming repository found the second one the hard way: its build script derives
+the version name with `git describe --exact-match`, which returns *whatever* tag
+`HEAD` carries. After an upload tagged the commit, the next platform built in the
+same release read `uploaded/v1.1.0+67` as its release tag, stripped a leading
+`v` that was not there and everything after the `+`, and refused with
+`uploaded/v1.1.0` against a pubspec saying `1.1.0`.
+
+`git describe --exact-match --match 'v*'` is the fix there. The general point is
+that these tags are now on your release commits, so anything that reads tags
+sees them — and only a multi-platform release that *interleaves* build and
+upload produces it, which is why no test had the shape.
 
 ### `release refspecs` — so a clone can see the build numbers
 
