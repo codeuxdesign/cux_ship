@@ -1,6 +1,7 @@
 # `release check` — has this version already gone out, asked of the repository
 
-Status: **draft, second pass after review**, 21 August 2026. Not built.
+Status: **draft, third pass — one adversarial and two consumer reviews folded
+in**, 21 August 2026. Not built.
 
 Two repositories answer this question in shell, the answers have drifted, and one
 of the two was wrong until this afternoon — it read an upload tag as a release
@@ -190,8 +191,8 @@ it unconditionally. Worse than a boolean: on the lane the check mostly exists
 for — `main` after a merge-back, with a forgotten pubspec bump — `v$VERSION`
 *does* exist and *does* name the version being built, so the unconditional flag
 validates precisely when the check should refuse. That is `--allow-untagged`
-with a longer spelling, proposed three paragraphs after citing
-`--allow-untagged` as the thing not to build.
+with a longer spelling, proposed one paragraph after citing `--allow-untagged`
+as the thing not to build.
 
 The repair is to demand a fact the forward lane does not have: **which earlier
 submission of this version is being continued.** `--continues-build 43` names

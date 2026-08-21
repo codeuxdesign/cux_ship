@@ -1,6 +1,6 @@
 # Promoting writes the release tag, and one method writes it
 
-Status: **draft**, 21 August 2026. Not built.
+Status: **draft, after one adversarial review**, 21 August 2026. Not built.
 
 A promotion is the moment a version becomes released. The tag records exactly
 that. They are two commands today, so something has to glue them — and the glue
