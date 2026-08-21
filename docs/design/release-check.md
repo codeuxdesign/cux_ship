@@ -158,18 +158,37 @@ refusal, which is the check's main job. The policy is **lane-dependent** — the
 same comparison is right in one lane and wrong in the other — and no comparison
 of `(version, build)` can express a lane.
 
-**Proposed: the caller names the release it is continuing.**
+**Proposed: the caller names the prior submission it is continuing.**
 
 ```
-cux_ship release check --version 1.1.0 --continues v1.1.0
+cux_ship release check --version 1.1.0 --continues-build 43
+cux_ship release check --version 1.1.0 --continues-commit <sha>
 ```
 
 Not a boolean. `--allow-untagged` was a boolean, was passed by every invocation
 that ever ran, gated nothing, and was deleted for it — a flag that is always
-passed is not a check. `--continues` carries *information* instead, and is
-therefore checkable: the named tag must exist, and it must name the version being
-built. It is also rare by construction — a staggered release is occasional, so a
-script cannot pass it unconditionally without lying about something verifiable.
+passed is not a check.
+
+**And not `--continues v1.1.0`, which this document proposed until the flag was
+run against its own bar.** Its validation was that the named tag exist and name
+the version being built — so the only value that can ever validate is
+`v$VERSION`, derivable from `--version` by concatenation, and a script can pass
+it unconditionally. Worse than a boolean: on the lane the check mostly exists
+for — `main` after a merge-back, with a forgotten pubspec bump — `v$VERSION`
+*does* exist and *does* name the version being built, so the unconditional flag
+validates precisely when the check should refuse. That is `--allow-untagged`
+with a longer spelling, proposed three paragraphs after citing
+`--allow-untagged` as the thing not to build.
+
+The repair is to demand a fact the forward lane does not have: **which earlier
+submission of this version is being continued.** `--continues-build 43` names
+the build number the version already went out as; `--continues-commit <sha>`
+names the commit that submission was built from. Either is checkable against
+the tags that recorded the submission, and neither can be passed
+unconditionally — on a fresh version there is no prior submission to name, so
+the flag fails validation and the build stops loudly instead of the check being
+silently disarmed. Which spelling is the owner's call (§9), and it should be
+settled with the tag vocabulary that records those facts, not separately.
 
 **The alternative considered** is a descent test — allow equality when HEAD
 descends from the tag naming X. It needs no flag, and it has a real hole: `main`
@@ -261,7 +280,7 @@ carries the warning in the pass line itself, not only in a listing below it.
 ## 7. Interface
 
 ```
-cux_ship release check --version 1.1.0 [--continues v1.1.0]
+cux_ship release check --version 1.1.0 [--continues-build 43 | --continues-commit <sha>]
 ```
 
 - **stdout carries the query**: the highest released version found, and by which
@@ -285,9 +304,12 @@ cux_ship release check --version 1.1.0 [--continues v1.1.0]
 
 ## 9. Open
 
-**The lane discriminator** — `--continues` against the descent test. §4 argues
-for the flag and this repository's philosophy agrees, but it is the owner's call
-and it is the one decision that changes what a caller has to type.
+**The lane discriminator** — a `--continues-*` flag against the descent test,
+and if the flag, which fact it names: `--continues-build` reads best in a
+script that already knows the number it is continuing past,
+`--continues-commit` names what the tag actually points at. §4 argues for a
+flag and this repository's philosophy agrees, but it is the owner's call and it
+is the one decision that changes what a caller has to type.
 
 **Whether `also` is the right shape** for per-platform release tags. It has the
 least evidence behind it: those tags are written by hand from `promote.sh` and
