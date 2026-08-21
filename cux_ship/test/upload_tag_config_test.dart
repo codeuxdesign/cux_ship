@@ -143,9 +143,12 @@ void main() {
       );
     });
 
-    test('a format alongside enabled: false is still refused', () {
-      // Turning it off explicitly and naming a shape is the same contradiction
-      // — and the more likely typo, because it reads as configured.
+    test('a format alongside an explicit enabled: false is accepted', () {
+      // **The line between this and the case above is who said what.** Silence
+      // about `enabled` is a contradiction, because the format was written to
+      // be used and nothing turns it on. Saying `false` out loud is not: the
+      // operator has named a shape and switched it off, which is what turning
+      // a feature off while keeping its configuration looks like.
       _config(
         'tag:\n  upload:\n    enabled: false\n'
         '    format: uploaded/v{version}+{build}\n',

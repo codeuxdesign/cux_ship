@@ -164,6 +164,52 @@ void main() {
     }
   });
 
+  test('neither store has an artifact flag the guard cannot see', () {
+    // **A tripwire rather than a proof, and it is here because the failure it
+    // guards is silent.** The guard resolves the artifact with the same
+    // expression each store uses — `--aab` on Play, `--artifact` on the App
+    // Store, else the manifest — but it does so in a *copy*. If a store grows
+    // another way to name a build, that store uploads it and the guard sees
+    // nothing, so the upload goes unrecorded and nothing says so. That is the
+    // inverse of the bug this file exists for and strictly worse: a spurious
+    // record is loud, a missing one is not.
+    //
+    // So: fail when an upload parser declares a plausibly-artifact-naming
+    // option the guard does not read. Whoever adds `--apk` gets sent here,
+    // and from here to `uploadRecordFor`.
+    const readByGuard = {'aab', 'artifact'};
+    const couldNameAnArtifact = {
+      'aab',
+      'apk',
+      'app',
+      'archive',
+      'artifact',
+      'binary',
+      'bundle',
+      'ipa',
+      'pkg',
+      'xcarchive',
+    };
+
+    final runner = buildRunner();
+    for (final store in ['play', 'appstore']) {
+      final declared = runner
+          .commands[store]!
+          .subcommands['upload']!
+          .argParser
+          .options
+          .keys
+          .toSet();
+      expect(
+        declared.intersection(couldNameAnArtifact).difference(readByGuard),
+        isEmpty,
+        reason:
+            '$store upload declares an artifact option uploadRecordFor does '
+            'not read, so an upload through it would go unrecorded in silence',
+      );
+    }
+  });
+
   test('both upload subcommands declare --commit', () {
     // The guard skips a parser that never declared it, which is correct and is
     // why it cannot simply be deleted. These are the two that must not be
