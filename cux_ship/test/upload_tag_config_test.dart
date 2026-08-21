@@ -293,7 +293,15 @@ void main() {
       );
       final body = _git.run(['tag', '-l', '-n99', 'uploaded/v1.0.0+49']);
       expect(body, contains('build 49'));
-      expect(body, contains('appstore/ios'));
+      expect(body, contains('abc123'), reason: 'the digest of what went out');
+      expect(
+        body,
+        isNot(contains('appstore/ios')),
+        reason:
+            'the record is keyed by commit and shared by every store that '
+            'uploads it, so naming one would name whichever went first — see '
+            'docs/design/upload-record-scope.md',
+      );
     });
 
     test('refuses when on and --commit was not given', () {

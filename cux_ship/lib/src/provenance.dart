@@ -315,7 +315,24 @@ UploadRecordResult? recordUploadIfConfigured(
       commit: commit,
       annotation: <String>[
         'build $build of $version',
-        'store: $store',
+        // **No `store:` line, because one tag cannot honestly carry it.** The
+        // record is keyed by (version, build) and therefore by commit, and the
+        // stores that share a commit share the tag: the first to upload writes
+        // it and every other finds it already there and moves on. So a
+        // `store:` line named whichever store happened to go first and read as
+        // the whole truth — How It Went's build 69 went to Play, TestFlight
+        // iOS and TestFlight macOS under a tag saying `store: play`.
+        //
+        // Recording all of them would mean rewriting a published tag, which is
+        // a force-push: the one operation that makes a record stop being
+        // evidence, since clones that already fetched it keep the old body and
+        // nothing reconciles them. Saying less is the honest fix. What the tag
+        // claims now is exactly what it can prove — this commit, this build
+        // number, these bytes, uploaded somewhere.
+        //
+        // Per-store records would need per-store tag *names*; that is a
+        // namespace decision, recorded as open in
+        // docs/design/upload-record-scope.md.
         if (checksum != null) ...<String>['sha256 $checksum'],
         // Deliberately not a timestamp: the tag object carries its own, and a
         // second one in the body is a thing that can disagree with it.

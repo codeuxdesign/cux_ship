@@ -62,8 +62,15 @@ const _knownTagKindKeys = {'enabled', 'format'};
 /// `v*` tag will read a bare `v1.0.4+56` as a released 1.0.4 — `sort -V` ranks
 /// build metadata *above* the version it annotates — and then refuse to build
 /// 1.0.4, naming a release that never happened. Under `uploaded/` no such glob
-/// matches. One of the repositories using this tool has that guard in its older
-/// form right now, which is how the trap was found.
+/// matches. That is how the trap was found: a repository using this tool had
+/// the guard in exactly that form. It has since filtered metadata-carrying
+/// tags, and the namespace is what protects anyone who has not.
+///
+/// The previous wording said that repository "has that guard right now", which
+/// stopped being true the afternoon they fixed it and would never have told
+/// anyone. A present-tense claim about another repository's state is a fact
+/// with no owner here — say what was learned, not what someone else is
+/// currently doing.
 const defaultUploadTagFormat = 'uploaded/v{version}+{build}';
 
 /// The release tag shape when nothing overrides it.

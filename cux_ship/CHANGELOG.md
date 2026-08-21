@@ -196,6 +196,19 @@ tag:
     format: uploaded/v{version}+{build}    # default
 ```
 
+**There is no compatibility window, and the failure is total rather than
+partial.** Neither version accepts both spellings and there is no alias: 3.4.0
+knows `provenance` and not `tag`, 3.4.1 knows `tag` and not `provenance`, and an
+unknown top-level key stops *every* command — not only the ones that write a
+tag. So the constraint and `.cux-ship.yaml` must move in **one commit**, and
+afterwards there is no version to fall back to without editing the file back.
+
+This is the opposite shape from 3.3.0 → 3.4.0, where constraint-first was
+survivable because the newer version tolerated the block being absent. Raised by
+a consuming repository that was about to migrate and read the code rather than
+the notes to find it out — which is the wrong way round, and why it is written
+here now.
+
 `provenance` was specialist vocabulary twice over: the art world's word for an
 object's ownership history, and — in software — the supply-chain term for
 *signed* attestations (npm `--provenance`, SLSA, sigstore). A reader arriving
