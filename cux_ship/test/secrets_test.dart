@@ -742,4 +742,39 @@ tokens:
       loaded.dispose();
     });
   });
+
+  group('spawnFor', () {
+    // **A shebang is a POSIX kernel feature.** `./ci-release.sh` runs on Linux
+    // and macOS because the kernel reads the `#!` line; Windows has no such
+    // step, so CreateProcess is handed a `.sh` it cannot execute and Dart
+    // reports "The system cannot find the file specified" — naming a file that
+    // is right there. Third POSIX-only seam found on that platform, each one
+    // chokepoint deeper than the last: the probe path, then the PATH fallback,
+    // then this.
+    //
+    // Only the pass-through half is assertable here; the bash-prefixing half
+    // needs Windows, and saying so beats a test that pretends otherwise.
+
+    test('leaves a command alone on this platform', () {
+      expect(spawnFor(['./ci-release.sh', 'windowsportable']), [
+        './ci-release.sh',
+        'windowsportable',
+      ]);
+      expect(spawnFor(['flutter', 'build']), ['flutter', 'build']);
+    }, testOn: '!windows');
+
+    test('an empty command is not rewritten into one', () {
+      // `command.first` on an empty list throws, and an exec with no child is
+      // a usage error that belongs upstream rather than a crash here.
+      expect(spawnFor([]), isEmpty);
+    });
+
+    test('a non-script child is never wrapped, on any platform', () {
+      // The rule is scoped to shell scripts on purpose: wrapping anything else
+      // in bash would change how every ordinary binary is launched, on the one
+      // platform nobody here runs day to day.
+      expect(spawnFor(['flutter', 'build', 'windows']).first, 'flutter');
+      expect(spawnFor(['dart', 'run', 'x.dart']).first, 'dart');
+    });
+  });
 }

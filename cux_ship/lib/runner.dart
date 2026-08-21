@@ -1300,6 +1300,20 @@ class _SecretsExecCommand extends Command<void> {
     } on ProjectException catch (e) {
       stderr.writeln('cux_ship secrets exec: ${e.message}');
       exitCode = 1;
+    } on ProcessException catch (e) {
+      // **A child that cannot be launched is an ordinary mistake, not a
+      // crash.** It escaped as `Unhandled exception:` plus a stack naming
+      // `process_win.cc`, which tells an operator nothing they can act on —
+      // and the frames are noise around one fact: the thing named on the
+      // command line did not start. The version of this for `ReleaseException`
+      // was fixed in 3.4.1; `ProcessException` is a different type and slipped
+      // through the same net.
+      stderr.writeln(
+        'cux_ship secrets exec: could not run ${argResults!.rest.join(' ')}\n'
+        '    ${e.message}\n'
+        'The secrets were decrypted and have been removed again; nothing ran.',
+      );
+      exitCode = 1;
     }
   }
 }

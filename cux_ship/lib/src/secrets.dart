@@ -574,6 +574,32 @@ class LoadedSecrets {
   }
 }
 
+/// How to actually launch [command], which is not always [command] itself.
+///
+/// **A shebang is a POSIX kernel feature, not a universal one.** `./ci.sh` runs
+/// on Linux and macOS because the kernel reads the `#!` line and execs the
+/// interpreter named there. Windows has no such step: `CreateProcess` is handed
+/// a `.sh` it has no idea how to execute, and Dart surfaces that as
+/// `ProcessException: The system cannot find the file specified` — a message
+/// naming the file that *is* there, which is about as misleading as it gets.
+///
+/// So on Windows a shell script is launched through `bash` explicitly. That is
+/// not a guess about the host: Git for Windows ships `bash` and is present on
+/// GitHub's windows runners, and it is already what executes these same scripts
+/// when a workflow step names them.
+///
+/// Everything else is spawned unchanged, on every platform.
+List<String> spawnFor(List<String> command) {
+  if (!Platform.isWindows || command.isEmpty) {
+    return command;
+  }
+  final child = command.first.toLowerCase();
+  if (!child.endsWith('.sh') && !child.endsWith('.bash')) {
+    return command;
+  }
+  return ['bash', ...command];
+}
+
 /// Locates the `sops` binary: the project's `.bin` first, then PATH.
 ///
 /// **Both halves were POSIX-only, and `deps install` learning Windows is what
@@ -1430,9 +1456,10 @@ Future<int> runSecretsExec({
     }
     stderr.writeln('==> running ${command.join(' ')} in $repoRoot');
 
+    final spawn = spawnFor(command);
     final process = await Process.start(
-      command.first,
-      command.skip(1).toList(),
+      spawn.first,
+      spawn.skip(1).toList(),
       environment: secrets.environment,
       // **Without this a removed variable comes back.** `Process.start` merges
       // the map into the parent's environment by default, so anything `--only`
