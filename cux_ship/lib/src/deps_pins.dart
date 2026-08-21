@@ -56,6 +56,12 @@ const depsPins = <ToolPin>[
     sha256: '53b0abacd38ef1b12a66d6c100956691b9cefce018d91f81e73ddf7438b94d77',
   ),
   (
+    tool: 'sops',
+    version: '3.13.3',
+    platform: 'amd64.exe',
+    sha256: 'a4a9a398858fe8b2ef72d9686d930bf7c5cece9be74ad83ac3b53cfdd70e6b1c',
+  ),
+  (
     tool: 'age',
     version: '1.3.1',
     platform: 'darwin-arm64',
@@ -78,5 +84,11 @@ const depsPins = <ToolPin>[
     version: '1.3.1',
     platform: 'linux-arm64',
     sha256: 'c6878a324421b69e3e20b00ba17c04bc5c6dab0030cfe55bf8f68fa8d9e9093a',
+  ),
+  (
+    tool: 'age',
+    version: '1.3.1',
+    platform: 'windows-amd64',
+    sha256: 'c56e8ce22f7e80cb85ad946cc82d198767b056366201d3e1a2b93d865be38154',
   ),
 ];

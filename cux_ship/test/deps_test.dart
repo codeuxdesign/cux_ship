@@ -138,6 +138,65 @@ void main() {
     });
   });
 
+  group('windows asset naming', () {
+    // **What a Mac can check about a Windows install, and what it cannot.**
+    // These pin the naming rules — the part that is knowable from upstream's
+    // published assets and was got wrong by assuming the pattern held. The
+    // install path itself (bsdtar reading a zip, no chmod, `.exe` on disk)
+    // needs a Windows machine, and this file must not pretend otherwise.
+
+    test('sops names its Windows asset by architecture alone', () {
+      // The one place upstream departs from its own convention. Every other
+      // platform is `<os>.<arch>`; Windows is `sops-v3.13.3.amd64.exe`, with
+      // no `windows` in it. Building the URL from `os.arch` here gives a 404,
+      // which is what "it's just a pin-table addition" ran into.
+      expect(platformFor('sops', (os: 'windows', arch: 'amd64')), 'amd64.exe');
+      expect(platformFor('sops', (os: 'linux', arch: 'amd64')), 'linux.amd64');
+      expect(
+        platformFor('sops', (os: 'darwin', arch: 'arm64')),
+        'darwin.arm64',
+      );
+    });
+
+    test('age keeps its own convention on Windows', () {
+      expect(
+        platformFor('age', (os: 'windows', arch: 'amd64')),
+        'windows-amd64',
+      );
+    });
+
+    test('age ships a zip for Windows and a tarball everywhere else', () {
+      // Not cosmetic: it decides both the URL and whether `tar` is given -xf
+      // or -xzf, and GNU tar cannot read a zip at all.
+      expect(ageArchiveExtension('windows-amd64'), 'zip');
+      expect(ageArchiveExtension('linux-amd64'), 'tar.gz');
+      expect(ageArchiveExtension('darwin-arm64'), 'tar.gz');
+    });
+
+    test('both Windows builds are pinned, and by the names upstream uses', () {
+      // A pin whose platform string does not match the asset name resolves to
+      // a URL that 404s at install time, on the one platform nobody here can
+      // run — so the names are asserted rather than eyeballed.
+      final sops = pinFor('sops', (os: 'windows', arch: 'amd64'));
+      final age = pinFor('age', (os: 'windows', arch: 'amd64'));
+
+      expect(sops.platform, 'amd64.exe');
+      expect(age.platform, 'windows-amd64');
+      expect(sops.sha256, hasLength(64));
+      expect(age.sha256, hasLength(64));
+    });
+
+    test('windows arm64 is refused rather than half-pinned', () {
+      // sops publishes arm64.exe; age publishes no windows-arm64 archive at
+      // all. Pinning the half that exists would fail at install with a 404 on
+      // the second tool instead of the message that says what to do.
+      expect(
+        () => pinFor('age', (os: 'windows', arch: 'arm64')),
+        throwsA(isA<ProjectException>()),
+      );
+    });
+  });
+
   group('sha256OfFile', () {
     test('matches the known digest of "abc"', () async {
       final file = File('${_bin.path}/abc')..writeAsStringSync('abc');

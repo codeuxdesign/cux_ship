@@ -43,6 +43,11 @@ const _repos = {'sops': 'getsops/sops', 'age': 'FiloSottile/age'};
   Abi.macosX64 => (os: 'darwin', arch: 'amd64'),
   Abi.linuxArm64 => (os: 'linux', arch: 'arm64'),
   Abi.linuxX64 => (os: 'linux', arch: 'amd64'),
+  // **amd64 only, deliberately.** sops publishes `arm64.exe` but age publishes
+  // no windows-arm64 archive at all, so a pin for it could not be completed —
+  // and half a toolchain is worse than the message below, which at least says
+  // what to do.
+  Abi.windowsX64 => (os: 'windows', arch: 'amd64'),
   final other => throw ProjectException(
     'no sops or age build is pinned for $other — install both yourself and '
     'put them on PATH',
@@ -50,8 +55,31 @@ const _repos = {'sops': 'getsops/sops', 'age': 'FiloSottile/age'};
 };
 
 /// Asset naming differs between the two projects: sops uses dots, age dashes.
-String platformFor(String tool, ({String os, String arch}) host) =>
-    tool == 'sops' ? '${host.os}.${host.arch}' : '${host.os}-${host.arch}';
+///
+/// **And sops names its Windows builds by architecture alone.** The asset is
+/// `sops-v3.13.3.amd64.exe`, with no `windows` anywhere in it, while every
+/// other platform is `sops-v3.13.3.<os>.<arch>`. So the `os.arch` rule this
+/// function otherwise implements produces a URL that 404s — the one place the
+/// two projects' conventions diverge from their own.
+String platformFor(String tool, ({String os, String arch}) host) {
+  if (tool == 'sops') {
+    return host.os == 'windows'
+        ? '${host.arch}.exe'
+        : '${host.os}.${host.arch}';
+  }
+  return '${host.os}-${host.arch}';
+}
+
+/// age ships a zip for Windows and a tar.gz everywhere else.
+String ageArchiveExtension(String platform) =>
+    platform.startsWith('windows') ? 'zip' : 'tar.gz';
+
+/// What an executable is called on this machine.
+///
+/// Windows will not run a file without the extension, so the name is part of
+/// the install rather than a cosmetic detail: `sops` on disk is `sops.exe`
+/// there, and every lookup of it has to agree.
+String exeName(String name) => Platform.isWindows ? '$name.exe' : name;
 
 /// The pinned version of [tool], and the hash for this machine's build.
 ToolPin pinFor(String tool, ({String os, String arch}) host) {
@@ -72,7 +100,7 @@ ToolPin pinFor(String tool, ({String os, String arch}) host) {
 /// sops asks a remote service for the newest version unless told not to, which
 /// would make this hang on an offline machine instead of answering.
 String? installedVersion(String binDir, String tool) {
-  final exe = File('$binDir/$tool');
+  final exe = File('$binDir/${exeName(tool)}');
   if (!exe.existsSync()) {
     return null;
   }
@@ -110,7 +138,8 @@ Future<int> runDeps(
     // checked for existence rather than being assumed to have come with it.
     final complete =
         have == pin.version &&
-        (tool != 'age' || File('$binDir/age-keygen').existsSync());
+        (tool != 'age' ||
+            File('$binDir/${exeName('age-keygen')}').existsSync());
     if (complete) {
       log('$tool ${pin.version}: ok');
       continue;
@@ -192,7 +221,7 @@ Future<String> sha256OfFile(File file) async =>
     (await sha256.bind(file.openRead()).first).toString();
 
 Future<void> _installSops(String binDir, ToolPin pin) async {
-  final dest = File('$binDir/sops');
+  final dest = File('$binDir/${exeName('sops')}');
   await fetchVerified(
     'https://github.com/${_repos['sops']}/releases/download/'
     'v${pin.version}/sops-v${pin.version}.${pin.platform}',
@@ -205,18 +234,24 @@ Future<void> _installSops(String binDir, ToolPin pin) async {
 Future<void> _installAge(String binDir, ToolPin pin) async {
   final work = Directory.systemTemp.createTempSync('cux_ship_age');
   try {
-    final archive = File('${work.path}/age.tar.gz');
+    final extension = ageArchiveExtension(pin.platform);
+    final archive = File('${work.path}/age.$extension');
     await fetchVerified(
       'https://github.com/${_repos['age']}/releases/download/'
-      'v${pin.version}/age-v${pin.version}-${pin.platform}.tar.gz',
+      'v${pin.version}/age-v${pin.version}-${pin.platform}.$extension',
       archive,
       pin.sha256,
     );
     // Shelled out rather than pulling an archive library in: tar is on every
     // machine that can run the rest of this, and the hash above is what the
     // trust rests on either way.
+    //
+    // **`-xf` for the zip, because only bsdtar reads one.** Windows 10 and
+    // later ship bsdtar as `tar`, which unpacks zip happily; GNU tar does not,
+    // and never has to here, because the zip is the Windows asset. `-xzf` is
+    // kept for the tarball rather than relying on both tars auto-detecting.
     final result = Process.runSync('tar', [
-      '-xzf',
+      extension == 'zip' ? '-xf' : '-xzf',
       archive.path,
       '-C',
       work.path,
@@ -227,12 +262,16 @@ Future<void> _installAge(String binDir, ToolPin pin) async {
     // The archive holds both binaries under age/. age-keygen is the one that
     // makes an identity, so omitting it would leave first-time setup needing a
     // system install after all.
+    //
+    // Verified against the real Windows zip rather than assumed: it carries
+    // `age/age.exe` and `age/age-keygen.exe` — the same `age/` prefix as the
+    // tarball, with the extension the platform requires.
     for (final name in ['age', 'age-keygen']) {
-      final source = File('${work.path}/age/$name');
+      final source = File('${work.path}/age/${exeName(name)}');
       if (!source.existsSync()) {
-        throw ProjectException('the age archive has no $name');
+        throw ProjectException('the age archive has no ${exeName(name)}');
       }
-      final dest = source.copySync('$binDir/$name');
+      final dest = source.copySync('$binDir/${exeName(name)}');
       _makeExecutable(dest);
     }
   } finally {
@@ -241,7 +280,15 @@ Future<void> _installAge(String binDir, ToolPin pin) async {
 }
 
 /// Dart cannot set a mode, and these are downloaded to be run.
+///
+/// **Nothing to do on Windows, and no `chmod` there to do it with.** Windows
+/// decides what is runnable from the extension rather than a mode bit, which
+/// [exeName] has already supplied. Shelling out anyway would fail the install
+/// on the one platform that needs no permission change at all.
 void _makeExecutable(File file) {
+  if (Platform.isWindows) {
+    return;
+  }
   final result = Process.runSync('chmod', ['755', file.path]);
   if (result.exitCode != 0) {
     throw ProjectException('could not make ${file.path} executable');
@@ -257,6 +304,10 @@ const _updatePlatforms = [
   (os: 'darwin', arch: 'amd64'),
   (os: 'linux', arch: 'amd64'),
   (os: 'linux', arch: 'arm64'),
+  // Windows amd64 and not arm64: age publishes no windows-arm64 archive, so
+  // the pass below would fail on it — and pinning half a toolchain is worse
+  // than [currentPlatform]'s refusal, which says what to do instead.
+  (os: 'windows', arch: 'amd64'),
 ];
 
 Future<void> _update(void Function(String) log) async {
@@ -299,13 +350,14 @@ Future<void> _update(void Function(String) log) async {
     for (final host in _updatePlatforms) {
       final platform = platformFor('age', host);
       log('hashing age $ageVersion ($platform)');
-      final archive = File('${work.path}/age-$platform.tar.gz');
+      final extension = ageArchiveExtension(platform);
+      final archive = File('${work.path}/age-$platform.$extension');
       // Downloaded only to be hashed: age publishes no checksum file, so the
       // hash is trust-on-first-use over HTTPS and this is where that trust is
       // established. Reviewing the diff is the other half of it.
       await _download(
         'https://github.com/${_repos['age']}/releases/download/'
-        'v$ageVersion/age-v$ageVersion-$platform.tar.gz',
+        'v$ageVersion/age-v$ageVersion-$platform.$extension',
         archive,
       );
       pins.add((
