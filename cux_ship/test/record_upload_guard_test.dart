@@ -23,6 +23,7 @@ import 'dart:io';
 
 import 'package:cux_ship/runner.dart';
 import 'package:cux_ship/src/build_manifest.dart';
+import 'package:cux_ship/src/release.dart' show ReleaseException;
 import 'package:test/test.dart';
 
 late Directory _dist;
@@ -47,8 +48,13 @@ UploadRecordRequest? _decide(
   );
 }
 
-/// A manifest on disk, as an upload would be handed one.
+/// A manifest on disk, and the artifact it names, as an upload would find them.
+///
+/// The artifact is written because the guard now stats it — a record must not
+/// claim an upload of bytes that do not exist. A fixture with a manifest and no
+/// artifact was describing a `dist/` that could not occur.
 BuildManifest _manifest() {
+  File('${_dist.path}/how-it-went-1.1.0-67.aab').writeAsStringSync('bundle');
   final path = '${_dist.path}/manifest.json';
   File(path).writeAsStringSync(
     jsonEncode({
@@ -105,10 +111,53 @@ void main() {
     );
   });
 
+  test('an artifact that is not there records nothing, and says so', () {
+    // **Found by a consumer who mistyped a path to test something else.** The
+    // record is written before the store is contacted — that is deliberate,
+    // and the documented meaning is "an upload was attempted". It was also
+    // written before anything opened the file, so
+    //
+    //     appstore upload --ipa /nonexistent/proof.ipa --yes
+    //     ==> recorded this upload
+    //     cux_ship appstore upload: no such file: /nonexistent/proof.ipa
+    //
+    // left a permanent, pushed tag naming an upload that could not have
+    // happened: no store contacted, no bytes in existence. *Attempted* implies
+    // something was tried.
+    //
+    // `--manifest` callers were already safe, because verify() refuses a
+    // missing artifact first. This is the direct-flag path, which is the first
+    // thing anyone writes.
+    expect(
+      () => _decide('play', 'upload', [
+        '--aab',
+        '/nonexistent/never-built.aab',
+        '--track',
+        'internal',
+        '--commit',
+        'a' * 40,
+        '--version-name',
+        '1.2.0',
+        '--build-number',
+        '70',
+      ]),
+      throwsA(
+        isA<ReleaseException>().having(
+          (e) => e.toString(),
+          'message',
+          contains('nothing to record an upload of'),
+        ),
+      ),
+    );
+  });
+
   test('an explicit artifact records even with no manifest', () {
+    final aab = '${_dist.path}/app.aab';
+    File(aab).writeAsStringSync('bundle');
+
     final request = _decide('play', 'upload', [
       '--aab',
-      'dist/app.aab',
+      aab,
       '--track',
       'internal',
       '--commit',

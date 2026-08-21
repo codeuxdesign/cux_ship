@@ -203,6 +203,101 @@ void main() {
     );
   });
 
+  test('two runners recording the same build is not a collision', () {
+    // **The half the test above could not see, and the one that happens.** It
+    // uses a *different* commit, which is the rare case; a release matrix
+    // sharing one commit and one build number is every release. Both jobs mint
+    // their own annotated tag object — different timestamp, different message —
+    // and git refuses to replace one with the other, rejecting the push with
+    // `! [rejected] ... (already exists)`: the same words as a real collision.
+    //
+    // Read as one, it blocked an upload that had done nothing wrong, and AuthPass
+    // found it by half-shipping a release: playstoredev pushed first, playstore
+    // was refused, and nothing was left to distinguish them but the commit the
+    // remote tag actually names.
+    final origin = Directory.systemTemp.createTempSync('cux_ship_origin');
+    addTearDown(() => origin.deleteSync(recursive: true));
+    Process.runSync('git', ['init', '-q', '--bare', origin.path]);
+    _git.run(['remote', 'add', 'origin', origin.path]);
+
+    final shared = _commit('one artifact, two jobs');
+
+    // The other runner recorded this exact build first, with its own wording.
+    _git.run([
+      'tag',
+      '-a',
+      'uploaded/v1.0.0+49',
+      shared,
+      '-m',
+      'build 49 of 1.0.0\nstore: playstoredev',
+    ]);
+    _git.run(['push', '-q', 'origin', 'refs/tags/uploaded/v1.0.0+49']);
+    _git.run(['tag', '-d', 'uploaded/v1.0.0+49']);
+
+    expect(
+      recordUpload(_git, _record(shared)),
+      UploadRecordResult.alreadyRecorded,
+      reason: 'same commit, someone else got there first — not a collision',
+    );
+
+    expect(
+      Git(
+        origin.path,
+      ).run(['rev-parse', 'refs/tags/uploaded/v1.0.0+49^{commit}']),
+      shared,
+      reason: 'and the published record still names the right commit',
+    );
+  });
+
+  test('a push that fails once and then works is not a collision', () {
+    // **The branch that reported a collision for a tag it had just published.**
+    // When the push is rejected and origin turns out not to hold the tag, the
+    // failure was operational rather than a race — so it is re-run without
+    // `ok`, to surface git's own message. But if that retry *succeeds*, the
+    // remote lookup's `null` was still in hand, and `null != commit` threw
+    // `UploadCollisionException` saying `origin points at: null`: exit 3, the
+    // code a release wrapper is documented to treat as unrecoverable, for a
+    // record that is on origin and correct.
+    //
+    // Reached here with a pre-receive hook that refuses exactly once, which is
+    // what a transient credential or network failure looks like from this side.
+    final origin = Directory.systemTemp.createTempSync('cux_ship_origin');
+    addTearDown(() => origin.deleteSync(recursive: true));
+    Process.runSync('git', ['init', '-q', '--bare', origin.path]);
+    final hook = File('${origin.path}/hooks/pre-receive')
+      ..writeAsStringSync(
+        // A marker beside the hook, named absolutely: `git` runs hooks with a
+        // cwd this test should not have to predict, and `\$GIT_DIR` would be
+        // interpolated by Dart before the shell ever saw it.
+        '#!/bin/sh\n'
+        'marker="${origin.path}/refused-once"\n'
+        'if [ ! -f "\$marker" ]; then\n'
+        '  touch "\$marker"\n'
+        '  echo "transient" >&2\n'
+        '  exit 1\n'
+        'fi\n'
+        'exit 0\n',
+      );
+    Process.runSync('chmod', ['+x', hook.path]);
+    _git.run(['remote', 'add', 'origin', origin.path]);
+
+    final built = _commit('built');
+
+    expect(
+      recordUpload(_git, _record(built)),
+      UploadRecordResult.created,
+      reason: 'the second push landed, so this is the record it created',
+    );
+
+    expect(
+      Git(
+        origin.path,
+      ).run(['rev-parse', 'refs/tags/uploaded/v1.0.0+49^{commit}']),
+      built,
+      reason: 'and it really is on origin, which is what makes it a record',
+    );
+  });
+
   test('a collision is its own exception type, so a wrapper can tell', () {
     // Release scripts tolerate a store refusing a build it already holds — the
     // upload runs under `|| exitCode=$?` so a re-run is a no-op. A collision

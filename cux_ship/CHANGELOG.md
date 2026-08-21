@@ -1,5 +1,84 @@
 # Changelog
 
+## 3.4.2
+
+### Windows
+
+`deps install` pins `sops` and `age` for `windows_x64`, and the `exec` paths run
+there. Reported as a pin-table addition; it was four things before a pin was
+reached, each unreachable until the one before it was fixed:
+
+- **sops names its Windows asset by architecture alone** — `sops-v3.13.3.amd64.exe`,
+  with no `windows` in it, where every other platform is `<os>.<arch>`.
+- **age ships a `.zip`** where every other platform ships `.tar.gz`, which decides
+  the URL *and* whether `tar` gets `-xf` or `-xzf`; GNU tar cannot read a zip.
+- **Binaries need `.exe` on disk**, and every lookup had to agree — the install
+  wrote `sops.exe` while `findSops` asked for `sops`, then fell back to
+  `sh -c command -v`, and there is no `sh` on a Windows runner.
+- **A shebang is a POSIX kernel feature.** `./ci.sh` is handed to `CreateProcess`,
+  which cannot run it. Shell scripts are launched through Git Bash, chosen by
+  location — `C:\Windows\System32\bash.exe` is the WSL launcher, and on a runner
+  with no distribution it exits 255 saying so.
+
+`windows_arm64` is deliberately unpinned: sops publishes `arm64.exe`, age
+publishes no windows-arm64 archive, and half a toolchain is worse than the
+message saying what to install.
+
+**Signal watching now asks the platform first.** `ProcessSignal.sigterm.watch()`
+raises on Windows, asynchronously, and `secrets exec` carried on running — so the
+watcher that cleans up a decrypted key on Ctrl-C was **not armed, and armed and
+unarmed looked identical**. Little is actually lost there: Windows has no POSIX
+SIGTERM, `SIGINT` is what Ctrl-C sends, and Dart watches that fine.
+
+### Known limitation on Windows: a Dart grandchild's console
+
+**Under `secrets exec` or `keychain exec` on Windows, a Dart process spawned
+below the child can die silently.** Isolated to one boundary by a consumer, with
+a four-level repro: bash chains and command substitutions are fine at any depth,
+and the defect turns on precisely at a Dart parent spawning with
+`ProcessStartMode.inheritStdio` — below which descendants lose the console in
+both directions, and a Dart grandchild dies with exit 255 before its first write.
+
+**The workaround is to redirect that tool's output to a file**, which restores
+it completely. That is a workaround, not a fix, and is named as one here.
+
+Not fixed in this version on purpose. The mitigation in our layer would be to
+pipe and forward rather than inherit, which costs interactive children, TTY
+detection and correct stream interleaving — a trade worth making only if the SDK
+says the behaviour is intended. A minimal repro exists for that question.
+
+### Two runners recording the same build is no longer read as a collision
+
+**A release matrix could not record an upload.** Jobs that share a commit and a
+build number — playstore and playstoredev, ios and macos — each mint their *own*
+annotated tag object for the same name and the same commit: different timestamp,
+different message, therefore a different object id. Git refuses to replace one
+with the other and rejects the push as `! [rejected] ... (already exists)`,
+which is the same words as a genuine collision.
+
+The push treated any rejection as that collision, so the second job's upload was
+blocked having done nothing wrong — and because the record is written before the
+store is contacted, the release half-shipped: one store took the build and the
+others refused to start. AuthPass hit this on a real stable push.
+
+Origin is now asked what its tag actually names, exactly as the local path
+already asks:
+
+```
+git ls-remote origin 'refs/tags/<name>^{}'
+```
+
+The `^{}` is the fix. Without it `ls-remote` answers with the tag *object* id,
+and comparing those reports a collision on every parallel release and never on a
+real one. Same commit is `alreadyRecorded`; a different commit is still
+`UploadCollisionException` and still exit 3. A rejection with no remote tag at
+all — credentials, network, a hook — re-runs the push so git's own message
+reaches the operator rather than an invented one.
+
+The existing remote-collision test used a *different* commit, which is the rare
+case; a matrix sharing one commit is every release. The same-commit case has its
+own test now, and it fails against the old push.
+
 ## 3.4.1
 
 ### The fixes below have tests that die when the fix is removed
@@ -161,6 +240,19 @@ tag:
     enabled: true
     format: uploaded/v{version}+{build}    # default
 ```
+
+**There is no compatibility window, and the failure is total rather than
+partial.** Neither version accepts both spellings and there is no alias: 3.4.0
+knows `provenance` and not `tag`, 3.4.1 knows `tag` and not `provenance`, and an
+unknown top-level key stops *every* command — not only the ones that write a
+tag. So the constraint and `.cux-ship.yaml` must move in **one commit**, and
+afterwards there is no version to fall back to without editing the file back.
+
+This is the opposite shape from 3.3.0 → 3.4.0, where constraint-first was
+survivable because the newer version tolerated the block being absent. Raised by
+a consuming repository that was about to migrate and read the code rather than
+the notes to find it out — which is the wrong way round, and why it is written
+here now.
 
 `provenance` was specialist vocabulary twice over: the art world's word for an
 object's ownership history, and — in software — the supply-chain term for

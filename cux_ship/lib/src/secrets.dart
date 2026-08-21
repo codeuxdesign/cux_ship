@@ -28,8 +28,10 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:yaml/yaml.dart';
 
+import 'deps.dart' show exeName;
 import 'placed.dart';
 import 'project.dart';
+import 'signals.dart';
 
 part 'secrets_add.dart';
 part 'secrets_only.dart';
@@ -573,15 +575,119 @@ class LoadedSecrets {
   }
 }
 
+/// How to actually launch [command], which is not always [command] itself.
+///
+/// **A shebang is a POSIX kernel feature, not a universal one.** `./ci.sh` runs
+/// on Linux and macOS because the kernel reads the `#!` line and execs the
+/// interpreter named there. Windows has no such step: `CreateProcess` is handed
+/// a `.sh` it has no idea how to execute, and Dart surfaces that as
+/// `ProcessException: The system cannot find the file specified` — a message
+/// naming the file that *is* there, which is about as misleading as it gets.
+///
+/// So on Windows a shell script is launched through `bash` explicitly. That is
+/// not a guess about the host: Git for Windows ships `bash` and is present on
+/// GitHub's windows runners, and it is already what executes these same scripts
+/// when a workflow step names them.
+///
+/// Everything else is spawned unchanged, on every platform.
+List<String> spawnFor(List<String> command) {
+  if (!Platform.isWindows || command.isEmpty) {
+    return command;
+  }
+  final child = command.first.toLowerCase();
+  if (!child.endsWith('.sh') && !child.endsWith('.bash')) {
+    return command;
+  }
+  return [windowsBash(), ...command];
+}
+
+/// Whether [path] is Windows' WSL launcher rather than a real bash.
+///
+/// **There are two `bash.exe` on a GitHub Windows runner and PATH order picks
+/// the wrong one.** `C:\Windows\System32\bash.exe` is the Windows Subsystem for
+/// Linux shim; on a runner with no distribution installed it exits 255 saying
+/// so, which reads as the script failing rather than as bash never having run.
+/// GitHub's own `shell: bash` steps sidestep this by naming Git Bash
+/// absolutely — so the parent script rides the right one while a child spawned
+/// as bare `bash` gets the shim, and nothing in the environment says so.
+///
+/// Identified by location because that is what actually distinguishes them: the
+/// shim lives in the Windows system directories and a real bash never does.
+bool isWslShim(String path) {
+  final normalized = path.toLowerCase().replaceAll('/', r'\');
+  return normalized.contains(r'\windows\system32\') ||
+      normalized.contains(r'\windows\syswow64\');
+}
+
+/// The Git Bash to run a shell script with, on Windows.
+///
+/// Well-known location first and `where` second, deliberately in that order: it
+/// makes the choice independent of PATH ordering, which is the thing that broke
+/// here. `where` then covers installs that are not in the default place —
+/// scoop, chocolatey, a custom prefix — filtered against [isWslShim].
+String windowsBash() {
+  const wellKnown = r'C:\Program Files\Git\bin\bash.exe';
+  if (File(wellKnown).existsSync()) {
+    return wellKnown;
+  }
+  final ProcessResult found;
+  try {
+    found = Process.runSync('where', ['bash']);
+  } on ProcessException {
+    throw ProjectException(_noBash);
+  }
+  final real = const LineSplitter()
+      .convert('${found.stdout}')
+      .map((l) => l.trim())
+      .where((l) => l.isNotEmpty && !isWslShim(l))
+      .firstOrNull;
+  if (real == null) {
+    throw ProjectException(_noBash);
+  }
+  return real;
+}
+
+const _noBash =
+    'no Git Bash found to run a shell script with. Looked for '
+    r'"C:\Program Files\Git\bin\bash.exe" and for a `where bash` result '
+    'outside the Windows system directories — the bash.exe in System32 is '
+    'the WSL launcher, which cannot run a repository script. Install Git for '
+    'Windows, or put a real bash on PATH ahead of it.';
+
 /// Locates the `sops` binary: the project's `.bin` first, then PATH.
+///
+/// **Both halves were POSIX-only, and `deps install` learning Windows is what
+/// exposed it.** The install put `sops.exe` in `.bin` and reported success;
+/// the very next command looked for `.bin/sops`, missed it, and fell through
+/// to `sh -c command -v` — and there is no `sh` on a Windows runner, so the
+/// fallback could not answer either. Two chokepoints, one taught the new
+/// platform: the same shape as a cross-check that ran at the upload and not at
+/// the write.
 String findSops(String repoRoot) {
-  final local = File('$repoRoot/.bin/sops');
+  final local = File('$repoRoot/.bin/${exeName('sops')}');
   if (local.existsSync()) {
     return local.path;
   }
-  final which = Process.runSync('sh', ['-c', 'command -v sops']);
-  final found = (which.stdout as String).trim();
-  if (which.exitCode == 0 && found.isNotEmpty) {
+  // `where` is the Windows equivalent and prints one path per line, newest
+  // match first. Wrapped because a missing interpreter raises rather than
+  // exiting non-zero, which would escape as an unhandled error instead of the
+  // sentence below.
+  final ProcessResult which;
+  try {
+    which = Platform.isWindows
+        ? Process.runSync('where', ['sops'])
+        : Process.runSync('sh', ['-c', 'command -v sops']);
+  } on ProcessException {
+    throw ProjectException(
+      'sops not found — run `cux_ship deps install`, or put sops on PATH',
+    );
+  }
+  final found = const LineSplitter()
+      .convert('${which.stdout}')
+      .map((l) => l.trim())
+      .where((l) => l.isNotEmpty)
+      .firstOrNull;
+  if (which.exitCode == 0 && found != null) {
     return found;
   }
   throw ProjectException(
@@ -1404,9 +1510,10 @@ Future<int> runSecretsExec({
     }
     stderr.writeln('==> running ${command.join(' ')} in $repoRoot');
 
+    final spawn = spawnFor(command);
     final process = await Process.start(
-      command.first,
-      command.skip(1).toList(),
+      spawn.first,
+      spawn.skip(1).toList(),
       environment: secrets.environment,
       // **Without this a removed variable comes back.** `Process.start` merges
       // the map into the parent's environment by default, so anything `--only`
@@ -1424,6 +1531,18 @@ Future<int> runSecretsExec({
       // while the unit tests were green.
       includeParentEnvironment: false,
       workingDirectory: repoRoot,
+      // **This line is the boundary of a known Windows defect — see the
+      // CHANGELOG's 3.4.2 known-limitation section.** A consumer isolated it to
+      // exactly one layer: bash chains and command substitutions are fine at any
+      // depth, and everything below a Dart parent spawning with `inheritStdio`
+      // loses the console in both directions, so a Dart *grandchild* dies with
+      // exit 255 before its first write. Redirecting that tool's output to a
+      // file restores it.
+      //
+      // Kept because the alternative — piping and forwarding — costs interactive
+      // children, TTY detection and correct stream interleaving, and `exec`
+      // wraps arbitrary build scripts. That trade is worth making only if the
+      // SDK says this is intended; a minimal repro exists to ask.
       mode: ProcessStartMode.inheritStdio,
     );
 
@@ -1432,10 +1551,7 @@ Future<int> runSecretsExec({
     // private key in the temp directory. The signal is forwarded rather than
     // acted on here, so the child gets to exit and the ordinary path below
     // does the removal.
-    final signals = [
-      ProcessSignal.sigint.watch().listen((s) => process.kill(s)),
-      ProcessSignal.sigterm.watch().listen((s) => process.kill(s)),
-    ];
+    final signals = [...watchTerminating(process.kill)];
     try {
       return await process.exitCode;
     } finally {

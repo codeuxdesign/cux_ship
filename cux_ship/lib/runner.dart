@@ -201,8 +201,34 @@ UploadRecordRequest? uploadRecordFor({
 
   // `--aab` on Play, `--artifact` on the App Store, or whatever the manifest
   // named. Absent from all three means nothing was handed over.
-  if ((opt('aab') ?? opt('artifact') ?? manifest?.artifactPath) == null) {
+  final artifact = opt('aab') ?? opt('artifact') ?? manifest?.artifactPath;
+  if (artifact == null) {
     return null;
+  }
+
+  // **The bytes have to exist before the record claims they were uploaded.**
+  // The tag is written before the store is contacted, deliberately — the
+  // documented meaning is "an upload was attempted with this artifact at this
+  // commit", and the alternative failure is "shipped but unprovable". But it
+  // was also written before anything opened the file, so a mistyped path left
+  // a permanent, pushed tag for an upload that was never physically possible:
+  // no store contacted, no bytes in existence. *Attempted* implies something
+  // was tried, and nothing was.
+  //
+  // A `--manifest` caller was already covered, because `verify()` refuses a
+  // missing artifact before this runs. A caller passing `--aab` or
+  // `--artifact` directly — the first thing anyone writes — was not, and both
+  // known consumers escaped it only by checking the file in their own scripts
+  // first, which is a property of those scripts rather than of this tool.
+  //
+  // Costs one `stat`, no credentials and no network, and forfeits nothing:
+  // everything the record protects against happens after this point.
+  if (!File(artifact).existsSync()) {
+    throw ReleaseException(
+      'no artifact at $artifact, so there is nothing to record an upload of. '
+      'The record is written before the store is contacted, and it would '
+      'otherwise name an upload that could not have happened.',
+    );
   }
 
   return UploadRecordRequest(
@@ -1273,6 +1299,20 @@ class _SecretsExecCommand extends Command<void> {
       );
     } on ProjectException catch (e) {
       stderr.writeln('cux_ship secrets exec: ${e.message}');
+      exitCode = 1;
+    } on ProcessException catch (e) {
+      // **A child that cannot be launched is an ordinary mistake, not a
+      // crash.** It escaped as `Unhandled exception:` plus a stack naming
+      // `process_win.cc`, which tells an operator nothing they can act on —
+      // and the frames are noise around one fact: the thing named on the
+      // command line did not start. The version of this for `ReleaseException`
+      // was fixed in 3.4.1; `ProcessException` is a different type and slipped
+      // through the same net.
+      stderr.writeln(
+        'cux_ship secrets exec: could not run ${argResults!.rest.join(' ')}\n'
+        '    ${e.message}\n'
+        'The secrets were decrypted and have been removed again; nothing ran.',
+      );
       exitCode = 1;
     }
   }
