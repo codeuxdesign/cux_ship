@@ -1531,6 +1531,18 @@ Future<int> runSecretsExec({
       // while the unit tests were green.
       includeParentEnvironment: false,
       workingDirectory: repoRoot,
+      // **This line is the boundary of a known Windows defect — see the
+      // CHANGELOG's 3.4.2 known-limitation section.** A consumer isolated it to
+      // exactly one layer: bash chains and command substitutions are fine at any
+      // depth, and everything below a Dart parent spawning with `inheritStdio`
+      // loses the console in both directions, so a Dart *grandchild* dies with
+      // exit 255 before its first write. Redirecting that tool's output to a
+      // file restores it.
+      //
+      // Kept because the alternative — piping and forwarding — costs interactive
+      // children, TTY detection and correct stream interleaving, and `exec`
+      // wraps arbitrary build scripts. That trade is worth making only if the
+      // SDK says this is intended; a minimal repro exists to ask.
       mode: ProcessStartMode.inheritStdio,
     );
 

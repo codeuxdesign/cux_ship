@@ -2,6 +2,51 @@
 
 ## 3.4.2
 
+### Windows
+
+`deps install` pins `sops` and `age` for `windows_x64`, and the `exec` paths run
+there. Reported as a pin-table addition; it was four things before a pin was
+reached, each unreachable until the one before it was fixed:
+
+- **sops names its Windows asset by architecture alone** — `sops-v3.13.3.amd64.exe`,
+  with no `windows` in it, where every other platform is `<os>.<arch>`.
+- **age ships a `.zip`** where every other platform ships `.tar.gz`, which decides
+  the URL *and* whether `tar` gets `-xf` or `-xzf`; GNU tar cannot read a zip.
+- **Binaries need `.exe` on disk**, and every lookup had to agree — the install
+  wrote `sops.exe` while `findSops` asked for `sops`, then fell back to
+  `sh -c command -v`, and there is no `sh` on a Windows runner.
+- **A shebang is a POSIX kernel feature.** `./ci.sh` is handed to `CreateProcess`,
+  which cannot run it. Shell scripts are launched through Git Bash, chosen by
+  location — `C:\Windows\System32\bash.exe` is the WSL launcher, and on a runner
+  with no distribution it exits 255 saying so.
+
+`windows_arm64` is deliberately unpinned: sops publishes `arm64.exe`, age
+publishes no windows-arm64 archive, and half a toolchain is worse than the
+message saying what to install.
+
+**Signal watching now asks the platform first.** `ProcessSignal.sigterm.watch()`
+raises on Windows, asynchronously, and `secrets exec` carried on running — so the
+watcher that cleans up a decrypted key on Ctrl-C was **not armed, and armed and
+unarmed looked identical**. Little is actually lost there: Windows has no POSIX
+SIGTERM, `SIGINT` is what Ctrl-C sends, and Dart watches that fine.
+
+### Known limitation on Windows: a Dart grandchild's console
+
+**Under `secrets exec` or `keychain exec` on Windows, a Dart process spawned
+below the child can die silently.** Isolated to one boundary by a consumer, with
+a four-level repro: bash chains and command substitutions are fine at any depth,
+and the defect turns on precisely at a Dart parent spawning with
+`ProcessStartMode.inheritStdio` — below which descendants lose the console in
+both directions, and a Dart grandchild dies with exit 255 before its first write.
+
+**The workaround is to redirect that tool's output to a file**, which restores
+it completely. That is a workaround, not a fix, and is named as one here.
+
+Not fixed in this version on purpose. The mitigation in our layer would be to
+pipe and forward rather than inherit, which costs interactive children, TTY
+detection and correct stream interleaving — a trade worth making only if the SDK
+says the behaviour is intended. A minimal repro exists for that question.
+
 ### Two runners recording the same build is no longer read as a collision
 
 **A release matrix could not record an upload.** Jobs that share a commit and a
