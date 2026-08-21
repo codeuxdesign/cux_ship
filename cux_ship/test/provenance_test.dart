@@ -249,6 +249,55 @@ void main() {
     );
   });
 
+  test('a push that fails once and then works is not a collision', () {
+    // **The branch that reported a collision for a tag it had just published.**
+    // When the push is rejected and origin turns out not to hold the tag, the
+    // failure was operational rather than a race — so it is re-run without
+    // `ok`, to surface git's own message. But if that retry *succeeds*, the
+    // remote lookup's `null` was still in hand, and `null != commit` threw
+    // `UploadCollisionException` saying `origin points at: null`: exit 3, the
+    // code a release wrapper is documented to treat as unrecoverable, for a
+    // record that is on origin and correct.
+    //
+    // Reached here with a pre-receive hook that refuses exactly once, which is
+    // what a transient credential or network failure looks like from this side.
+    final origin = Directory.systemTemp.createTempSync('cux_ship_origin');
+    addTearDown(() => origin.deleteSync(recursive: true));
+    Process.runSync('git', ['init', '-q', '--bare', origin.path]);
+    final hook = File('${origin.path}/hooks/pre-receive')
+      ..writeAsStringSync(
+        // A marker beside the hook, named absolutely: `git` runs hooks with a
+        // cwd this test should not have to predict, and `\$GIT_DIR` would be
+        // interpolated by Dart before the shell ever saw it.
+        '#!/bin/sh\n'
+        'marker="${origin.path}/refused-once"\n'
+        'if [ ! -f "\$marker" ]; then\n'
+        '  touch "\$marker"\n'
+        '  echo "transient" >&2\n'
+        '  exit 1\n'
+        'fi\n'
+        'exit 0\n',
+      );
+    Process.runSync('chmod', ['+x', hook.path]);
+    _git.run(['remote', 'add', 'origin', origin.path]);
+
+    final built = _commit('built');
+
+    expect(
+      recordUpload(_git, _record(built)),
+      UploadRecordResult.created,
+      reason: 'the second push landed, so this is the record it created',
+    );
+
+    expect(
+      Git(
+        origin.path,
+      ).run(['rev-parse', 'refs/tags/uploaded/v1.0.0+49^{commit}']),
+      built,
+      reason: 'and it really is on origin, which is what makes it a record',
+    );
+  });
+
   test('a collision is its own exception type, so a wrapper can tell', () {
     // Release scripts tolerate a store refusing a build it already holds — the
     // upload runs under `|| exitCode=$?` so a re-run is a no-op. A collision

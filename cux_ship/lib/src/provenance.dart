@@ -223,6 +223,13 @@ UploadRecordResult recordUpload(
         // some other reason (credentials, network, a hook). Re-run it without
         // `ok` to surface git's own message rather than inventing one.
         git.run(['push', 'origin', 'refs/tags/${record.name}']);
+        // **And return, because the retry may have worked.** Falling through
+        // with `remote` still null compared null against the commit and threw
+        // a collision reading `origin points at: null` — exit 3, the code
+        // wrappers are documented to treat as unrecoverable — for a push that
+        // had just landed. A transient failure that succeeds on the second
+        // attempt is the ordinary reason to reach this branch.
+        return result;
       }
       if (remote != commit) {
         throw UploadCollisionException(
