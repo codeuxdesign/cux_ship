@@ -241,6 +241,72 @@ void main() {
       expect('\n${read('CHANGELOG.md')}'.split('\n## 1.0.4').length - 1, 1);
     });
 
+    test('a clone without the tag does not fight origin over the same commit', () {
+      // **The stuck state.** Origin holds the tag at this very commit and this
+      // clone does not, so the local check finds nothing, the run mints its
+      // *own* annotated object — this run's timestamp and message — and git
+      // refuses to replace origin's with it.
+      //
+      // Read as a failure it was worse than a wrong error: the tag then existed
+      // locally, so every retry took the "already exists" branch, pushed, was
+      // rejected again, and failed again. Stuck until somebody deleted the
+      // local tag, which nothing said to do.
+      repo();
+      final head = _git.run(['rev-parse', 'HEAD']);
+      final origin = Directory.systemTemp.createTempSync('cux_ship_origin');
+      addTearDown(() => origin.deleteSync(recursive: true));
+      Process.runSync('git', ['init', '-q', '--bare', origin.path]);
+      _git.run(['remote', 'add', 'origin', origin.path]);
+
+      // Another machine got there first, with its own wording.
+      _git.run(['tag', '-a', 'v1.0.3', head, '-m', 'from the other runner']);
+      _git.run(['push', '-q', 'origin', 'refs/tags/v1.0.3']);
+      _git.run(['tag', '-d', 'v1.0.3']);
+
+      expect(
+        finishRelease(_git, FinishOptions(commit: head, version: _v('1.0.3'))),
+        anyElement(contains('already on origin')),
+        reason: 'same commit, someone else minted it — not a collision',
+      );
+      expect(
+        Git(origin.path).run(['rev-parse', 'refs/tags/v1.0.3^{commit}']),
+        head,
+        reason: 'and the published tag still names the right commit',
+      );
+    });
+
+    test('a genuine collision on origin is named as one', () {
+      // The other half, and what the old comment claimed already happened: the
+      // remote holding this name at a *different* commit. It reached the
+      // operator as raw git output rather than as the collision message.
+      repo();
+      final ours = _git.run(['rev-parse', 'HEAD']);
+      final origin = Directory.systemTemp.createTempSync('cux_ship_origin');
+      addTearDown(() => origin.deleteSync(recursive: true));
+      Process.runSync('git', ['init', '-q', '--bare', origin.path]);
+      _git.run(['remote', 'add', 'origin', origin.path]);
+
+      _git.run(['commit', '-q', '--allow-empty', '-m', 'theirs']);
+      final theirs = _git.run(['rev-parse', 'HEAD']);
+      _git.run(['tag', '-a', 'v1.0.3', theirs, '-m', 'theirs']);
+      _git.run(['push', '-q', 'origin', 'refs/tags/v1.0.3']);
+      _git.run(['tag', '-d', 'v1.0.3']);
+
+      expect(
+        () => finishRelease(
+          _git,
+          FinishOptions(commit: ours, version: _v('1.0.3')),
+        ),
+        throwsA(
+          isA<ReleaseException>().having(
+            (e) => e.toString(),
+            'message',
+            contains('different commit on origin'),
+          ),
+        ),
+      );
+    });
+
     test('a repeat pushes a tag the first run created but failed to push', () {
       // The tag existing *locally* says nothing about the remote holding it,
       // and the release tag is what a later reader resolves a version against.
