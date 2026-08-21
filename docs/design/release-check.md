@@ -243,7 +243,13 @@ explicit format cannot do that.
 build 43 of 1.1.0 went to a tester; the version is unreleased and the next build
 of it must still be allowed. Both shell guards do this with `grep -v '+'`, and
 both peers said independently that *it is the metadata filter that saves us, not
-the glob*. So it is a rule of the parse rather than of the pattern.
+the glob*. So it is a rule of the parse rather than of the pattern — and it has
+a stronger backstop than two shells happening to agree: **config validation
+refuses a `tag.upload.format` that lacks `{build}`** (`config.dart`, a
+`ProjectException` at parse), so a tool-written upload record always carries
+its build number in its name and no bare-version template can ever reproduce
+it. The exclusion of upload records is enforced where those tags are written,
+not only where they are read.
 
 **A near-miss is reported, and this is what makes declining the config safe.**
 Any tag whose last path segment parses as `v<version>` without build metadata,
