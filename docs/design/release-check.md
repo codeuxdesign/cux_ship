@@ -88,6 +88,26 @@ while its git record is deliberately one `uploaded/` tag per commit, so git
 *cannot express* which destinations hold what. A git-oracled check is therefore
 a tool for repositories whose release is a single event. Theirs is not.
 
+**"Structural" does not mean permanent, and the reopening condition is already
+written down.** The premise above rests entirely on one tag per commit — and
+`BUILD-TAGS` §8.1 records that as a *decision*, with AuthPass supplying the
+constraint that settled it, and names exactly what it gives up: git can no longer
+answer *"did macOS ever ship from this commit?"*, only *"something did"*. Per-store
+records were on the table as a real capability and declined for cost, not
+refused as impossible. `upload-record-scope.md` files the same question from the
+other end.
+
+So: **final while the record stays one tag per commit; reopened by a per-store
+opt-in, which two documents already contemplate.** A closed door with no named
+condition is what stops the conversation happening when the condition arrives.
+
+**And even then adoption would be a choice rather than a consequence.** A richer
+git record would make this *possible* for AuthPass without making it *right*:
+their guards ask what a given destination currently holds, and that is a
+question about a store's present state which a git record only ever
+approximates. The structural argument is the reason it cannot be adopted today;
+it is not the only reason it might not be adopted the day it could.
+
 **Final for AuthPass, and for the tuple — and for nothing else.** The
 `(version, buildNumber)` tuple that `BUILD-TAGS` §6 asked for was asked for *by
 AuthPass*, and is not built. But the first pass of this document went further and
