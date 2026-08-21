@@ -28,6 +28,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:yaml/yaml.dart';
 
+import 'deps.dart' show exeName;
 import 'placed.dart';
 import 'project.dart';
 
@@ -574,14 +575,39 @@ class LoadedSecrets {
 }
 
 /// Locates the `sops` binary: the project's `.bin` first, then PATH.
+///
+/// **Both halves were POSIX-only, and `deps install` learning Windows is what
+/// exposed it.** The install put `sops.exe` in `.bin` and reported success;
+/// the very next command looked for `.bin/sops`, missed it, and fell through
+/// to `sh -c command -v` — and there is no `sh` on a Windows runner, so the
+/// fallback could not answer either. Two chokepoints, one taught the new
+/// platform: the same shape as a cross-check that ran at the upload and not at
+/// the write.
 String findSops(String repoRoot) {
-  final local = File('$repoRoot/.bin/sops');
+  final local = File('$repoRoot/.bin/${exeName('sops')}');
   if (local.existsSync()) {
     return local.path;
   }
-  final which = Process.runSync('sh', ['-c', 'command -v sops']);
-  final found = (which.stdout as String).trim();
-  if (which.exitCode == 0 && found.isNotEmpty) {
+  // `where` is the Windows equivalent and prints one path per line, newest
+  // match first. Wrapped because a missing interpreter raises rather than
+  // exiting non-zero, which would escape as an unhandled error instead of the
+  // sentence below.
+  final ProcessResult which;
+  try {
+    which = Platform.isWindows
+        ? Process.runSync('where', ['sops'])
+        : Process.runSync('sh', ['-c', 'command -v sops']);
+  } on ProcessException {
+    throw ProjectException(
+      'sops not found — run `cux_ship deps install`, or put sops on PATH',
+    );
+  }
+  final found = const LineSplitter()
+      .convert('${which.stdout}')
+      .map((l) => l.trim())
+      .where((l) => l.isNotEmpty)
+      .firstOrNull;
+  if (which.exitCode == 0 && found != null) {
     return found;
   }
   throw ProjectException(
