@@ -65,6 +65,18 @@ ReleaseTagResult recordRelease(Git git, {
   second command to forget.
 - **`cux_ship release tag` exposes the same method** for everything else:
 
+**The first bullet reverses a documented promise, and owes it an argument.**
+`play/cli.dart`'s header specifies promote as touching no git — *"tagging and
+bumping is a separate, once-per-release step rather than something each
+store's promote repeats"* — written so that two stores can publish the *same*
+version, which is impossible if either one moves it. Both halves of that
+reason survive the reversal: `recordRelease` never bumps, so the version still
+does not move; and §4's second row makes the per-store repeat safe rather
+than forbidden — the second store's promote finds the tag at its commit and
+ensures it is pushed, not a second tag. What does not survive is the header
+itself, which must be rewritten when this is built. A comment that outlives
+its truth is exactly the defect §1 just counted three copies of.
+
 ```
 cux_ship release tag --version 1.1.0 --target amazon --commit <sha>
 ```
