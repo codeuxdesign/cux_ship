@@ -189,8 +189,11 @@ This is the stated reason the shell copy exists, and it is a real difference:
   red release, and invites a re-run of a promotion that already succeeded.
 
 So `recordRelease` **warns and does not fail** — and that is a property of *when
-it runs*, not a preference. It runs after the store said yes, always, by
-construction.
+it runs*, not a preference. From a promote it runs after the store said yes, by
+construction. The standalone form has no store in the loop, so there
+"after the release" is documented intent rather than construction — §6's
+boundary with `release finish` is what keeps a script that has not shipped
+anything yet from reaching for the one tagger that only warns.
 
 Which makes "created locally but not pushed" a state this deliberately produces,
 and therefore one it must recover from. Two rules, both already learned:
@@ -203,6 +206,14 @@ and therefore one it must recover from. Two rules, both already learned:
   `git ls-remote origin 'refs/tags/<name>^{}'`, dereferenced, because comparing
   tag *objects* reports a collision on every parallel promotion and never on a
   real one. This is 3.4.2's fix, and the shell copy is where it has not landed.
+
+And the warning must name what heals it, because **an unpushed release tag is
+invisible to everything that reads the record** — `release-check.md`'s oracle
+is origin, so a warned-and-forgotten push failure leaves the next build of
+this version unrefused on every machine but this one, and after the *last*
+promotion of a version no later store's promote comes along to re-push it. The
+remedy the warning names is re-running the same promotion: safe by §4's second
+row, which exists precisely so that the retry pushes instead of shrugging.
 
 ## 6. What this replaces, and what it does not
 
