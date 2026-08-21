@@ -141,11 +141,29 @@ that a human "retag deliberately once you know which one shipped". The tool
 knows which one shipped: the one it just promoted, to the target it just
 promoted to. Recording it is strictly better than asking.
 
+**The first column is asked of origin, not of the clone.** The §5 lesson
+applies at the decision, before it applies at the push: a clone that has not
+fetched since another machine promoted sees no `vX.Y.Z`, takes the first row,
+and mints a bare tag origin already holds at another commit — and the
+rejection then arrives *after* the wrong decision, downgraded to a warning by
+§5, leaving the divergence unrecorded and two machines each holding their own
+`vX.Y.Z`. So the existing-tag question is
+`git ls-remote origin 'refs/tags/vX.Y.Z^{}'` where an origin is configured,
+local refs otherwise — the same oracle rule `release-check.md` §6 arrived at
+from the reading side. And a bare-tag push rejected because origin names
+another commit is the third row discovered late, resolving to the same action:
+qualify.
+
 **The cost, stated:** the bare tag then means *the first target to promote this
-version*, which is a little arbitrary. The alternative — qualifying both once a
-second target diverges — would mean rewriting a published tag, and a record that
-gets rewritten stops being a record. So the bare tag stays where it landed and
-the divergent one is qualified.
+version*, which is a little arbitrary — and only as good as the first writer.
+A bare tag hand-written at the wrong commit (HEAD during a promotion, which §3
+calls the normal mistake) is enshrined by this rule as the norm, with the
+correctly-resolved commit filed as the exception; no entry lies about what it
+points at, but which name reads as *the* release was decided by whoever tagged
+first, right or wrong. The alternative — qualifying both once a second target
+diverges — would mean rewriting a published tag, and a record that gets
+rewritten stops being a record. So the bare tag stays where it landed and the
+divergent one is qualified.
 
 **The qualifier is a target, not a platform**, and this is the command that
 makes that possible: promote knows the destination it just moved a build to,
