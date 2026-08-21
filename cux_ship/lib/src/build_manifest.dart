@@ -325,7 +325,7 @@ class BuildManifest {
 /// directory is refused rather than accepted, because [artifact] is stored as
 /// a basename resolved against the manifest's directory: a manifest written
 /// elsewhere parses fine and then cannot find the file it describes.
-String writeBuildManifest({
+({String path, String crossCheck}) writeBuildManifest({
   required String artifactPath,
   String? outPath,
   required String versionName,
@@ -423,6 +423,22 @@ String writeBuildManifest({
     if (extra.isNotEmpty) ...{'x': extra},
   };
 
+  // **Before the file is written, not after.** The writer is already holding
+  // these bytes — it just digested them — so this is the earliest moment the
+  // defect exists, minutes after the build rather than at an upload. A refusal
+  // here leaves no manifest at all; a check afterwards would leave a wrong one
+  // on disk for somebody to find and believe.
+  //
+  // The claimed values are the arguments, so this catches a build that did not
+  // honor them: a Gradle override, an export step rewriting CFBundleVersion, a
+  // variable that evaluated empty.
+  final coverage = describeCrossCheck(
+    versionName: versionName,
+    buildNumber: buildNumber,
+    format: format,
+    baked: readBakedFacts(artifactPath, format),
+  );
+
   final path = outPath ?? '$artifactPath.manifest.json';
   final artifactDirectory = p.dirname(p.absolute(artifactPath));
   if (p.dirname(p.absolute(path)) != artifactDirectory) {
@@ -437,7 +453,7 @@ String writeBuildManifest({
   File(path).writeAsStringSync(
     '${const JsonEncoder.withIndent('  ').convert(document)}\n',
   );
-  return path;
+  return (path: path, crossCheck: coverage);
 }
 
 /// Compares what a manifest claims against what its artifact says, and returns

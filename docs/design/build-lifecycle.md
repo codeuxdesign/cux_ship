@@ -73,8 +73,11 @@ insufficient, this table is where the reader goes.
 
 ## 3. Where it runs: both existing chokepoints
 
-**At `manifest write`.** The writer already holds the artifact's bytes — it
-digests them. Reading two more values out of the same file catches the defect
+**At `manifest write`** — built second, and only because a consumer noticed it
+was missing: the writer printed no cross-check line at all, so "no reader for
+apk" and "checked and agreed" rendered identically one command over from where
+that distinction was the whole point. The writer already holds the artifact's
+bytes — it digests them. Reading two more values out of the same file catches the defect
 at the earliest moment it exists, minutes after the build, before an upload is
 attempted and before anyone walks away believing `dist/` is good. A mismatch is
 a refusal: the manifest is not written, and the message names both values and

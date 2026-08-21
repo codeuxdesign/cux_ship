@@ -2,6 +2,17 @@
 
 ## 3.4.1
 
+### The cross-check runs at `manifest write` too, not only at upload
+
+The design said *both* chokepoints and only the upload one was built, so
+`manifest write` printed no cross-check line at all — meaning "no reader for
+apk" and "checked and agreed" were the same output, one command away from where
+that distinction is the entire point. Reported by a second consumer wiring the
+writer.
+
+It runs **before the file is written**, so a mismatch leaves no manifest rather
+than a wrong one on disk for somebody to find and believe.
+
 ### A collision now has an exit code a shell can see
 
 `UploadCollisionException` has existed since 3.3.0 with a doc comment promising

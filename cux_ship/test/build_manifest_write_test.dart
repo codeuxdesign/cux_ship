@@ -35,7 +35,7 @@ String _write(String artifactPath, {bool dirty = false, String? flavor}) =>
       builtAt: '2026-08-19T14:22:00Z',
       format: 'aab',
       flavor: flavor,
-    );
+    ).path;
 
 void main() {
   setUp(() => _dist = Directory.systemTemp.createTempSync('cux_ship_write'));
@@ -108,7 +108,7 @@ void main() {
     // hex characters. A check that knew only 40 would refuse a valid id and
     // insist it was the wrong length — the short-sha defect from the other
     // side, encoding "what our repositories use" as "what is correct".
-    final path = writeBuildManifest(
+    final written = writeBuildManifest(
       artifactPath: _artifact(),
       versionName: '1.1.0',
       buildNumber: '53',
@@ -120,7 +120,7 @@ void main() {
       builtAt: '2026-08-19T14:22:00Z',
     );
 
-    expect(BuildManifest.read(path).gitSha, 'd' * 64);
+    expect(BuildManifest.read(written.path).gitSha, 'd' * 64);
   });
 
   test('a length between the two formats is still an abbreviation', () {
@@ -170,7 +170,7 @@ void main() {
     // only guard was a shell `if` in one consuming repository, so every other
     // --manifest caller would have shipped build 0.
     final artifact = _artifact();
-    final path = writeBuildManifest(
+    final written = writeBuildManifest(
       artifactPath: artifact,
       versionName: '1.1.0',
       buildNumber: '0',
@@ -184,7 +184,7 @@ void main() {
     );
 
     expect(
-      () => BuildManifest.read(path).verify(),
+      () => BuildManifest.read(written.path).verify(),
       throwsA(
         isA<ReleaseException>().having(
           (e) => e.toString(),
@@ -194,7 +194,7 @@ void main() {
       ),
     );
     expect(
-      () => BuildManifest.read(path).verify(allowDirty: true),
+      () => BuildManifest.read(written.path).verify(allowDirty: true),
       throwsA(isA<ReleaseException>()),
       reason: '--allow-dirty must not wave through an unnumbered build',
     );
@@ -229,7 +229,7 @@ void main() {
     // One artifact per directory wants a fixed name the uploader can state
     // rather than glob for, which is a better shape than the sidecar default.
     final artifact = _artifact();
-    final path = writeBuildManifest(
+    final written = writeBuildManifest(
       artifactPath: artifact,
       outPath: '${_dist.path}/manifest.json',
       versionName: '1.1.0',
@@ -242,9 +242,9 @@ void main() {
       builtAt: '2026-08-19T14:22:00Z',
     );
 
-    expect(path, '${_dist.path}/manifest.json');
-    expect(BuildManifest.read(path).artifactPath, artifact);
-    expect(() => BuildManifest.read(path).verify(), returnsNormally);
+    expect(written.path, '${_dist.path}/manifest.json');
+    expect(BuildManifest.read(written.path).artifactPath, artifact);
+    expect(() => BuildManifest.read(written.path).verify(), returnsNormally);
   });
 
   test('--out into another directory is refused', () {
@@ -312,7 +312,7 @@ void main() {
   });
 
   test('repo-local keys go under x, where no shared tool reads them', () {
-    final path = writeBuildManifest(
+    final written = writeBuildManifest(
       artifactPath: _artifact(),
       versionName: '1.1.0',
       buildNumber: '53',
@@ -324,11 +324,11 @@ void main() {
       builtAt: '2026-08-19T14:22:00Z',
       extra: const {'target': 'wasm'},
     );
-    final written = jsonDecode(File(path).readAsStringSync()) as Map;
+    final document = jsonDecode(File(written.path).readAsStringSync()) as Map;
 
-    expect(written['x'], {'target': 'wasm'});
+    expect(document['x'], {'target': 'wasm'});
     expect(
-      written.containsKey('target'),
+      document.containsKey('target'),
       isFalse,
       reason: 'unnamespaced would collide with a future schema field',
     );
