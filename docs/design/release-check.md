@@ -296,6 +296,19 @@ now watched an undistinguished exit code get swallowed by `|| exitCode=$?`.
 `git rev-parse --is-shallow-repository` is what separates a shallow clone from a
 genuinely fresh repository.
 
+**What a caller does with a 5, so the distinction is policy rather than
+decoration: stop the build, same as a 4.** `build.sh` treats any nonzero exit
+as a refusal — no branching, no retry loop, and never `|| exitCode=$?`. The
+split is for the *operator* reading the failure, because the two remedies are
+opposite: a 4 says bump the version (or name the submission being continued,
+§4), a 5 says fix the checkout — and treating a shallow checkout as a reason
+to bump spends a version to fix a fetch flag. Blocking on 5 does not hand a
+transient origin failure a veto over releases, because 5 additionally requires
+that local refs hold no release tag at all: a checkout that has ever fetched
+answers from local refs with a warning, exit 0 or 4. The checkout that exits 5
+could not have answered honestly by any design, and a release job that cannot
+reach its own origin has a problem worth stopping for.
+
 **A skipped unparseable tag taints the pass.** AuthPass carries `vv1.5.8`, a real
 typo on a real origin. Skipping it is right; passing silently afterwards is not,
 because that tag may *be* the release of 1.5.8. So a pass that skipped anything
