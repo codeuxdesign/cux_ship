@@ -1030,7 +1030,7 @@ ArgParser buildPlayParser(PlayCommand cmd) {
           help:
               'The commit this artifact was BUILT from — a build manifest\'s '
               'gitSha, never a commit found by searching for a version. Only '
-              'read when the repository declares provenance.record-uploads.',
+              'read when the repository declares tag.upload.enabled.',
         )
         ..addOption(
           'manifest',

@@ -14,8 +14,17 @@ import 'package:test/test.dart';
 
 late Directory _dist;
 
-String _artifact([String bytes = 'a signed bundle, pretend']) {
-  final path = '${_dist.path}/how-it-went-1.1.0-53.aab';
+/// A stand-in artifact in a format that has no baked-facts reader.
+///
+/// **`pkg` rather than `aab`, and that is load-bearing.** These tests are about
+/// digests, shas and where the sidecar lands, not about cross-checking — but
+/// the writer cross-checks every artifact whose format has a reader, and a text
+/// file named `.aab` is not a bundle. It used to pass anyway, because a reader
+/// that could not open its input reported "no reader for aab" and the check
+/// quietly did not happen. Naming these what they actually are keeps that
+/// crutch from coming back.
+String _artifact([String bytes = 'a signed installer, pretend']) {
+  final path = '${_dist.path}/how-it-went-1.1.0-53.pkg';
   File(path).writeAsStringSync(bytes);
   return path;
 }
@@ -29,13 +38,13 @@ String _write(String artifactPath, {bool dirty = false, String? flavor}) =>
       buildNumber: '53',
       gitSha: _sha,
       dirty: dirty,
-      platform: 'android',
+      platform: 'macos',
       producerName: 'cux_ship',
       producerVersion: '3.4.0-dev.1',
       builtAt: '2026-08-19T14:22:00Z',
-      format: 'aab',
+      format: 'pkg',
       flavor: flavor,
-    );
+    ).path;
 
 void main() {
   setUp(() => _dist = Directory.systemTemp.createTempSync('cux_ship_write'));
@@ -51,8 +60,8 @@ void main() {
     expect(read.versionName, '1.1.0');
     expect(read.buildNumber, '53');
     expect(read.gitSha, _sha);
-    expect(read.platform, 'android');
-    expect(read.format, 'aab');
+    expect(read.platform, 'macos');
+    expect(read.format, 'pkg');
     expect(read.flavor, 'playstore');
     expect(read.producer?['name'], 'cux_ship');
     expect(read.buildNumberAssigned, isTrue);
@@ -108,7 +117,7 @@ void main() {
     // hex characters. A check that knew only 40 would refuse a valid id and
     // insist it was the wrong length — the short-sha defect from the other
     // side, encoding "what our repositories use" as "what is correct".
-    final path = writeBuildManifest(
+    final written = writeBuildManifest(
       artifactPath: _artifact(),
       versionName: '1.1.0',
       buildNumber: '53',
@@ -120,7 +129,7 @@ void main() {
       builtAt: '2026-08-19T14:22:00Z',
     );
 
-    expect(BuildManifest.read(path).gitSha, 'd' * 64);
+    expect(BuildManifest.read(written.path).gitSha, 'd' * 64);
   });
 
   test('a length between the two formats is still an abbreviation', () {
@@ -170,7 +179,7 @@ void main() {
     // only guard was a shell `if` in one consuming repository, so every other
     // --manifest caller would have shipped build 0.
     final artifact = _artifact();
-    final path = writeBuildManifest(
+    final written = writeBuildManifest(
       artifactPath: artifact,
       versionName: '1.1.0',
       buildNumber: '0',
@@ -184,7 +193,7 @@ void main() {
     );
 
     expect(
-      () => BuildManifest.read(path).verify(),
+      () => BuildManifest.read(written.path).verify(),
       throwsA(
         isA<ReleaseException>().having(
           (e) => e.toString(),
@@ -194,7 +203,7 @@ void main() {
       ),
     );
     expect(
-      () => BuildManifest.read(path).verify(allowDirty: true),
+      () => BuildManifest.read(written.path).verify(allowDirty: true),
       throwsA(isA<ReleaseException>()),
       reason: '--allow-dirty must not wave through an unnumbered build',
     );
@@ -208,19 +217,19 @@ void main() {
     File(path).writeAsStringSync(
       jsonEncode({
         'schema': 1,
-        'platform': 'android',
+        'platform': 'macos',
         'versionName': '1.1.0',
         'buildNumber': 53,
         'gitSha': 'd9c394b',
         'dirty': false,
-        'variant': 'aab',
-        'artifact': 'how-it-went-1.1.0-53.aab',
+        'variant': 'pkg',
+        'artifact': 'how-it-went-1.1.0-53.pkg',
         'sha256': sha256.convert(File(artifact).readAsBytesSync()).toString(),
       }),
     );
 
     final read = BuildManifest.read(path);
-    expect(read.format, 'aab', reason: 'variant is schema 1\'s spelling');
+    expect(read.format, 'pkg', reason: 'variant is schema 1\'s spelling');
     expect(read.buildNumberAssigned, isTrue, reason: 'absent is not a claim');
     expect(() => read.verify(), returnsNormally);
   });
@@ -229,7 +238,7 @@ void main() {
     // One artifact per directory wants a fixed name the uploader can state
     // rather than glob for, which is a better shape than the sidecar default.
     final artifact = _artifact();
-    final path = writeBuildManifest(
+    final written = writeBuildManifest(
       artifactPath: artifact,
       outPath: '${_dist.path}/manifest.json',
       versionName: '1.1.0',
@@ -242,9 +251,9 @@ void main() {
       builtAt: '2026-08-19T14:22:00Z',
     );
 
-    expect(path, '${_dist.path}/manifest.json');
-    expect(BuildManifest.read(path).artifactPath, artifact);
-    expect(() => BuildManifest.read(path).verify(), returnsNormally);
+    expect(written.path, '${_dist.path}/manifest.json');
+    expect(BuildManifest.read(written.path).artifactPath, artifact);
+    expect(() => BuildManifest.read(written.path).verify(), returnsNormally);
   });
 
   test('--out into another directory is refused', () {
@@ -311,8 +320,67 @@ void main() {
     );
   });
 
+  test('a format with a reader that cannot read the file is refused', () {
+    // The distinction this locks in: "no reader for this format" is a fact
+    // about the format, and "the reader could not open this file" is a fact
+    // about the file. Both used to print the first sentence, so a truncated
+    // download, a missing `unzip`, or a text file with the wrong extension all
+    // rendered as ordinary trusted-loudly output — and the check silently
+    // stopped running. Every fixture in this file was standing on that.
+    final path = '${_dist.path}/how-it-went-1.1.0-53.aab';
+    File(path).writeAsStringSync('not a zip, whatever it is called');
+
+    expect(
+      () => writeBuildManifest(
+        artifactPath: path,
+        versionName: '1.1.0',
+        buildNumber: '53',
+        gitSha: _sha,
+        dirty: false,
+        platform: 'android',
+        producerName: 'cux_ship',
+        producerVersion: '3.4.0-dev.1',
+        builtAt: '2026-08-19T14:22:00Z',
+        format: 'aab',
+      ),
+      throwsA(
+        isA<ReleaseException>().having(
+          (e) => e.toString(),
+          'message',
+          allOf(contains('cannot cross-check'), contains('truncated')),
+        ),
+      ),
+    );
+    expect(
+      File('$path.manifest.json').existsSync(),
+      isFalse,
+      reason: 'a refusal must not leave a manifest behind',
+    );
+  });
+
+  test('a format with no reader is trusted, and says so', () {
+    // The other side of the same coin, and the reason the refusal above cannot
+    // simply be "always refuse": pkg has no reader and never will have one
+    // here, so it must pass — while saying out loud that nothing was checked.
+    final written = writeBuildManifest(
+      artifactPath: _artifact(),
+      versionName: '1.1.0',
+      buildNumber: '53',
+      gitSha: _sha,
+      dirty: false,
+      platform: 'macos',
+      producerName: 'cux_ship',
+      producerVersion: '3.4.0-dev.1',
+      builtAt: '2026-08-19T14:22:00Z',
+      format: 'pkg',
+    );
+
+    expect(written.crossCheck, contains('no reader for pkg'));
+    expect(written.crossCheck, contains('taken on trust'));
+  });
+
   test('repo-local keys go under x, where no shared tool reads them', () {
-    final path = writeBuildManifest(
+    final written = writeBuildManifest(
       artifactPath: _artifact(),
       versionName: '1.1.0',
       buildNumber: '53',
@@ -324,11 +392,11 @@ void main() {
       builtAt: '2026-08-19T14:22:00Z',
       extra: const {'target': 'wasm'},
     );
-    final written = jsonDecode(File(path).readAsStringSync()) as Map;
+    final document = jsonDecode(File(written.path).readAsStringSync()) as Map;
 
-    expect(written['x'], {'target': 'wasm'});
+    expect(document['x'], {'target': 'wasm'});
     expect(
-      written.containsKey('target'),
+      document.containsKey('target'),
       isFalse,
       reason: 'unnamespaced would collide with a future schema field',
     );

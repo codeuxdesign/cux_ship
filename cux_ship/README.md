@@ -199,12 +199,90 @@ Schema 1, and an unknown schema is refused rather than read optimistically —
 every value the upload is named by comes from this file:
 
 ```json
-{ "schema": 1, "platform": "ios", "versionName": "1.1.0", "buildNumber": 51,
-  "gitSha": "fef65ce", "dirty": false, "artifact": "how-it-went-1.1.0-51.ipa",
-  "sha256": "…" }
+{ "schema": 2, "platform": "ios", "versionName": "1.1.0", "buildNumber": 51,
+  "gitSha": "fef65ce…", "dirty": false, "format": "ipa",
+  "artifact": "how-it-went-1.1.0-51.ipa", "sha256": "…" }
 ```
 
 `artifact` is relative to the manifest, so a `dist/` tree stays movable.
+
+### `manifest write` — the other half, so the schema exists once
+
+```bash
+cux_ship manifest write --artifact dist/android/app-1.1.0-53.aab \
+  --platform android --format aab \
+  --version-name 1.1.0 --build-number 53 \
+  --git-sha "$SHA" --no-dirty
+```
+
+Before this, every consuming repository wrote the file with a shell heredoc — so
+the schema existed in prose in each of them and in code in none, and a field one
+producer omitted was invisible until an upload weeks later published an artifact
+described by the wrong numbers. The writer sits beside the reader, which makes
+the round trip a test rather than a convention.
+
+Three things it refuses, each of which fails silently otherwise:
+
+- **The digest is computed here and cannot be passed in.** A digest recorded
+  before signing fails verification on *every* real release rather than never,
+  so it must not be expressible. Run this after signing.
+- **`--dirty` has no default.** Give it as `--dirty` or `--no-dirty`; a script
+  that forgot the flag would certify every dirty build as clean.
+- **An abbreviated `--git-sha` is refused.** 40 hex characters for a sha1
+  repository, 64 for sha256. A reader normalizes whatever it is given, which is
+  exactly what lets a seven-character sha survive here and break a tool that
+  does not.
+
+`--git-sha` and the dirty flag are inputs and never derived: this runs *after*
+the build, where a tree that moved in between is invisible.
+
+`--out` writes the manifest under a different name **in the artifact's own
+directory** — for a build that keeps one artifact per platform directory and
+wants a fixed `manifest.json` its uploader can name without globbing. Anywhere
+else is refused, because the artifact is recorded as a basename resolved against
+the manifest's directory.
+
+### `--derived-from` — a repackaged artifact inherits its provenance
+
+```bash
+cux_ship manifest write --artifact app_1.9.15_amd64.deb \
+  --platform linux --format deb \
+  --derived-from app-1.9.15.tar.gz.manifest.json \
+  --packaging gitSha=… --packaging repo=…
+```
+
+No build facts are retyped: the `.deb`'s manifest carries the *tarball's*
+`gitSha`, `dirty`, `versionName` and `buildNumber` as its own, because a reader
+that knows nothing about derivation must still get true answers from the fields
+it already reads.
+
+**It takes the parent's manifest, not a hand-assembled entry**, so the chain
+assembles itself and stays flat and nearest-first through any number of steps —
+a `.snap` from a `.deb` from a tarball records both ancestors and still reports
+the tarball's commit. The parent is digest-checked when its artifact sits beside
+its manifest, which turns a fetch that straddled a non-atomic upload into a
+refusal rather than a derivation recorded from bytes nobody has.
+
+### The cross-check — the manifest is compared against the artifact
+
+Every `--manifest` upload reads the build's own values back out of the artifact:
+
+```
+==> app-1.1.0-66.aab — build 66 of 1.1.0 from bd8d32f…, digest verified
+    cross-check: build number and version name agree with base/manifest/AndroidManifest.xml
+```
+
+The digest proves the bytes are the ones the manifest was written for. It cannot
+notice that the *build* disagreed with the values the script passed — an export
+step rewriting `CFBundleVersion`, a Gradle override, a variable that evaluated
+empty. In each of those the manifest honestly describes the wrong artifact and
+every flag is correct.
+
+`aab` is read from `base/manifest/AndroidManifest.xml` (aapt2 protobuf), `apk`
+from `AndroidManifest.xml` (binary XML — a different encoding, so a separate
+reader), and `ipa` from `Payload/*.app/Info.plist`. **A format with no reader is trusted out loud** —
+`cross-check: no reader for pkg — build number and version name taken on
+trust` — because "not checked" must not render the same as "checked and fine".
 
 ### Recording which commit an upload came from
 
@@ -212,18 +290,42 @@ Off unless a repository asks for it:
 
 ```yaml
 # .cux-ship.yaml
-provenance:
-  record-uploads: true
+tag:
+  upload:
+    enabled: true
 ```
+
+`tag:` is the namespace for every kind of tag this tool writes, and both kinds
+are implemented. `upload` records one upload of one build and is **off** unless
+asked for; `release` names the tag `release finish` writes and is **on**,
+defaulting to the `v{version}` this tool has always written.
+
+```yaml
+tag:
+  release:
+    format: rel/{version}    # default: v{version}
+```
+
+A release format must contain `{version}`, or every release would collide under
+one name. `{build}` is allowed but not required — and if a format asks for one
+when the command has none, the tag is **refused** rather than written with the
+gap left empty, because `v1.2.3+` is wrong by a single trailing character in a
+name nobody reads twice.
 
 With it on, `play upload` and `appstore upload` write an annotated tag naming
 the commit the artifact was **built from**, before contacting the store:
 
 ```bash
+cux_ship play upload --manifest dist/android/manifest.json
+```
+
+`--manifest` supplies the commit, so nothing has to read it out by hand:
+
+```bash
 cux_ship play upload --commit "$(jq -r .gitSha dist/android/manifest.json)"
 ```
 
-**`--commit` is not optional and is not inferred.** An upload job routinely runs
+**`--commit` is not inferred.** An upload job routinely runs
 on a different checkout from the build — a `workflow_run` trigger, a repackaging
 step, a retry hours later — so `HEAD` is not the answer, and a record naming the
 wrong commit is worse than no record at all. It is your build manifest's
@@ -246,7 +348,20 @@ correctness property rather than a preference: a release guard that asks "has
 this version shipped" by taking the highest `v*` tag reads a bare `v1.0.4+56` as
 a released 1.0.4 — `sort -V` ranks build metadata *above* the version it
 annotates — and then refuses to build 1.0.4, naming a release that never
-happened. Override with `provenance.tag`, which must contain `{build}`.
+happened. Override with `tag.upload.format`, which must contain `{build}`.
+
+**The namespace protects that guard and not every reader — check yours.** A
+consuming repository found the second one the hard way: its build script derives
+the version name with `git describe --exact-match`, which returns *whatever* tag
+`HEAD` carries. After an upload tagged the commit, the next platform built in the
+same release read `uploaded/v1.1.0+67` as its release tag, stripped a leading
+`v` that was not there and everything after the `+`, and refused with
+`uploaded/v1.1.0` against a pubspec saying `1.1.0`.
+
+`git describe --exact-match --match 'v*'` is the fix there. The general point is
+that these tags are now on your release commits, so anything that reads tags
+sees them — and only a multi-platform release that *interleaves* build and
+upload produces it, which is why no test had the shape.
 
 ### `release refspecs` — so a clone can see the build numbers
 

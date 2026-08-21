@@ -46,7 +46,7 @@
 // that will do the upload, and tagging afterwards makes the failure mode
 // "shipped but unprovable" — an artifact in front of users whose commit nobody
 // can name.
-import 'config.dart' show ProvenanceConfig;
+import 'config.dart' show TagKindConfig;
 import 'release.dart' show Git, ReleaseException, resolveCommit, taggedCommit;
 
 /// The tag recording that [commit] reached a store.
@@ -88,6 +88,19 @@ class UploadRecord {
 /// as the tolerable kind and the release finishes green, which turns the
 /// loudest error here into the quietest. A distinct type gives the CLI a
 /// distinct exit code, and the wrapper something to match on.
+/// What `cux_ship` exits with when [UploadCollisionException] is raised.
+///
+/// **A number, because a shell wrapper cannot match on a Dart type.** The class
+/// above has existed since 3.3.0 saying it "gives the CLI a distinct exit code";
+/// it did not, so the only thing a wrapper could see was 1 — the same as every
+/// other failure, including the tolerable one it deliberately swallows.
+///
+/// 3 rather than 1, and not 2, which `screenshots flatten --check` already uses
+/// for "there is work to do". Deliberately not 65 or any other sysexits value:
+/// those describe *categories* a caller might already be branching on, and this
+/// needs to be unmistakably one thing.
+const uploadCollisionExit = 3;
+
 class UploadCollisionException extends ReleaseException {
   UploadCollisionException(super.message);
 }
@@ -212,7 +225,7 @@ UploadRecordResult recordUpload(
 /// need push credentials on its upload job.
 UploadRecordResult? recordUploadIfConfigured(
   String repoRoot,
-  ProvenanceConfig config, {
+  TagKindConfig config, {
   required String store,
   required String? version,
   required String? build,
@@ -220,7 +233,7 @@ UploadRecordResult? recordUploadIfConfigured(
   required String? checksum,
   bool dryRun = false,
 }) {
-  if (!config.recordUploads) {
+  if (!config.enabled) {
     return null;
   }
 
@@ -229,7 +242,7 @@ UploadRecordResult? recordUploadIfConfigured(
   // usually means the artifact was not described to this command at all.
   if (commit == null || commit.isEmpty) {
     throw ReleaseException(
-      'provenance.record-uploads is on and --commit was not given.\n'
+      'tag.upload.enabled is on and --commit was not given.\n'
       'Pass the commit the artifact was BUILT from — your build manifest\'s '
       'gitSha. It is not inferred from HEAD on purpose: an upload job often '
       'runs on a different checkout from the build, and a record naming the '
@@ -238,7 +251,7 @@ UploadRecordResult? recordUploadIfConfigured(
   }
   if (version == null || build == null) {
     throw ReleaseException(
-      'provenance.record-uploads is on, and the ${version == null ? 'version' : 'build number'} '
+      'tag.upload.enabled is on, and the ${version == null ? 'version' : 'build number'} '
       'is not known here — pass --version-name and --build-number so the tag '
       'can be named.',
     );
@@ -247,7 +260,7 @@ UploadRecordResult? recordUploadIfConfigured(
   return recordUpload(
     Git(repoRoot),
     UploadRecord(
-      name: config.tagFor(version: version, build: build),
+      name: config.nameFor(version: version, build: build),
       commit: commit,
       annotation: <String>[
         'build $build of $version',

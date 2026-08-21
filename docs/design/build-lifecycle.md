@@ -8,9 +8,15 @@ review that dismantled it. Both are kept because the argument is more useful
 than the conclusion: the superseded design rested on a rule stated exactly
 backwards, and §1 below is that rule the right way around.
 
-One cost question gates one row of the table in §2; everything else is buildable
-against code that ships today. No new commands, no schema change, no state
-between commands.
+**Built, 21 August 2026, and shipped in `cux_ship` 3.4.0.** The cost question
+that gated §2's `aab` row was answered by writing the reader — §5 records the
+run, and the estimate was pessimistic in three ways. `verify()` now cross-checks
+every `--manifest` upload, and a format with no reader says so on its own line.
+
+Its first real use was a release: it read `versionCode 65` out of a 69 MB bundle
+in 0.77 s including VM startup, where the same check previously cost a transfer
+to Play. No new commands, no schema change, no state between commands, as
+designed.
 
 This extends [build-manifest.md](build-manifest.md), which specifies the file.
 This specifies *what is checked against the artifact*, and the answer is: more
@@ -48,7 +54,7 @@ of the bytes and refuse a manifest that disagrees with its artifact.**
 |---|---|---|---|
 | `ipa` | `Payload/*.app/Info.plist` → `CFBundleVersion`, `CFBundleShortVersionString` | zip entry + `plutil` (Apple artifacts are only produced on macOS) | trivial |
 | `aab` | `base/manifest/AndroidManifest.xml` → `versionCode`, `versionName` | zip entry + a minimal aapt2-proto walker, **§5** | to be priced |
-| `apk` | binary XML (axml), a different encoding than the `.aab`'s proto | separate reader | deferred until a producer ships `.apk` — AuthPass's sideload and Amazon flavors will, so the deferral has a known end |
+| `apk` | `AndroidManifest.xml` → `versionCode`, `versionName` | zip entry + a binary-XML (axml) reader — **built**, ahead of the producer that needed it | ~170 lines: a string pool and one element's attributes |
 | `pkg`, `dmg`, `msix`, `snap`, `deb`, archives | — | none | **trusted, and said out loud** — see below |
 
 **A format without a reader is trusted loudly, never silently.** The check
@@ -67,8 +73,11 @@ insufficient, this table is where the reader goes.
 
 ## 3. Where it runs: both existing chokepoints
 
-**At `manifest write`.** The writer already holds the artifact's bytes — it
-digests them. Reading two more values out of the same file catches the defect
+**At `manifest write`** — built second, and only because a consumer noticed it
+was missing: the writer printed no cross-check line at all, so "no reader for
+apk" and "checked and agreed" rendered identically one command over from where
+that distinction was the whole point. The writer already holds the artifact's
+bytes — it digests them. Reading two more values out of the same file catches the defect
 at the earliest moment it exists, minutes after the build, before an upload is
 attempted and before anyone walks away believing `dist/` is good. A mismatch is
 a refusal: the manifest is not written, and the message names both values and

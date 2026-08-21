@@ -1,5 +1,206 @@
 # Changelog
 
+## 3.4.1
+
+### The fixes below have tests that die when the fix is removed
+
+Found by review, and the most useful thing in it: reintroducing the guard bug
+left all 464 tests green, and deleting the collision's `catch` clause did too.
+Both fixes were as untested as the defects they fixed, and both defects were the
+silent kind — so the suite would have watched either walk back in.
+
+The guard's decision is now `uploadRecordFor`, split out of the store plumbing
+so it can be exercised without a store, a network or a repository; three of its
+cases go red against the old guard. The collision drives the real binary in a
+git repository holding a colliding record, and observes exit 3 — reachable
+because the record is written before the store is contacted.
+
+Neither test could have been written against the old shape. That is the finding
+rather than an aside: a decision buried in a method that needs credentials to
+reach is a decision nothing will check.
+
+### A listing-only push no longer demands a build it did not upload
+
+`play upload --metadata` publishes a store listing and hands over no artifact —
+documented, with a worked example. Repairing the recording guard made every such
+run refuse under `tag.upload.enabled`, before any store contact, because the
+record's scope was "the upload command ran" rather than "an artifact reached the
+store". An operator supplying the previous build's numbers to get past it would
+have been told the upload *collided* — exit 3, on a run that uploaded nothing.
+
+Recording now requires an artifact in the run: `--aab`, `--artifact`, or one the
+manifest names.
+
+### An Android manifest carrying neither value is a refusal, not trust
+
+Every valid `.apk` and `.aab` declares `versionCode` and `versionName`. Finding
+neither means the walk lost its place, and reporting that as "taken on trust"
+was the same collapse the cross-check exists to prevent, one level in. Related:
+`_pooled` treated *any* out-of-range string index like the format's explicit
+`0xFFFFFFFF` sentinel, so a desynced read produced a plausible partial answer
+instead of an error.
+
+A partial check now names the half it did not check — `build number agrees with
+…, version name taken on trust`. It used to print only what it had compared, so
+"checked one of two" and "checked both" differed by which nouns appeared.
+
+### Smaller, all from the same review
+
+- `readApkFacts` and `readAabFacts` caught only `FormatException`, but the
+  walk's reads are `ByteData` and raise `RangeError` — so a manifest declaring
+  sizes past its own end escaped as an unhandled Dart error with forty frames,
+  out of a binary whose exit codes are a documented interface.
+- `unzip` exit **1** means "warnings, and the extraction succeeded". It was
+  refused as "not the archive its extension claims", which is both wrong and
+  wrongly worded. Exit 11 ("no matching files") is now its own sentence too.
+- `release finish` computed the tag name before consulting `--no-tag`, so a run
+  that had just decided not to tag could refuse over the name it would not
+  write. The `ProjectException` handler also still prefixed every message with
+  `--app-dir:`, which this version made a lie — config and tag-naming errors
+  now reach it too, and were being blamed on a flag the operator had not passed.
+- `tag.upload.format` without `tag.upload.enabled` validated the format and then
+  wrote nothing. It is refused as the contradiction it is; defaulting it *on*
+  would hand a repository a push-credential requirement it never asked for.
+
+
+### The cross-check runs at `manifest write` too, not only at upload
+
+The design said *both* chokepoints and only the upload one was built, so
+`manifest write` printed no cross-check line at all — meaning "no reader for
+apk" and "checked and agreed" were the same output, one command away from where
+that distinction is the entire point. Reported by a second consumer wiring the
+writer.
+
+It runs **before the file is written**, so a mismatch leaves no manifest rather
+than a wrong one on disk for somebody to find and believe.
+
+### A collision now has an exit code a shell can see
+
+`UploadCollisionException` has existed since 3.3.0 with a doc comment promising
+it "gives the CLI a distinct exit code". Nothing mapped it, so the only thing a
+wrapper could observe was `1` — indistinguishable from the failure release
+scripts deliberately swallow (`|| exitCode=$?`, so re-running a release for a
+build the store already holds is a no-op). A collision exited through that same
+path and the release finished green having published nothing.
+
+`uploadCollisionExit` is **3**. A `ReleaseException` now also prints its sentence
+and exits 1 rather than escaping as an unhandled Dart error, because forty
+frames of stack bury the one line an operator needs.
+
+### `tag.release` — `release finish` stops hardcoding its tag name
+
+```yaml
+tag:
+  release:
+    enabled: true          # default, unlike upload
+    format: v{version}     # default
+```
+
+The name was `'v' + version`, in the source. A repository whose releases are
+named `rel/1.2.3`, or carry a platform prefix, needed a fork. `{build}` is
+optional here and *required* in `tag.upload.format` — a release names a version,
+an upload record names one upload of it.
+
+`--no-tag` overrides `enabled: true`, and the log says which asked: `not
+tagging: --no-tag` against `not tagging: tag.release.enabled is false`. A flag
+and a config key answering the same question is how a setting comes to appear
+inert.
+
+### `.apk` cross-check
+
+Binary XML (axml) — a chunked format with a string pool, structurally unlike the
+`.aab`'s protobuf, so a second reader rather than a tweak. Verified against a
+real profile `.apk` and `aapt2 dump xmltree`, which agreed on `versionCode 1`
+and `versionName 1.1.0-profile`.
+
+The trap it sets, and the reason the type has to decide where to look: reading
+the `data` word for a *string* attribute yields a pool index printed as a
+number — a plausible wrong answer rather than a failure.
+
+Both string-pool encodings are now covered by tests. The UTF-16 branch had
+none — not from the fixtures here, which build UTF-8 pools, and not from the
+three production `.apk`s it was validated against, which are all UTF-8 — so it
+shipped on the strength of the spec alone. The two layouts share nothing: UTF-8
+stores two lengths per string and UTF-16 stores one, counted in different units,
+with a different continuation bit. Non-ASCII cases are in both, because ASCII is
+exactly where the encodings agree and an ASCII fixture cannot tell a working
+reader from a lucky one.
+
+### A reader that cannot read is no longer reported as no reader at all
+
+`readApkFacts`, `readAabFacts` and `readIpaFacts` returned null when the archive
+could not be opened — and null upstream means *this format has no reader*. So a
+missing `unzip`, a truncated download, or a file that is not the archive its
+extension claims all printed `cross-check: no reader for aab — build number and
+version name taken on trust`: a sentence that reads like ordinary operation,
+while the check silently stopped running for the rest of that machine's life.
+
+Failing to read now raises, naming the cause. Null is reserved for the formats
+that genuinely have no reader (`pkg`, `dmg`, `msix`, `snap`, `deb`, archives),
+which stay trusted-out-loud as before. Reported by Copilot, which raised it as a
+suppressed comment on the review.
+
+Separately, an archive that opens but carries neither value now reports *that* —
+`carried neither value — taken on trust`, naming the file it read — rather than
+falling back to the no-reader sentence.
+
+### A tag format that wants a build number and has none is refused
+
+`tag.release.format` is checked for `{version}` at parse time, but `{build}` is
+legal there and whether a build number exists is a property of the invocation
+rather than the file. The substitution filled it with an empty string, so
+`v{version}+{build}` under `release finish` wrote and pushed `v1.2.3+` — wrong
+by one trailing character, in a name nobody reads twice.
+
+
+### `provenance:` is now `tag:` — **breaking, and free**
+
+```yaml
+tag:
+  upload:
+    enabled: true
+    format: uploaded/v{version}+{build}    # default
+```
+
+`provenance` was specialist vocabulary twice over: the art world's word for an
+object's ownership history, and — in software — the supply-chain term for
+*signed* attestations (npm `--provenance`, SLSA, sigstore). A reader arriving
+from the second expects a transparency log and gets one annotated git tag. A
+name that promises more than it delivers is worse than one that says nothing.
+Every comparable tool calls this a tag: fastlane's `add_git_tag`,
+semantic-release's `tagFormat`, Maven's `tagNameFormat`, npm's
+`git-tag-version`.
+
+**Breaking in name only, and safe to break**: the feature never worked (below),
+so no repository has it set in anger.
+
+`tag:` is a namespace for every kind of tag this tool writes, not just uploads.
+**`tag.release` lands in this same version**, so `release finish` no longer
+hardcodes `v{version}` — a repository whose releases are named `rel/1.2.3`, or
+carry a platform prefix, stops needing a fork. It is enabled by default, where
+an upload record is opt-in, because a release tag is what this tool has always
+written.
+
+Singular `tag:` rather than `tags:` because the config's own convention is
+plural-holds-a-list (`locales`, `screenshots`), singular-holds-a-map (`play`,
+`appstore`).
+
+
+**`provenance.record-uploads` recorded nothing unless `--commit` was typed by
+hand** — which is every caller using `--manifest`, the flag whose whole purpose
+is supplying that commit. So the feature has never worked for its intended
+caller since it shipped in 3.3.0.
+
+The guard asked `ArgResults.options.contains('commit')`, which holds what was
+*provided or defaulted*. What it meant to ask — and what its own doc comment
+says — is whether the subcommand *declares* the option, so that a parser without
+it is skipped rather than interrogated. Those two disagree exactly when an
+option exists and was not given, which is the case that matters.
+
+Nothing failed. The guard returns early and silently, so `record-uploads: true`
+read as working for as long as nobody went looking for the tag. Found by turning
+it on in a real repository, uploading, and finding no tag.
+
 ## 3.4.0
 
 **The pre-release becomes a release.** `3.4.0-dev.1` was published so the

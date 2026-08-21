@@ -188,7 +188,7 @@ void runManifestWrite(ArgResults args) {
     );
   }
 
-  final path = writeBuildManifest(
+  final written = writeBuildManifest(
     artifactPath: need('artifact'),
     outPath: args.option('out'),
     versionName: need('version-name', parent?.versionName),
@@ -228,16 +228,21 @@ void runManifestWrite(ArgResults args) {
   // worth nothing three weeks later, when the question is which commit and
   // which bytes it described — so say them, and say them from the file that
   // was written rather than from the arguments that were passed.
-  final written = BuildManifest.read(path);
+  final manifest = BuildManifest.read(written.path);
   stdout.writeln(
-    'wrote $path\n'
-    '  ${written.platform}'
-    '${written.format == null ? '' : '/${written.format}'}'
-    '${written.flavor == null ? '' : ' ${written.flavor}'}'
-    '  ${written.versionName} (${written.buildNumber})'
-    '${written.buildNumberAssigned ? '' : ' UNASSIGNED'}'
-    '  ${written.gitSha.substring(0, 7)}${written.dirty ? '-dirty' : ''}'
-    '  sha256:${written.sha256Digest.substring(0, 12)}',
+    'wrote ${written.path}\n'
+    '  ${manifest.platform}'
+    '${manifest.format == null ? '' : '/${manifest.format}'}'
+    '${manifest.flavor == null ? '' : ' ${manifest.flavor}'}'
+    '  ${manifest.versionName} (${manifest.buildNumber})'
+    '${manifest.buildNumberAssigned ? '' : ' UNASSIGNED'}'
+    '  ${manifest.gitSha.substring(0, 7)}${manifest.dirty ? '-dirty' : ''}'
+    '  sha256:${manifest.sha256Digest.substring(0, 12)}\n'
+    // Said at write time as well as at upload, which is where it was missing:
+    // a second consumer wired the writer and saw no cross-check line at all,
+    // so "no reader for apk" and "checked and agreed" rendered identically —
+    // the exact thing the sentence exists to prevent, one command over.
+    '    ${written.crossCheck}',
   );
 }
 

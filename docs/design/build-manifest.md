@@ -4,12 +4,12 @@ Status: **built**, 20 August 2026 — `cux_ship manifest write`, and the reader
 takes schema 1 and 2 alike. Parts of it are still unexercised; *Status* at the
 end says which and is the honest account.
 
-This document specifies **the file**. When it is written is
-[build-lifecycle.md](build-lifecycle.md), which proposes splitting the write into
-a `begin` before the build and a `seal` after it — because the four fields this
-document requires a producer to supply are exactly the ones nothing can verify
-in the current ordering. That is specified and unimplemented; this is what
-ships.
+This document specifies **the file**. What is checked against the artifact is
+[build-lifecycle.md](build-lifecycle.md), which is also built: an upload reads
+the build's own `versionCode` / `CFBundleVersion` back out of an `.aab` or
+`.ipa` and refuses a manifest that disagrees. Its first design proposed
+reordering the write instead, on a rule stated backwards; the review that
+dismantled it is kept beside it.
 
 ## What it is for
 
@@ -136,7 +136,7 @@ should carry their askers, or their descendants will be guessed at the same way.
 | `artifact` | sidecar only | Filename, relative to the manifest. Keeps a `dist/` tree movable. |
 | `sha256` | sidecar only | Of the artifact **as it will be uploaded** — after signing, over the container including its card. |
 | `format` | no | `aab`, `apk`, `ipa`, `pkg`, `dmg`, `msix`, `exe`, `snap`, `deb`, `tar.gz`, `zip`. Named `format` rather than schema 1's `variant`, which collides with Gradle's meaning — *variant* there is flavor-plus-buildType, and the repository that motivated this schema has six Gradle flavors, so `flavor: playstore, variant: aab` would be misread by every Android-literate reader. **It does not absorb `variant`** — see the archaeology above. Its asker today is thin: the pre-upload confirmation line a human reads. Optional for that reason, and a consumer that ever branches on it should say so here. |
-| `gitSha` | yes | `^[0-9a-f]{40}$`, validated rather than trusted. |
+| `gitSha` | yes | A full commit id, validated rather than trusted: `^([0-9a-f]{40}\|[0-9a-f]{64})$` — 40 for a sha1 repository, 64 for sha256, which git has supported since 2.29. Abbreviated is refused, because a reader that resolves whatever it is given is exactly what lets a short sha survive to break one that does not. |
 | `dirty` | yes | No default; absent must not read as clean. Defined as a non-empty `git status --porcelain` at the repository root, untracked non-ignored files counting. |
 | `versionName` | yes | Marketing version. |
 | `buildNumber` | yes | JSON integer. |
@@ -350,7 +350,15 @@ So the honest state, field by field:
   this package's own reader. That is the part that ends two hand-rolled
   producers, and it did not need a third repository to be worth having.
 - **Schema 2 reads and writes.** Schema 1 still reads, unchanged.
-- **`derivedFrom` and `packaging` are written but unexercised.** Nothing in
+- **`derivedFrom` and `packaging` have a writer and one consumer's local
+  verification.** `manifest write --derived-from <parent manifest>` landed on
+  21 August 2026: it hoists the parent's build facts and assembles the chain
+  itself, rather than leaving each repackager to implement "[parent] + parent's
+  own derivedFrom" separately. AuthPass verified it on the real tarball → deb →
+  snap chain, including the corrupted-parent refusal. **It has still not run in
+  production** — their `make_deb` fires only on a release-branch push — so the
+  first genuine derived manifest is owed to their next stable release.
+- **Superseded, kept for the argument:** nothing in
   either consuming repository repackages an artifact yet — the tarball → `.deb`
   → `.snap` chain that motivated them is AuthPass's, and their migration has not
   reached it. The fields are specified above and round-trip in tests; they have
