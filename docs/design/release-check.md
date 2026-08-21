@@ -276,6 +276,16 @@ origin is configured. Its answer wins, because it is the record and the local
 clone is a cache of it. This also makes the tool correct the morning after
 somebody else released, which no local-refs design can be.
 
+**Stated against today's checkouts, so the argument does not overclaim.**
+Neither consumer's release build currently has the tagless checkout: Hold the
+Wheel's job sets `fetch-depth: 0`, and How It Went builds releases on a laptop
+with a full clone and no CI at all. The defect above is what the first pass
+would have done to the *default* checkout, not what it would do to these two
+next week. What origin buys today is the staleness case — the laptop the
+morning after somebody else released — plus not having the check's correctness
+hang on one line of one workflow file staying set. §9 weighs the case with
+that discount applied.
+
 Every state, with the exit code it must carry, because §7 makes the exit code the
 only thing a shell caller sees:
 
@@ -356,9 +366,11 @@ that writer's vocabulary, or keep ignoring them because the bare tag already
 carries the version.
 
 **Whether this is worth building at all.** With origin as the oracle it does
-something shell cannot cheaply do — answer correctly in a tagless CI checkout,
-and the morning after somebody else released. Without that it is a nicer parser
-over the same stale cache, and the store-side `versionName` warning gains real
-ground. The first is now the design, so the case is stronger than it was — but
-it is still one check of four, in two repositories, and that is the honest size
-of it.
+something shell cannot cheaply do — answer correctly the morning after somebody
+else released, and in a tagless CI checkout, though §6 records that neither
+consumer's release build actually has one today, so that half of the case
+defends against a future default rather than a present defect. Without origin
+it is a nicer parser over the same stale cache, and the store-side
+`versionName` warning gains real ground. The first is now the design, so the
+case is stronger than it was — but it is still one check of four, in two
+repositories, and that is the honest size of it.
