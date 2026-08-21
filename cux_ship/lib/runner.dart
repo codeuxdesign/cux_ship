@@ -135,33 +135,81 @@ BuildManifest? _manifest(Command<void> command) {
 /// not the moment anything was published *from* this repository. Only when the
 /// subcommand actually carries the options, so a parser that never declared
 /// `--commit` is skipped rather than interrogated.
-void _recordUploadIfAsked(
-  Command<void> command, {
-  required ProjectContext project,
-  required ProjectConfig config,
-  required String store,
-  required String? Function() versionName,
+/// What one invocation would record, or null when it records nothing.
+///
+/// **Split out of [_recordUploadIfAsked] so the decision can be tested without
+/// a store, a network or a git repository.** It could not be before, and the
+/// consequence was not theoretical: reintroducing the `ArgResults.options` bug
+/// this class exists to fix left all 464 tests green, because the suite
+/// asserted that `package:args` distinguishes declared from provided options
+/// rather than that the guard asks the right one. A fix for a silent failure
+/// that no test can see regress is the same silent failure with a patch on it.
+class UploadRecordRequest {
+  const UploadRecordRequest({
+    required this.version,
+    required this.build,
+    required this.commit,
+    required this.checksum,
+    required this.dryRun,
+  });
+
+  final String? version;
+  final String? build;
+  final String? commit;
+  final String? checksum;
+  final bool dryRun;
+}
+
+/// Whether [command] is an invocation that records an upload, and what of.
+///
+/// Three things disqualify a run, and each was learned rather than designed:
+///
+/// - **Not `upload`.** A promote moves a build the store already holds and is
+///   not the moment anything was published from this repository.
+/// - **A subcommand that does not declare `--commit`.** A parser that never
+///   had the option is skipped rather than interrogated.
+/// - **No artifact in the run.** `play upload --metadata` publishes a listing
+///   and hands over no build — documented in `play/cli.dart` as a first-class
+///   case, "listing-only pushes need no artifact". The record's scope is *an
+///   artifact reached the store*, not *the upload command ran*, and conflating
+///   them made a store-listing typo fix demand a commit, a version and a build
+///   number for a build that does not exist. Worse, an operator who supplied
+///   the previous build's numbers to get past that would be told the upload
+///   collided — exit 3, the loudest error here, on a run that uploaded nothing.
+/// Takes the three things the decision actually reads rather than a [Command],
+/// because a `Command`'s `argResults` is populated by `run()` and is null after
+/// a bare `parse()` — so a signature taking one can only be exercised by
+/// actually running a store command, which is why this was never tested.
+UploadRecordRequest? uploadRecordFor({
+  required String commandName,
+  required ArgParser parser,
+  required ArgResults args,
   BuildManifest? manifest,
+  String? Function()? fallbackVersionName,
 }) {
-  final args = command.argResults!;
-  // **`argParser.options` is what was *declared*; `ArgResults.options` is what
+  // **`parser.options` is what was *declared*; `ArgResults.options` is what
   // was *provided or defaulted*.** This asked the second and meant the first,
   // so recording was skipped for every caller that did not type `--commit` —
   // which is every caller using `--manifest`, the flag that exists to supply it.
   // Nothing failed: the guard is the silent kind, and `record-uploads: true`
   // read as working for as long as nobody looked for the tag.
-  if (command.name != 'upload' ||
-      !command.argParser.options.containsKey('commit')) {
-    return;
+  if (commandName != 'upload' || !parser.options.containsKey('commit')) {
+    return null;
   }
   String? opt(String name) =>
-      command.argParser.options.containsKey(name) ? args.option(name) : null;
+      parser.options.containsKey(name) ? args.option(name) : null;
 
-  final result = recordUploadIfConfigured(
-    project.root,
-    config.uploadTag,
-    store: store,
-    version: opt('version-name') ?? manifest?.versionName ?? versionName(),
+  // `--aab` on Play, `--artifact` on the App Store, or whatever the manifest
+  // named. Absent from all three means nothing was handed over.
+  if ((opt('aab') ?? opt('artifact') ?? manifest?.artifactPath) == null) {
+    return null;
+  }
+
+  return UploadRecordRequest(
+    version:
+        opt('version-name') ??
+        manifest?.versionName ??
+        fallbackVersionName?.call(),
     build: opt('build-number') ?? manifest?.buildNumber,
     // The manifest's gitSha is the whole reason --commit exists, so a caller
     // that passed one has already answered the question the flag asks.
@@ -170,6 +218,37 @@ void _recordUploadIfAsked(
     // A dry run must not write a record: it deletes its store edit rather than
     // committing, so nothing is published and there is nothing to record.
     dryRun: args.options.contains('dry-run') && args.flag('dry-run'),
+  );
+}
+
+void _recordUploadIfAsked(
+  Command<void> command, {
+  required ProjectContext project,
+  required ProjectConfig config,
+  required String store,
+  required String? Function() versionName,
+  BuildManifest? manifest,
+}) {
+  final request = uploadRecordFor(
+    commandName: command.name,
+    parser: command.argParser,
+    args: command.argResults!,
+    manifest: manifest,
+    fallbackVersionName: versionName,
+  );
+  if (request == null) {
+    return;
+  }
+
+  final result = recordUploadIfConfigured(
+    project.root,
+    config.uploadTag,
+    store: store,
+    version: request.version,
+    build: request.build,
+    commit: request.commit,
+    checksum: request.checksum,
+    dryRun: request.dryRun,
   );
   if (result != null) {
     stderr.writeln(switch (result) {
@@ -595,10 +674,14 @@ class _FinishCommand extends Command<void> {
       stderr.writeln('cux_ship release finish: ${e.message}');
       exitCode = 1;
     } on ProjectException catch (e) {
-      // From --app-dir. Reported here rather than as a UsageException because
-      // by this point the repository root has been read and the message names
-      // real paths, which is more use than the usage text would be.
-      stderr.writeln('cux_ship release finish: --app-dir: ${e.message}');
+      // **No longer only `--app-dir`, so it no longer says so.** This block
+      // also covers `ProjectConfig.read` and the tag naming above, and while
+      // the prefix was still hardcoded a malformed `.cux-ship.yaml` was
+      // reported against a flag the operator had very likely not passed —
+      // sending them to look at the one thing that was not wrong. Reported
+      // here rather than as a UsageException because by this point the
+      // repository root has been read and the message names real paths.
+      stderr.writeln('cux_ship release finish: ${e.message}');
       exitCode = 1;
     }
   }

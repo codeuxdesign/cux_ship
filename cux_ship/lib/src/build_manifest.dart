@@ -501,8 +501,40 @@ String describeCrossCheck({
     if (baked.buildNumber != null) 'build number',
     if (baked.versionName != null) 'version name',
   ];
+  final trusted = <String>[
+    if (baked.buildNumber == null) 'build number',
+    if (baked.versionName == null) 'version name',
+  ];
+
+  // **For the two Android formats, carrying neither value is not a fact about
+  // the artifact — it is a reader that lost its place.** A valid `.apk` or
+  // `.aab` always declares `versionCode` and `versionName`; the manifest is
+  // where Android reads them from. So "found neither" means the walk desynced
+  // — an attribute count misread, a pool index out of range — and reporting
+  // that as trust is the same collapse this function exists to prevent, one
+  // level in. It is a refusal here and taken on trust nowhere.
+  if (checked.isEmpty && (format == 'apk' || format == 'aab')) {
+    throw ReleaseException(
+      'read ${baked.source} out of this artifact and found neither a build '
+      'number nor a version name in it. Every valid $format declares both, so '
+      'this is a manifest this tool could not parse rather than one that says '
+      'nothing — and the values it carries have not been checked.',
+    );
+  }
   if (checked.isEmpty) {
     return 'cross-check: ${baked.source} carried neither value — taken on trust';
   }
-  return 'cross-check: ${checked.join(' and ')} agree with ${baked.source}';
+
+  final agreement =
+      'cross-check: ${checked.join(' and ')} '
+      '${checked.length == 1 ? 'agrees' : 'agree'} with ${baked.source}';
+  // **The unchecked half has to be named.** A partial check used to print only
+  // what it had compared, so "checked one of two" and "checked both" differed
+  // by which nouns appeared in the sentence — legible only to someone who
+  // already knew there were two. Everywhere else here, what was *not* verified
+  // is said out loud; this was the one place it was not.
+  if (trusted.isEmpty) {
+    return agreement;
+  }
+  return '$agreement, ${trusted.join(' and ')} taken on trust';
 }

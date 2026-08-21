@@ -352,6 +352,21 @@ class ProjectConfig {
         '$enabled',
       );
     }
+    // **A format with no `enabled` is a contradiction, not a preference.**
+    // Recording is opt-in because it pushes a tag and therefore needs push
+    // credentials — so a block naming a shape and never saying to write it got
+    // its format validated and then wrote nothing. That is precisely "a
+    // setting that appears to be applied and is not", which the header of this
+    // file calls the one failure this tool refuses everywhere else. Defaulting
+    // it *on* would be worse: it would hand a repository a credential
+    // requirement it never asked for.
+    if (block.containsKey('format') && enabled == null) {
+      throw ProjectException(
+        '$cuxShipConfigFile: tag.upload.format is set and tag.upload.enabled '
+        'is not, so the format would be checked and then never used. Add '
+        '"enabled: true" to record uploads, or remove the format.',
+      );
+    }
     final format = _string(block, 'format') ?? defaultUploadTagFormat;
     if (!format.contains('{build}')) {
       // Without the build number two uploads of one version collide, and the

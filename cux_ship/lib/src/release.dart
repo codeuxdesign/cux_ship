@@ -273,13 +273,6 @@ class FinishOptions {
 /// touching anything first, so "you are on the wrong branch" costs nothing.
 List<String> finishRelease(Git git, FinishOptions options) {
   final log = <String>[];
-  // Was `v` plus the version, hardcoded. `tag.release.format` is the source
-  // now, defaulting to the same thing — so a repository whose releases are
-  // named `rel/1.2.3`, or carry a platform prefix, stops needing a fork.
-  final tagName = options.releaseTag.nameFor(
-    version: options.version.toString(),
-    build: options.buildNumber,
-  );
   final pubspecPath = pubspecPathFor(options.appDir);
 
   // Checked up front, both of them, because a half-finished release is worse
@@ -323,6 +316,17 @@ List<String> finishRelease(Git git, FinishOptions options) {
     );
   }
   if (wantsTag) {
+    // **Named here rather than at the top of the function, because naming can
+    // refuse.** A format carrying `{build}` is legal, and a run with no build
+    // number cannot fill it — so computing the name up front made `--no-tag`
+    // and `tag.release.enabled: false` fail over a tag they had just decided
+    // not to write. Was `v` plus the version, hardcoded; `tag.release.format`
+    // is the source now, so a repository whose releases are named `rel/1.2.3`
+    // stops needing a fork.
+    final tagName = options.releaseTag.nameFor(
+      version: options.version.toString(),
+      build: options.buildNumber,
+    );
     // **Existence is not the question — where it points is.** Leaving an
     // existing tag alone is right when it already names this release, and is
     // how a half-finished run is safely repeated. It is wrong when the name

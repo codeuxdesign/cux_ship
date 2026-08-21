@@ -2,6 +2,67 @@
 
 ## 3.4.1
 
+### The fixes below have tests that die when the fix is removed
+
+Found by review, and the most useful thing in it: reintroducing the guard bug
+left all 464 tests green, and deleting the collision's `catch` clause did too.
+Both fixes were as untested as the defects they fixed, and both defects were the
+silent kind — so the suite would have watched either walk back in.
+
+The guard's decision is now `uploadRecordFor`, split out of the store plumbing
+so it can be exercised without a store, a network or a repository; three of its
+cases go red against the old guard. The collision drives the real binary in a
+git repository holding a colliding record, and observes exit 3 — reachable
+because the record is written before the store is contacted.
+
+Neither test could have been written against the old shape. That is the finding
+rather than an aside: a decision buried in a method that needs credentials to
+reach is a decision nothing will check.
+
+### A listing-only push no longer demands a build it did not upload
+
+`play upload --metadata` publishes a store listing and hands over no artifact —
+documented, with a worked example. Repairing the recording guard made every such
+run refuse under `tag.upload.enabled`, before any store contact, because the
+record's scope was "the upload command ran" rather than "an artifact reached the
+store". An operator supplying the previous build's numbers to get past it would
+have been told the upload *collided* — exit 3, on a run that uploaded nothing.
+
+Recording now requires an artifact in the run: `--aab`, `--artifact`, or one the
+manifest names.
+
+### An Android manifest carrying neither value is a refusal, not trust
+
+Every valid `.apk` and `.aab` declares `versionCode` and `versionName`. Finding
+neither means the walk lost its place, and reporting that as "taken on trust"
+was the same collapse the cross-check exists to prevent, one level in. Related:
+`_pooled` treated *any* out-of-range string index like the format's explicit
+`0xFFFFFFFF` sentinel, so a desynced read produced a plausible partial answer
+instead of an error.
+
+A partial check now names the half it did not check — `build number agrees with
+…, version name taken on trust`. It used to print only what it had compared, so
+"checked one of two" and "checked both" differed by which nouns appeared.
+
+### Smaller, all from the same review
+
+- `readApkFacts` and `readAabFacts` caught only `FormatException`, but the
+  walk's reads are `ByteData` and raise `RangeError` — so a manifest declaring
+  sizes past its own end escaped as an unhandled Dart error with forty frames,
+  out of a binary whose exit codes are a documented interface.
+- `unzip` exit **1** means "warnings, and the extraction succeeded". It was
+  refused as "not the archive its extension claims", which is both wrong and
+  wrongly worded. Exit 11 ("no matching files") is now its own sentence too.
+- `release finish` computed the tag name before consulting `--no-tag`, so a run
+  that had just decided not to tag could refuse over the name it would not
+  write. The `ProjectException` handler also still prefixed every message with
+  `--app-dir:`, which this version made a lie — config and tag-naming errors
+  now reach it too, and were being blamed on a flag the operator had not passed.
+- `tag.upload.format` without `tag.upload.enabled` validated the format and then
+  wrote nothing. It is refused as the contradiction it is; defaulting it *on*
+  would hand a repository a push-credential requirement it never asked for.
+
+
 ### The cross-check runs at `manifest write` too, not only at upload
 
 The design said *both* chokepoints and only the upload one was built, so

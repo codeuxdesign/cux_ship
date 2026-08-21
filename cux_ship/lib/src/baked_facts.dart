@@ -253,8 +253,24 @@ Map<String, String> readBinaryXmlAttributes(
 }
 
 /// [index] as a pool string, or null for the `-1` that means absent.
-String? _pooled(List<String> pool, int index) =>
-    index == 0xFFFFFFFF || index >= pool.length ? null : pool[index];
+///
+/// **Only `0xFFFFFFFF` means absent.** Any other index past the end of the pool
+/// means the walk is reading something that is not an index — a desync — and
+/// treating that as "this attribute has no value" turns a lost parser into a
+/// quiet, plausible answer: the attribute vanishes, the cross-check reports on
+/// whatever else it found, and nothing says the read went wrong.
+String? _pooled(List<String> pool, int index) {
+  if (index == 0xFFFFFFFF) {
+    return null;
+  }
+  if (index >= pool.length) {
+    throw FormatException(
+      'string index $index is past the end of a ${pool.length}-entry pool, so '
+      'this is not being read as the structure it is',
+    );
+  }
+  return pool[index];
+}
 
 /// The strings of a RES_STRING_POOL chunk at [offset].
 List<String> _stringPool(
@@ -329,9 +345,11 @@ Uint8List _zipEntry(String archive, String entry) {
     ], stdoutEncoding: null);
   } on ProcessException catch (e) {
     throw ReleaseException(
-      'cannot cross-check $name: unzip is not available (${e.message}). '
-      'Install it, or the version baked into every artifact goes unchecked on '
-      'this machine.',
+      'cannot cross-check $name: unzip is not available (${e.message}), and '
+      'without it the values baked into an archive cannot be read at all. '
+      'Install it — there is deliberately no flag to proceed on trust, '
+      'because a host that silently stopped checking is the state this exists '
+      'to make impossible.',
     );
   }
   // 11 is unzip's "no matching files", which is a different fact about the
@@ -344,7 +362,11 @@ Uint8List _zipEntry(String archive, String entry) {
       'it is not the format it is named as',
     );
   }
-  if (result.exitCode != 0) {
+  // **1 is "warnings, and the extraction succeeded"**, which Info-ZIP returns
+  // for things like an offset-shifted archive — the bytes on stdout are the
+  // entry's, and refusing them would call a readable artifact unreadable.
+  // Distinguished from 2/3/9, which mean it could not be read.
+  if (result.exitCode != 0 && result.exitCode != 1) {
     throw ReleaseException(
       'cannot cross-check $name: $entry could not be extracted from it '
       '(unzip exit ${result.exitCode}). Either the file is not the archive its '
@@ -379,6 +401,14 @@ BakedFacts readAabFacts(String path) {
       'could not read $entry out of ${path.split('/').last}: ${e.message}. '
       'The bundle may be from an AGP whose manifest layout this does not know.',
     );
+  } on RangeError catch (e) {
+    // As in [readApkFacts]: a length read out of the file's own bytes can send
+    // a read past the end, and that arrives as RangeError rather than as a
+    // FormatException.
+    throw ReleaseException(
+      'could not read $entry out of ${path.split('/').last}: it declares '
+      'sizes that run past its own bytes ($e)',
+    );
   }
   // Neither value present is "the manifest carried neither", not "no reader" —
   // see [readBakedFacts] for why those must not render alike.
@@ -412,7 +442,11 @@ BakedFacts readIpaFacts(String path) {
   // 11 is "no matching files" — the archive listed fine and holds no such
   // entry, which the `entry == null` branch below says precisely. Anything
   // else means it could not be read as an archive at all.
-  if (listing.exitCode != 0 && listing.exitCode != 11) {
+  // 1 is warnings with the listing still produced; 11 is "no matching files",
+  // which the `entry == null` branch below reports precisely.
+  if (listing.exitCode != 0 &&
+      listing.exitCode != 1 &&
+      listing.exitCode != 11) {
     throw ReleaseException(
       'cannot cross-check $name: it could not be read as an archive '
       '(unzip exit ${listing.exitCode})',
@@ -469,6 +503,18 @@ BakedFacts readApkFacts(String path) {
   } on FormatException catch (e) {
     throw ReleaseException(
       'could not read $entry out of ${path.split('/').last}: ${e.message}',
+    );
+  } on RangeError catch (e) {
+    // **`ByteData` throws `RangeError`, not `FormatException`.** Catching only
+    // the latter meant a manifest whose declared header size ran past the
+    // chunk escaped as an unhandled Dart error — forty frames where the
+    // product is one sentence, out of a binary whose exit codes are a
+    // documented interface. Every read in the walk is a candidate, so the
+    // catch belongs here rather than at each one.
+    throw ReleaseException(
+      'could not read $entry out of ${path.split('/').last}: it declares '
+      'sizes that run past its own bytes ($e). The file is truncated, or it '
+      'is not the binary XML it is positioned as.',
     );
   }
   // Both values absent is a different answer from a reader that failed: the

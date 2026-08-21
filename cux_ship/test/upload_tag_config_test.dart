@@ -125,6 +125,40 @@ void main() {
       expect(r.nameFor(version: '1.2.3'), 'rel/1.2.3');
     });
 
+    test('a format with no enabled is refused as the contradiction it is', () {
+      // The block was validated and then ignored: the {build} check ran, the
+      // default stayed false, and no tag was ever written. A setting that
+      // appears to be applied and is not is the one failure this file's own
+      // header says the config refuses everywhere else.
+      _config('tag:\n  upload:\n    format: uploaded/v{version}+{build}\n');
+      expect(
+        () => ProjectConfig.read(_root.path),
+        throwsA(
+          isA<ProjectException>().having(
+            (e) => e.toString(),
+            'message',
+            contains('never used'),
+          ),
+        ),
+      );
+    });
+
+    test('a format alongside enabled: false is still refused', () {
+      // Turning it off explicitly and naming a shape is the same contradiction
+      // — and the more likely typo, because it reads as configured.
+      _config(
+        'tag:\n  upload:\n    enabled: false\n'
+        '    format: uploaded/v{version}+{build}\n',
+      );
+      expect(
+        ProjectConfig.read(_root.path).uploadTag.enabled,
+        isFalse,
+        reason:
+            'explicit is not a contradiction: the operator said both things '
+            'on purpose and the format is inert by their instruction',
+      );
+    });
+
     test('a release format wanting {build} without one is refused', () {
       // `{build}` is legal in a release format and parse-time cannot judge it:
       // whether a build number exists is a property of the invocation. So the

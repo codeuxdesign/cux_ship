@@ -13,6 +13,7 @@
 // process could not observe `exit()` at all.
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:cux_ship/src/provenance.dart' show uploadCollisionExit;
 import 'package:test/test.dart';
 
@@ -37,7 +38,91 @@ ProcessResult _run(List<String> args, {String? cwd}) => Process.runSync(
   workingDirectory: cwd,
 );
 
+/// A repository with a build recorded as uploaded, from a *different* commit.
+///
+/// The collision is raised before any store is contacted, so this reaches
+/// exit 3 with no credentials and no network.
+String _repoWithCollidingRecord() {
+  final root = Directory.systemTemp.createTempSync('cux_ship_collide');
+  String git(List<String> args) =>
+      (Process.runSync('git', args, workingDirectory: root.path).stdout
+              as String)
+          .trim();
+
+  Process.runSync('git', [
+    'init',
+    '-q',
+    '-b',
+    'main',
+  ], workingDirectory: root.path);
+  git(['config', 'user.email', 'test@example.invalid']);
+  git(['config', 'user.name', 'Test']);
+  File('${root.path}/pubspec.yaml').writeAsStringSync(
+    'name: app\nversion: 1.1.0+67\nenvironment:\n  sdk: ^3.6.0\n',
+  );
+  File(
+    '${root.path}/.cux-ship.yaml',
+  ).writeAsStringSync('tag:\n  upload:\n    enabled: true\n');
+  git(['add', '-A']);
+  git(['commit', '-qm', 'first']);
+  final first = git(['rev-parse', 'HEAD']);
+  // The record exists, naming the *first* commit...
+  git(['tag', '-a', 'uploaded/v1.1.0+67', '-m', 'recorded', first]);
+  // ...and then the tree moves, so the artifact about to be uploaded under the
+  // same version and build was built somewhere else.
+  File('${root.path}/second.txt').writeAsStringSync('moved on');
+  git(['add', '-A']);
+  git(['commit', '-qm', 'second']);
+
+  final dist = Directory('${root.path}/dist')..createSync();
+  final artifact = File('${dist.path}/app.aab')..writeAsStringSync('pretend');
+  // A real digest: `verify()` checks it before anything reaches the record, so
+  // a placeholder would fail this for the wrong reason and the case would
+  // "pass" against a bug it never got near. No `format`, so the cross-check
+  // has no reader to run — the artifact is not a real bundle.
+  final digest = sha256.convert(artifact.readAsBytesSync()).toString();
+  File('${dist.path}/manifest.json').writeAsStringSync(
+    '{"schema":2,"platform":"android","versionName":"1.1.0",'
+    '"buildNumber":67,"gitSha":"${git(['rev-parse', 'HEAD'])}",'
+    '"dirty":false,"artifact":"app.aab","sha256":"$digest"}',
+  );
+  return root.path;
+}
+
 void main() {
+  test('a collision exits with the collision code, not 1', () {
+    // **The half that was missing.** `uploadCollisionExit` existed, and the
+    // catch that maps it existed — but nothing drove a real collision through
+    // the binary, so deleting the `on UploadCollisionException` clause left
+    // every test green while a release wrapper went back to seeing 1 and
+    // swallowing it. The record is written before the store is contacted,
+    // which is what makes this reachable with no credentials.
+    final root = _repoWithCollidingRecord();
+    try {
+      final result = _run([
+        'play',
+        'upload',
+        '--manifest',
+        'dist/manifest.json',
+        '--track',
+        'internal',
+      ], cwd: root);
+
+      expect(
+        result.exitCode,
+        uploadCollisionExit,
+        reason: '${result.stdout}${result.stderr}',
+      );
+      expect('${result.stderr}', contains('already names a different commit'));
+      expect(
+        '${result.stderr}${result.stdout}',
+        isNot(contains('Unhandled exception')),
+      );
+    } finally {
+      Directory(root).deleteSync(recursive: true);
+    }
+  });
+
   test('the collision code is not one another failure already uses', () {
     // The whole point is that a wrapper can tell this apart from the failure it
     // tolerates. Sharing a number with anything else gives that back.
