@@ -38,6 +38,7 @@ import 'dart:math';
 
 import 'project.dart';
 import 'secrets.dart';
+import 'signals.dart';
 
 /// How long the keychain stays unlocked, in seconds.
 ///
@@ -1690,10 +1691,11 @@ Future<int> runKeychainExec({
       // below does the cleanup. A Dart process gets none of this for free, where
       // a shell script's foreground child is signalled by the terminal and its
       // trap fires on the way out.
-      final signals = [
-        ProcessSignal.sigint.watch().listen(process.kill),
-        ProcessSignal.sigterm.watch().listen(process.kill),
-      ];
+      // Only the signals this platform can deliver — see signals.dart. This
+      // path is macOS-only in practice, so it is not where the Windows failure
+      // showed up; it shares the helper because two copies of a rule are how
+      // one of them stops being true.
+      final signals = watchTerminating(process.kill);
       try {
         // Awaited before the `finally` below runs: deleting the keychain out
         // from under a live codesign produces errors that explain nothing.

@@ -31,6 +31,7 @@ import 'package:yaml/yaml.dart';
 import 'deps.dart' show exeName;
 import 'placed.dart';
 import 'project.dart';
+import 'signals.dart';
 
 part 'secrets_add.dart';
 part 'secrets_only.dart';
@@ -1538,10 +1539,7 @@ Future<int> runSecretsExec({
     // private key in the temp directory. The signal is forwarded rather than
     // acted on here, so the child gets to exit and the ordinary path below
     // does the removal.
-    final signals = [
-      ProcessSignal.sigint.watch().listen((s) => process.kill(s)),
-      ProcessSignal.sigterm.watch().listen((s) => process.kill(s)),
-    ];
+    final signals = [...watchTerminating(process.kill)];
     try {
       return await process.exitCode;
     } finally {
