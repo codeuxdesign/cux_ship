@@ -769,6 +769,37 @@ tokens:
       expect(spawnFor([]), isEmpty);
     });
 
+    test('the WSL shim is told apart from a real bash, by location', () {
+      // **Layer four, and the one that looked like the script failing.** A
+      // GitHub Windows runner has two `bash.exe`: Git Bash, and the WSL
+      // launcher in System32. With no distribution installed the launcher
+      // exits 255 saying so — which reads as the child failing rather than as
+      // bash never having run. GitHub's own `shell: bash` steps name Git Bash
+      // absolutely, so the parent rode the right one and the child, spawned as
+      // bare `bash`, got the shim.
+      //
+      // Location is what actually separates them, so location is what is
+      // tested — and this half is pure, which is why it is assertable here.
+      expect(isWslShim(r'C:\Windows\System32\bash.exe'), isTrue);
+      expect(isWslShim(r'c:\windows\system32\BASH.EXE'), isTrue);
+      expect(isWslShim('C:/Windows/System32/bash.exe'), isTrue);
+      expect(isWslShim(r'C:\Windows\SysWOW64\bash.exe'), isTrue);
+
+      expect(isWslShim(r'C:\Program Files\Git\bin\bash.exe'), isFalse);
+      expect(
+        isWslShim(r'C:\Users\me\scoop\apps\git\current\bin\bash.exe'),
+        isFalse,
+      );
+      expect(isWslShim('/bin/bash'), isFalse);
+    });
+
+    test('a path merely mentioning system32 is not the shim', () {
+      // The check is a path-segment question, not a substring one — a project
+      // checked out somewhere unfortunate must not lose its bash.
+      expect(isWslShim(r'C:\src\system32-notes\bin\bash.exe'), isFalse);
+      expect(isWslShim(r'D:\windows-builds\bin\bash.exe'), isFalse);
+    });
+
     test('a non-script child is never wrapped, on any platform', () {
       // The rule is scoped to shell scripts on purpose: wrapping anything else
       // in bash would change how every ordinary binary is launched, on the one

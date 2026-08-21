@@ -597,8 +597,61 @@ List<String> spawnFor(List<String> command) {
   if (!child.endsWith('.sh') && !child.endsWith('.bash')) {
     return command;
   }
-  return ['bash', ...command];
+  return [windowsBash(), ...command];
 }
+
+/// Whether [path] is Windows' WSL launcher rather than a real bash.
+///
+/// **There are two `bash.exe` on a GitHub Windows runner and PATH order picks
+/// the wrong one.** `C:\Windows\System32\bash.exe` is the Windows Subsystem for
+/// Linux shim; on a runner with no distribution installed it exits 255 saying
+/// so, which reads as the script failing rather than as bash never having run.
+/// GitHub's own `shell: bash` steps sidestep this by naming Git Bash
+/// absolutely — so the parent script rides the right one while a child spawned
+/// as bare `bash` gets the shim, and nothing in the environment says so.
+///
+/// Identified by location because that is what actually distinguishes them: the
+/// shim lives in the Windows system directories and a real bash never does.
+bool isWslShim(String path) {
+  final normalized = path.toLowerCase().replaceAll('/', r'\');
+  return normalized.contains(r'\windows\system32\') ||
+      normalized.contains(r'\windows\syswow64\');
+}
+
+/// The Git Bash to run a shell script with, on Windows.
+///
+/// Well-known location first and `where` second, deliberately in that order: it
+/// makes the choice independent of PATH ordering, which is the thing that broke
+/// here. `where` then covers installs that are not in the default place —
+/// scoop, chocolatey, a custom prefix — filtered against [isWslShim].
+String windowsBash() {
+  const wellKnown = r'C:\Program Files\Git\bin\bash.exe';
+  if (File(wellKnown).existsSync()) {
+    return wellKnown;
+  }
+  final ProcessResult found;
+  try {
+    found = Process.runSync('where', ['bash']);
+  } on ProcessException {
+    throw ProjectException(_noBash);
+  }
+  final real = const LineSplitter()
+      .convert('${found.stdout}')
+      .map((l) => l.trim())
+      .where((l) => l.isNotEmpty && !isWslShim(l))
+      .firstOrNull;
+  if (real == null) {
+    throw ProjectException(_noBash);
+  }
+  return real;
+}
+
+const _noBash =
+    'no Git Bash found to run a shell script with. Looked for '
+    r'"C:\Program Files\Git\bin\bash.exe" and for a `where bash` result '
+    'outside the Windows system directories — the bash.exe in System32 is '
+    'the WSL launcher, which cannot run a repository script. Install Git for '
+    'Windows, or put a real bash on PATH ahead of it.';
 
 /// Locates the `sops` binary: the project's `.bin` first, then PATH.
 ///
