@@ -125,6 +125,43 @@ void main() {
       expect(r.nameFor(version: '1.2.3'), 'rel/1.2.3');
     });
 
+    test('a release format wanting {build} without one is refused', () {
+      // `{build}` is legal in a release format and parse-time cannot judge it:
+      // whether a build number exists is a property of the invocation. So the
+      // refusal has to be here, at the point the name is made — and it has to
+      // be a refusal rather than an empty substitution, which would write and
+      // push `v1.2.3+`, a tag wrong by one trailing character in a name nobody
+      // reads twice.
+      _config('tag:\n  release:\n    format: v{version}+{build}\n');
+      final r = ProjectConfig.read(_root.path).releaseTag;
+
+      expect(
+        () => r.nameFor(version: '1.2.3'),
+        throwsA(
+          isA<ProjectException>().having(
+            (e) => e.toString(),
+            'message',
+            allOf(contains('needs a build number'), contains('v1.2.3+')),
+          ),
+        ),
+      );
+      expect(
+        r.nameFor(version: '1.2.3', build: '56'),
+        'v1.2.3+56',
+        reason: 'the same format is fine once the number is there',
+      );
+    });
+
+    test('an empty build number is refused like a missing one', () {
+      // A shell that resolved its build number to "" passes an empty string
+      // rather than null, and would otherwise land in exactly the same place.
+      const r = TagKindConfig(enabled: true, format: 'v{version}+{build}');
+      expect(
+        () => r.nameFor(version: '1.2.3', build: ''),
+        throwsA(isA<ProjectException>()),
+      );
+    });
+
     test('tag.release.enabled false is read', () {
       _config('tag:\n  release:\n    enabled: false\n');
       expect(ProjectConfig.read(_root.path).releaseTag.enabled, isFalse);

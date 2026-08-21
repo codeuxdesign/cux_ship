@@ -33,9 +33,16 @@ late Directory _dist;
 
 const _sha = 'd9c394bd9c394bd9c394bd9c394bd9c394bd9c39';
 
+/// A stand-in artifact in a format with no baked-facts reader.
+///
+/// `pkg`, not `aab`: the writer cross-checks any format it has a reader for,
+/// and a text file named `.aab` is refused as the not-an-archive it is. These
+/// cases are about the CLI's arguments rather than about cross-checking, and
+/// they passed as `.aab` only while a reader that could not open its input
+/// reported "no reader for aab" — the defect, not a fixture convenience.
 String _artifact() {
-  final path = '${_dist.path}/how-it-went-1.1.0-53.aab';
-  File(path).writeAsStringSync('a signed bundle, pretend');
+  final path = '${_dist.path}/how-it-went-1.1.0-53.pkg';
+  File(path).writeAsStringSync('a signed installer, pretend');
   return path;
 }
 
@@ -50,9 +57,9 @@ List<String> _args(String artifact) => [
   '--artifact',
   artifact,
   '--platform',
-  'android',
+  'macos',
   '--format',
-  'aab',
+  'pkg',
   '--version-name',
   '1.1.0',
   '--build-number',
@@ -81,9 +88,14 @@ void main() {
     // answer "which commit, which bytes" from a build log alone.
     final output = '${result.stdout}';
     expect(output, contains('1.1.0 (53)'));
-    expect(output, contains('android/aab'));
+    expect(output, contains('macos/pkg'));
     expect(output, contains(_sha.substring(0, 7)));
     expect(output, contains('sha256:'));
+    // The cross-check sentence is part of "effective, not intended": a format
+    // with no reader has to say that it was trusted, in the same breath and on
+    // every write, or trusted and checked read the same in a build log.
+    expect(output, contains('cross-check:'));
+    expect(output, contains('no reader for pkg'));
   });
 
   test('what it writes is what this package reads back', () {

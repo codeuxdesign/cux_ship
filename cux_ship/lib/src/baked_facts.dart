@@ -315,26 +315,55 @@ List<String> _stringPool(
 /// package's existing precedent — `deps.dart` shells to `tar` for the same
 /// reason. An `.aab` is tens of megabytes and only one small member is wanted,
 /// so nothing is expanded.
-Uint8List? _zipEntry(String archive, String entry) {
-  final result = Process.runSync('unzip', [
-    '-p',
-    archive,
-    entry,
-  ], stdoutEncoding: null);
+/// Throws rather than returning null on failure, because the caller's null
+/// means "this format has no reader" — a much quieter thing than "the reader
+/// for this format could not read this file".
+Uint8List _zipEntry(String archive, String entry) {
+  final name = archive.split('/').last;
+  final ProcessResult result;
+  try {
+    result = Process.runSync('unzip', [
+      '-p',
+      archive,
+      entry,
+    ], stdoutEncoding: null);
+  } on ProcessException catch (e) {
+    throw ReleaseException(
+      'cannot cross-check $name: unzip is not available (${e.message}). '
+      'Install it, or the version baked into every artifact goes unchecked on '
+      'this machine.',
+    );
+  }
+  // 11 is unzip's "no matching files", which is a different fact about the
+  // file from "this is not a zip" and deserves a different sentence — the
+  // whole point of this function throwing rather than returning null is that
+  // an operator can tell these apart from a build log.
+  if (result.exitCode == 11) {
+    throw ReleaseException(
+      'cannot cross-check $name: it is an archive but carries no $entry, so '
+      'it is not the format it is named as',
+    );
+  }
   if (result.exitCode != 0) {
-    return null;
+    throw ReleaseException(
+      'cannot cross-check $name: $entry could not be extracted from it '
+      '(unzip exit ${result.exitCode}). Either the file is not the archive its '
+      'extension claims, or it is truncated.',
+    );
   }
   final bytes = result.stdout as List<int>;
-  return bytes.isEmpty ? null : Uint8List.fromList(bytes);
+  if (bytes.isEmpty) {
+    throw ReleaseException(
+      'cannot cross-check $name: $entry is present but empty',
+    );
+  }
+  return Uint8List.fromList(bytes);
 }
 
 /// What an `.aab` says about itself, or null if it cannot be read.
-BakedFacts? readAabFacts(String path) {
+BakedFacts readAabFacts(String path) {
   const entry = 'base/manifest/AndroidManifest.xml';
   final proto = _zipEntry(path, entry);
-  if (proto == null) {
-    return null;
-  }
   final Map<String, String> attributes;
   try {
     attributes = readProtoManifestAttributes(proto, {
@@ -351,9 +380,8 @@ BakedFacts? readAabFacts(String path) {
       'The bundle may be from an AGP whose manifest layout this does not know.',
     );
   }
-  if (attributes.isEmpty) {
-    return null;
-  }
+  // Neither value present is "the manifest carried neither", not "no reader" —
+  // see [readBakedFacts] for why those must not render alike.
   return BakedFacts(
     versionName: attributes['versionName'],
     buildNumber: attributes['versionCode'],
@@ -361,20 +389,34 @@ BakedFacts? readAabFacts(String path) {
   );
 }
 
-/// What an `.ipa` says about itself, or null if it cannot be read.
+/// What an `.ipa` says about itself.
 ///
 /// The `Info.plist` inside is a *binary* plist, so this asks `plutil` rather
 /// than parsing one. Apple artifacts are only ever produced on macOS, which is
 /// the only place `plutil` exists and the only place an `.ipa` is built — so
 /// the tool is present wherever the question can be asked.
-BakedFacts? readIpaFacts(String path) {
-  final listing = Process.runSync('unzip', [
-    '-Z1',
-    path,
-    'Payload/*.app/Info.plist',
-  ]);
-  if (listing.exitCode != 0) {
-    return null;
+BakedFacts readIpaFacts(String path) {
+  final name = path.split('/').last;
+  final ProcessResult listing;
+  try {
+    listing = Process.runSync('unzip', [
+      '-Z1',
+      path,
+      'Payload/*.app/Info.plist',
+    ]);
+  } on ProcessException catch (e) {
+    throw ReleaseException(
+      'cannot cross-check $name: unzip is not available (${e.message})',
+    );
+  }
+  // 11 is "no matching files" — the archive listed fine and holds no such
+  // entry, which the `entry == null` branch below says precisely. Anything
+  // else means it could not be read as an archive at all.
+  if (listing.exitCode != 0 && listing.exitCode != 11) {
+    throw ReleaseException(
+      'cannot cross-check $name: it could not be read as an archive '
+      '(unzip exit ${listing.exitCode})',
+    );
   }
   final entry = const LineSplitter()
       .convert(listing.stdout as String)
@@ -382,12 +424,12 @@ BakedFacts? readIpaFacts(String path) {
       .where((l) => l.endsWith('.app/Info.plist'))
       .firstOrNull;
   if (entry == null) {
-    return null;
+    throw ReleaseException(
+      'cannot cross-check $name: it carries no Payload/*.app/Info.plist, so '
+      'it is not an ipa whatever it is named',
+    );
   }
   final plist = _zipEntry(path, entry);
-  if (plist == null) {
-    return null;
-  }
 
   // `plutil` can read stdin with `-`, but Process.runSync cannot write to a
   // child, so the member is spilled to a temp file and removed however this
@@ -407,32 +449,20 @@ BakedFacts? readIpaFacts(String path) {
       return result.exitCode == 0 ? (result.stdout as String).trim() : null;
     }
 
+    // Neither key present is "the plist carried neither" — reported as taken on
+    // trust, naming this plist — and not "no reader for ipa".
     final version = extract('CFBundleShortVersionString');
     final build = extract('CFBundleVersion');
-    if (version == null && build == null) {
-      return null;
-    }
     return BakedFacts(versionName: version, buildNumber: build, source: entry);
   } finally {
     temporary.deleteSync(recursive: true);
   }
 }
 
-/// What [artifactPath] says about itself, or null when its format has no
-/// reader.
-///
-/// Null is a real answer and the caller must report it: `pkg`, `dmg`, `msix`,
-/// `snap`, `deb` and plain archives are trusted, and saying so is what keeps
-/// "not checked" from reading like "checked and fine". `apk` is deliberately
-/// absent — its manifest is binary XML, a different encoding from the `.aab`'s
-/// protobuf, and no producer here ships one yet.
-/// What an `.apk` says about itself, or null if it cannot be read.
-BakedFacts? readApkFacts(String path) {
+/// What an `.apk` says about itself.
+BakedFacts readApkFacts(String path) {
   const entry = 'AndroidManifest.xml';
   final axml = _zipEntry(path, entry);
-  if (axml == null) {
-    return null;
-  }
   final Map<String, String> attributes;
   try {
     attributes = readBinaryXmlAttributes(axml, {'versionCode', 'versionName'});
@@ -441,9 +471,11 @@ BakedFacts? readApkFacts(String path) {
       'could not read $entry out of ${path.split('/').last}: ${e.message}',
     );
   }
-  if (attributes.isEmpty) {
-    return null;
-  }
+  // Both values absent is a different answer from a reader that failed: the
+  // manifest parsed and simply carried neither, which `describeCrossCheck`
+  // renders as "carried neither value — taken on trust". Returning null here
+  // would file it as "no reader for apk" instead, which is a claim about the
+  // *format* rather than about this file.
   return BakedFacts(
     versionName: attributes['versionName'],
     buildNumber: attributes['versionCode'],
@@ -451,6 +483,20 @@ BakedFacts? readApkFacts(String path) {
   );
 }
 
+/// What [artifactPath] says about itself, or null when its format has no
+/// reader.
+///
+/// **Null means "no reader exists for this format", and nothing else.** It is a
+/// real answer the caller must report: `pkg`, `dmg`, `msix`, `snap`, `deb` and
+/// plain archives are trusted, and saying so is what keeps "not checked" from
+/// reading like "checked and fine".
+///
+/// A reader that *exists and fails* throws instead, and that distinction is the
+/// point. Both rendered as null once — so a missing `unzip`, a truncated
+/// download or an entry that is not where it should be all printed "no reader
+/// for apk" on a build host where the reader was present and working
+/// everywhere else. The cross-check would then be skipped for the rest of that
+/// machine's life, in a sentence that reads like ordinary operation.
 BakedFacts? readBakedFacts(String artifactPath, String? format) =>
     switch (format) {
       'aab' => readAabFacts(artifactPath),

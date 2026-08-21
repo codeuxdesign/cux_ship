@@ -56,6 +56,41 @@ The trap it sets, and the reason the type has to decide where to look: reading
 the `data` word for a *string* attribute yields a pool index printed as a
 number — a plausible wrong answer rather than a failure.
 
+Both string-pool encodings are now covered by tests. The UTF-16 branch had
+none — not from the fixtures here, which build UTF-8 pools, and not from the
+three production `.apk`s it was validated against, which are all UTF-8 — so it
+shipped on the strength of the spec alone. The two layouts share nothing: UTF-8
+stores two lengths per string and UTF-16 stores one, counted in different units,
+with a different continuation bit. Non-ASCII cases are in both, because ASCII is
+exactly where the encodings agree and an ASCII fixture cannot tell a working
+reader from a lucky one.
+
+### A reader that cannot read is no longer reported as no reader at all
+
+`readApkFacts`, `readAabFacts` and `readIpaFacts` returned null when the archive
+could not be opened — and null upstream means *this format has no reader*. So a
+missing `unzip`, a truncated download, or a file that is not the archive its
+extension claims all printed `cross-check: no reader for aab — build number and
+version name taken on trust`: a sentence that reads like ordinary operation,
+while the check silently stopped running for the rest of that machine's life.
+
+Failing to read now raises, naming the cause. Null is reserved for the formats
+that genuinely have no reader (`pkg`, `dmg`, `msix`, `snap`, `deb`, archives),
+which stay trusted-out-loud as before. Reported by Copilot, which raised it as a
+suppressed comment on the review.
+
+Separately, an archive that opens but carries neither value now reports *that* —
+`carried neither value — taken on trust`, naming the file it read — rather than
+falling back to the no-reader sentence.
+
+### A tag format that wants a build number and has none is refused
+
+`tag.release.format` is checked for `{version}` at parse time, but `{build}` is
+legal there and whether a build number exists is a property of the invocation
+rather than the file. The substitution filled it with an empty string, so
+`v{version}+{build}` under `release finish` wrote and pushed `v1.2.3+` — wrong
+by one trailing character, in a name nobody reads twice.
+
 
 ### `provenance:` is now `tag:` — **breaking, and free**
 
@@ -78,12 +113,12 @@ semantic-release's `tagFormat`, Maven's `tagNameFormat`, npm's
 **Breaking in name only, and safe to break**: the feature never worked (below),
 so no repository has it set in anger.
 
-`tag:` is a namespace for every kind of tag this tool writes, not just uploads —
-`release finish` hardcodes `v{version}` today and configuring it is planned.
-**`tag.release` is therefore named and refused**: writing it says "not
-implemented yet" rather than parsing and doing nothing, because a release tagged
-the default way while the config says otherwise is the silent shape this whole
-feature exists to escape.
+`tag:` is a namespace for every kind of tag this tool writes, not just uploads.
+**`tag.release` lands in this same version**, so `release finish` no longer
+hardcodes `v{version}` — a repository whose releases are named `rel/1.2.3`, or
+carry a platform prefix, stops needing a fork. It is enabled by default, where
+an upload record is opt-in, because a release tag is what this tool has always
+written.
 
 Singular `tag:` rather than `tags:` because the config's own convention is
 plural-holds-a-list (`locales`, `screenshots`), singular-holds-a-map (`play`,

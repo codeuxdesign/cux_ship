@@ -295,10 +295,22 @@ tag:
     enabled: true
 ```
 
-`tag:` is the namespace for every kind of tag this tool writes. `upload` is the
-only one implemented; `release` is named and **refused** rather than ignored, so
-configuring it today says "not implemented yet" instead of silently leaving a
-release tagged the default way.
+`tag:` is the namespace for every kind of tag this tool writes, and both kinds
+are implemented. `upload` records one upload of one build and is **off** unless
+asked for; `release` names the tag `release finish` writes and is **on**,
+defaulting to the `v{version}` this tool has always written.
+
+```yaml
+tag:
+  release:
+    format: rel/{version}    # default: v{version}
+```
+
+A release format must contain `{version}`, or every release would collide under
+one name. `{build}` is allowed but not required — and if a format asks for one
+when the command has none, the tag is **refused** rather than written with the
+gap left empty, because `v1.2.3+` is wrong by a single trailing character in a
+name nobody reads twice.
 
 With it on, `play upload` and `appstore upload` write an annotated tag naming
 the commit the artifact was **built from**, before contacting the store:

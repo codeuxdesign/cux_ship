@@ -144,24 +144,44 @@ void main() {
       (v >> 24) & 0xff,
     ];
 
-    /// A UTF-8 string pool: offsets, then each string with its two lengths.
-    List<int> pool(List<String> items) {
+    /// A string pool, in either of the two encodings the format allows.
+    ///
+    /// **Both exist in the wild and they share no layout.** A UTF-8 pool
+    /// stores two lengths per string — the UTF-16 code-unit count and then the
+    /// byte count — while a UTF-16 pool stores one, counted in 16-bit units,
+    /// with a wider continuation bit (`0x8000` on a uint16, against `0x80` on a
+    /// byte). Which one an apk carries is decided by the toolchain that built
+    /// it, so a reader that handles one handles roughly half of Android.
+    List<int> pool(List<String> items, {bool asUtf8 = true}) {
       final blob = <int>[];
       final offsets = <int>[];
       for (final item in items) {
         offsets.add(blob.length);
-        final bytes = utf8.encode(item);
-        blob
-          ..add(bytes.length)
-          ..add(bytes.length)
-          ..addAll(bytes)
-          ..add(0);
+        if (asUtf8) {
+          final bytes = utf8.encode(item);
+          blob
+            // The UTF-16 length first, then the byte length. They differ for
+            // anything outside ASCII, which is what makes reading the first one
+            // a bug that ASCII fixtures cannot see.
+            ..add(item.length)
+            ..add(bytes.length)
+            ..addAll(bytes)
+            ..add(0);
+        } else {
+          final units = item.codeUnits;
+          blob
+            ..addAll(u16(units.length))
+            ..addAll(units.expand(u16))
+            ..addAll(u16(0));
+        }
       }
       const header = 28;
       final body = [
-        ...u32(items.length), ...u32(0),
-        ...u32(0x0100), // UTF-8
-        ...u32(header + items.length * 4), ...u32(0),
+        ...u32(items.length),
+        ...u32(0),
+        ...u32(asUtf8 ? 0x0100 : 0),
+        ...u32(header + items.length * 4),
+        ...u32(0),
         for (final o in offsets) ...u32(o),
         ...blob,
       ];
@@ -195,8 +215,12 @@ void main() {
       ];
     }
 
-    Uint8List axml(List<String> strings, List<(int, int, int, int)> attrs) {
-      final p = pool(strings);
+    Uint8List axml(
+      List<String> strings,
+      List<(int, int, int, int)> attrs, {
+      bool asUtf8 = true,
+    }) {
+      final p = pool(strings, asUtf8: asUtf8);
       final e = element(attrs);
       final body = [...p, ...e];
       return Uint8List.fromList([
@@ -223,6 +247,52 @@ void main() {
 
       expect(readBinaryXmlAttributes(bytes, {'versionName'}), {
         'versionName': '1.1.0',
+      });
+    });
+
+    test('a UTF-16 string pool reads, and it is a separate layout', () {
+      // Nothing exercised this branch — not these fixtures, which build UTF-8
+      // pools, and not the three production apks it was validated against,
+      // which are all UTF-8. It was shipped on the strength of the spec alone.
+      final bytes = axml(
+        ['versionName', _ns, '1.1.0'],
+        [(1, 0, 0x03, 2)],
+        asUtf8: false,
+      );
+
+      expect(readBinaryXmlAttributes(bytes, {'versionName'}), {
+        'versionName': '1.1.0',
+      });
+    });
+
+    test('a UTF-16 pool carries non-ASCII whole', () {
+      // ASCII is where the two encodings agree, so an ASCII-only fixture
+      // cannot tell a working UTF-16 reader from one that is reading bytes and
+      // getting away with it. The `é` is two bytes in UTF-8 and one unit in
+      // UTF-16; the emoji is a surrogate pair, so it also proves the unit
+      // count is units rather than characters.
+      final bytes = axml(
+        ['versionName', _ns, '1.1.0-café 🚲'],
+        [(1, 0, 0x03, 2)],
+        asUtf8: false,
+      );
+
+      expect(readBinaryXmlAttributes(bytes, {'versionName'}), {
+        'versionName': '1.1.0-café 🚲',
+      });
+    });
+
+    test('a UTF-8 pool carries non-ASCII whole', () {
+      // The mirror of the above, and the reason the writer emits *two* lengths:
+      // taking the first (the UTF-16 count) as a byte count truncates exactly
+      // one byte per non-ASCII character, which an ASCII fixture never sees.
+      final bytes = axml(
+        ['versionName', _ns, '1.1.0-café 🚲'],
+        [(1, 0, 0x03, 2)],
+      );
+
+      expect(readBinaryXmlAttributes(bytes, {'versionName'}), {
+        'versionName': '1.1.0-café 🚲',
       });
     });
 
