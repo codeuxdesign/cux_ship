@@ -2,7 +2,9 @@
 
 Status: **decisions pending**. The analysis is settled; three decisions below
 need a yes or a no, and two questions raised at 23 locales are undecided.
-Nothing here is implemented.
+Nothing here is implemented, with one amendment: the TestFlight-group section
+is built as of 25 August 2026 — see the note that closes it, including where
+the implementation diverged from the sketch.
 
 The research behind it examined Play, App Store Connect, Microsoft Partner
 Center, Amazon, Samsung, Huawei, snapcraft, F-Droid, debian and fosshub, plus
@@ -196,9 +198,36 @@ promotions to a group do not, on both stores and for the same reason.
 `--beta-group` at upload stays, as the convenience it is. What changes is that
 it stops being the *only* way to reach a group.
 
-Not modelled, and worth naming: external TestFlight groups require **Beta App
-Review**, which is separate from App Store review and appears nowhere in this
-tooling.
+Not modelled when this was written, and named as the gap it was: external
+TestFlight groups require **Beta App Review**, which is separate from App
+Store review and appeared nowhere in this tooling.
+
+**Built, 25 August 2026, diverging from the sketch above in one place worth
+recording.** This section proposed carrying groups on `promote`, whose build
+resolution defaults to the newest Apple holds. What shipped is a sibling verb
+instead — `appstore beta-release --build-number N --beta-group <name>` — with
+`--build-number` **required**, on the `wait` precedent: a release to testers
+is a release of a *specific* build, and "newest" would release somebody
+else's upload. That default is right for promote's own job, where the newest
+processed build is the one being shipped, and wrong for reaching back to a
+build uploaded days ago — which is exactly the case this section called "not
+expressible today". It is expressible now; that sentence is retired, just not
+spelled `promote`.
+
+The rest landed as sketched, and further. `promote --beta-group` and `upload
+--beta-group` both carry the full external flow — one implementation behind
+all three spellings — and Beta App Review is modelled rather than named as a
+gap: the flow forks on the group's kind, internal staying assignment-alone
+and byte-identical to what it always was, external reasserting the Beta App
+Description (`store/appstore/listings/<locale>/beta_description.txt`,
+present-means-owned like every listing field, absent leaving the console's
+text alone), submitting for beta review idempotently, and reading back
+`externalBuildState`. And "promotions to a group do not publish" stopped
+being a sentence this document asserted about code that disagreed: promote
+had been resolving the inferred listing tree and publishing it before the
+group block ran, then printing "the listing is untouched" — the inference is
+now suppressed under `--beta-group`, which is what makes the rule above true
+in code rather than only here.
 
 **Two things stay on upload, deliberately.** `--listing-only` remains the
 explicit escape for *fix the live page now* — an act rather than a cadence. On
