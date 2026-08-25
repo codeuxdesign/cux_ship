@@ -1,5 +1,23 @@
 # Changelog
 
+## 3.5.1
+
+**Manifests written by 3.5.0 name producer "cux_ship 3.4.2"** — the release
+bumped the pubspec and not the hand-maintained `cuxShipVersion`, and nothing
+on the publish path runs the test that exists for exactly that drift. The
+constant is right again, and the release script now refuses to publish when
+the two disagree, beside its version-set-by-HEAD guard: the same class of
+silence, where nothing fails and a wrong provenance string reads exactly like
+a right one.
+
+**The committed-notes guard now looks through a symlink, not at it.** `git
+status -- <link>` answers for the link object, which stays clean while the
+file it points at is mid-edit — and the link's parent decided which repository
+was asked, the wrong one for a link into another checkout. A repository
+keeping `CHANGELOG.md` as a root symlink shipped an uncommitted section
+straight past the guard that way. Refusals through a link now name the
+resolved file, the one to commit.
+
 ## 3.5.0
 
 ### External TestFlight groups are a release, not an assignment
