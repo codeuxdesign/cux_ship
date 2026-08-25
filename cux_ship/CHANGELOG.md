@@ -1,5 +1,54 @@
 # Changelog
 
+## 3.5.0
+
+### External TestFlight groups are a release, not an assignment
+
+`--beta-group` used to add the build to the group and stop — complete for an
+internal group, which receives an assigned build within minutes, and silently
+hollow for an external one, which receives *nothing* until the build passes
+Apple's beta review. The flag now reads the group's kind and carries an
+external release the rest of the way: the Beta App Description is reasserted,
+the build is submitted for beta review — idempotently, a retried job finds the
+first run's submission instead of a 409 — and the closing line reads back the
+`externalBuildState` Apple now reports, because what a run sent is not
+evidence of what arrived. The internal path is unchanged to the byte.
+
+**`appstore beta-release` is promote's TestFlight sibling.** For the build
+somebody else's job uploaded — CI, usually — where `upload` has nothing left
+to carry:
+
+```bash
+cux_ship appstore beta-release --build-number 52 --beta-group "External Testers"
+```
+
+`--build-number` is required, not defaulted to the newest, for the reason
+`wait` requires it: a release to testers is a release of a *specific* build,
+and "newest" would release somebody else's upload.
+
+**The description is owned like every listing field.**
+`store/appstore/listings/<locale>/beta_description.txt` present means
+reasserted on every release; absent means App Store Connect owns it and
+nothing here touches it; only *no description anywhere* — no file, no locale
+in the console holding one — is refused, before anything has been written.
+`--beta-description <file>` overrides the tree; it is a file option and never
+a bare string, so what testers read went through a working tree rather than
+shell history, and like the changelog it must be committed.
+
+New refusals, each closing a silent failure: `--beta-description` against an
+internal group, or without any `--beta-group`, publishes nothing and says so
+instead; `--skip-waiting` with `--beta-group` asked for incompatible things
+and used to skip the group step while still printing done; a prior beta
+review submission Apple `REJECTED` is a hard failure rather than a green
+no-op, because a build is submitted at most once and re-running does not
+resubmit.
+
+**`promote --beta-group` no longer publishes the listing.** The option's help
+always said a group promotion creates no App Store version and publishes no
+listing; the inferred `store/appstore` tree made both claims false. The
+inference is suppressed under `--beta-group`, and an explicit `--metadata`
+alongside is refused as the contradiction it is.
+
 ## 3.4.2
 
 ### Windows
