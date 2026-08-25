@@ -84,6 +84,25 @@ if [ "$SET_BY" != "$HEAD_SHA" ]; then
     sets the version — see docs/RELEASING.md."
 fi
 
+# **The baked version has to say what the pubspec says.** cux_ship carries its
+# version as a hand-maintained constant — a manifest records which producer
+# wrote it — and the test that keeps the two honest lives in a suite this
+# script never runs, because `dart pub publish` runs no tests either. So the
+# drift the test exists for shipped anyway: 3.5.0 was published with the
+# constant still saying 3.4.2, and every manifest it writes names a producer
+# version that never released. Checked here, where the publish is; skipped for
+# a member that bakes no version.
+BAKED_FILE="$PACKAGE/lib/src/version.dart"
+if [ -f "$BAKED_FILE" ]; then
+  BAKED=$(sed -n "s/^const [A-Za-z]*[Vv]ersion = '\([^']*\)';\$/\1/p" "$BAKED_FILE")
+  [ -n "$BAKED" ] || die "$BAKED_FILE exists but no version constant was found in it —
+    the check would pass by default, which is the failure it exists to close"
+  [ "$BAKED" = "$VERSION" ] ||
+    die "pubspec.yaml says $VERSION but $BAKED_FILE bakes $BAKED.
+    Set the constant in the release commit; a manifest naming the wrong
+    producer reads exactly like one naming the right one."
+fi
+
 echo "==> $PACKAGE $VERSION at $(git rev-parse --short HEAD), tag $TAG"
 
 if $DRY_RUN; then
