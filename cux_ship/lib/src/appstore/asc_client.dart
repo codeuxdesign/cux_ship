@@ -108,6 +108,23 @@ class AscApiException implements Exception {
           'here can\n'
           '  read what you declared or warn you that it is incomplete.';
     }
+
+    // "Beta App Description is missing." — a 422 from submitting a build for
+    // beta review while TestFlight's Test Information holds no description.
+    // The backstop behind the preflight in beta_release.dart, which checks
+    // before writing anything: this can still arrive when the console was
+    // blanked between that read and the submission, and the error alone does
+    // not say the field lives outside the listing tree entirely.
+    if (text.contains('beta app description is missing')) {
+      return 'An external TestFlight group needs a Beta App Description, and '
+          'there is none.\n'
+          '  Either make it the repository\'s:\n'
+          '    store/appstore/listings/<locale>/beta_description.txt\n'
+          '  which every release then reasserts, or fill it in once by hand in '
+          'App Store\n'
+          '  Connect > TestFlight > Test Information, which this tool leaves '
+          'alone.';
+    }
     return null;
   }
 }

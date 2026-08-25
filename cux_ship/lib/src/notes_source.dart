@@ -32,7 +32,14 @@ import 'release.dart' show Git, ReleaseException;
 /// A path outside a git repository is not an error: a `dist/` published from a
 /// tarball on a machine with no checkout has no working tree to be dirty, and
 /// the notes there came from wherever the tarball did.
-void requireCommittedNotes(Iterable<String> paths) {
+///
+/// [what] names the text in the refusal — the rule covers everything published
+/// to testers or shoppers, not only release notes, and the beta app
+/// description takes the same guard for the same reason.
+void requireCommittedNotes(
+  Iterable<String> paths, {
+  String what = 'release notes',
+}) {
   for (final path in paths) {
     final file = File(path);
     if (!file.existsSync()) {
@@ -51,7 +58,7 @@ void requireCommittedNotes(Iterable<String> paths) {
     ], allowFailure: true);
     if (status.isNotEmpty) {
       throw ReleaseException(
-        'release notes would come from uncommitted changes in $path.\n'
+        '$what would come from uncommitted changes in $path.\n'
         'Commit it first. What reaches a store should have been reviewed, and '
         'a working tree is the one copy nobody else has seen.',
       );

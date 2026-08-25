@@ -135,6 +135,7 @@ void main() {
   const helpOnly = [
     ['appstore', 'upload'],
     ['appstore', 'promote'],
+    ['appstore', 'beta-release'],
     ['appstore', 'wait'],
     ['play', 'upload'],
     ['play', 'promote'],
@@ -153,6 +154,35 @@ void main() {
       expect(result.exitCode, 0, reason: output);
     });
   }
+
+  // Offline refusals, testable end to end because they fire before any
+  // credential is loaded. The build number is required by decision rather
+  // than accident — the 2.2.0 `wait` note made the same call — so the
+  // refusal, not just the option, is what gets pinned.
+  test('beta-release without its arguments refuses, naming each', () {
+    // The bundle id is passed because the fixture has no Xcode project to
+    // infer one from, and that refusal would otherwise arrive first.
+    final noGroup = _run(repo, [
+      'appstore',
+      'beta-release',
+      '--bundle-id',
+      'design.codeux.consumer',
+    ]);
+    expect('${noGroup.stderr}', contains('--beta-group'));
+    expect(noGroup.exitCode, isNot(0));
+
+    final noBuild = _run(repo, [
+      'appstore',
+      'beta-release',
+      '--bundle-id',
+      'design.codeux.consumer',
+      '--beta-group',
+      'friends',
+    ]);
+    expect('${noBuild.stderr}', contains('--build-number'));
+    expect('${noBuild.stderr}', contains('deliberately not defaulted'));
+    expect(noBuild.exitCode, isNot(0));
+  });
 
   test('a repository with no config still starts every command', () {
     // The other half of the 3.2.0 shape: the crash fired only when a block was
