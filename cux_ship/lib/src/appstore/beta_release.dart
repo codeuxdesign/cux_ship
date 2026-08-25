@@ -21,6 +21,14 @@
 // quietly drifts from. And absent means left alone — a description somebody
 // maintains in App Store Connect is respected, and only *no description
 // anywhere* is refused, before anything has been written.
+//
+// [resolveBetaDescription] runs in the caller's offline validation, not here.
+// On `upload --beta-group` the artifact, the processing wait and the notes
+// all land before this flow is reached, so a typo'd path or a dirty file
+// discovered here would refuse *after* the build went up. Everything about
+// the description that can fail without a network has to fail while nothing
+// has happened yet; only "is there one anywhere" needs App Store Connect, and
+// that check is this file's.
 import 'dart:io';
 
 import '../notes_source.dart';
@@ -47,10 +55,16 @@ String betaDescriptionFileIn(String metadataPath, String locale) => [
 /// The path is kept because the dirty-file guard and every refusal want to
 /// name it, not merely quote it.
 class BetaDescription {
-  BetaDescription(this.path, this.text);
+  BetaDescription(this.path, this.text, {required this.explicit});
 
   final String path;
   final String text;
+
+  /// Whether `--beta-description` named the file, as opposed to the tree
+  /// supplying it. An explicit flag against a group that cannot use it is
+  /// refused; a tree file is standing state rather than an instruction, so
+  /// its presence stays harmless where it does not apply.
+  final bool explicit;
 }
 
 /// The description this release would publish, or null when the repository
@@ -61,6 +75,10 @@ class BetaDescription {
 /// rather than shell history — then the listing tree's per-locale file. A
 /// flag pointing at nothing is refused; an absent tree file is the ordinary
 /// way of leaving the console-maintained description alone.
+///
+/// Everything here is offline — existence, the dirty guard, emptiness, the
+/// limit — which is what lets the caller run it before a credential is even
+/// loaded, and long before an artifact goes up.
 BetaDescription? resolveBetaDescription({
   String? optionPath,
   String? metadataPath,
@@ -98,11 +116,15 @@ BetaDescription? resolveBetaDescription({
       '$betaAppDescriptionLimit',
     );
   }
-  return BetaDescription(path, text);
+  return BetaDescription(path, text, explicit: optionPath != null);
 }
 
 /// Gives [build] to [groupName], and for an external group carries it through
 /// beta review to the point where only Apple's answer is outstanding.
+///
+/// [description] comes from [resolveBetaDescription], already run in the
+/// caller's offline validation. [metadataPath] is only for naming the file a
+/// refusal would have somebody create.
 ///
 /// Returns true when the group was internal — where assignment alone *is* the
 /// release, nothing further happens, and the caller keeps whatever closing
@@ -113,38 +135,59 @@ Future<bool> releaseToBetaGroup(
   Map<String, dynamic> build,
   String groupName, {
   required String locale,
-  String? descriptionPath,
+  BetaDescription? description,
   String? metadataPath,
 }) async {
   final group = await store.findBetaGroup(app, groupName);
 
   if (isInternalBetaGroup(group)) {
+    // The explicit flag is refused rather than ignored: a flag that prints a
+    // warning and then does nothing is advisory output people learn to skim,
+    // and honouring it here would publish a description no internal release
+    // uses. Only the *flag* — a tree file is standing state, and the internal
+    // path has to stay byte-identical to what it always did.
+    if (description != null && description.explicit) {
+      throw ReleaseException(
+        '"$groupName" is an internal group, which needs no beta review and '
+        'publishes no description — drop --beta-description, or release to '
+        'an external group.',
+      );
+    }
     await store.addToBetaGroup(group, build);
     return true;
   }
 
-  // External, so everything that can refuse does it now, before the first
-  // write — App Store Connect has no edit transaction to discard, and a
-  // refusal after the group assignment would leave a half-made release.
-  final description = resolveBetaDescription(
-    optionPath: descriptionPath,
-    metadataPath: metadataPath,
-    locale: locale,
+  // Said out loud because the two paths do very different amounts of work,
+  // and which one ran should be readable from the run itself.
+  stdout.writeln(
+    '    "$groupName" is an external group — carrying on through beta review',
   );
-  // Read once, whatever happens next: the preflight needs it when the
-  // repository supplies nothing, the dedupe needs it when it does.
-  final localization = await store.betaAppLocalization(app, locale);
-  final current =
-      ((localization?['attributes'] as Map<String, dynamic>?)?['description']
-              as String?)
+
+  // Every localization, read once: the preflight below wants to know whether
+  // a description exists *anywhere* — a localized app may keep its only one
+  // on its primary locale, and refusing over the wrong --locale would be
+  // spurious — while the dedupe and the write stay scoped to [locale].
+  final localizations = await store.betaAppLocalizations(app);
+  Map<String, dynamic>? localization;
+  for (final candidate in localizations) {
+    if ((candidate['attributes'] as Map<String, dynamic>?)?['locale'] ==
+        locale) {
+      localization = candidate;
+    }
+  }
+  String descriptionOf(Map<String, dynamic> l) =>
+      ((l['attributes'] as Map<String, dynamic>?)?['description'] as String?)
           ?.trim() ??
       '';
-  if (description == null && current.isEmpty) {
+  final current = localization == null ? '' : descriptionOf(localization);
+
+  if (description == null &&
+      !localizations.any((l) => descriptionOf(l).isNotEmpty)) {
     throw ReleaseException(
       'an external group needs a Beta App Description, and there is none '
-      'anywhere — not in the repository, not in App Store Connect. Apple '
-      'refuses the beta review submission without one, so nothing has been '
-      'written.\n'
+      'anywhere — not in the repository, and no locale in App Store Connect '
+      'holds one. Apple refuses the beta review submission without one, so '
+      'nothing has been written.\n'
       'Either create '
       '${betaDescriptionFileIn(metadataPath ?? 'store/appstore', locale)} — '
       'owned and reasserted by every release from then on — or fill it in '

@@ -66,6 +66,7 @@ import '../asc_platforms.dart';
 import '../listing_requirements.dart';
 import '../notes_source.dart';
 import '../reachable.dart';
+import '../release.dart' show ReleaseException;
 import 'app_store.dart';
 import 'asc_client.dart';
 import 'beta_release.dart';
@@ -280,10 +281,11 @@ ArgParser buildAscParser(AscCommand cmd) {
           'no-metadata',
           negatable: false,
           help:
-              'Upload the build and nothing else, leaving the store listing '
-              'untouched. For a TestFlight build, which is not a version '
-              'submission and needs no listing — and which is otherwise '
-              'refused whenever the App Store version is locked by review.',
+              'Leave the store listing untouched: upload the build, and any '
+              '--beta-group release, and nothing else. For a TestFlight '
+              'build, which is not a version submission and needs no listing '
+              '— and which is otherwise refused whenever the App Store '
+              'version is locked by review.',
         )
         ..addFlag(
           'skip-waiting',
@@ -603,8 +605,29 @@ Future<void> runAsc(
   if (noMetadata && opt('metadata') != null) {
     fail('--metadata and --no-metadata ask for opposite things');
   }
+  final betaGroup = opt('beta-group');
+  // A promotion to a group publishes no listing — which is `--beta-group`'s
+  // own help text, and until here it was false: promote resolved the inferred
+  // store/appstore tree and the listing publish ran before the group block
+  // was reached, so `promote --beta-group X` published the whole listing,
+  // could create an App Store version, and then printed "the listing is
+  // untouched". Suppressing the inference is what makes the help text true;
+  // an *explicit* `--metadata` alongside is a contradiction and is refused
+  // rather than quietly dropped. The same shape as the version-name
+  // exemption below. The beta description still resolves through
+  // [listingTree] — test information, not listing.
+  if (cmd == AscCommand.promote &&
+      betaGroup != null &&
+      opt('metadata') != null) {
+    fail(
+      '--metadata and --beta-group ask for opposite things on promote: a '
+      'promotion to a group publishes no listing',
+    );
+  }
   final metadataPath =
-      (cmd == AscCommand.upload || cmd == AscCommand.promote) && !noMetadata
+      (cmd == AscCommand.upload || cmd == AscCommand.promote) &&
+          !noMetadata &&
+          !(cmd == AscCommand.promote && betaGroup != null)
       ? (opt('metadata') ?? defaults.metadata)
       : null;
   // The tree the beta app description lives in — deliberately not the gated
@@ -616,7 +639,6 @@ Future<void> runAsc(
   final promote = cmd == AscCommand.promote;
   final reads = cmd.isRead;
 
-  final betaGroup = opt('beta-group');
   if (cmd == AscCommand.betaRelease) {
     if (betaGroup == null) {
       fail(
@@ -635,6 +657,15 @@ Future<void> runAsc(
     }
     if (int.tryParse(number) == null) {
       fail('--build-number must be an integer, got "$number"');
+    }
+    // `wait 2132` reads naturally because that command declares its build
+    // number positional; this one does not, so a stray positional here is
+    // most likely a build number the run would then silently not use.
+    if (args.rest.isNotEmpty) {
+      fail(
+        'unexpected argument "${args.rest.first}" — beta-release takes '
+        '--build-number and --beta-group as options',
+      );
     }
   }
 
@@ -691,6 +722,43 @@ Future<void> runAsc(
         'release notes are ${literalNotes.length} characters; the App Store '
         'allows $appStoreReleaseNotesLimit',
       );
+    }
+  }
+
+  // The beta app description, resolved offline exactly like the notes above —
+  // and the placement is load-bearing on `upload --beta-group`: the artifact,
+  // the processing wait and the notes all land before the group step, so a
+  // typo'd path, a dirty file or an over-limit one discovered there would
+  // refuse *after* the build went up. Here it refuses before a credential is
+  // even loaded; only "is there a description anywhere" needs the network and
+  // stays in the flow.
+  final betaDescriptionPath = opt('beta-description');
+  if (betaDescriptionPath != null && betaGroup == null) {
+    fail(
+      '--beta-description without --beta-group publishes nothing — name the '
+      'group the description is for',
+    );
+  }
+  // Incompatible rather than quietly reordered: the group step needs the
+  // processed build, which is exactly the wait --skip-waiting declines. The
+  // old behaviour was worse than either — the group was silently skipped and
+  // the run still printed done.
+  if (betaGroup != null && cmd == AscCommand.upload && flag('skip-waiting')) {
+    fail(
+      '--skip-waiting and --beta-group ask for incompatible things: a build '
+      'cannot reach a group until Apple finishes processing it',
+    );
+  }
+  BetaDescription? betaDescription;
+  if (betaGroup != null) {
+    try {
+      betaDescription = resolveBetaDescription(
+        optionPath: betaDescriptionPath,
+        metadataPath: listingTree,
+        locale: locale,
+      );
+    } on ReleaseException catch (e) {
+      fail(e.message);
     }
   }
 
@@ -938,9 +1006,9 @@ Future<void> runAsc(
 
     // The TestFlight sibling of promote: submits a build TestFlight already
     // holds to a beta group, builds and uploads nothing. It exists for the
-    // build somebody else's job uploaded — `upload` refuses to carry a
-    // duplicate, so without this the group assignment and the beta review had
-    // no command to arrive by.
+    // build somebody else's job uploaded, where `upload` has nothing left to
+    // carry — without this the group assignment and the beta review had no
+    // command to arrive by.
     if (cmd == AscCommand.betaRelease) {
       final build = await store.findBuild(app, buildNumber!);
       if (build == null) {
@@ -950,11 +1018,22 @@ Future<void> runAsc(
         );
       }
       final attributes = build['attributes'] as Map<String, dynamic>?;
-      if (attributes?['processingState'] != 'VALID') {
+      final state = attributes?['processingState'] as String? ?? '(unknown)';
+      if (state != 'VALID') {
+        // FAILED and INVALID are terminal, and `appstore wait` *raises* on
+        // them — so the advice forks, or the slow-case advice sends somebody
+        // to a command that can only restate the problem.
+        if (state == 'FAILED' || state == 'INVALID') {
+          fail(
+            'build $buildNumber came back $state from Apple\'s processing and '
+            'will never be releasable. The reason is only in the e-mail Apple '
+            'sends and in the Activity tab; upload a new build.',
+          );
+        }
         fail(
-          'build $buildNumber is ${attributes?['processingState']}, and a '
-          'build cannot reach a group until Apple finishes processing it — '
-          '`appstore wait $buildNumber` blocks until it does.',
+          'build $buildNumber is $state, and a build cannot reach a group '
+          'until Apple finishes processing it — `appstore wait $buildNumber` '
+          'blocks until it does.',
         );
       }
       if (attributes?['expired'] == true) {
@@ -971,7 +1050,7 @@ Future<void> runAsc(
         build,
         betaGroup!,
         locale: locale,
-        descriptionPath: opt('beta-description'),
+        description: betaDescription,
         metadataPath: listingTree,
       );
       if (internal) {
@@ -1047,7 +1126,7 @@ Future<void> runAsc(
             build,
             betaGroup,
             locale: locale,
-            descriptionPath: opt('beta-description'),
+            description: betaDescription,
             metadataPath: listingTree,
           );
         }
@@ -1138,7 +1217,7 @@ Future<void> runAsc(
           chosen,
           betaGroup,
           locale: locale,
-          descriptionPath: opt('beta-description'),
+          description: betaDescription,
           metadataPath: listingTree,
         );
         if (internal) {
@@ -1258,7 +1337,9 @@ String _summarizeAsc({
 }) {
   final rows = <String, String?>{
     'app': '$bundleId ($platform)',
-    'version': versionName,
+    // beta-release names no version: it releases a build, and the inferred
+    // pubspec version would only claim a fact the command never uses.
+    'version': cmd == AscCommand.betaRelease ? null : versionName,
     'build': switch (cmd) {
       AscCommand.promote => buildNumber ?? 'newest processed build Apple holds',
       _ => buildNumber,

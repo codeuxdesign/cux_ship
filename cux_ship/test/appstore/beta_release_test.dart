@@ -33,6 +33,12 @@ class _FakeClient implements AscClient {
   /// The body of each write, keyed by `METHOD path`.
   final bodies = <String, Map<String, dynamic>>{};
 
+  /// The query of each read, keyed by `GET path` — recorded because a filter
+  /// is load-bearing: a submissions read without `filter[build]` is invalid
+  /// at Apple, and a groups read without `filter[name]` answers with *every*
+  /// group, whose first element then decides internal-versus-external.
+  final queries = <String, Map<String, String>?>{};
+
   Iterable<String> get writes => log.where((r) => !r.startsWith('GET '));
 
   @override
@@ -41,6 +47,7 @@ class _FakeClient implements AscClient {
     Map<String, String>? query,
   }) async {
     log.add('GET $path');
+    queries['GET $path'] = query;
     return collections[path] ?? const [];
   }
 
@@ -50,6 +57,7 @@ class _FakeClient implements AscClient {
     Map<String, String>? query,
   }) async {
     log.add('GET $path');
+    queries['GET $path'] = query;
     return resources[path] ?? const {};
   }
 
@@ -150,12 +158,20 @@ Directory _tree(String description) {
 }
 
 /// Runs the flow with stdout captured, returning (output, wasInternal).
+///
+/// Resolution happens first and separately, exactly as the CLI now does it —
+/// offline, before anything has touched the fake network.
 Future<(String, bool)> _release(
   _FakeClient client, {
   required bool dryRun,
   String? metadataPath,
   String? descriptionPath,
 }) async {
+  final description = resolveBetaDescription(
+    optionPath: descriptionPath,
+    metadataPath: metadataPath,
+    locale: 'en-US',
+  );
   final store = AppStore(
     client,
     Writer(client, dryRun: dryRun),
@@ -169,7 +185,7 @@ Future<(String, bool)> _release(
       _build(),
       'friends',
       locale: 'en-US',
-      descriptionPath: descriptionPath,
+      description: description,
       metadataPath: metadataPath,
     ),
     stdout: () => captured,
@@ -192,6 +208,12 @@ void main() {
     // No review, no description — not even a read of them. The internal path
     // has to stay byte-identical to what it always did.
     expect(client.log, ['GET /v1/betaGroups', _assign]);
+    // The filters are load-bearing: without filter[name], Apple answers with
+    // every group and `first` silently decides internal-versus-external.
+    expect(client.queries['GET /v1/betaGroups'], {
+      'filter[app]': 'APP',
+      'filter[name]': 'friends',
+    });
     expect(output, contains('added to beta group "friends"'));
     expect(output, isNot(contains('beta review')));
   });
@@ -283,6 +305,12 @@ void main() {
         },
       },
     );
+    // An unfiltered betaAppReviewSubmissions read is invalid at Apple, so a
+    // lost filter[build] would stay green here while every real run broke.
+    expect(client.queries['GET /v1/betaAppReviewSubmissions'], {
+      'filter[build]': 'B1',
+    });
+    expect(output, contains('is an external group'));
     expect(output, contains('external build state: WAITING_FOR_BETA_REVIEW'));
   });
 
@@ -366,6 +394,115 @@ void main() {
     expect(output, contains('would create: added to beta group "friends"'));
     expect(output, contains('would update: beta app description'));
     expect(output, contains('would create: submitted for beta review'));
+  });
+
+  test('a description on another locale is enough to proceed', () async {
+    // The preflight asks whether a description exists *anywhere*: a localized
+    // app may keep its only one on its primary locale, and refusing that over
+    // a default --locale en-US would be spurious. The write side still stays
+    // scoped to --locale, which here supplies nothing — so nothing is written
+    // beyond the assignment and the submission.
+    final client = _FakeClient(
+      collections: {
+        '/v1/betaGroups': [_group(internal: false)],
+        '/v1/apps/APP/betaAppLocalizations': [
+          {
+            'id': 'L2',
+            'attributes': {'locale': 'de-DE', 'description': 'Nur hier.'},
+          },
+        ],
+        '/v1/betaAppReviewSubmissions': const [],
+      },
+    );
+
+    final (_, internal) = await _release(client, dryRun: false);
+
+    expect(internal, isFalse);
+    expect(client.writes, [_assign, _submit]);
+  });
+
+  test('a repo description with no localization record is created', () async {
+    // The POST branch: an app whose locale has no betaAppLocalizations record
+    // yet gets one created rather than a null-id PATCH. Pinned against the
+    // fake only — the empirically verified call was the PATCH; see the PR.
+    final tree = _tree('First description.\n');
+    final client = _FakeClient(
+      collections: {
+        '/v1/betaGroups': [_group(internal: false)],
+        '/v1/apps/APP/betaAppLocalizations': const [],
+        '/v1/betaAppReviewSubmissions': const [],
+      },
+    );
+
+    await _release(client, dryRun: false, metadataPath: tree.path);
+
+    const create = 'POST /v1/betaAppLocalizations';
+    expect(client.writes, [_assign, create, _submit]);
+    expect(client.bodies[create]!['data'], {
+      'type': 'betaAppLocalizations',
+      'attributes': {'locale': 'en-US', 'description': 'First description.'},
+      'relationships': {
+        'app': {
+          'data': {'type': 'apps', 'id': 'APP'},
+        },
+      },
+    });
+  });
+
+  test('--beta-description against an internal group is refused', () async {
+    // Refused rather than ignored: a flag that prints a warning and then does
+    // nothing is advisory output people learn to skim. Only the flag — a tree
+    // file is standing state, not an instruction, and the internal path stays
+    // byte-identical (the case above).
+    final tree = _tree('x');
+    final flagFile = File('${tree.path}/explicit.txt')
+      ..writeAsStringSync('Only externals read this.\n');
+    final client = _FakeClient(
+      collections: {
+        '/v1/betaGroups': [_group(internal: true)],
+      },
+    );
+
+    await expectLater(
+      _release(client, dryRun: false, descriptionPath: flagFile.path),
+      throwsA(
+        isA<ReleaseException>().having(
+          (e) => e.message,
+          'message',
+          contains('drop --beta-description'),
+        ),
+      ),
+    );
+    expect(client.writes, isEmpty, reason: 'refused before the assignment');
+  });
+
+  test('a rejected earlier submission fails the release, loudly', () async {
+    // A REJECTED submission printed as a no-op would be a green release that
+    // delivered nothing — the exact shape the external path exists to end.
+    final client = _FakeClient(
+      collections: {
+        '/v1/betaGroups': [_group(internal: false)],
+        '/v1/apps/APP/betaAppLocalizations': [_localization('Text.')],
+        '/v1/betaAppReviewSubmissions': [
+          {
+            'id': 'S1',
+            'attributes': {'betaReviewState': 'REJECTED'},
+          },
+        ],
+      },
+    );
+
+    await expectLater(
+      _release(client, dryRun: false),
+      throwsA(
+        isA<ReleaseException>().having(
+          (e) => e.message,
+          'message',
+          allOf(contains('rejected'), contains('upload a new build')),
+        ),
+      ),
+    );
+    expect(client.writes, [_assign], reason: 'no second submission');
   });
 
   test('a dirty description file is refused, like a dirty changelog', () {

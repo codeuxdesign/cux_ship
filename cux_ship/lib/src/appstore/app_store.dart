@@ -18,6 +18,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:cux_ship_verify/metadata.dart';
 
+import '../release.dart' show ReleaseException;
 import 'asc_client.dart';
 
 /// The `platform` App Store Connect wants, which is not spelled the way the
@@ -470,23 +471,14 @@ class AppStore {
     }, describe: 'added to beta group "${_attributes(group)['name']}"');
   }
 
-  /// The `betaAppLocalizations` record for [locale], or null.
+  /// Every `betaAppLocalizations` record the app has.
   ///
   /// Where the TestFlight "Beta App Description" lives — Test Information in
   /// the console. Scoped to the app rather than to a build or a version, so it
-  /// outlives every release.
-  Future<Map<String, dynamic>?> betaAppLocalization(
-    App app,
-    String locale,
-  ) async {
-    final all = await client.getAll('/v1/apps/${app.id}/betaAppLocalizations');
-    for (final localization in all) {
-      if (_attributes(localization)['locale'] == locale) {
-        return localization;
-      }
-    }
-    return null;
-  }
+  /// outlives every release. All of them rather than one locale's, because
+  /// "does a description exist anywhere" is a question about the whole set.
+  Future<List<Map<String, dynamic>>> betaAppLocalizations(App app) =>
+      client.getAll('/v1/apps/${app.id}/betaAppLocalizations');
 
   /// Writes the Beta App Description for one locale.
   ///
@@ -533,6 +525,19 @@ class AppStore {
     );
     if (existing.isNotEmpty) {
       final state = _attributes(existing.first)['betaReviewState'];
+      // A rejected submission is not a no-op to report and move past: the
+      // release delivered nothing, and a green exit here is how that goes
+      // unnoticed until a tester asks where the build is.
+      if (state == 'REJECTED') {
+        throw ReleaseException(
+          'build ${_attributes(build)['version']} was already submitted for '
+          'beta review and Apple rejected it — this release delivered '
+          'nothing.\n'
+          'Apple explains the rejection in App Store Connect > TestFlight and '
+          'by e-mail, never through this API. Fix what it names and upload a '
+          'new build; a build is submitted at most once.',
+        );
+      }
       stdout.writeln(
         '    already submitted for beta review — Apple says $state',
       );
