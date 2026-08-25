@@ -102,4 +102,66 @@ void main() {
       returnsNormally,
     );
   });
+
+  test('an uncommitted edit reached through a symlink is still refused', () {
+    // The blind spot this pins: `git status -- <link>` answers for the link
+    // object, which stays clean while the file it points at is mid-edit. One
+    // consuming repository keeps CHANGELOG.md as a root symlink into its
+    // package directory, and an uncommitted section walked straight past the
+    // guard through it.
+    Directory('${_root.path}/pkg').createSync();
+    final target = '${_root.path}/pkg/CHANGELOG.md';
+    File(target).writeAsStringSync('# Changelog\n\n## 1.0.0\n\n- Something\n');
+    final link = Link('${_root.path}/CHANGELOG.md')
+      ..createSync('pkg/CHANGELOG.md');
+    _git.run(['add', '-A']);
+    _git.run(['commit', '-q', '-m', 'notes and link']);
+    File(target).writeAsStringSync('# Changelog\n\n## 1.0.0\n\n- Half a sen');
+
+    expect(
+      () => requireCommittedNotes([link.path]),
+      throwsA(
+        isA<ReleaseException>().having(
+          (e) => e.toString(),
+          'message',
+          allOf(contains('pkg/CHANGELOG.md'), contains('Commit it first')),
+        ),
+      ),
+    );
+  });
+
+  test('a clean file reached through a symlink is allowed', () {
+    // The other half: resolving the link must not turn a committed file into
+    // a refusal.
+    Directory('${_root.path}/pkg').createSync();
+    File(
+      '${_root.path}/pkg/CHANGELOG.md',
+    ).writeAsStringSync('# Changelog\n\n## 1.0.0\n\n- Something\n');
+    final link = Link('${_root.path}/CHANGELOG.md')
+      ..createSync('pkg/CHANGELOG.md');
+    _git.run(['add', '-A']);
+    _git.run(['commit', '-q', '-m', 'notes and link']);
+
+    expect(() => requireCommittedNotes([link.path]), returnsNormally);
+  });
+
+  test('a symlink into another repository consults that repository', () {
+    // The link's parent decides which repository is asked, and for a symlink
+    // those differ: asked about a path outside itself, the link-side
+    // repository answers nothing at all, and nothing reads as clean.
+    final other = Directory.systemTemp.createTempSync('cux_ship_other');
+    addTearDown(() => other.deleteSync(recursive: true));
+    final otherGit = Git(other.path);
+    otherGit.run(['init', '-q', '-b', 'main']);
+    otherGit.run(['config', 'user.email', 'test@example.com']);
+    otherGit.run(['config', 'user.name', 'Test']);
+    final target = '${other.path}/CHANGELOG.md';
+    File(target).writeAsStringSync('never committed over there');
+    final link = Link('${_root.path}/CHANGELOG.md')..createSync(target);
+
+    expect(
+      () => requireCommittedNotes([link.path]),
+      throwsA(isA<ReleaseException>()),
+    );
+  });
 }

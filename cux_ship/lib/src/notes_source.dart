@@ -45,7 +45,14 @@ void requireCommittedNotes(
     if (!file.existsSync()) {
       continue;
     }
-    final directory = file.parent.absolute.path;
+    // Through the symlink, not at it. `git status -- <link>` answers for the
+    // link object, which stays clean while the file it points at is mid-edit
+    // — and the link's parent decides which repository gets asked, which for
+    // a link into another checkout is the wrong one. One consuming repository
+    // keeps CHANGELOG.md as a root symlink into its package directory, and an
+    // uncommitted section walked straight past this guard through it.
+    final resolved = File(file.resolveSymbolicLinksSync());
+    final directory = resolved.parent.absolute.path;
     final git = Git(directory);
     if (!git.ok(['rev-parse', '--is-inside-work-tree'])) {
       continue;
@@ -54,11 +61,18 @@ void requireCommittedNotes(
       'status',
       '--porcelain',
       '--',
-      file.absolute.path,
+      resolved.path,
     ], allowFailure: true);
     if (status.isNotEmpty) {
+      // The resolved path is the one to commit, so a refusal through a link
+      // names it — naming only the link would send somebody to `git add` a
+      // file whose object has not changed.
+      final via = resolved.path == file.absolute.path
+          ? ''
+          : ' (reached through $path)';
       throw ReleaseException(
-        '$what would come from uncommitted changes in $path.\n'
+        '$what would come from uncommitted changes in '
+        '${resolved.path}$via.\n'
         'Commit it first. What reaches a store should have been reviewed, and '
         'a working tree is the one copy nobody else has seen.',
       );
