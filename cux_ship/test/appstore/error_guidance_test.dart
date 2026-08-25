@@ -57,5 +57,18 @@ void main() {
       );
       expect(AscApiException.guidanceFor(const []), isNull);
     });
+
+    // Apple's title verbatim, from a live 422 answering a beta review
+    // submission with no description — the code beside it,
+    // ENTITY_UNPROCESSABLEMISSING_BETA_APP_DESCRIPTION, never reaches the
+    // flattened details, so the title is what there is to match.
+    test('the missing beta description names both remedies', () {
+      final guidance = AscApiException.guidanceFor([
+        'Beta App Description is missing.',
+      ]);
+      expect(guidance, isNotNull);
+      expect(guidance, contains('beta_description.txt'));
+      expect(guidance, contains('TestFlight > Test Information'));
+    });
   });
 }

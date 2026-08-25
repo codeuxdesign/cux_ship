@@ -347,6 +347,10 @@ class _AscSubcommand extends Command<void> {
     AscCommand.promote =>
       'Submit a build TestFlight already holds for App Store review. Builds '
           'and uploads nothing; changes no version.',
+    AscCommand.betaRelease =>
+      'Release a build TestFlight already holds to a beta group. Builds and '
+          'uploads nothing; an external group is carried through beta review, '
+          'reasserting the beta app description on the way.',
     AscCommand.builds => 'Print the builds Apple holds.',
     AscCommand.versions => 'Print the App Store versions.',
     AscCommand.screenshotTypes =>

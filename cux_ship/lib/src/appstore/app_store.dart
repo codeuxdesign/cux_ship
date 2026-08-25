@@ -18,6 +18,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:cux_ship_verify/metadata.dart';
 
+import '../release.dart' show ReleaseException;
 import 'asc_client.dart';
 
 /// The `platform` App Store Connect wants, which is not spelled the way the
@@ -115,6 +116,13 @@ String? _id(Map<String, dynamic> resource) {
   final id = resource['id'];
   return id is String ? id : null;
 }
+
+/// Whether [group] is one of Apple's internal groups, which need no beta
+/// review. Read from the resource rather than guessed from the name, because
+/// the two kinds part ways completely: an internal group receives an assigned
+/// build within minutes, an external one receives nothing until beta review.
+bool isInternalBetaGroup(Map<String, dynamic> group) =>
+    _attributes(group)['isInternalGroup'] == true;
 
 Map<String, dynamic> _attributes(Map<String, dynamic> resource) {
   final attributes = resource['attributes'];
@@ -428,15 +436,9 @@ class AppStore {
     }
   }
 
-  /// Adds a build to a named beta group, so testers actually receive it.
-  ///
-  /// An internal group needs no review and is available within minutes, which
-  /// is the closest thing the App Store has to Play's internal track.
-  Future<void> addToBetaGroup(
-    App app,
-    Map<String, dynamic> build,
-    String groupName,
-  ) async {
+  /// The named beta group, whole, so the caller can read `isInternalGroup`
+  /// before deciding what a release to it has to involve.
+  Future<Map<String, dynamic>> findBetaGroup(App app, String groupName) async {
     final groups = await client.getAll(
       '/v1/betaGroups',
       query: {'filter[app]': app.id, 'filter[name]': groupName},
@@ -449,15 +451,119 @@ class AppStore {
             'over the API.',
       ], request: 'GET /v1/betaGroups');
     }
-    await writer.post(
-      '/v1/betaGroups/${_id(groups.first)}/relationships/builds',
-      {
-        'data': [
-          {'type': 'builds', 'id': _id(build)},
-        ],
-      },
-      describe: 'added to beta group "$groupName"',
+    return groups.first;
+  }
+
+  /// Adds a build to a beta group, so testers actually receive it.
+  ///
+  /// An internal group needs no review and is available within minutes, which
+  /// is the closest thing the App Store has to Play's internal track. An
+  /// external group is different in kind rather than degree: assignment alone
+  /// delivers nothing there until the build passes beta review.
+  Future<void> addToBetaGroup(
+    Map<String, dynamic> group,
+    Map<String, dynamic> build,
+  ) async {
+    await writer.post('/v1/betaGroups/${_id(group)}/relationships/builds', {
+      'data': [
+        {'type': 'builds', 'id': _id(build)},
+      ],
+    }, describe: 'added to beta group "${_attributes(group)['name']}"');
+  }
+
+  /// Every `betaAppLocalizations` record the app has.
+  ///
+  /// Where the TestFlight "Beta App Description" lives — Test Information in
+  /// the console. Scoped to the app rather than to a build or a version, so it
+  /// outlives every release. All of them rather than one locale's, because
+  /// "does a description exist anywhere" is a question about the whole set.
+  Future<List<Map<String, dynamic>>> betaAppLocalizations(App app) =>
+      client.getAll('/v1/apps/${app.id}/betaAppLocalizations');
+
+  /// Writes the Beta App Description for one locale.
+  ///
+  /// [existing] is the record [betaAppLocalization] found, so the caller's
+  /// dedupe read and this write cannot disagree about which record they mean.
+  Future<void> writeBetaAppDescription(
+    App app,
+    String locale,
+    String text, {
+    required Map<String, dynamic>? existing,
+  }) async {
+    final describe =
+        'beta app description ($locale, ${text.length} characters)';
+    if (existing == null) {
+      await writer.post('/v1/betaAppLocalizations', {
+        'data': {
+          'type': 'betaAppLocalizations',
+          'attributes': {'locale': locale, 'description': text},
+          'relationships': {'app': relation('apps', app.id)},
+        },
+      }, describe: describe);
+    } else {
+      await writer.patch('/v1/betaAppLocalizations/${_id(existing)}', {
+        'data': {
+          'type': 'betaAppLocalizations',
+          'id': _id(existing),
+          'attributes': {'description': text},
+        },
+      }, describe: describe);
+    }
+  }
+
+  /// Submits [build] for beta review, once.
+  ///
+  /// The same idempotence shape as [submitForReview]: find the submission that
+  /// already covers this build, reuse it, and say so. A build is submitted at
+  /// most once, so a retried release job finds the first run's submission here
+  /// rather than a 409.
+  Future<void> submitBetaReview(Map<String, dynamic> build) async {
+    final buildId = _id(build)!;
+    final existing = await client.getAll(
+      '/v1/betaAppReviewSubmissions',
+      query: {'filter[build]': buildId},
     );
+    if (existing.isNotEmpty) {
+      final state = _attributes(existing.first)['betaReviewState'];
+      // A rejected submission is not a no-op to report and move past: the
+      // release delivered nothing, and a green exit here is how that goes
+      // unnoticed until a tester asks where the build is.
+      if (state == 'REJECTED') {
+        throw ReleaseException(
+          'build ${_attributes(build)['version']} was already submitted for '
+          'beta review and Apple rejected it — this release delivered '
+          'nothing.\n'
+          'Apple explains the rejection in App Store Connect > TestFlight and '
+          'by e-mail, never through this API. Fix what it names and upload a '
+          'new build; a build is submitted at most once.',
+        );
+      }
+      stdout.writeln(
+        '    already submitted for beta review — Apple says $state',
+      );
+      return;
+    }
+    await writer.post('/v1/betaAppReviewSubmissions', {
+      'data': {
+        'type': 'betaAppReviewSubmissions',
+        'relationships': {'build': relation('builds', buildId)},
+      },
+    }, describe: 'submitted for beta review');
+  }
+
+  /// Prints what TestFlight now says about the build's external availability.
+  ///
+  /// The same "say which way it ended" convention as [awaitProcessing]: a run
+  /// reports what it sent, which is not evidence of what arrived, so the
+  /// closing line is read back rather than assumed. WAITING_FOR_BETA_REVIEW is
+  /// the state a successful submission lands in.
+  Future<void> reportExternalBuildState(Map<String, dynamic> build) async {
+    final detail = await client.get('/v1/builds/${_id(build)}/buildBetaDetail');
+    final data = detail['data'];
+    final state = data is Map<String, dynamic>
+        ? _attributes(data)['externalBuildState']
+        : null;
+    stdout.writeln('==> external build state: ${state ?? '(not reported)'}');
   }
 
   // ---------------------------------------------------------------- versions

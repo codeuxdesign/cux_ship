@@ -66,8 +66,10 @@ import '../asc_platforms.dart';
 import '../listing_requirements.dart';
 import '../notes_source.dart';
 import '../reachable.dart';
+import '../release.dart' show ReleaseException;
 import 'app_store.dart';
 import 'asc_client.dart';
+import 'beta_release.dart';
 import 'signing_report.dart';
 import 'testflight_notes.dart';
 
@@ -82,6 +84,7 @@ import 'testflight_notes.dart';
 enum AscCommand {
   upload('upload'),
   promote('promote'),
+  betaRelease('beta-release'),
   builds('builds'),
   versions('versions'),
   screenshotTypes('screenshot-types'),
@@ -110,6 +113,17 @@ enum AscCommand {
 /// Apple spells it `en-US`, matching a Play listing's default language rather
 /// than diverging for no reason.
 const _defaultLocale = 'en-US';
+
+/// `--beta-description`, shared by every command that can reach an external
+/// group. A file option and never a bare string, for the release-notes
+/// reason: what testers read should be committed, reviewable text, not
+/// whatever was in a shell history.
+const _betaDescriptionHelp =
+    'File whose contents become the TestFlight Beta App Description for '
+    '--locale, which Apple requires before an external group can receive a '
+    'build. Without it, listings/<locale>/beta_description.txt in the '
+    'metadata tree applies when present, and an absent file leaves whatever '
+    'App Store Connect holds alone.';
 
 /// `45m`, `90s`, or a bare number of seconds. Null when it is none of those.
 ///
@@ -166,6 +180,32 @@ ArgParser buildAscParser(AscCommand cmd) {
   }
 
   if (cmd.isRead) {
+    return parser;
+  }
+
+  // Like `wait`, this carries only its own arguments: no artifact, no
+  // changelog, no version name — it builds nothing, sets no notes, and names
+  // no App Store version, so those options would be questions with no answer.
+  if (cmd == AscCommand.betaRelease) {
+    parser
+      ..addOption(
+        'build-number',
+        help:
+            'The build TestFlight already holds. Required, and deliberately '
+            'not defaulted to the newest: a release to testers is a release '
+            'of a *specific* build, and "newest" would release somebody '
+            "else's upload.",
+      )
+      ..addOption(
+        'beta-group',
+        help:
+            'TestFlight group to release the build to. An internal group '
+            'receives it by assignment alone; an external one is carried on '
+            'through beta review, without which it receives nothing.',
+      )
+      ..addOption('beta-description', help: _betaDescriptionHelp)
+      ..addOption('locale', defaultsTo: _defaultLocale)
+      ..addFlag('dry-run', negatable: false, help: 'Every read, no writes.');
     return parser;
   }
 
@@ -228,8 +268,11 @@ ArgParser buildAscParser(AscCommand cmd) {
           'beta-group',
           help:
               'TestFlight group to give the build to. An internal group needs '
-              "no review, which is the closest thing to Play's internal track.",
+              "no review, which is the closest thing to Play's internal "
+              'track; an external group is carried on through beta review, '
+              'without which it receives nothing.',
         )
+        ..addOption('beta-description', help: _betaDescriptionHelp)
         ..addOption(
           'metadata',
           help: 'Directory of store listing text and screenshots to publish.',
@@ -238,10 +281,11 @@ ArgParser buildAscParser(AscCommand cmd) {
           'no-metadata',
           negatable: false,
           help:
-              'Upload the build and nothing else, leaving the store listing '
-              'untouched. For a TestFlight build, which is not a version '
-              'submission and needs no listing — and which is otherwise '
-              'refused whenever the App Store version is locked by review.',
+              'Leave the store listing untouched: upload the build, and any '
+              '--beta-group release, and nothing else. For a TestFlight '
+              'build, which is not a version submission and needs no listing '
+              '— and which is otherwise refused whenever the App Store '
+              'version is locked by review.',
         )
         ..addFlag(
           'skip-waiting',
@@ -262,6 +306,7 @@ ArgParser buildAscParser(AscCommand cmd) {
               'this needs no upload, creates no App Store version, and '
               'publishes no listing.',
         )
+        ..addOption('beta-description', help: _betaDescriptionHelp)
         ..addOption(
           'metadata',
           help:
@@ -283,13 +328,14 @@ ArgParser buildAscParser(AscCommand cmd) {
               "Release over Apple's seven-day phased schedule once approved. "
               'Not a fraction — Apple runs the schedule itself.',
         );
+    case AscCommand.betaRelease:
     case AscCommand.builds:
     case AscCommand.versions:
     case AscCommand.screenshotTypes:
     case AscCommand.buildNumber:
     case AscCommand.awaitBuild:
     case AscCommand.signing:
-      throw StateError('unreachable: handled by cmd.isRead above');
+      throw StateError('unreachable: handled by cmd.isRead or above');
   }
 
   return parser;
@@ -559,12 +605,69 @@ Future<void> runAsc(
   if (noMetadata && opt('metadata') != null) {
     fail('--metadata and --no-metadata ask for opposite things');
   }
+  final betaGroup = opt('beta-group');
+  // A promotion to a group publishes no listing — which is `--beta-group`'s
+  // own help text, and until here it was false: promote resolved the inferred
+  // store/appstore tree and the listing publish ran before the group block
+  // was reached, so `promote --beta-group X` published the whole listing,
+  // could create an App Store version, and then printed "the listing is
+  // untouched". Suppressing the inference is what makes the help text true;
+  // an *explicit* `--metadata` alongside is a contradiction and is refused
+  // rather than quietly dropped. The same shape as the version-name
+  // exemption below. The beta description still resolves through
+  // [listingTree] — test information, not listing.
+  if (cmd == AscCommand.promote &&
+      betaGroup != null &&
+      opt('metadata') != null) {
+    fail(
+      '--metadata and --beta-group ask for opposite things on promote: a '
+      'promotion to a group publishes no listing',
+    );
+  }
   final metadataPath =
-      (cmd == AscCommand.upload || cmd == AscCommand.promote) && !noMetadata
+      (cmd == AscCommand.upload || cmd == AscCommand.promote) &&
+          !noMetadata &&
+          !(cmd == AscCommand.promote && betaGroup != null)
       ? (opt('metadata') ?? defaults.metadata)
       : null;
+  // The tree the beta app description lives in — deliberately not the gated
+  // [metadataPath]. `--no-metadata` declines the App Store listing publish,
+  // and the beta description is not listing: it is TestFlight test
+  // information, the thing a `--no-metadata` TestFlight upload exists to
+  // deliver.
+  final listingTree = opt('metadata') ?? defaults.metadata;
   final promote = cmd == AscCommand.promote;
   final reads = cmd.isRead;
+
+  if (cmd == AscCommand.betaRelease) {
+    if (betaGroup == null) {
+      fail(
+        'which group? --beta-group names the TestFlight group to release to. '
+        'App Store Connect > TestFlight > Groups is where they are made.',
+      );
+    }
+    final number = opt('build-number');
+    if (number == null) {
+      fail(
+        'which build? --build-number is required, and deliberately not '
+        'defaulted to the newest Apple holds: a release to testers is a '
+        'release of a *specific* build, and "newest" would release somebody '
+        "else's upload.",
+      );
+    }
+    if (int.tryParse(number) == null) {
+      fail('--build-number must be an integer, got "$number"');
+    }
+    // `wait 2132` reads naturally because that command declares its build
+    // number positional; this one does not, so a stray positional here is
+    // most likely a build number the run would then silently not use.
+    if (args.rest.isNotEmpty) {
+      fail(
+        'unexpected argument "${args.rest.first}" — beta-release takes '
+        '--build-number and --beta-group as options',
+      );
+    }
+  }
 
   if (cmd == AscCommand.upload && ipaPath == null && metadataPath == null) {
     fail('nothing to do — pass --artifact, --metadata, or both');
@@ -598,9 +701,11 @@ Future<void> runAsc(
   final notesPath = opt('release-notes');
   // The changelog default applies only when no literal notes were given;
   // offering both and then refusing the pair would be inference creating the
-  // conflict it complains about.
-  final changelogPath =
-      opt('changelog') ?? (notesPath == null ? defaults.changelog : null);
+  // conflict it complains about. beta-release takes no notes at all — the
+  // "What to Test" came with the upload — so the default is not offered to it.
+  final changelogPath = cmd == AscCommand.betaRelease
+      ? null
+      : opt('changelog') ?? (notesPath == null ? defaults.changelog : null);
   if (notesPath != null && opt('changelog') != null) {
     fail('--release-notes and --changelog both supply the notes; pick one');
   }
@@ -617,6 +722,43 @@ Future<void> runAsc(
         'release notes are ${literalNotes.length} characters; the App Store '
         'allows $appStoreReleaseNotesLimit',
       );
+    }
+  }
+
+  // The beta app description, resolved offline exactly like the notes above —
+  // and the placement is load-bearing on `upload --beta-group`: the artifact,
+  // the processing wait and the notes all land before the group step, so a
+  // typo'd path, a dirty file or an over-limit one discovered there would
+  // refuse *after* the build went up. Here it refuses before a credential is
+  // even loaded; only "is there a description anywhere" needs the network and
+  // stays in the flow.
+  final betaDescriptionPath = opt('beta-description');
+  if (betaDescriptionPath != null && betaGroup == null) {
+    fail(
+      '--beta-description without --beta-group publishes nothing — name the '
+      'group the description is for',
+    );
+  }
+  // Incompatible rather than quietly reordered: the group step needs the
+  // processed build, which is exactly the wait --skip-waiting declines. The
+  // old behaviour was worse than either — the group was silently skipped and
+  // the run still printed done.
+  if (betaGroup != null && cmd == AscCommand.upload && flag('skip-waiting')) {
+    fail(
+      '--skip-waiting and --beta-group ask for incompatible things: a build '
+      'cannot reach a group until Apple finishes processing it',
+    );
+  }
+  BetaDescription? betaDescription;
+  if (betaGroup != null) {
+    try {
+      betaDescription = resolveBetaDescription(
+        optionPath: betaDescriptionPath,
+        metadataPath: listingTree,
+        locale: locale,
+      );
+    } on ReleaseException catch (e) {
+      fail(e.message);
     }
   }
 
@@ -758,6 +900,7 @@ Future<void> runAsc(
         buildNumber: buildNumber,
         ipaPath: ipaPath,
         metadataPath: metadataPath,
+        betaGroup: betaGroup,
         changelogPath: changelogPath,
         locale: locale,
         phased: flag('phased'),
@@ -859,6 +1002,68 @@ Future<void> runAsc(
       return;
     }
 
+    // --------------------------------------------------------- beta-release
+
+    // The TestFlight sibling of promote: submits a build TestFlight already
+    // holds to a beta group, builds and uploads nothing. It exists for the
+    // build somebody else's job uploaded, where `upload` has nothing left to
+    // carry — without this the group assignment and the beta review had no
+    // command to arrive by.
+    if (cmd == AscCommand.betaRelease) {
+      final build = await store.findBuild(app, buildNumber!);
+      if (build == null) {
+        fail(
+          'Apple holds no ${platform.name} build $buildNumber for $bundleId. '
+          '`appstore builds` prints what it does hold.',
+        );
+      }
+      final attributes = build['attributes'] as Map<String, dynamic>?;
+      final state = attributes?['processingState'] as String? ?? '(unknown)';
+      if (state != 'VALID') {
+        // FAILED and INVALID are terminal, and `appstore wait` *raises* on
+        // them — so the advice forks, or the slow-case advice sends somebody
+        // to a command that can only restate the problem.
+        if (state == 'FAILED' || state == 'INVALID') {
+          fail(
+            'build $buildNumber came back $state from Apple\'s processing and '
+            'will never be releasable. The reason is only in the e-mail Apple '
+            'sends and in the Activity tab; upload a new build.',
+          );
+        }
+        fail(
+          'build $buildNumber is $state, and a build cannot reach a group '
+          'until Apple finishes processing it — `appstore wait $buildNumber` '
+          'blocks until it does.',
+        );
+      }
+      if (attributes?['expired'] == true) {
+        fail(
+          'build $buildNumber has expired — TestFlight builds last 90 days, '
+          'so upload a new one.',
+        );
+      }
+
+      stdout.writeln('==> giving build $buildNumber to "$betaGroup"');
+      final internal = await releaseToBetaGroup(
+        store,
+        app,
+        build,
+        betaGroup!,
+        locale: locale,
+        description: betaDescription,
+        metadataPath: listingTree,
+      );
+      if (internal) {
+        stdout.writeln('==> done — an internal group needs no beta review');
+      } else if (!dryRun) {
+        stdout.writeln('==> done');
+      }
+      if (dryRun) {
+        stdout.writeln('==> dry run — nothing was written');
+      }
+      return;
+    }
+
     // ------------------------------------------------------------- the build
 
     Map<String, dynamic>? build;
@@ -913,10 +1118,17 @@ Future<void> runAsc(
           }
           await store.setWhatToTest(build, locale, testFlightNotes);
         }
-        final group = opt('beta-group');
-        if (group != null) {
+        if (betaGroup != null) {
           stdout.writeln('==> beta group');
-          await store.addToBetaGroup(app, build, group);
+          await releaseToBetaGroup(
+            store,
+            app,
+            build,
+            betaGroup,
+            locale: locale,
+            description: betaDescription,
+            metadataPath: listingTree,
+          );
         }
       }
     }
@@ -995,15 +1207,29 @@ Future<void> runAsc(
       // Store version is the public artefact; a TestFlight group is not, and
       // conflating them is how a version record appears for a release nobody
       // has decided to make.
-      final betaGroup = opt('beta-group');
       if (betaGroup != null) {
         final number =
             (chosen['attributes'] as Map<String, dynamic>?)?['version'];
         stdout.writeln('==> giving build $number to "$betaGroup"');
-        await store.addToBetaGroup(app, chosen, betaGroup);
-        stdout.writeln(
-          '==> done — not submitted for review, and the listing is untouched',
+        final internal = await releaseToBetaGroup(
+          store,
+          app,
+          chosen,
+          betaGroup,
+          locale: locale,
+          description: betaDescription,
+          metadataPath: listingTree,
         );
+        if (internal) {
+          // The sentence belongs to the internal case alone: an external
+          // group's build *was* submitted — for beta review — and printing
+          // "not submitted" over that would describe a non-release as done.
+          stdout.writeln(
+            '==> done — not submitted for review, and the listing is untouched',
+          );
+        } else if (!dryRun) {
+          stdout.writeln('==> done');
+        }
         if (dryRun) {
           // Said here because this path returns before the closing notice, and
           // a dry run that printed "done" and nothing else would read as a
@@ -1104,19 +1330,23 @@ String _summarizeAsc({
   required String? buildNumber,
   required String? ipaPath,
   required String? metadataPath,
+  required String? betaGroup,
   required String? changelogPath,
   required String locale,
   required bool phased,
 }) {
   final rows = <String, String?>{
     'app': '$bundleId ($platform)',
-    'version': versionName,
+    // beta-release names no version: it releases a build, and the inferred
+    // pubspec version would only claim a fact the command never uses.
+    'version': cmd == AscCommand.betaRelease ? null : versionName,
     'build': switch (cmd) {
       AscCommand.promote => buildNumber ?? 'newest processed build Apple holds',
       _ => buildNumber,
     },
     'artifact': ipaPath,
     'listing': metadataPath,
+    'beta group': betaGroup,
     'notes from': changelogPath,
     'locale': locale,
     'phased': phased ? 'yes — over Apple\'s seven-day schedule' : null,
@@ -1126,6 +1356,9 @@ String _summarizeAsc({
     AscCommand.promote =>
       'About to submit for App Store review. Once Apple approves it, this is '
           'public.',
+    AscCommand.betaRelease =>
+      'About to release a build TestFlight already holds to a beta group. '
+          'An external group goes on to Apple for beta review.',
     AscCommand.upload when ipaPath != null =>
       'About to upload a build to TestFlight'
           '${metadataPath == null ? '' : ' and publish the listing'}.',

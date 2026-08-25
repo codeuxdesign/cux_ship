@@ -1,6 +1,6 @@
 ---
 name: cux-ship-releasing
-description: Set up or operate releases to the App Store and Google Play with cux_ship. Use when wiring a project up to ship for the first time, adding store metadata or a signing key, uploading or promoting a build, handling sops-encrypted release credentials, or debugging a store rejection. Also use when a project has a tool/cux_ship directory, a .cux-ship.yaml, a store/ tree, or secrets/release.yaml.
+description: Set up or operate releases to the App Store and Google Play with cux_ship. Use when wiring a project up to ship for the first time, adding store metadata or a signing key, uploading or promoting a build, releasing to TestFlight beta groups, handling sops-encrypted release credentials, or debugging a store rejection. Also use when a project has a tool/cux_ship directory, a .cux-ship.yaml, a store/ tree, or secrets/release.yaml.
 ---
 
 # Shipping with cux_ship
@@ -70,6 +70,50 @@ default.
    read again until somebody is reconstructing what shipped where. If you want a
    record of an upload, that is `tag.upload.enabled` in `.cux-ship.yaml`, which
    `<store> upload` writes itself with the destination it actually used.
+
+## TestFlight groups
+
+**Internal and external groups are different releases wearing one flag.** An
+internal group receives an assigned build within minutes, no review. An
+external group receives *nothing* until the build passes Apple's beta review —
+so `--beta-group`, on `upload` or `promote`, reads the group's kind and
+carries an external one the rest of the way: the beta app description is
+reasserted, the build is submitted for beta review, and the closing line reads
+back what Apple now says (`WAITING_FOR_BETA_REVIEW` is success). Do not treat
+"added to beta group" as the release for an external group; the closing state
+line is.
+
+For a build that is already up — CI uploaded it, `upload` has nothing left to
+carry — the whole release is one command:
+
+```bash
+cux_ship appstore beta-release --build-number 52 --beta-group "External Testers"
+```
+
+`--build-number` is required and deliberately not defaulted to the newest, for
+the reason `appstore wait` requires it: a release to testers is a release of a
+*specific* build, and "newest" would release somebody else's upload.
+
+**The beta app description is owned like every other listing field.**
+`store/appstore/listings/<locale>/beta_description.txt` present means owned:
+reasserted on every release, so the console cannot drift from it. Absent means
+the console owns it and nothing here touches it. Like the changelog, only
+committed text is published — a dirty file is refused, so commit it before
+releasing.
+
+Refusals a release runner will actually hit, each meaning what it says:
+
+- **`--skip-waiting` with `--beta-group` is refused.** A build cannot reach a
+  group until Apple finishes processing it, which is exactly the wait being
+  skipped.
+- **"No description anywhere"** — external group, nothing in the repository,
+  no locale in App Store Connect holding one. It refuses *before* anything is
+  written; either create the tree file above or fill in TestFlight > Test
+  Information once in the console.
+- **A REJECTED earlier beta review submission is a hard failure, not a
+  no-op.** A build is submitted at most once, so re-running does not resubmit
+  and the release delivered nothing. Apple explains the rejection only by
+  e-mail and in the console; fix what it names and upload a new build.
 
 ## What cannot be undone
 

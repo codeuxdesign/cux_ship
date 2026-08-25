@@ -135,6 +135,7 @@ void main() {
   const helpOnly = [
     ['appstore', 'upload'],
     ['appstore', 'promote'],
+    ['appstore', 'beta-release'],
     ['appstore', 'wait'],
     ['play', 'upload'],
     ['play', 'promote'],
@@ -153,6 +154,160 @@ void main() {
       expect(result.exitCode, 0, reason: output);
     });
   }
+
+  // Offline refusals, testable end to end because they fire before any
+  // credential is loaded. The build number is required by decision rather
+  // than accident — the 2.2.0 `wait` note made the same call — so the
+  // refusal, not just the option, is what gets pinned.
+  test('beta-release without its arguments refuses, naming each', () {
+    // The bundle id is passed because the fixture has no Xcode project to
+    // infer one from, and that refusal would otherwise arrive first.
+    final noGroup = _run(repo, [
+      'appstore',
+      'beta-release',
+      '--bundle-id',
+      'design.codeux.consumer',
+    ]);
+    expect('${noGroup.stderr}', contains('--beta-group'));
+    expect(noGroup.exitCode, isNot(0));
+
+    final noBuild = _run(repo, [
+      'appstore',
+      'beta-release',
+      '--bundle-id',
+      'design.codeux.consumer',
+      '--beta-group',
+      'friends',
+    ]);
+    expect('${noBuild.stderr}', contains('--build-number'));
+    expect('${noBuild.stderr}', contains('deliberately not defaulted'));
+    expect(noBuild.exitCode, isNot(0));
+
+    // A bare positional is most likely a build number that the run would
+    // otherwise silently not use, while demanding --build-number anyway.
+    final positional = _run(repo, [
+      'appstore',
+      'beta-release',
+      '--bundle-id',
+      'design.codeux.consumer',
+      '--beta-group',
+      'friends',
+      '--build-number',
+      '5',
+      '52',
+    ]);
+    expect('${positional.stderr}', contains('unexpected argument "52"'));
+    expect(positional.exitCode, isNot(0));
+  });
+
+  // The description guards are offline by design — on `upload --beta-group`
+  // the artifact and the processing wait land before the group step, so
+  // anything about the description that can refuse has to refuse before a
+  // credential is loaded. That design is also what makes these testable end
+  // to end: no network, no secrets, a spawned CLI and an exit code.
+  group('the beta description refuses offline', () {
+    test('a dirty tree description stops an upload, despite --no-metadata', () {
+      Directory(
+        '${repo.path}/store/appstore/listings/en-US',
+      ).createSync(recursive: true);
+      File(
+        '${repo.path}/store/appstore/listings/en-US/beta_description.txt',
+      ).writeAsStringSync('half-written\n');
+      File('${repo.path}/app.ipa').writeAsStringSync('not really an ipa');
+
+      final result = _run(repo, [
+        'appstore', 'upload',
+        '--bundle-id', 'design.codeux.consumer',
+        '--artifact', 'app.ipa',
+        '--build-number', '5',
+        '--version-name', '1.0.0',
+        // The decision under test: --no-metadata declines the *listing*, and
+        // the beta description is test information, so the tree file is
+        // still consulted.
+        '--no-metadata',
+        '--beta-group', 'Friends',
+      ]);
+      final output = '${result.stdout}${result.stderr}';
+      expect(output, contains('the beta app description'));
+      expect(output, contains('uncommitted'));
+      // Refused before any credential was even looked for — the proof this
+      // ran in the offline block rather than after the artifact went up.
+      expect(output, isNot(contains('credentials')));
+      expect(result.exitCode, isNot(0));
+    });
+
+    test('--beta-description without --beta-group refuses', () {
+      Directory('${repo.path}/store/appstore').createSync(recursive: true);
+      final result = _run(repo, [
+        'appstore',
+        'upload',
+        '--bundle-id',
+        'design.codeux.consumer',
+        '--beta-description',
+        'missing.txt',
+      ]);
+      expect('${result.stderr}', contains('without --beta-group'));
+      expect(result.exitCode, isNot(0));
+    });
+
+    test('--skip-waiting and --beta-group refuse together', () {
+      File('${repo.path}/app.ipa').writeAsStringSync('not really an ipa');
+      final result = _run(repo, [
+        'appstore',
+        'upload',
+        '--bundle-id',
+        'design.codeux.consumer',
+        '--artifact',
+        'app.ipa',
+        '--build-number',
+        '5',
+        '--version-name',
+        '1.0.0',
+        '--skip-waiting',
+        '--beta-group',
+        'Friends',
+      ]);
+      expect('${result.stderr}', contains('incompatible'));
+      expect(result.exitCode, isNot(0));
+    });
+  });
+
+  group('promote --beta-group leaves the listing alone', () {
+    test('the inferred tree is not even loaded', () {
+      // An empty store/appstore fails loadMetadata with "nothing to
+      // publish", so its absence from the output is proof the tree was never
+      // consulted — the run gets all the way to the missing credentials.
+      Directory('${repo.path}/store/appstore').createSync(recursive: true);
+      final result = _run(repo, [
+        'appstore',
+        'promote',
+        '--bundle-id',
+        'design.codeux.consumer',
+        '--beta-group',
+        'Friends',
+        '--dry-run',
+      ]);
+      final output = '${result.stdout}${result.stderr}';
+      expect(output, isNot(contains('nothing to publish')));
+      expect(output, contains('credentials'));
+    });
+
+    test('an explicit --metadata alongside is a contradiction', () {
+      Directory('${repo.path}/store/appstore').createSync(recursive: true);
+      final result = _run(repo, [
+        'appstore',
+        'promote',
+        '--bundle-id',
+        'design.codeux.consumer',
+        '--beta-group',
+        'Friends',
+        '--metadata',
+        'store/appstore',
+      ]);
+      expect('${result.stderr}', contains('opposite things on promote'));
+      expect(result.exitCode, isNot(0));
+    });
+  });
 
   test('a repository with no config still starts every command', () {
     // The other half of the 3.2.0 shape: the crash fired only when a block was
