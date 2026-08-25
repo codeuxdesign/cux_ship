@@ -33,13 +33,13 @@ note is too long.
 ```
 cux_ship appstore upload            play upload            release finish
          appstore promote           play promote           release refspecs
-         appstore builds            play tracks            screenshots flatten
-         appstore versions          play listing           verify
-         appstore screenshot-types  play version-code      secrets add
-         appstore build-number                             secrets check
-         appstore wait                                     secrets list
-         appstore signing                                  secrets remove
-                                                           secrets exec
+         appstore beta-release      play tracks            screenshots flatten
+         appstore builds            play listing           verify
+         appstore versions          play version-code      secrets add
+         appstore screenshot-types                         secrets check
+         appstore build-number                             secrets list
+         appstore wait                                     secrets remove
+         appstore signing                                  secrets exec
                                                            secrets place
                                                            secrets clean
                                                            secrets pack
@@ -116,6 +116,24 @@ it has always worked out for itself.
 
 Without any of this, nothing changes: a project whose app *is* its repository
 needs no file and reads exactly as it always did.
+
+### beta-release is promote's TestFlight sibling
+
+```bash
+cux_ship appstore beta-release --build-number 52 --beta-group "External Testers"
+```
+
+It gives a build TestFlight already holds to a beta group, and builds and
+uploads nothing — the case where CI uploaded the build and `upload` has
+nothing left to carry. An internal group receives the build by assignment
+alone. An external one receives nothing that way, so the release carries on:
+the Beta App Description is reasserted from
+`store/appstore/listings/<locale>/beta_description.txt` when that file exists
+(and left to the console when it does not), the build is submitted for beta
+review, and the closing line reads back the state Apple now reports.
+`--build-number` is required rather than defaulted to the newest, for the
+same reason `appstore wait` requires it: "newest" would release somebody
+else's upload.
 
 ### promote is per-store; `release finish` is per-release
 
