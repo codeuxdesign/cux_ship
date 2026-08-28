@@ -23,9 +23,14 @@ place below is cross-cutting: true of every test and no particular one.
 fix is trusted.** A test written after the fix and only ever seen green proves
 nothing about the fix — it may pass for a reason unrelated to the guard, or
 assert something the mutation cannot reach. Revert the fix, run the test,
-watch it fail for the stated reason, restore. PRs here list their mutations
-(#17 ran twenty-two); a reviewer repeating one at random is normal and has
-caught real gaps.
+watch it fail for the stated reason, restore.
+
+**And list the mutations in the PR body**, because the body is the only
+place the discipline is reviewable: a rule practiced invisibly is
+indistinguishable from one not practiced, which is one step from the state
+this file exists to prevent (#17 listed its twenty-two; #22 ran its
+mutations and listed none, and review could not tell the difference). A
+reviewer repeating one at random is normal and has caught real gaps.
 
 ## A fake must carry the semantics the tested branch selects on
 

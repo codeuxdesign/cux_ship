@@ -110,7 +110,13 @@ fi
 # forgotten one is silent twice over: the parser reads a non-digit heading as
 # prose, so the section never ships under any number, and pub.dev renders the
 # published changelog with "Unreleased" sitting above the version it was.
-if grep -q '^## Unreleased' "$PACKAGE/CHANGELOG.md" 2>/dev/null; then
+# Loud on absence, checked separately: every member ships a CHANGELOG.md and
+# pub.dev expects one, so a missing file is its own defect — and silencing
+# the grep instead would make it indistinguishable from a clean changelog,
+# the absence-and-failure collapse this repository keeps paying for.
+[ -f "$PACKAGE/CHANGELOG.md" ] ||
+  die "$PACKAGE has no CHANGELOG.md — every member ships one"
+if grep -q '^## Unreleased' "$PACKAGE/CHANGELOG.md"; then
   die "$PACKAGE/CHANGELOG.md still has an '## Unreleased' section.
     Rename it to '## $VERSION' in the release commit — the release commit is
     the one place that knows the number."
