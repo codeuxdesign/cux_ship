@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+**`appstore beta-groups` prints the groups an app has, and the kind of each.**
+A group's *name* is the one input `--beta-group` cannot infer, default or
+guess, and nothing printed one: the only command that touched groups filtered
+by exact name, so a caller who did not already know the name had to leave the
+tool and read App Store Connect. The kind comes with it because the kind is
+half the answer — assignment alone delivers an internal group within minutes
+and delivers an external one nothing until beta review passes, so choosing a
+name from this list is choosing what a release costs.
+
+**And the lookup that misses now names the groups that exist.** `no beta group
+called "X"` was true and unhelpful: filtering by exact name answers only about
+the name asked for, so the refusal withheld the one string the caller was
+missing — from a response the command was already entitled to make. It now
+lists what the app has, with each kind, or says the app has none at all and
+that groups cannot be created over the API.
+
+Found from the consuming end, staging a build to external testers on a release
+where the group's name was not written down anywhere: 3.5.0 made the release
+work and left no way to discover what to call it.
+
 ## 3.5.1
 
 **Manifests written by 3.5.0 name producer "cux_ship 3.4.2"** — the release

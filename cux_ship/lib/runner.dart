@@ -352,6 +352,10 @@ class _AscSubcommand extends Command<void> {
           'uploads nothing; an external group is carried through beta review, '
           'reasserting the beta app description on the way.',
     AscCommand.builds => 'Print the builds Apple holds.',
+    AscCommand.betaGroups =>
+      'Print the TestFlight groups this app has, and whether each is internal '
+          'or external — the name --beta-group needs, which cannot be guessed '
+          'and which no other command will tell you.',
     AscCommand.versions => 'Print the App Store versions.',
     AscCommand.screenshotTypes =>
       "Print the ScreenshotDisplayType values this app carries — Apple's "
