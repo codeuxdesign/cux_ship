@@ -103,6 +103,25 @@ if [ -f "$BAKED_FILE" ]; then
     producer reads exactly like one naming the right one."
 fi
 
+# **A section still headed "Unreleased" must be claimed before it ships.**
+# Feature PRs write their CHANGELOG entry under `## Unreleased` because the
+# version number is the release commit's to spend, not theirs — which leaves
+# exactly one moment where the rename can be forgotten, and this is it. A
+# forgotten one is silent twice over: the parser reads a non-digit heading as
+# prose, so the section never ships under any number, and pub.dev renders the
+# published changelog with "Unreleased" sitting above the version it was.
+# Loud on absence, checked separately: every member ships a CHANGELOG.md and
+# pub.dev expects one, so a missing file is its own defect — and silencing
+# the grep instead would make it indistinguishable from a clean changelog,
+# the absence-and-failure collapse this repository keeps paying for.
+[ -f "$PACKAGE/CHANGELOG.md" ] ||
+  die "$PACKAGE has no CHANGELOG.md — every member ships one"
+if grep -q '^## Unreleased' "$PACKAGE/CHANGELOG.md"; then
+  die "$PACKAGE/CHANGELOG.md still has an '## Unreleased' section.
+    Rename it to '## $VERSION' in the release commit — the release commit is
+    the one place that knows the number."
+fi
+
 echo "==> $PACKAGE $VERSION at $(git rev-parse --short HEAD), tag $TAG"
 
 if $DRY_RUN; then
