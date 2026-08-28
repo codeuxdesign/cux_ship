@@ -46,6 +46,7 @@ cux_ship appstore upload            play upload            release finish
                                                            keychain exec
                                                            deps install
                                                            deps check
+                                                           manifest write
 ```
 
 **Run it from a project root and it works out the rest.** The `applicationId`
