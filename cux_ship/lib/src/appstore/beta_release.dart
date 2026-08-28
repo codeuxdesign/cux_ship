@@ -140,7 +140,26 @@ Future<bool> releaseToBetaGroup(
 }) async {
   final group = await store.findBetaGroup(app, groupName);
 
-  if (isInternalBetaGroup(group)) {
+  final kind = betaGroupKind(group);
+  // A kind Apple did not report is refused, not guessed — and the defaults
+  // are not symmetric, which is the stake beyond the absent-is-not-false
+  // shape. Guessing external submits an internal group for beta review:
+  // wrong, but it fails at Apple where somebody sees it. Guessing internal
+  // assigns an external group and prints done — precisely the silently
+  // hollow release this flow exists to prevent. Refusing is the only
+  // reading that cannot regress it. Cannot happen with the plain lookup
+  // above (Apple returns default attributes); a sparse `fields[betaGroups]`
+  // added later is what would cause it.
+  if (kind == BetaGroupKind.unknown) {
+    throw ReleaseException(
+      'App Store Connect did not say whether "$groupName" is internal or '
+      'external — the betaGroups resource carried no isInternalGroup '
+      'attribute, and the two kinds need entirely different releases, so '
+      'neither is guessed. Nothing has been written.',
+    );
+  }
+
+  if (kind == BetaGroupKind.internal) {
     // The explicit flag is refused rather than ignored: a flag that prints a
     // warning and then does nothing is advisory output people learn to skim,
     // and honouring it here would publish a description no internal release

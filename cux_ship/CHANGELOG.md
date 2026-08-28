@@ -22,6 +22,21 @@ Found from the consuming end, staging a build to external testers on a release
 where the group's name was not written down anywhere: 3.5.0 made the release
 work and left no way to discover what to call it.
 
+**A group whose kind Apple did not report is refused at release, not
+guessed.** The kind was read `== true`, which collapsed "false" and "absent":
+a `betaGroups` resource not carrying `isInternalGroup` — a sparse fieldset, an
+API change — silently read as external, on the one field a beta release
+branches on. The defaults are not symmetric, which is why neither is taken:
+external submits an internal group for beta review and fails at Apple, where
+somebody sees it; internal assigns an external group and prints done, the
+silently hollow release this flow exists to prevent. The release path now
+refuses an unknown kind before anything is written. The two display sites —
+the `beta-groups` listing and the miss's group list — print `unknown` instead
+and carry on, because a diagnostic must not blank itself over one malformed
+group, and "Apple did not tell me" points at the cause where a guessed kind
+points nowhere. Both listings are now also sorted by name, since the API
+promises no order and stable output is diffable output.
+
 ## 3.5.1
 
 **Manifests written by 3.5.0 name producer "cux_ship 3.4.2"** — the release

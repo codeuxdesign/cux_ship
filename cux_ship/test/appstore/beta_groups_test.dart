@@ -56,9 +56,16 @@ class _FakeClient implements AscClient {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-Map<String, dynamic> _group(String name, {required bool internal}) => {
+/// [internal] null builds a group whose resource does not carry the
+/// attribute at all — the sparse-fieldset shape, which is a different fact
+/// from `false` and has to stay constructible or the distinction untests
+/// itself back out.
+Map<String, dynamic> _group(String name, {bool? internal}) => {
   'id': 'id-$name',
-  'attributes': {'name': name, 'isInternalGroup': internal},
+  'attributes': {
+    'name': name,
+    if (internal != null) ...{'isInternalGroup': internal},
+  },
 };
 
 /// Captures what a command printed. `beta_release_test.dart`'s shape.
@@ -169,6 +176,63 @@ void main() {
             // Falls back to the guidance it had before the listing existed.
             contains('App Store Connect > TestFlight > Groups'),
             isNot(contains('This app has')),
+          ),
+        ),
+      ),
+    );
+  });
+
+  test('a group whose kind Apple did not report prints unknown, and the '
+      'rest of the listing survives', () async {
+    // Absent and false are different facts. `unknown` says "Apple did not
+    // tell me" — a fact about the response, pointing at a sparse fieldset —
+    // where a silent `external` points nowhere. And it must not throw: this
+    // is the command reached for while diagnosing a failed release, so one
+    // malformed group taking down the whole listing would blank it at the
+    // exact moment it is needed.
+    final client = _FakeClient([
+      _group('Beta Testers', internal: false),
+      _group('mystery'),
+      _group('howitwent testers', internal: true),
+    ]);
+    final out = await _printed(() => storeOf(client).listBetaGroups(app));
+
+    expect(out, contains('mystery'));
+    expect(out, contains('unknown'));
+    expect(out, contains('howitwent testers'));
+    expect(out, contains('Beta Testers'));
+  });
+
+  test('the listing is sorted by name, whatever order Apple returns', () async {
+    // Stable output is diffable output; the API promises no order.
+    final client = _FakeClient([
+      _group('zeta', internal: true),
+      _group('alpha', internal: false),
+      _group('midway', internal: true),
+    ]);
+    final out = await _printed(() => storeOf(client).listBetaGroups(app));
+
+    final positions = ['alpha', 'midway', 'zeta'].map(out.indexOf).toList();
+    expect(positions, everyElement(isNot(-1)));
+    expect(positions, orderedEquals([...positions]..sort()));
+  });
+
+  test('the 404 listing prints unknown for a kind Apple did not report, '
+      'and still refuses', () async {
+    // The enrichment is best-effort by design (4123a20): it must never cost
+    // the refusal, and a throw from the kind read would do exactly what the
+    // network guard there stopped the second call from doing.
+    final client = _FakeClient([_group('mystery')]);
+
+    await expectLater(
+      storeOf(client).findBetaGroup(app, 'Externa1 Testers'),
+      throwsA(
+        isA<AscApiException>().having(
+          (e) => e.toString(),
+          'message',
+          allOf(
+            contains('no beta group called "Externa1 Testers"'),
+            contains('"mystery" (unknown)'),
           ),
         ),
       ),
