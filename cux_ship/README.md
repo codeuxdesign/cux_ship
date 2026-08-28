@@ -34,13 +34,13 @@ note is too long.
 cux_ship appstore upload            play upload            release finish
          appstore promote           play promote           release refspecs
          appstore beta-release      play tracks            screenshots flatten
-         appstore builds            play listing           verify
-         appstore versions          play version-code      secrets add
-         appstore screenshot-types                         secrets check
-         appstore build-number                             secrets list
-         appstore wait                                     secrets remove
-         appstore signing                                  secrets exec
-                                                           secrets place
+         appstore beta-groups       play listing           verify
+         appstore builds            play version-code      secrets add
+         appstore versions                                 secrets check
+         appstore screenshot-types                         secrets list
+         appstore build-number                             secrets remove
+         appstore wait                                     secrets exec
+         appstore signing                                  secrets place
                                                            secrets clean
                                                            secrets pack
                                                            keychain exec

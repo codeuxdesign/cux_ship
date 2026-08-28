@@ -94,6 +94,15 @@ cux_ship appstore beta-release --build-number 52 --beta-group "External Testers"
 the reason `appstore wait` requires it: a release to testers is a release of a
 *specific* build, and "newest" would release somebody else's upload.
 
+**The group's name is the one input none of this can infer**, and it is not in
+the repository — groups are made in App Store Connect and cannot be created
+over the API. `appstore beta-groups` prints the names an app has and whether
+each is internal or external, which is the kind that decides everything above:
+
+```bash
+cux_ship appstore beta-groups
+```
+
 **The beta app description is owned like every other listing field.**
 `store/appstore/listings/<locale>/beta_description.txt` present means owned:
 reasserted on every release, so the console cannot drift from it. Absent means

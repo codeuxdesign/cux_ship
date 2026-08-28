@@ -23,6 +23,10 @@ class _FakeClient implements AscClient {
   final List<Map<String, dynamic>> groups;
   final List<String> requests = <String>[];
 
+  /// Makes the *unfiltered* listing throw, which is the enrichment call and not
+  /// the lookup — so a test can fail one without failing the other.
+  bool failUnfiltered = false;
+
   @override
   Future<List<Map<String, dynamic>>> getAll(
     String path, {
@@ -31,6 +35,9 @@ class _FakeClient implements AscClient {
     requests.add(
       'GET $path${query?['filter[name]'] == null ? '' : ' by name'}',
     );
+    if (failUnfiltered && query?['filter[name]'] == null) {
+      throw const SocketException('connection reset');
+    }
     // The real endpoint filters server-side, so the fake has to as well —
     // otherwise a lookup for a name that does not exist would come back full
     // and the 404 under test would never be reached.
@@ -137,6 +144,31 @@ void main() {
             contains('no beta group called "Externa1 Testers"'),
             contains('"Beta Testers" (external)'),
             contains('"howitwent testers" (internal)'),
+          ),
+        ),
+      ),
+    );
+  });
+
+  test('a listing that fails keeps the refusal it was meant to improve', () async {
+    // **The enrichment is a second network call inside a failure path.** If it
+    // throws, the useful refusal — the group does not exist — would be replaced
+    // by an unrelated transport error, and the diagnosis lost to the thing
+    // added to improve it. Worth having, never worth the original message.
+    final client = _FakeClient([_group('Beta Testers', internal: false)])
+      ..failUnfiltered = true;
+
+    await expectLater(
+      storeOf(client).findBetaGroup(app, 'Externa1 Testers'),
+      throwsA(
+        isA<AscApiException>().having(
+          (e) => e.toString(),
+          'message',
+          allOf(
+            contains('no beta group called "Externa1 Testers"'),
+            // Falls back to the guidance it had before the listing existed.
+            contains('App Store Connect > TestFlight > Groups'),
+            isNot(contains('This app has')),
           ),
         ),
       ),

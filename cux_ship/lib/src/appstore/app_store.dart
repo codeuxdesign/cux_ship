@@ -479,16 +479,34 @@ class AppStore {
       // "then what is it called".** A filter by exact name answers only about
       // the name asked for, so a 404 that stops there sends the reader to the
       // console to look up a string this request could have printed.
-      final existing = await betaGroups(app);
+      //
+      // **Best effort, and that is the whole reason for the catch.** This is a
+      // second network call *inside a failure path*, so letting it throw would
+      // replace a refusal that names the problem — the group does not exist —
+      // with an unrelated transport error, and the diagnosis would be lost to
+      // the thing added to improve it. The enrichment is worth having and
+      // never worth the original message.
+      var existing = const <Map<String, dynamic>>[];
+      var listed = true;
+      try {
+        existing = await betaGroups(app);
+      } on Object {
+        listed = false;
+      }
       throw AscApiException(404, [
         'no beta group called "$groupName".',
-        if (existing.isEmpty)
+        if (!listed) ...<String>[
+          'Create it once in App Store Connect > TestFlight > Groups, or pass '
+              '--beta-group with a name that exists. Groups cannot be created '
+              'over the API.',
+        ] else if (existing.isEmpty) ...<String>[
           'This app has no beta groups at all. Create one in App Store '
               'Connect > TestFlight > Groups; they cannot be created over the '
-              'API.'
-        else
+              'API.',
+        ] else ...<String>[
           'This app has: ${existing.map((g) => '"${_attributes(g)['name']}" '
               '(${isInternalBetaGroup(g) ? 'internal' : 'external'})').join(', ')}.',
+        ],
       ], request: 'GET /v1/betaGroups');
     }
     return groups.first;
