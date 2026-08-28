@@ -436,6 +436,37 @@ class AppStore {
     }
   }
 
+  /// Every beta group this app has.
+  Future<List<Map<String, dynamic>>> betaGroups(App app) =>
+      client.getAll('/v1/betaGroups', query: {'filter[app]': app.id});
+
+  /// Prints them, with the kind, because the kind decides what a release costs.
+  ///
+  /// **A name is the one input `--beta-group` cannot infer or default**, and
+  /// until this existed nothing printed one: the only command that touched
+  /// groups filtered by exact name and 404'd, so a caller who did not already
+  /// know the name had to leave the tool and read the console. That is a
+  /// read-only fact about the app, which is what the other `list*` commands
+  /// here are for.
+  Future<void> listBetaGroups(App app) async {
+    final groups = await betaGroups(app);
+    if (groups.isEmpty) {
+      stdout.writeln(
+        '  no beta groups — create one in App Store Connect > TestFlight > '
+        'Groups. They cannot be created over the API.',
+      );
+      return;
+    }
+    for (final group in groups) {
+      final attributes = _attributes(group);
+      stdout.writeln(
+        '  ${attributes['name']}  '
+        '${isInternalBetaGroup(group) ? 'internal' : 'external'}'
+        '${attributes['publicLinkEnabled'] == true ? '  (public link)' : ''}',
+      );
+    }
+  }
+
   /// The named beta group, whole, so the caller can read `isInternalGroup`
   /// before deciding what a release to it has to involve.
   Future<Map<String, dynamic>> findBetaGroup(App app, String groupName) async {
@@ -444,11 +475,38 @@ class AppStore {
       query: {'filter[app]': app.id, 'filter[name]': groupName},
     );
     if (groups.isEmpty) {
+      // **Say what does exist, because the caller's next question is always
+      // "then what is it called".** A filter by exact name answers only about
+      // the name asked for, so a 404 that stops there sends the reader to the
+      // console to look up a string this request could have printed.
+      //
+      // **Best effort, and that is the whole reason for the catch.** This is a
+      // second network call *inside a failure path*, so letting it throw would
+      // replace a refusal that names the problem — the group does not exist —
+      // with an unrelated transport error, and the diagnosis would be lost to
+      // the thing added to improve it. The enrichment is worth having and
+      // never worth the original message.
+      var existing = const <Map<String, dynamic>>[];
+      var listed = true;
+      try {
+        existing = await betaGroups(app);
+      } on Object {
+        listed = false;
+      }
       throw AscApiException(404, [
         'no beta group called "$groupName".',
-        'Create it once in App Store Connect > TestFlight > Groups, or pass '
-            '--beta-group with a name that exists. Groups cannot be created '
-            'over the API.',
+        if (!listed) ...<String>[
+          'Create it once in App Store Connect > TestFlight > Groups, or pass '
+              '--beta-group with a name that exists. Groups cannot be created '
+              'over the API.',
+        ] else if (existing.isEmpty) ...<String>[
+          'This app has no beta groups at all. Create one in App Store '
+              'Connect > TestFlight > Groups; they cannot be created over the '
+              'API.',
+        ] else ...<String>[
+          'This app has: ${existing.map((g) => '"${_attributes(g)['name']}" '
+              '(${isInternalBetaGroup(g) ? 'internal' : 'external'})').join(', ')}.',
+        ],
       ], request: 'GET /v1/betaGroups');
     }
     return groups.first;

@@ -86,6 +86,7 @@ enum AscCommand {
   promote('promote'),
   betaRelease('beta-release'),
   builds('builds'),
+  betaGroups('beta-groups'),
   versions('versions'),
   screenshotTypes('screenshot-types'),
   buildNumber('build-number'),
@@ -100,6 +101,7 @@ enum AscCommand {
   /// True for the operations that only read, which return before any write.
   bool get isRead => const {
     AscCommand.builds,
+    AscCommand.betaGroups,
     AscCommand.versions,
     AscCommand.screenshotTypes,
     AscCommand.buildNumber,
@@ -330,6 +332,7 @@ ArgParser buildAscParser(AscCommand cmd) {
         );
     case AscCommand.betaRelease:
     case AscCommand.builds:
+    case AscCommand.betaGroups:
     case AscCommand.versions:
     case AscCommand.screenshotTypes:
     case AscCommand.buildNumber:
@@ -991,6 +994,9 @@ Future<void> runAsc(
     }
     if (cmd == AscCommand.builds) {
       await store.listBuilds(app);
+    }
+    if (cmd == AscCommand.betaGroups) {
+      await store.listBetaGroups(app);
     }
     if (cmd == AscCommand.versions) {
       await store.listVersions(app);
