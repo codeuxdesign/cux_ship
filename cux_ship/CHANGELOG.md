@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.6.0
 
 **`appstore beta-groups` prints the groups an app has, and the kind of each.**
 A group's *name* is the one input `--beta-group` cannot infer, default or
