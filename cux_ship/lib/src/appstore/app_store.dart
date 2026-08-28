@@ -117,12 +117,29 @@ String? _id(Map<String, dynamic> resource) {
   return id is String ? id : null;
 }
 
-/// Whether [group] is one of Apple's internal groups, which need no beta
-/// review. Read from the resource rather than guessed from the name, because
-/// the two kinds part ways completely: an internal group receives an assigned
-/// build within minutes, an external one receives nothing until beta review.
-bool isInternalBetaGroup(Map<String, dynamic> group) =>
-    _attributes(group)['isInternalGroup'] == true;
+/// What kind of group a `betaGroups` resource says it is — or that it did
+/// not say.
+///
+/// Three states, deliberately. This used to be a bool read `== true`, which
+/// collapsed "false" and "absent": a resource not carrying the attribute
+/// reported *external*, silently, on the one field the reading exists for.
+/// Absent is a fact about the response — a sparse `fields[betaGroups]`
+/// query, an API change — not a fact about the group, and the sites acting
+/// on the kind need to decide for themselves what not knowing means there.
+/// The same shape as 3.4.1's readApkFacts fix: a reader that cannot read
+/// must not report a reading.
+enum BetaGroupKind { internal, external, unknown }
+
+/// The kind of [group], read from the resource rather than guessed from the
+/// name, because the two kinds part ways completely: an internal group
+/// receives an assigned build within minutes, an external one receives
+/// nothing until beta review.
+BetaGroupKind betaGroupKind(Map<String, dynamic> group) =>
+    switch (_attributes(group)['isInternalGroup']) {
+      true => BetaGroupKind.internal,
+      false => BetaGroupKind.external,
+      _ => BetaGroupKind.unknown,
+    };
 
 Map<String, dynamic> _attributes(Map<String, dynamic> resource) {
   final attributes = resource['attributes'];
@@ -457,11 +474,22 @@ class AppStore {
       );
       return;
     }
-    for (final group in groups) {
+    // Sorted, because the API promises no order and stable output is
+    // diffable output. `unknown` prints as itself rather than throwing: this
+    // is the command reached for while diagnosing a failed release, so one
+    // group whose kind Apple withheld must not blank the listing at the
+    // moment it is needed — and "unknown" is the truer diagnostic anyway, a
+    // fact about the response where a guessed kind points nowhere.
+    final sorted = [...groups]
+      ..sort(
+        (a, b) =>
+            '${_attributes(a)['name']}'.compareTo('${_attributes(b)['name']}'),
+      );
+    for (final group in sorted) {
       final attributes = _attributes(group);
       stdout.writeln(
         '  ${attributes['name']}  '
-        '${isInternalBetaGroup(group) ? 'internal' : 'external'}'
+        '${betaGroupKind(group).name}'
         '${attributes['publicLinkEnabled'] == true ? '  (public link)' : ''}',
       );
     }
@@ -503,13 +531,26 @@ class AppStore {
           'This app has no beta groups at all. Create one in App Store '
               'Connect > TestFlight > Groups; they cannot be created over the '
               'API.',
-        ] else ...<String>[
-          'This app has: ${existing.map((g) => '"${_attributes(g)['name']}" '
-              '(${isInternalBetaGroup(g) ? 'internal' : 'external'})').join(', ')}.',
-        ],
+        ] else ...<String>['This app has: ${_namedKinds(existing)}.'],
       ], request: 'GET /v1/betaGroups');
     }
     return groups.first;
+  }
+
+  /// `"name" (kind), …` sorted by name — the listing's order, and the
+  /// listing's treatment of `unknown`: this text exists to help a refusal,
+  /// so a kind Apple withheld prints as the fact it is rather than throwing
+  /// and costing the refusal, the way 4123a20 stopped the second network
+  /// call from doing.
+  String _namedKinds(List<Map<String, dynamic>> groups) {
+    final sorted = [...groups]
+      ..sort(
+        (a, b) =>
+            '${_attributes(a)['name']}'.compareTo('${_attributes(b)['name']}'),
+      );
+    return sorted
+        .map((g) => '"${_attributes(g)['name']}" (${betaGroupKind(g).name})')
+        .join(', ');
   }
 
   /// Adds a build to a beta group, so testers actually receive it.

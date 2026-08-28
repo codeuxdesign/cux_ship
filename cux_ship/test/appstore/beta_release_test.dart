@@ -135,6 +135,14 @@ Map<String, dynamic> _group({required bool internal}) => {
   'attributes': {'name': 'friends', 'isInternalGroup': internal},
 };
 
+/// A group whose resource does not carry `isInternalGroup` at all — the
+/// sparse-fieldset shape. A different fact from `false`, and the release
+/// path must treat it as one.
+Map<String, dynamic> _groupWithoutKind() => {
+  'id': 'G1',
+  'attributes': {'name': 'friends'},
+};
+
 Map<String, dynamic> _localization(String description) => {
   'id': 'L1',
   'attributes': {'locale': 'en-US', 'description': description},
@@ -195,6 +203,37 @@ Future<(String, bool)> _release(
 }
 
 void main() {
+  test(
+    'a group whose kind Apple did not report refuses before any write',
+    () async {
+      // The two defaults are not symmetric, which is why neither is taken.
+      // Defaulting external submits an internal group for beta review — wrong,
+      // but it fails at Apple where somebody sees it. Defaulting internal
+      // assigns an external group and prints done, which is precisely the
+      // silently hollow release this flow exists to prevent. Refusing is the
+      // only reading that cannot regress it.
+      final client = _FakeClient(
+        collections: {
+          '/v1/betaGroups': [_groupWithoutKind()],
+        },
+      );
+
+      await expectLater(
+        _release(client, dryRun: false),
+        throwsA(
+          isA<ReleaseException>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains('isInternalGroup'), contains('friends')),
+          ),
+        ),
+      );
+      expect(client.writes, isEmpty, reason: 'the refusal must precede writes');
+      // And precede the external path's reads too — nothing else was asked.
+      expect(client.log, ['GET /v1/betaGroups']);
+    },
+  );
+
   test('an internal group is assignment alone, exactly as before', () async {
     final client = _FakeClient(
       collections: {
