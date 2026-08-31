@@ -1008,8 +1008,15 @@ Future<void> runAsc(
     }
   }
 
-  // Decided here, once, and read at both sites below. See [ListingPublish]
-  // for why this is an enum and not two conditions.
+  // Decided here, once. Four reads follow; the two that pick a publish site
+  // compare it against distinct constants, which is what makes double
+  // publishing impossible rather than merely avoided. See [ListingPublish].
+  //
+  // This said "read at both sites below" until a review counted them. It was
+  // inexact when written, got worse when a fourth read was added, and survived
+  // the commit whose whole purpose was fixing the identical wording in
+  // listing_publish_test.dart's header — a fair illustration of why the
+  // counting keeps needing an outside reader.
   final publish = listingPublish(
     hasMetadata: metadata != null,
     hasArtifact: ipaPath != null,
