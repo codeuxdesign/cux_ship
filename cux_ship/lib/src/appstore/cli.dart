@@ -640,29 +640,65 @@ Future<void> _publishAscListing(
         '    (dry run created no version, so the fields below are skipped)',
       );
     } else {
-      final copyright = metadata.copyright;
+      // **Compared before writing, the same as the app-level half above.**
+      // These fields used to be rewritten with identical values on every run:
+      // harmless per request, and seven more chances to exit non-zero having
+      // already written something. Read once here; the writes below consume
+      // this rather than reading again, so the comparison and the action
+      // cannot disagree.
+      final localizations = await store.versionLocalizations(version);
+      final needsReviewDetail = metadata.reviewNotes != null;
+      final existingReviewDetail = needsReviewDetail
+          ? await store.reviewDetail(version)
+          : null;
+      final versionChanges = versionLevelChanges(
+        metadata: metadata,
+        version: version,
+        localizations: localizations,
+        reviewDetail: existingReviewDetail,
+        contact: ReviewContact.fromEnvironment(),
+      );
+
+      if (versionChanges.unverifiable.isNotEmpty) {
+        stdout.writeln(
+          '==> could not read the current '
+          '${versionChanges.unverifiable.join(", ")}, so '
+          '${versionChanges.unverifiable.length == 1 ? 'it is' : 'they are'} '
+          'written rather than assumed unchanged',
+        );
+      }
+      if (versionChanges.isEmpty && metadata.copyright != null) {
+        stdout.writeln('==> version text: already matches, nothing written');
+      }
+
+      final copyright = versionChanges.copyright;
       if (copyright != null) {
         stdout.writeln('==> copyright');
         await store.writeVersionAttributes(version, {'copyright': copyright});
       }
 
-      final reviewNotes = metadata.reviewNotes;
-      if (reviewNotes != null) {
+      final reviewDetails = versionChanges.reviewDetails;
+      if (reviewDetails != null) {
         stdout.writeln('==> review notes');
         await store.writeReviewDetails(
           version,
-          reviewNotes,
-          contact: ReviewContact.fromEnvironment(),
+          reviewDetails.notes,
+          contact: reviewDetails.contact,
+          existing: existingReviewDetail,
         );
       }
 
       for (final localeMetadata in metadata.locales) {
-        if (localeMetadata.version.isNotEmpty) {
-          stdout.writeln('==> ${localeMetadata.locale}: listing text');
+        final changedText = versionChanges.localizations[localeMetadata.locale];
+        if (changedText != null) {
+          stdout.writeln(
+            '==> ${localeMetadata.locale}: ${changedText.keys.join(", ")}',
+          );
           await store.writeVersionLocalization(
             version,
             localeMetadata.locale,
-            localeMetadata.version,
+            changedText,
+            existing: localizations,
           );
         }
         if (localeMetadata.screenshots.isNotEmpty) {
@@ -1558,9 +1594,14 @@ Future<void> runAsc(
                 'publishes it verbatim',
               );
             }
+            // Not compared, unlike the listing text: these notes are
+            // per-release and come from CHANGELOG.md, so "unchanged since
+            // last time" is not a state a release is expected to be in.
+            // The read is still passed in, so this write decides POST or
+            // PATCH from a reading rather than making its own.
             await store.writeVersionLocalization(version, locale, {
               'whatsNew': releaseNotes,
-            });
+            }, existing: await store.versionLocalizations(version));
           }
         }
         if (flag('phased')) {
