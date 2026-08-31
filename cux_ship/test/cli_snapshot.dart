@@ -61,26 +61,40 @@ String _compile() {
     ..createSync(recursive: true);
   final snapshot = '${dir.path}/cli.dill';
 
-  // Suites run in parallel and all compile, so each writes its own file and
-  // renames it into place. Rename is atomic, and a suite already reading the
-  // old one keeps it open — whereas compiling straight to the shared path
-  // would let two writers interleave into a corrupt snapshot.
-  final scratch = '$snapshot.$pid';
+  // Suites run in parallel and all compile, so each writes somewhere of its own
+  // and renames the result into place. Rename is atomic and both writers
+  // produce the same bytes from the same source, so whoever lands last is
+  // still correct, and a suite already spawning the previous one keeps its
+  // inode — whereas compiling straight to the shared path would let two
+  // writers interleave into a corrupt snapshot.
+  //
+  // **The scratch name comes from `createTempSync`, and may not come from
+  // `pid`.** It did, and CI failed where this machine had not: `dart test` runs
+  // VM suites as *isolates in one process*, so every suite reports the same
+  // pid, and two of them chose the same scratch path. The first renamed it
+  // away; the second's rename found nothing and threw `PathNotFoundException`.
+  // A process-wide identifier cannot separate writers that are not processes,
+  // and a race that resolves on timing is exactly the kind that stays green on
+  // a laptop.
+  final scratch = dir.createTempSync('compile-');
+  final compiled = '${scratch.path}/cli.dill';
   final result = Process.runSync(Platform.resolvedExecutable, [
     'compile',
     'kernel',
     cliSource,
     '-o',
-    scratch,
+    compiled,
   ]);
   // Loudly. Falling back to spawning the source here would be slow but correct,
   // which is the problem: nobody would ever notice it had happened.
   if (result.exitCode != 0) {
+    scratch.deleteSync(recursive: true);
     throw StateError(
       'could not compile $cliSource to a kernel snapshot '
       '(exit ${result.exitCode})\n${result.stdout}${result.stderr}',
     );
   }
-  File(scratch).renameSync(snapshot);
+  File(compiled).renameSync(snapshot);
+  scratch.deleteSync(recursive: true);
   return snapshot;
 }
