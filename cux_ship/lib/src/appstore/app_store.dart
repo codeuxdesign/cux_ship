@@ -361,6 +361,13 @@ List<String> unrequestedCategoryChanges({
 /// [deliveryState] is part of the identity rather than a detail beside it:
 /// the checksum is committed before ingestion finishes, so name and checksum
 /// alone match an asset Apple went on to reject.
+///
+/// **It arrives on the collection read**, measured against a live account —
+/// `/v1/appScreenshotSets/{id}/appScreenshots` carries `assetDeliveryState`
+/// with no `include` and no per-screenshot GET. That is load-bearing: if it
+/// only appeared on a single-resource read, every asset here would report a
+/// null state, nothing would ever equal `COMPLETE`, and the skip would
+/// silently never fire while looking entirely correct.
 typedef PublishedScreenshot = ({
   String? fileName,
   String? checksum,
@@ -377,6 +384,11 @@ typedef LocalScreenshot = ({String fileName, String checksum});
 /// and the next run's comparison computed another, every screenshot would
 /// re-upload for ever and the skip would silently never fire — the quiet
 /// half-failure this whole change exists to remove.
+///
+/// Measured rather than assumed: `sourceFileChecksum` as Apple reports it back
+/// equals this MD5 of the source bytes, exactly, for all four screenshots of a
+/// live macOS listing. So the comparison identifies an unchanged file, which
+/// is the single inference the whole skip rests on.
 String checksumOf(List<int> bytes) => md5.convert(bytes).toString();
 
 /// [file] reduced to what identifies it to Apple.
@@ -399,7 +411,7 @@ PublishedScreenshot readPublishedScreenshot(Map<String, dynamic> screenshot) {
 ///
 /// **The comparison that stops a release rewriting images nobody changed.**
 /// `--metadata` deleted the whole screenshot set and re-uploaded every file on
-/// every run, which SHIPPING.md called harmless. It was not: four assets going
+/// every run, which the consuming project's SHIPPING.md called harmless. It was not: four assets going
 /// up immediately before a submission is what put a version in front of Apple
 /// while its screenshots were still being ingested, and the submission was
 /// refused with `appStoreVersions … is not in valid state` — a message about
@@ -409,6 +421,12 @@ PublishedScreenshot readPublishedScreenshot(Map<String, dynamic> screenshot) {
 /// the order they were uploaded, so the same files in a different order are a
 /// different listing. Comparing as sequences means a reorder re-uploads, which
 /// is correct; comparing as sets would silently leave the old order in place.
+///
+/// Apple was observed returning them in upload order on a live account, which
+/// makes sequence comparison workable — but that was one app, one locale, four
+/// files named `01-`…`04-`, so it is evidence the choice costs nothing here
+/// rather than evidence the API promises an order. The reasoning above is what
+/// the choice rests on; the observation only says it is not gratuitous.
 ///
 /// Conservative in the one direction that matters. Any doubt — a length that
 /// differs, a name or checksum Apple did not report — is a mismatch, which
