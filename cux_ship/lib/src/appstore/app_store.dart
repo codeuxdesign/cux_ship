@@ -663,6 +663,24 @@ class ProcessingTimeout implements Exception {
       '  transferring the artifact a second time.';
 }
 
+/// What a run did to an App Store version record, when it did something that
+/// outlives the run.
+///
+/// **Both of these change what the *next* run finds.** `ensureVersion` adopts
+/// an existing editable version rather than making a second one, so a promote
+/// that fails after this point has already moved the state its rerun starts
+/// from. A failure that does not say so invites the one response that is
+/// wrong — run it again — and the second run behaves differently from the
+/// first for a reason nothing printed.
+enum VersionChange {
+  /// A version record that did not exist before this run.
+  created,
+
+  /// An existing editable version, renamed to the requested version string.
+  /// The name it had before is gone.
+  renamed,
+}
+
 /// An app record, which is the one thing in this whole pipeline that a human
 /// had to create by hand — `POST /v1/apps` does not exist.
 class App {
@@ -688,6 +706,13 @@ class AppStore {
   final AscClient client;
   final Writer writer;
   final AscPlatform platform;
+
+  /// What this run did to a version record, or null if it did nothing to one.
+  ///
+  /// Set by [ensureVersion] only when a write actually happened — never on a
+  /// dry run, which leaves nothing behind to report. Read by the failure path,
+  /// so a run that exits non-zero still names what it left.
+  ({VersionChange change, String versionString})? versionChange;
 
   Future<App> resolveApp(String bundleId) async {
     final apps = await client.getAll(
@@ -1145,9 +1170,14 @@ class AppStore {
       );
       if (renamed == null) {
         // Dry run: report the existing record, which is the one a real run
-        // would have edited, so later steps describe the right thing.
+        // would have edited, so later steps describe the right thing. Nothing
+        // was written, so there is nothing for a failure to report.
         return existing;
       }
+      versionChange = (
+        change: VersionChange.renamed,
+        versionString: versionString,
+      );
       final data = renamed['data'];
       return data is Map<String, dynamic> ? data : existing;
     }
@@ -1167,7 +1197,14 @@ class AppStore {
       },
     }, describe: 'App Store version $versionString');
     final data = created?['data'];
-    return data is Map<String, dynamic> ? data : null;
+    if (data is! Map<String, dynamic>) {
+      return null;
+    }
+    versionChange = (
+      change: VersionChange.created,
+      versionString: versionString,
+    );
+    return data;
   }
 
   /// Points an App Store version at a build App Store Connect already holds.

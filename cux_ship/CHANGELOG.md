@@ -1,5 +1,61 @@
 # Changelog
 
+## 3.6.1
+
+**`promote` no longer fails because the *other* platform is in review.** An app
+has one set of app-level records shared by both platforms, so
+`promote --platform macos` refused with 409 whenever the iOS side sat in
+`WAITING_FOR_REVIEW` — and refused at the first thing a promotion does, so
+nothing downstream ran: no version created, no build attached, no submission
+made. The gate was this package's own invention. Apple accepts a `PATCH`
+against an `appInfos` record in that state, and fastlane's
+`fetch_edit_app_info` has selected it for years. `editableVersionStates` is
+unchanged, because it is also what refuses a push against a *version* that is
+with Apple, and that refusal is correct; the app-level half now has its own
+list.
+
+**And it does not fail for a listing it was not going to change.** The
+app-level half opened by demanding an editable record before anything had
+decided whether the tree carried app-level content at all, so a promotion
+whose listing already matched App Store Connect failed for want of a record it
+would never have touched. It now reads the records once, compares field by
+field, and asks for something to write to only when something needs writing —
+which is the ordinary case on a release where the categories, the age rating
+and the name have not moved since the last one. A run that changes nothing
+writes nothing.
+
+Content rights is the exception that proves the shape: it is an attribute of
+the app rather than of an `appInfos` record, so it is no longer gated on
+acquiring one — and it is still skipped when it already matches. Two
+properties, and it needed both.
+
+**Where a refusal is still right, it now says which field and what to do.** A
+value that could not be read counts as differing rather than as matching,
+because skipping a write on the strength of not knowing is how a listing
+silently fails to publish. Refusals name the fields that would have been
+written and the states that would have accepted them, and the two 409s no
+longer read alike: "no record can be written to" is answered in App Store
+Connect, "Apple rejected this value" is answered in the tree.
+
+Writability is a whitelist. A record under active review, and any state this
+package has not enumerated, is refused rather than written to — Apple has
+changed that enum before, and an unrecognised state that refuses costs
+somebody a minute where one that writes changes something nobody examined.
+One consequence worth knowing: a record whose `appStoreState` Apple does not
+report is now refused too, where it used to be treated as editable. It only
+arises when a write is actually needed.
+
+**A promotion that fails after creating the version now says so.** Creating it
+is one of the first things a promotion does, so a failure anywhere after that
+exits non-zero having already changed what App Store Connect holds — and
+"exit 1" reads as "nothing happened". The failure now names the version it
+left behind and that a rerun will adopt rather than duplicate.
+
+**Fixed: `promote --metadata` published the whole listing twice**, clearing
+and re-uploading every screenshot both times, under a comment claiming it
+published in one place only. Two conditions at two sites that had to stay
+complementary by discipline; now one decision, read at both.
+
 ## 3.6.0
 
 **`appstore beta-groups` prints the groups an app has, and the kind of each.**

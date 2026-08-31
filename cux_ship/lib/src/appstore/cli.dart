@@ -1452,19 +1452,55 @@ Future<void> runAsc(
     }
   } on AscApiException catch (e) {
     stderr.writeln('asc_upload: $e');
+    _reportVersionLeftBehind(store);
     exitCode = 1;
   } on ProcessingTimeout catch (e) {
     // Caught rather than left to the runtime: an uncaught exception exits 255
     // with a stack trace, and a stack trace above the one sentence that says
     // "read the e-mail" is how that sentence gets skimmed past.
     stderr.writeln('asc_upload: $e');
+    _reportVersionLeftBehind(store);
     exitCode = 1;
   } on MetadataException catch (e) {
     stderr.writeln('asc_upload: ${e.message}');
+    _reportVersionLeftBehind(store);
     exitCode = 1;
   } finally {
     client.close();
   }
+}
+
+/// Names the version record a failing run left behind, if it left one.
+///
+/// **A command that exits non-zero reads as "nothing happened", and here that
+/// is false.** Creating the version is one of the first things a promotion
+/// does, so a failure anywhere after it — the listing, the submission — exits
+/// 1 having already changed what App Store Connect holds. The creation is
+/// printed when it happens, but that line is above an error and gets skimmed
+/// past, which invites the one response that is wrong: run it again. The
+/// rerun then behaves differently from the first, because `ensureVersion`
+/// adopts the record rather than making a second one.
+///
+/// Written to stderr beside the error rather than to stdout, so it survives
+/// the same redirection the error does.
+void _reportVersionLeftBehind(AppStore store) {
+  final change = store.versionChange;
+  if (change == null) {
+    return;
+  }
+  final what = switch (change.change) {
+    VersionChange.created =>
+      'created App Store version ${change.versionString}',
+    VersionChange.renamed =>
+      'renamed an existing editable version to ${change.versionString}',
+  };
+  stderr.writeln(
+    '  This run $what before it failed, and that record is still there.\n'
+    '  Running the command again will adopt it rather than make a second '
+    'one.\n'
+    '  Delete it in App Store Connect if the failure means it should not '
+    'exist.',
+  );
 }
 
 /// What is about to happen, in the terms the caller will recognise.
