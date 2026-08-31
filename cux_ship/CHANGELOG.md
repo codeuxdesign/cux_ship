@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+**A publish that changes nothing now writes nothing, including the version
+text.** 3.6.1 compared the app-level half and the screenshots before writing
+them, and rewrote the copyright, the review notes and every localized listing
+field regardless — so a run against an unchanged tree still sent seven PATCHes
+carrying identical values.
+
+Harmless per request, which is why it survived, and seven more chances to exit
+non-zero having already written something — the failure shape the rest of this
+package is built to avoid. The boundary was not a decision: each comparison in
+3.6.1 exists because a specific defect demanded one, and these fields had no
+defect behind them. The rule stopped where the bugs did.
+
+The review contact is part of the comparison, not just the notes: Apple refuses
+an update carrying notes without the whole contact beside them, so the pair is
+what gets written and the pair is what has to match. A field Apple did not
+report counts as differing, as everywhere else here.
+
+Found by a consuming project upgrading to 3.6.1 and reading its own
+`--listing-only --dry-run` output — the same run that confirmed the screenshot
+skip working for the first time.
+
 ## 3.6.1
 
 **`appstore promote` can say how the release should start, and always says how

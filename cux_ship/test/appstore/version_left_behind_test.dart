@@ -89,6 +89,7 @@ Map<String, dynamic> _version(
 };
 
 void main() {
+  _localizationForUploadTests();
   final app = App('APP', 'Example', 'design.codeux.example');
 
   test(
@@ -296,5 +297,80 @@ void main() {
     await store.ensureVersion(app, '1.1.3', create: true);
 
     expect(store.versionChange, isNull);
+  });
+}
+
+/// Counts reads, so a test can assert both halves of a cache: that it saves
+/// the request it claims to, and that it does not save the one that matters.
+class _CountingClient implements AscClient {
+  _CountingClient(this.localizations);
+
+  final List<Map<String, dynamic>> localizations;
+  int localizationReads = 0;
+
+  @override
+  Future<List<Map<String, dynamic>>> getAll(
+    String path, {
+    Map<String, String>? query,
+  }) async {
+    if (path.contains('appStoreVersionLocalizations')) {
+      localizationReads++;
+      return localizations;
+    }
+    return const [];
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+Map<String, dynamic> _loc(String locale) => {
+  'type': 'appStoreVersionLocalizations',
+  'id': 'loc-$locale',
+  'attributes': {'locale': locale},
+};
+
+void _localizationForUploadTests() {
+  group('picking the localization screenshots hang off', () {
+    test('a locale already in the reading costs no request', () {
+      final client = _CountingClient([_loc('en-US')]);
+      final store = _store(client, dryRun: false);
+
+      expect(
+        store.localizationForUpload(
+          _version('1.1.3', 'PREPARE_FOR_SUBMISSION'),
+          'en-US',
+          known: [_loc('en-US')],
+        ),
+        completion(isNotNull),
+      );
+      expect(client.localizationReads, 0);
+    });
+
+    test(
+      'a locale absent from the reading is re-read, not given up on',
+      () async {
+        // **The regression this exists for.** A locale publishing for the first
+        // time has its record created by the listing-text write moments earlier,
+        // after the reading was taken. Trusting the cache here reports "no
+        // localization yet" and silently uploads none of its screenshots, while
+        // the text goes up — a first publish that looks like it worked.
+        final client = _CountingClient([_loc('fr-FR')]);
+        final store = _store(client, dryRun: false);
+
+        final found = await store.localizationForUpload(
+          _version('1.1.3', 'PREPARE_FOR_SUBMISSION'),
+          'fr-FR',
+          known: const [],
+        );
+
+        expect(
+          found,
+          isNotNull,
+          reason: 'the record exists; the cache is stale',
+        );
+        expect(client.localizationReads, 1);
+      },
+    );
   });
 }

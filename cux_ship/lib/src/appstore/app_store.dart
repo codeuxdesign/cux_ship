@@ -672,6 +672,181 @@ class AppLevelChanges {
   }.toList();
 }
 
+/// The record for [locale] among [localizations], or null when it has none.
+///
+/// A lookup in a list already in hand, not a request. Its existence is the
+/// point: every write site here used to fetch these records for itself and
+/// throw them away.
+Map<String, dynamic>? localizationFor(
+  List<Map<String, dynamic>> localizations,
+  String locale,
+) {
+  for (final localization in localizations) {
+    if (_attributes(localization)['locale'] == locale) {
+      return localization;
+    }
+  }
+  return null;
+}
+
+/// What a version-level publish would change, and nothing it would not.
+///
+/// **The sibling of [AppLevelChanges], and it arrived later for a reason worth
+/// writing down.** Each comparison in this file exists because a specific
+/// defect demanded it: the app-level half compares because demanding an
+/// editable record unconditionally made `promote` fail with 409 while the
+/// other platform was in review, and screenshots compare because deleting and
+/// re-uploading them immediately before a submission put a version in front of
+/// Apple with its assets still ingesting.
+///
+/// These fields had no such forcing function, so a run that changed nothing
+/// still rewrote the copyright, the review notes and five localized strings
+/// with identical values. Harmless per request — and still seven more chances
+/// to exit non-zero having already written something, which is the failure
+/// shape this file spends most of its comments on. *A run that changes nothing
+/// writes nothing* did not stop at the set boundary on purpose; it stopped
+/// where the bugs did.
+///
+/// **And it was the cheapest of the three, not the most expensive**, which is
+/// worth saying because the order they were built in implies the opposite.
+/// Both writers already read the current values in order to choose between
+/// POST and PATCH, and threw them away; the comparison needed no new request
+/// and no `?include=`. Categories were the awkward one — the bare read returns
+/// no `data` key for a relationship at all, measured against a live account,
+/// so comparing them needed a changed query. Doing this half actually *removes*
+/// requests, because one reading now serves every locale instead of one per
+/// write site.
+class VersionLevelChanges {
+  VersionLevelChanges({
+    required this.copyright,
+    required this.localizations,
+    required this.reviewDetails,
+  });
+
+  /// `appStoreVersions.copyright`, when it differs; null when it does not.
+  final String? copyright;
+
+  /// locale -> the `appStoreVersionLocalizations` attributes that differ.
+  final Map<String, Map<String, String>> localizations;
+
+  /// The notes and contact to push, when either differs.
+  ///
+  /// One field rather than two, because Apple refuses an *update* that carries
+  /// notes without the whole contact beside them — so the pair is what gets
+  /// written, and the pair is what has to be compared.
+  final ({String notes, ReviewContact? contact})? reviewDetails;
+
+  bool get isEmpty =>
+      copyright == null && localizations.isEmpty && reviewDetails == null;
+}
+
+/// Compares the version-scoped half of [metadata] against what Apple holds.
+///
+/// Pure, like [appLevelChanges], and for the same reason: a comparison that is
+/// wrong in one field skips a write and reports success, which is the quietest
+/// way this package can fail.
+///
+/// [localizations] carries no "could not be read" case, unlike its app-level
+/// twin: `versionLocalizations` returns a list or throws, so a caller has
+/// either read them or has already failed. An empty list is a reading — the
+/// locale genuinely has no record yet and the write creates one.
+///
+/// The nullable version of this parameter, and the `unverifiable` list it fed,
+/// were written by symmetry with [appLevelChanges], where the null case is
+/// real. Here no caller could reach them, so the documented degrade-to-write
+/// path did not exist and the message announcing it could never print.
+VersionLevelChanges versionLevelChanges({
+  required AppStoreMetadata metadata,
+  required Map<String, dynamic> version,
+  required List<Map<String, dynamic>> localizations,
+  required Map<String, dynamic>? reviewDetail,
+  required ReviewContact? contact,
+}) {
+  final wantedCopyright = metadata.copyright;
+  final currentCopyright = _attributes(version)['copyright'] as String?;
+  final copyright =
+      wantedCopyright == null || wantedCopyright == currentCopyright
+      ? null
+      : wantedCopyright;
+
+  final differing = <String, Map<String, String>>{};
+  for (final localeMetadata in metadata.locales) {
+    final wanted = localeMetadata.version;
+    if (wanted.isEmpty) {
+      continue;
+    }
+    final existing = localizations
+        .where((l) => _attributes(l)['locale'] == localeMetadata.locale)
+        .toList();
+    if (existing.isEmpty) {
+      // No record yet: everything differs and the write creates one. Read,
+      // not assumed, so not unverifiable.
+      differing[localeMetadata.locale] = Map.of(wanted);
+      continue;
+    }
+    final current = _attributes(existing.first);
+    final changed = <String, String>{
+      for (final entry in wanted.entries) ...{
+        if (current[entry.key] != entry.value) ...{entry.key: entry.value},
+      },
+    };
+    if (changed.isNotEmpty) {
+      differing[localeMetadata.locale] = changed;
+    }
+  }
+
+  ({String notes, ReviewContact? contact})? reviewDetails;
+  final wantedNotes = metadata.reviewNotes;
+  if (wantedNotes != null) {
+    final current = reviewDetail == null ? null : _attributes(reviewDetail);
+    // The contact goes with every write, so it is part of what "unchanged"
+    // means. Comparing the notes alone would skip a run whose only change was
+    // the reviewer's phone number.
+    final wantedAll = <String, String>{
+      'notes': wantedNotes,
+      ...?contact?.attributes,
+    };
+    if (current == null) {
+      reviewDetails = (notes: wantedNotes, contact: contact);
+    } else if (wantedAll.entries.any(
+      (entry) => current[entry.key] != entry.value,
+    )) {
+      // No `containsKey` guard here, unlike the age rating, and the
+      // difference is worth stating because the analogy invites one. Age
+      // rating answers are `Object?` and a declared one may itself be null,
+      // so there `null == null` would read an unreported attribute as a
+      // match. These values are all non-null strings, so an attribute Apple
+      // did not report already compares unequal and an extra guard would be
+      // unreachable — a check that cannot fail, above a comment claiming it
+      // can. Verified: adding it changes no test.
+      reviewDetails = (notes: wantedNotes, contact: contact);
+    }
+  }
+
+  return VersionLevelChanges(
+    copyright: copyright,
+    localizations: differing,
+    reviewDetails: reviewDetails,
+  );
+}
+
+/// Whether [metadata] declares any version-scoped *text* — copyright, review
+/// notes, or per-locale listing fields.
+///
+/// Screenshots are deliberately excluded: they report their own skip line per
+/// display type, so counting them here would announce "already matches" for a
+/// tree that declares nothing this sentence is about.
+///
+/// Its own predicate because the obvious shortcut is wrong in the way this
+/// package keeps being wrong. This was `metadata.copyright != null` — a proxy
+/// that happens to hold for the tree it was written against, and silently
+/// says nothing for a tree carrying a description and no copyright. The same
+/// undercount [listingNeedsVersion] shipped with, one release apart.
+bool declaresVersionText(AppStoreMetadata metadata) =>
+    metadata.copyright != null ||
+    metadata.reviewNotes != null ||
+    metadata.locales.any((locale) => locale.version.isNotEmpty);
+
 /// Whether [metadata] carries anything Apple scopes to a version rather than
 /// to the app — copyright, review notes, listing text, screenshots.
 ///
@@ -1672,18 +1847,22 @@ class AppStore {
     }, describe: attributes.keys.join(', '));
   }
 
-  /// Writes one locale's version-scoped fields, including the release notes.
+  /// Writes [attributes] for [locale], creating the localization when
+  /// [existing] — the records [versionLocalizations] already returned — has
+  /// none.
+  ///
+  /// The list is passed in rather than read again so the comparison that
+  /// produced [attributes] and the choice between POST and PATCH are made
+  /// from the same reading.
   Future<void> writeVersionLocalization(
     Map<String, dynamic> version,
     String locale,
-    Map<String, String> attributes,
-  ) async {
+    Map<String, String> attributes, {
+    required List<Map<String, dynamic>> existing,
+  }) async {
     if (attributes.isEmpty) {
       return;
     }
-    final existing = await client.getAll(
-      '/v1/appStoreVersions/${_id(version)}/appStoreVersionLocalizations',
-    );
     final match = existing
         .where((l) => _attributes(l)['locale'] == locale)
         .toList();
@@ -1785,6 +1964,54 @@ class AppStore {
       query: {'filter[platform]': platform.api},
     );
     return all.every((v) => _id(v) == _id(version));
+  }
+
+  /// Every `appStoreVersionLocalizations` record of [version].
+  ///
+  /// Read once and passed to both the comparison and the write, so the two
+  /// cannot disagree about whether a locale already has a record.
+  Future<List<Map<String, dynamic>>> versionLocalizations(
+    Map<String, dynamic> version,
+  ) => client.getAll(
+    '/v1/appStoreVersions/${_id(version)}/appStoreVersionLocalizations',
+  );
+
+  /// The `appStoreReviewDetail` of [version], or null when it has none yet.
+  Future<Map<String, dynamic>?> reviewDetail(
+    Map<String, dynamic> version,
+  ) async {
+    final existing = await client.get(
+      '/v1/appStoreVersions/${_id(version)}/appStoreReviewDetail',
+    );
+    final data = existing['data'];
+    return data is Map<String, dynamic> && data['id'] != null ? data : null;
+  }
+
+  /// The localization for [locale], re-read only when [known] does not have
+  /// it.
+  ///
+  /// **The cache is right for every locale that already existed and wrong for
+  /// the one that did not.** Screenshots hang off the localization record, and
+  /// a locale publishing for the first time has that record *created* by the
+  /// listing-text write a few lines earlier — after [known] was read. Looking
+  /// it up in [known] then finds nothing and reports "no localization yet, so
+  /// its screenshots are skipped", so a first publish uploads the text and
+  /// silently none of the images.
+  ///
+  /// That is exactly what a straight cache substitution cost, and it looked
+  /// like an optimisation because the common case — a locale Apple already
+  /// holds — is unaffected. So the re-read survives for precisely the case it
+  /// was there for, and nowhere else.
+  Future<Map<String, dynamic>?> localizationForUpload(
+    Map<String, dynamic> version,
+    String locale, {
+    required List<Map<String, dynamic>> known,
+  }) async {
+    final cached = localizationFor(known, locale);
+    if (cached != null) {
+      return cached;
+    }
+    return versionLocalization(version, locale);
   }
 
   /// The `appStoreVersionLocalizations` record for [locale], or null.
@@ -1998,20 +2225,19 @@ class AppStore {
   /// which comes back as "we were unable to evaluate your app", days later,
   /// with nothing to fix.
   ///
-  /// Created where the version has no review detail yet and patched where it
-  /// has. Apple may then demand contact fields on the create; that error is left
-  /// to speak for itself rather than pre-empted with invented values, because a
+  /// Apple may demand contact fields on the create; that error is left to
+  /// speak for itself rather than pre-empted with invented values, because a
   /// wrong contact is worse than a missing one.
+  /// Writes the reviewer-facing notes and contact, creating the record when
+  /// [existing] — what [reviewDetail] already returned — is null.
   Future<void> writeReviewDetails(
     Map<String, dynamic> version,
     String notes, {
     ReviewContact? contact,
+    required Map<String, dynamic>? existing,
   }) async {
     final versionId = _id(version);
-    final existing = await client.get(
-      '/v1/appStoreVersions/$versionId/appStoreReviewDetail',
-    );
-    final data = existing['data'];
+    final data = existing;
 
     // **All four contact fields go with every write, not only the first.**
     // Creating a review detail with nothing but notes succeeds; *updating* one
