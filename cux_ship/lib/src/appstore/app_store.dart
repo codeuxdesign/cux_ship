@@ -724,6 +724,18 @@ class AppStore {
   /// so a run that exits non-zero still names what it left.
   ({VersionChange change, String versionString})? versionChange;
 
+  /// The `reviewSubmissions` container this run created, if it created one.
+  ///
+  /// The sibling of [versionChange], and found the same way — by a run that
+  /// failed at `POST /v1/reviewSubmissionItems`, leaving a submission in
+  /// READY_FOR_REVIEW with no version in it and nothing in the output saying
+  /// so. Unlike the version, a rerun *does* adopt this one; [submitForReview]
+  /// looks for an open container first, because an unsubmitted one from an
+  /// earlier attempt blocks a new one and Apple's error does not say so. That
+  /// is worth stating in the failure rather than leaving somebody to discover
+  /// that an empty container is both harmless and load-bearing.
+  String? createdReviewSubmission;
+
   Future<App> resolveApp(String bundleId) async {
     final apps = await client.getAll(
       '/v1/apps',
@@ -1711,6 +1723,9 @@ class AppStore {
       }, describe: 'review submission');
       final data = created?['data'];
       submissionId = data is Map<String, dynamic> ? _id(data) : null;
+      // Only when one was really made. A dry run creates nothing, so it has
+      // nothing to leave behind and nothing to report.
+      createdReviewSubmission = submissionId;
     }
 
     if (submissionId == null) {

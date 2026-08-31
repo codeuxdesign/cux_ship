@@ -123,6 +123,31 @@ void main() {
     expect(store.versionChange, isNull);
   });
 
+  test('creating a review submission is recorded too', () async {
+    // The sibling, found by a run that failed at POST reviewSubmissionItems
+    // and left a container in READY_FOR_REVIEW with no version in it.
+    final store = _store(_FakeClient(), dryRun: false);
+    expect(store.createdReviewSubmission, isNull);
+
+    await store.submitForReview(
+      app,
+      _version('1.1.3', 'PREPARE_FOR_SUBMISSION'),
+    );
+
+    expect(store.createdReviewSubmission, isNotNull);
+  });
+
+  test('a dry run opens no submission, so it reports none', () async {
+    final store = _store(_FakeClient(), dryRun: true);
+
+    await store.submitForReview(
+      app,
+      _version('1.1.3', 'PREPARE_FOR_SUBMISSION'),
+    );
+
+    expect(store.createdReviewSubmission, isNull);
+  });
+
   test('finding the version already there changes nothing', () async {
     // Nothing was written, so there is nothing to warn about — the record
     // existed before this run and will exist after it.

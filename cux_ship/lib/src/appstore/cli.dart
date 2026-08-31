@@ -1469,18 +1469,18 @@ Future<void> runAsc(
     }
   } on AscApiException catch (e) {
     stderr.writeln('asc_upload: $e');
-    _reportVersionLeftBehind(store);
+    _reportStateLeftBehind(store);
     exitCode = 1;
   } on ProcessingTimeout catch (e) {
     // Caught rather than left to the runtime: an uncaught exception exits 255
     // with a stack trace, and a stack trace above the one sentence that says
     // "read the e-mail" is how that sentence gets skimmed past.
     stderr.writeln('asc_upload: $e');
-    _reportVersionLeftBehind(store);
+    _reportStateLeftBehind(store);
     exitCode = 1;
   } on MetadataException catch (e) {
     stderr.writeln('asc_upload: ${e.message}');
-    _reportVersionLeftBehind(store);
+    _reportStateLeftBehind(store);
     exitCode = 1;
   } finally {
     client.close();
@@ -1524,24 +1524,38 @@ String _removedCharacters(String original, String stripped) {
 ///
 /// Written to stderr beside the error rather than to stdout, so it survives
 /// the same redirection the error does.
-void _reportVersionLeftBehind(AppStore store) {
+void _reportStateLeftBehind(AppStore store) {
   final change = store.versionChange;
-  if (change == null) {
-    return;
+  if (change != null) {
+    final what = switch (change.change) {
+      VersionChange.created =>
+        'created App Store version ${change.versionString}',
+      VersionChange.renamed =>
+        'renamed an existing editable version to ${change.versionString}',
+    };
+    stderr.writeln(
+      '  This run $what before it failed, and that record is still there.\n'
+      '  Running the command again will adopt it rather than make a second '
+      'one.\n'
+      '  Delete it in App Store Connect if the failure means it should not '
+      'exist.',
+    );
   }
-  final what = switch (change.change) {
-    VersionChange.created =>
-      'created App Store version ${change.versionString}',
-    VersionChange.renamed =>
-      'renamed an existing editable version to ${change.versionString}',
-  };
-  stderr.writeln(
-    '  This run $what before it failed, and that record is still there.\n'
-    '  Running the command again will adopt it rather than make a second '
-    'one.\n'
-    '  Delete it in App Store Connect if the failure means it should not '
-    'exist.',
-  );
+
+  final submission = store.createdReviewSubmission;
+  if (submission != null) {
+    // Reported separately because the advice is the opposite: an empty
+    // container is not litter to clear up, it is what the next attempt
+    // reuses — and deleting it is the one thing that would make a rerun
+    // behave worse.
+    stderr.writeln(
+      '  It also opened review submission $submission, which may be empty.\n'
+      '  Leave it: an unsubmitted container blocks a new one, so the next '
+      'run\n'
+      '  reuses this one rather than failing on an error that does not say '
+      'why.',
+    );
+  }
 }
 
 /// What is about to happen, in the terms the caller will recognise.
