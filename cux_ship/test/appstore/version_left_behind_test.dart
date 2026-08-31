@@ -88,8 +88,81 @@ Map<String, dynamic> _version(
   },
 };
 
+/// Records every request in order, so a test can assert what happened *before*
+/// a refusal rather than only that it refused.
+class _OrderedClient implements AscClient {
+  _OrderedClient(this.versions);
+
+  final List<Map<String, dynamic>> versions;
+  final List<String> calls = [];
+
+  @override
+  Future<List<Map<String, dynamic>>> getAll(
+    String path, {
+    Map<String, String>? query,
+  }) async {
+    calls.add('GET $path');
+    return path.contains('appStoreVersions') ? versions : const [];
+  }
+
+  @override
+  Future<Map<String, dynamic>> patch(
+    String path,
+    Map<String, dynamic> b,
+  ) async {
+    calls.add('PATCH $path');
+    return {'data': <String, dynamic>{}};
+  }
+
+  @override
+  Future<Map<String, dynamic>> post(String path, Map<String, dynamic> b) async {
+    calls.add('POST $path');
+    return {'data': <String, dynamic>{}};
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+void _acquireBeforeWriteTests() {
+  test('refusing a non-editable version costs no write of its own', () async {
+    // **This pins `ensureVersion`, not the ordering it was moved for**, and
+    // the difference is worth stating because the name could easily claim
+    // more. Reverting the hoist in `_publishAscListing` leaves this green:
+    // `ensureVersion` behaves identically wherever it is called from.
+    //
+    // The invariant the hoist exists for — every acquisition that can refuse
+    // happens before any write, not before its own write — is a property of
+    // `_publishAscListing`, which is private and driven by no test: reaching
+    // it needs credentials and a store. It is held structurally instead, by
+    // the acquisition sitting above the first write with the reasoning beside
+    // it. Verified by mutation: moving it back makes no test fail, which is
+    // exactly why the comment there has to carry the weight.
+    //
+    // What this does pin is still worth having — that the refusal itself is a
+    // read that writes nothing, which is what makes hoisting it free.
+    final client = _OrderedClient([_version('1.0.3', 'READY_FOR_SALE')]);
+    final store = _store(client, dryRun: false);
+
+    await expectLater(
+      store.ensureVersion(
+        App('APP', 'Example', 'design.codeux.example'),
+        '1.0.3',
+        create: true,
+      ),
+      throwsA(isA<AscApiException>()),
+    );
+    expect(
+      client.calls.where((c) => !c.startsWith('GET')),
+      isEmpty,
+      reason: 'the refusal cost a write',
+    );
+  });
+}
+
 void main() {
   _localizationForUploadTests();
+  _acquireBeforeWriteTests();
   final app = App('APP', 'Example', 'design.codeux.example');
 
   test(

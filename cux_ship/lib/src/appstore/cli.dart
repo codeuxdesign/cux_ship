@@ -569,6 +569,51 @@ Future<void> _publishAscListing(
     ], request: 'GET /v1/appInfos');
   }
 
+  // **Every acquisition that can refuse happens before any write — not
+  // before its own write.**
+  //
+  // That distinction is the whole of this block. The app-level half already
+  // acquired its record before writing app-level fields, and satisfied the
+  // rule *per resource* while breaking it for the pair: the version was
+  // acquired after those writes, so a run against a version Apple will not
+  // let anyone edit wrote content rights, categories, the age rating and the
+  // localized name, and only then took a 409 naming the version.
+  //
+  // Per-resource is not a weaker form of the rule; it is a different rule
+  // that happens to coincide when there is one resource, which is why fixing
+  // the instance would have looked complete and left the next resource added
+  // to inherit the shape.
+  //
+  // Observed rather than reasoned about: a `--listing-only` run against a
+  // READY_FOR_SALE version printed the app-level result and *then* refused.
+  // It wrote nothing only because that tree happened to match. It needs
+  // app-level drift and an unusable version together — the combination
+  // nobody arranges and everybody meets after a rejection.
+  //
+  // Acquiring here costs nothing when it refuses, which is the common
+  // failure. When it instead *creates* a version that write comes first, and
+  // a later failure leaves a version behind — which the run already names.
+  //
+  // **No test holds this ordering**, and that is stated rather than hoped:
+  // `_publishAscListing` is private and needs credentials and a store to
+  // reach, so moving this line back below the writes fails nothing. Verified
+  // by mutation rather than assumed. The suite pins that the refusal is a
+  // read which writes nothing — what makes the hoist free — and this comment
+  // is the only thing holding where it sits.
+  final needsVersion = listingNeedsVersion(metadata);
+  if (needsVersion && versionName == null) {
+    // Unreachable via [runAsc], which asks the same question offline before a
+    // credential is loaded — see the check beside [listingPublish]. Kept as
+    // the invariant refusing to depend on its caller.
+    fail(
+      'pushing descriptions or screenshots needs --version-name, because '
+      'Apple scopes them to a version rather than to the app',
+    );
+  }
+  final version = needsVersion
+      ? await store.ensureVersion(app, versionName!, create: true)
+      : null;
+
   final contentRights = changes.contentRights;
   if (contentRights != null) {
     stdout.writeln('==> content rights');
@@ -616,25 +661,9 @@ Future<void> _publishAscListing(
     }
   }
 
-  // The version-scoped half needs a version to hang off. Created when
-  // absent, because a listing push before the first release is exactly
-  // when there is nothing there yet.
-  final needsVersion = listingNeedsVersion(metadata);
+  // The version-scoped half, hanging off the record acquired above rather
+  // than one fetched here — see the invariant beside that acquisition.
   if (needsVersion) {
-    if (versionName == null) {
-      // Unreachable via [runAsc], which asks the same question offline before
-      // a credential is loaded — see the check beside [listingPublish]. Kept
-      // because a missing version name must never be discovered *here*: by
-      // this point the app-level half has been written, and a run that fails
-      // after writing half a listing is the failure this file is built to
-      // avoid. The offline check is the one that fires; this one is the
-      // invariant refusing to depend on it.
-      fail(
-        'pushing descriptions or screenshots needs --version-name, because '
-        'Apple scopes them to a version rather than to the app',
-      );
-    }
-    final version = await store.ensureVersion(app, versionName, create: true);
     if (version == null) {
       stdout.writeln(
         '    (dry run created no version, so the fields below are skipped)',
