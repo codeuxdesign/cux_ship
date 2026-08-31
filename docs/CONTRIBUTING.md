@@ -1,6 +1,6 @@
 # Contributing
 
-Three rules, and a rule about the rules.
+Four rules, and a rule about the rules.
 
 ## The rule about the rules
 
@@ -16,6 +16,30 @@ listed here, because its twice-missed entries (#17, #22) are now held by
 Rules about *code* stay in the code, as comments beside what they govern, and
 in `docs/design/` — a copy here would drift from the original. What earns a
 place below is cross-cutting: true of every test and no particular one.
+
+## A claim about both stores is checked against both
+
+**A sentence asserting what "the stores" do — or what an unqualified
+`promote`, `upload` or `--dry-run` does — is verified against both
+implementations, or split into one statement per store.** The CLI is
+deliberately symmetric and the stores are not: Play has an edit transaction and
+commits atomically, the App Store has none and every write lands as it is made;
+a Play promotion is public immediately, an App Store promotion goes to review
+and then waits on `releaseType`; Play normalises unset options to defaults, the
+App Store side leaves remote state alone. A claim written about the shared verb
+is therefore written in whichever store the author had in mind, and is false
+about the other.
+
+Twice, in one bullet list. *"`play promote` and `appstore promote` are public
+immediately"* was true of Play only, in the section headed **What cannot be
+undone**. *"`--dry-run` ... opens a real store edit ... deletes the edit"* was
+true of Play only, and the App Store has no edit to open. Both sat in the
+safety section, and both survived because the sentence read as being about the
+tool rather than about a store.
+
+This cannot be a check — prose claims have no mechanical oracle — which is why
+it is here rather than in a test. The fix each time was to split the sentence,
+and the split is the shape to reach for.
 
 ## Watch the test fail
 

@@ -216,6 +216,28 @@ void main() {
     );
   });
 
+  test('a scheduled version under its own name is refused too', () async {
+    // The exact-match path, which the rename test does not reach. It has its
+    // own guard call, and until this existed that call could be deleted with
+    // the whole suite still green: the switch that used to make it
+    // compiler-exhaustive became a guard plus an early return, so removing it
+    // stopped being a compile error and started being a silent return —
+    // accepted, never written, exit zero, which is the class this option
+    // exists to kill.
+    final client = _FakeClient(
+      existing: [
+        _version('1.1.3', 'PREPARE_FOR_SUBMISSION', releaseType: 'SCHEDULED'),
+      ],
+    );
+    final store = _store(client, dryRun: false);
+
+    await expectLater(
+      store.ensureVersion(app, '1.1.3', create: true, releaseType: 'MANUAL'),
+      throwsA(isA<AscApiException>()),
+    );
+    expect(client.patched, isEmpty);
+  });
+
   test('a rename records the name it took away', () async {
     // The remedy for an adopted record is putting the name back, not deleting
     // it — and a message that says "renamed something to 1.1.3" without

@@ -144,8 +144,11 @@ Refusals a release runner will actually hit, each meaning what it says:
   are `cux_ship verify` and the test-suite functions.
 
   On **Play** it opens a real edit, does every step inside it, and deletes the
-  edit instead of committing — so Google validates the whole thing and then
-  throws it away. That is a strong rehearsal.
+  edit instead of committing, so Google validates the contents and then throws
+  them away. A strong rehearsal, with two edges: the checks `edits.commit`
+  performs are never reached, because the edit is deleted rather than
+  committed, and the data-safety declaration is a separate API outside the
+  edit that a dry run does not send at all.
 
   On the **App Store** there is no edit to open: App Store Connect has no edit
   transaction, so every write lands the moment it is made and a rehearsal can
@@ -154,12 +157,19 @@ Refusals a release runner will actually hit, each meaning what it says:
   a dry run that prints cleanly can still fail for real on a value Apple
   rejects.
 
-  **Weaker again on `appstore promote`.** Creating the version is a write, so
-  a dry run creates none, and everything that hangs off the version is then
-  skipped — the listing publish and the submission included. A green
-  `appstore promote --dry-run` has exercised almost none of the promote path.
-  Read it as "the arguments and the reads are sound", not as "this would have
+  **Weaker again on `appstore promote`, when the version does not exist yet.**
+  Creating it is a write, so a dry run creates none, and everything hanging off
+  the version is then skipped — the listing publish and the submission
+  included. That is the ordinary repeat release, and there a green
+  `appstore promote --dry-run` has exercised almost none of the promote path:
+  read it as "the arguments and the reads are sound", not "this would have
   worked".
+
+  When the version *does* already exist — the requested one, or the editable
+  one cux_ship adopts by renaming — the dry run has a record to work from and
+  rehearses the rest as would-writes. So how much a promote dry run proves
+  depends on state you may not have checked. The line it prints about creating
+  or renaming the version is the tell.
 - **A published pub.dev version is permanent** (retraction is a seven-day window,
   not an undo), if you are working on cux_ship itself.
 

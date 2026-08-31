@@ -1563,7 +1563,7 @@ class AppStore {
       // the version string had been patched would leave the version renamed
       // and its release type untouched — the half-applied run this file's
       // ordering exists to prevent.
-      refuseScheduledRelease(existing, releaseType);
+      _refuseScheduledRelease(existing, releaseType);
       final was = _attributes(existing)['versionString'];
       final renamed = await writer.patch(
         '/v1/appStoreVersions/${_id(existing)}',
@@ -1712,21 +1712,16 @@ class AppStore {
     }
   }
 
-  /// Writes [requested] onto [version] when it differs, and returns the record
-  /// that now describes it.
+  /// Throws when [requested] would change [version] away from `SCHEDULED`.
   ///
-  /// **Returns the PATCH's own response rather than the record it was handed**,
-  /// so a caller reporting the effective release type reports what Apple
-  /// acknowledged rather than what was true a moment earlier. On a dry run the
-  /// writer returns null and the pre-write record comes back unchanged, which
-  /// is correct: nothing was written, so nothing about it has changed.
-  /// Throws when [requested] would change a version away from `SCHEDULED`.
-  ///
-  /// Separate from [_applyReleaseType] so it can run *before* a write. The
-  /// rename path patches the version string first; refusing after that would
-  /// leave the version renamed and its release type untouched — half applied,
-  /// which is the failure this file's ordering exists to prevent.
-  void refuseScheduledRelease(Map<String, dynamic> version, String? requested) {
+  /// Its own function so it can run *before* a write. The rename path patches
+  /// the version string first; refusing after that would leave the version
+  /// renamed and its release type untouched — half applied, which is the
+  /// failure this file's ordering exists to prevent.
+  void _refuseScheduledRelease(
+    Map<String, dynamic> version,
+    String? requested,
+  ) {
     final current = _attributes(version)['releaseType'] as String?;
     if (releaseTypeChange(requested: requested, current: current) !=
         ReleaseTypeChange.refuseScheduled) {
@@ -1742,13 +1737,21 @@ class AppStore {
     ], request: 'PATCH /v1/appStoreVersions');
   }
 
+  /// Writes [requested] onto [version] when it differs, and returns the record
+  /// that now describes it.
+  ///
+  /// **Returns the PATCH's own response rather than the record it was handed**,
+  /// so a caller reporting the effective release type reports what Apple
+  /// acknowledged rather than what was true a moment earlier. On a dry run the
+  /// writer returns null and the pre-write record comes back unchanged, which
+  /// is correct: nothing was written, so nothing about it has changed.
   Future<Map<String, dynamic>> _applyReleaseType(
     Map<String, dynamic> version,
     String? requested,
   ) async {
     // Throws on a scheduled version. First, so the refusal happens before the
     // write on every path that reaches here.
-    refuseScheduledRelease(version, requested);
+    _refuseScheduledRelease(version, requested);
     final current = _attributes(version)['releaseType'] as String?;
     if (releaseTypeChange(requested: requested, current: current) !=
         ReleaseTypeChange.write) {
