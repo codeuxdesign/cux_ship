@@ -1,6 +1,6 @@
 # Changelog
 
-## 3.6.1
+## Unreleased
 
 **`promote` no longer fails because the *other* platform is in review.** An app
 has one set of app-level records shared by both platforms, so

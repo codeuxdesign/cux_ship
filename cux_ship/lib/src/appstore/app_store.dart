@@ -387,8 +387,16 @@ typedef LocalScreenshot = ({String fileName, String checksum});
 ///
 /// Measured rather than assumed: `sourceFileChecksum` as Apple reports it back
 /// equals this MD5 of the source bytes, exactly, for all four screenshots of a
-/// live macOS listing. So the comparison identifies an unchanged file, which
-/// is the single inference the whole skip rests on.
+/// live macOS listing. So the comparison identifies an unchanged file, which is
+/// the single inference the whole skip rests on.
+///
+/// Two limits on that measurement, because it is easy to read it as more than
+/// it is. It is a *round trip* — those bytes were committed by this package
+/// forty minutes earlier, so it shows Apple returns what it was given, not
+/// independently that Apple computes an MD5 of its own. And it exercises only
+/// the identity direction: unchanged in, match out. Nothing has yet watched a
+/// *changed* file fail to match, which is the direction that would catch a
+/// checksum this package computes over the wrong bytes.
 String checksumOf(List<int> bytes) => md5.convert(bytes).toString();
 
 /// [file] reduced to what identifies it to Apple.
@@ -411,7 +419,8 @@ PublishedScreenshot readPublishedScreenshot(Map<String, dynamic> screenshot) {
 ///
 /// **The comparison that stops a release rewriting images nobody changed.**
 /// `--metadata` deleted the whole screenshot set and re-uploaded every file on
-/// every run, which the consuming project's SHIPPING.md called harmless. It was not: four assets going
+/// every run, which the consuming project's SHIPPING.md called harmless. It
+/// was not: four assets going
 /// up immediately before a submission is what put a version in front of Apple
 /// while its screenshots were still being ingested, and the submission was
 /// refused with `appStoreVersions … is not in valid state` — a message about
@@ -419,8 +428,10 @@ PublishedScreenshot readPublishedScreenshot(Map<String, dynamic> screenshot) {
 ///
 /// **Order is part of the comparison, not a detail.** Screenshots are shown in
 /// the order they were uploaded, so the same files in a different order are a
-/// different listing. Comparing as sequences means a reorder re-uploads, which
-/// is correct; comparing as sets would silently leave the old order in place.
+/// different listing. Comparing as sequences means a reorder re-uploads, and
+/// comparing as sets would not — sequences dominate, which is what the choice
+/// rests on. Whether a reorder is *always* caught depends on the response
+/// order reflecting listing order, which is observed and not promised.
 ///
 /// Apple was observed returning them in upload order on a live account, which
 /// makes sequence comparison workable — but that was one app, one locale, four

@@ -1013,10 +1013,10 @@ Future<void> runAsc(
   // publishing impossible rather than merely avoided. See [ListingPublish].
   //
   // This said "read at both sites below" until a review counted them. It was
-  // inexact when written and got worse when a fourth read was added — and it
-  // survived the commit that fixed the identical wording in the test header
-  // two lines from here, which is a fair illustration of why the counting
-  // keeps needing an outside reader.
+  // inexact when written, got worse when a fourth read was added, and survived
+  // the commit whose whole purpose was fixing the identical wording in
+  // listing_publish_test.dart's header — a fair illustration of why the
+  // counting keeps needing an outside reader.
   final publish = listingPublish(
     hasMetadata: metadata != null,
     hasArtifact: ipaPath != null,
