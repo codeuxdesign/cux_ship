@@ -60,6 +60,13 @@ cux_ship play promote        # internal → production, newest build, notes from
 cux_ship appstore promote    # newest processed build → App Store review
 ```
 
+An App Store promotion submits for review; what happens once Apple approves is
+the version's release type. New versions are created `MANUAL` — somebody
+presses release — and existing ones are left as App Store Connect has them.
+`--release-type AFTER_APPROVAL` says go out on approval instead, and the run
+prints the effective value read back from Apple either way. It is a different
+axis from `--phased`, which is how fast a release rolls out once it starts.
+
 **Anything that becomes public asks first**, printing everything it inferred, so
 a wrong guess is visible before it is acted on rather than after:
 

@@ -501,6 +501,82 @@ List<String> screenshotDeliveryErrors(Map<String, dynamic> screenshot) {
   ].where((message) => message.isNotEmpty).toList();
 }
 
+/// The `releaseType` values `--release-type` will send.
+///
+/// `SCHEDULED` is Apple's third and is deliberately absent: it is meaningless
+/// without an `earliestReleaseDate` beside it, and an enum value that needs a
+/// second argument nobody can pass is a trap rather than a feature. fastlane
+/// reaches the same shape from the other direction — it has no scheduled
+/// *value* either, only an `auto_release_date` option that implies one. If this
+/// ever grows, it grows as `--release-date`, not as a third value here.
+const requestableReleaseTypes = {'MANUAL', 'AFTER_APPROVAL'};
+
+/// Apple's third release type, which this tool reads but will not write.
+const scheduledReleaseType = 'SCHEDULED';
+
+/// Why [value] cannot be sent as a release type, or null when it can.
+///
+/// Validated here rather than by `allowed:` on the option, because the args
+/// package's rejection is one generic line and `SCHEDULED` deserves a sentence
+/// that says what is missing.
+String? releaseTypeRefusal(String value) {
+  if (requestableReleaseTypes.contains(value)) {
+    return null;
+  }
+  if (value == scheduledReleaseType) {
+    return 'SCHEDULED needs an earliestReleaseDate beside it, and there is no '
+        'flag to give it one. Set the date in App Store Connect; '
+        '--release-type takes ${requestableReleaseTypes.join(" or ")}.';
+  }
+  return 'unknown release type "$value" — '
+      '--release-type takes ${requestableReleaseTypes.join(" or ")}';
+}
+
+/// What a run should do about the release type of a version that exists.
+enum ReleaseTypeChange {
+  /// No `--release-type`, so whatever App Store Connect holds stands. The
+  /// default, and the only behaviour before the flag existed.
+  leaveAlone,
+
+  /// Apple already holds what was asked for.
+  alreadySet,
+
+  /// Apple holds something else, and it can be written.
+  write,
+
+  /// Apple holds `SCHEDULED`. Changing away from it decides what happens to
+  /// the `earliestReleaseDate` beside it, and this tool has no way to say —
+  /// so it refuses rather than guessing whether Apple keeps a stale date.
+  refuseScheduled,
+}
+
+/// Whether [requested] needs writing over [current].
+///
+/// **Unset changes nothing.** An absent flag must leave App Store Connect as it
+/// is rather than normalise to a value this tool prefers; a release quietly
+/// switched to automatic because nobody passed a flag would be worse than the
+/// silence this exists to fix. fastlane draws the same line and says so out
+/// loud when it declines to set one.
+///
+/// A [current] Apple did not report is treated as differing, not as matching —
+/// absence is a fact about the response, the same reading [appLevelChanges]
+/// takes of an unreported category.
+ReleaseTypeChange releaseTypeChange({
+  required String? requested,
+  required String? current,
+}) {
+  if (requested == null) {
+    return ReleaseTypeChange.leaveAlone;
+  }
+  if (current == scheduledReleaseType) {
+    return ReleaseTypeChange.refuseScheduled;
+  }
+  if (current == requested) {
+    return ReleaseTypeChange.alreadySet;
+  }
+  return ReleaseTypeChange.write;
+}
+
 /// How a refusal names the age-rating answers.
 const ageRatingField = 'age rating';
 
@@ -1434,6 +1510,7 @@ class AppStore {
     App app,
     String versionString, {
     required bool create,
+    String? releaseType,
   }) async {
     final versions = await client.getAll(
       '/v1/apps/${app.id}/appStoreVersions',
@@ -1455,7 +1532,7 @@ class AppStore {
                 'edit it again.',
         ], request: 'GET /v1/appStoreVersions');
       }
-      return version;
+      return _applyReleaseType(version, releaseType);
     }
 
     if (!create) {
@@ -1469,9 +1546,15 @@ class AppStore {
     // always finds an editable version under the wrong name, and creating a
     // second one is rejected — the console renames instead, and so does this.
     //
-    // Only the version string is touched. releaseType and anything else set in
-    // the console is left alone, because adopting a version is not a licence to
-    // overwrite decisions made about it.
+    // Only the version string is touched, and anything set in the console is
+    // left alone, because adopting a version is not a licence to overwrite
+    // decisions made about it.
+    //
+    // `releaseType` is the one exception, and only when [releaseType] was
+    // asked for explicitly. An unset flag still leaves it exactly as Apple has
+    // it — the rule above is unchanged for every run that does not name a
+    // value. A flag that was passed *is* a decision about this version, which
+    // is the thing the rule protects, so it is written rather than ignored.
     final all = await client.getAll(
       '/v1/apps/${app.id}/appStoreVersions',
       query: {'filter[platform]': platform.api},
@@ -1519,10 +1602,11 @@ class AppStore {
         'attributes': {
           'platform': platform.api,
           'versionString': versionString,
-          // Manual: a release that goes live the instant Apple approves it
-          // takes the decision away from whoever is watching. Play's
-          // production track is equally a deliberate act.
-          'releaseType': 'MANUAL',
+          // Manual unless asked otherwise: a release that goes live the
+          // instant Apple approves it takes the decision away from whoever is
+          // watching. Play's production track is equally a deliberate act.
+          // `--release-type` is how somebody takes that decision on purpose.
+          'releaseType': releaseType ?? 'MANUAL',
         },
         'relationships': {'app': relation('apps', app.id)},
       },
@@ -1615,6 +1699,51 @@ class AppStore {
         },
         describe: '$locale: ${attributes.keys.join(", ")}',
       );
+    }
+  }
+
+  /// Writes [requested] onto [version] when it differs, and returns the record
+  /// that now describes it.
+  ///
+  /// **Returns the PATCH's own response rather than the record it was handed**,
+  /// so a caller reporting the effective release type reports what Apple
+  /// acknowledged rather than what was true a moment earlier. On a dry run the
+  /// writer returns null and the pre-write record comes back unchanged, which
+  /// is correct: nothing was written, so nothing about it has changed.
+  Future<Map<String, dynamic>> _applyReleaseType(
+    Map<String, dynamic> version,
+    String? requested,
+  ) async {
+    final current = _attributes(version)['releaseType'] as String?;
+    switch (releaseTypeChange(requested: requested, current: current)) {
+      case ReleaseTypeChange.leaveAlone:
+      case ReleaseTypeChange.alreadySet:
+        return version;
+      case ReleaseTypeChange.refuseScheduled:
+        throw AscApiException(409, [
+          'version ${_attributes(version)['versionString']} is scheduled to '
+              'release, and changing that away from SCHEDULED would decide '
+              'what happens to the date beside it.',
+          'This tool has no way to say, so it will not guess. Change the '
+              'release option in App Store Connect, or drop --release-type to '
+              'leave the schedule alone.',
+        ], request: 'PATCH /v1/appStoreVersions');
+      case ReleaseTypeChange.write:
+        final patched = await writer.patch(
+          '/v1/appStoreVersions/${_id(version)}',
+          {
+            'data': {
+              'type': 'appStoreVersions',
+              'id': _id(version),
+              'attributes': {'releaseType': requested},
+            },
+            // Both values, so the dry run's "would update:" line says what it
+            // would change *from* — the half that tells you whether to care.
+          },
+          describe: 'release type ${current ?? '(not reported)'} -> $requested',
+        );
+        final data = patched?['data'];
+        return data is Map<String, dynamic> ? data : version;
     }
   }
 

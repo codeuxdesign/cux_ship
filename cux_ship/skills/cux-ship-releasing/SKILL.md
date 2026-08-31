@@ -126,10 +126,19 @@ Refusals a release runner will actually hit, each meaning what it says:
 
 ## What cannot be undone
 
-- **`play promote` and `appstore promote` are public immediately.** Both print
-  everything they inferred and wait. Read the summary; do not reflexively pass
-  `--yes`. In CI `--yes` is required, because with no terminal the command
-  refuses rather than assuming yes — that refusal is a feature.
+- **`play promote` is public immediately. `appstore promote` is not, and the
+  difference is a setting you can now name.** Play's production track goes live
+  on promotion. An App Store promotion submits for *review*, and what happens
+  once Apple approves is the version's `releaseType`: `MANUAL` waits for
+  somebody to press release, `AFTER_APPROVAL` goes out on approval. cux_ship
+  creates new versions `MANUAL` and leaves existing ones alone, so the
+  irreversible moment on the App Store is usually later than the promote — but
+  `--release-type AFTER_APPROVAL` makes it the promote, and then it is as
+  irreversible as Play. The run prints the effective release type either way,
+  read back from Apple rather than from the flag.
+- **Both print everything they inferred and wait.** Read the summary; do not
+  reflexively pass `--yes`. In CI `--yes` is required, because with no terminal
+  the command refuses rather than assuming yes — that refusal is a feature.
 - **`--dry-run` is not offline.** It authenticates, opens a real store edit, does
   every step, then deletes the edit instead of committing. That makes it *safe*,
   not *credential-free*, and it fails if no app record exists yet. The genuinely

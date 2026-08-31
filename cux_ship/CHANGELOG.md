@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+**`appstore promote` can say how the release should start, and always says how
+it will.** `appStoreVersions.releaseType` decides what happens once Apple
+approves — wait for somebody to press release, or go out on approval — and
+there was no flag for it. Asked how a release should go out, a maintainer chose
+automatic; the version cux_ship created was `MANUAL`, because that was
+hardcoded. Nothing was rejected and nothing was reported: the decision had
+nowhere to go, and the default stood. It only did not matter because manual is
+the safer end of that mistake.
+
+`--release-type MANUAL|AFTER_APPROVAL` now carries it. **An unset flag still
+changes nothing** — a new version is created `MANUAL` as before, an existing
+one is left exactly as App Store Connect has it. A tool that normalised the
+unset case to its own preference would be the same failure running the other
+way. `SCHEDULED` is refused rather than approximated: Apple takes it, but only
+beside an `earliestReleaseDate` this tool has no way to send, and a version
+already scheduled is refused rather than silently rescheduled.
+
+And the run prints the effective release type, read back from the record Apple
+acknowledged rather than from the flag — *print effective configuration, never
+intended*. That line is the half that would have caught this, because the run
+it needed to catch passed no flag at all.
+
+
 **`promote` no longer fails because the *other* platform is in review.** An app
 has one set of app-level records shared by both platforms, so
 `promote --platform macos` refused with 409 whenever the iOS side sat in
