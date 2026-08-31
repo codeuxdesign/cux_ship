@@ -68,10 +68,10 @@ import '../notes_source.dart';
 import '../reachable.dart';
 import '../release.dart' show ReleaseException;
 import 'app_store.dart';
+import 'apple_notes.dart';
 import 'asc_client.dart';
 import 'beta_release.dart';
 import 'signing_report.dart';
-import 'testflight_notes.dart';
 
 /// Which App Store Connect operation [runAsc] performs.
 ///
@@ -407,6 +407,63 @@ typedef AscConfirm = void Function(String summary);
 /// [args] comes from [buildAscParser] for the same [cmd], so an option that
 /// belongs to another subcommand is simply absent rather than null — hence the
 /// `opt`/`flag` readers below. Anything still missing falls back to [defaults].
+/// Whether a run publishes the App Store listing, and at which point.
+///
+/// **One decision, taken once and read at both places that act on it.** The
+/// listing publish is reachable from two sites — the shared one after the
+/// upload block, and the one inside the promote block that runs after the
+/// build is attached and before the submission. Each used to carry its own
+/// condition (`metadata != null` at both), and both were true for a
+/// promote-with-metadata: the whole listing published twice, every screenshot
+/// cleared and re-uploaded twice, under a comment claiming "the listing
+/// publishes here, and only here".
+///
+/// Complementary conditions at two sites are the defect this file keeps
+/// producing — the same shape as the `--beta-group` publish it took 3.5.0 to
+/// close. An enum cannot be true in two places at once.
+enum ListingPublish {
+  /// Nothing to publish, or an artifact upload, which deliberately leaves the
+  /// listing alone.
+  none,
+
+  /// At the shared site: a listing-only invocation, which is the whole point
+  /// of the command.
+  shared,
+
+  /// Inside the promote block, after the build is attached and before the
+  /// submission — so a review sees the copy meant to accompany it, from a
+  /// version record that exists by then.
+  afterVersion,
+}
+
+/// Decides [ListingPublish] from what the run was asked to do.
+///
+/// Pure, and separate from [runAsc], because a decision buried in a method
+/// that needs credentials to reach is a decision nothing will check.
+ListingPublish listingPublish({
+  required bool hasMetadata,
+  required bool hasArtifact,
+  required bool promote,
+}) {
+  if (!hasMetadata) {
+    return ListingPublish.none;
+  }
+  // An upload carrying an artifact publishes nothing: these writes reach
+  // `appStoreVersionLocalizations` through `ensureVersion`, which *creates*
+  // the version record.
+  //
+  // Ordered before [promote] so the combination has a defined answer rather
+  // than a reachability argument. Today it cannot arise — promote's parser
+  // declares neither `--artifact` nor `--manifest`, and `defaults.artifact`
+  // only comes from the latter — but that is a fact about two other functions,
+  // and a decision table that depends on one staying true is the shape this
+  // enum exists to stop.
+  if (hasArtifact) {
+    return ListingPublish.none;
+  }
+  return promote ? ListingPublish.afterVersion : ListingPublish.shared;
+}
+
 /// Publishes the App Store listing from a metadata tree.
 ///
 /// **Its own function because two commands need it, for opposite reasons.** A
@@ -427,31 +484,122 @@ Future<void> _publishAscListing(
   // upload or a promote.
   Never Function(String) fail,
 ) async {
-  final appInfo = await store.editableAppInfo(app);
+  // **Decide what needs writing before demanding something to write to.**
+  //
+  // The app-level half used to open with `editableAppInfo`, which threw when
+  // no record was in an editable state — so a promotion whose listing was
+  // already correct still failed, and failed before the version was created,
+  // the build attached or the submission made. Nothing downstream ran.
+  //
+  // The order below is what keeps a failure atomic. The collection is read
+  // once; the comparison runs against the record [selectAppInfo] would read;
+  // the writable record is only demanded once something is known to need one,
+  // and that demand throws while nothing has been written yet. Every write,
+  // content rights included, happens after it.
+  final infos = await store.appInfos(app);
+  final readable = selectAppInfo(infos, AppInfoUse.read);
 
-  final contentRights = metadata.contentRights;
+  // Both sub-resources are read once, here, and the same readings serve the
+  // comparison and the write below — so the two cannot disagree about which
+  // declaration the answers were checked against, or about whether a locale
+  // already has a record.
+  final declaration = readable == null || metadata.ageRating == null
+      ? null
+      : await store.ageRatingDeclaration(readable);
+  final localizations =
+      readable == null || !metadata.locales.any((l) => l.appInfo.isNotEmpty)
+      ? null
+      : await store.appInfoLocalizations(readable);
+
+  final changes = appLevelChanges(
+    metadata: metadata,
+    currentContentRights: app.contentRights,
+    appInfo: readable,
+    ageRatingDeclaration: declaration,
+    appInfoLocalizations: localizations,
+  );
+
+  if (changes.unverifiable.isNotEmpty) {
+    // Said out loud: these are being written because they could not be shown
+    // to already match, which is not the same as knowing they differ.
+    stdout.writeln(
+      '==> could not read the current ${changes.unverifiable.join(", ")}, '
+      'so ${changes.unverifiable.length == 1 ? 'it is' : 'they are'} '
+      'written rather than assumed unchanged',
+    );
+  }
+
+  Map<String, dynamic>? appInfo;
+  if (changes.needsAppInfo) {
+    // Throws here, before the first write, naming what would have gone in.
+    // [selectAppInfo] picks the same record for a write as for the read
+    // above whenever a write target exists at all, so what was compared is
+    // what is written.
+    appInfo = requireWritableAppInfo(infos, fields: changes.appInfoFields);
+  } else if (changes.isEmpty && declaresAppLevelFields(metadata)) {
+    // Only when the tree actually declares app-level fields. Saying "already
+    // matches" about fields nobody asked for would report a comparison that
+    // never happened.
+    stdout.writeln('==> app-level listing: already matches, nothing written');
+  }
+
+  if (metadata.ageRating != null &&
+      changes.ageRating == null &&
+      changes.unverifiable.contains(ageRatingField)) {
+    // There is a record but no declaration hanging off it to write answers
+    // to. Raised here, beside the other acquisition and still before the
+    // first write, because publishing everything *except* the age rating
+    // would leave a version Apple refuses to review — and doing it after
+    // content rights had gone up would turn a clean failure into a
+    // half-applied change.
+    throw AscApiException(404, [
+      'the app has no ageRatingDeclaration to write to',
+    ], request: 'GET /v1/appInfos');
+  }
+
+  final contentRights = changes.contentRights;
   if (contentRights != null) {
     stdout.writeln('==> content rights');
     await store.writeContentRights(app, contentRights);
   }
 
-  if (metadata.categories.isNotEmpty) {
-    stdout.writeln('==> categories');
-    await store.writeCategories(appInfo, metadata.categories);
-  }
-  final ageRating = metadata.ageRating;
-  if (ageRating != null) {
-    stdout.writeln('==> age rating');
-    await store.writeAgeRating(appInfo, ageRating);
-  }
+  if (appInfo != null) {
+    if (changes.categories.isNotEmpty) {
+      stdout.writeln('==> categories');
+      // Read every relationship first, including the four subcategory slots
+      // this tool never writes — the check has to cover what the PATCH omits,
+      // because omission is the thing in question. Skipped on a dry run,
+      // which writes nothing for a read-back to be evidence about.
+      final before = store.writer.dryRun
+          ? null
+          : await store.categoryRelationships(appInfo);
+      await store.writeCategories(appInfo, changes.categories);
+      if (!store.writer.dryRun) {
+        await _checkCategoriesNothingElseMoved(
+          store,
+          appInfo,
+          before: before,
+          declared: changes.categories.keys.toSet(),
+        );
+      }
+    }
+    final ageRating = changes.ageRating;
+    if (ageRating != null) {
+      stdout.writeln('==> age rating');
+      await store.writeAgeRating(ageRating);
+    }
 
-  for (final localeMetadata in metadata.locales) {
-    if (localeMetadata.appInfo.isNotEmpty) {
-      stdout.writeln('==> ${localeMetadata.locale}: name and subtitle');
+    for (final entry in changes.localizations.entries) {
+      stdout.writeln('==> ${entry.key}: ${entry.value.keys.join(", ")}');
       await store.writeAppInfoLocalization(
         appInfo,
-        localeMetadata.locale,
-        localeMetadata.appInfo,
+        entry.key,
+        entry.value,
+        // The reading the comparison was made from. Non-null whenever there
+        // is a localization to write: `changes.localizations` is only
+        // populated for locales the metadata asks for, which is exactly what
+        // made this read happen.
+        existing: localizations ?? const [],
       );
     }
   }
@@ -459,13 +607,16 @@ Future<void> _publishAscListing(
   // The version-scoped half needs a version to hang off. Created when
   // absent, because a listing push before the first release is exactly
   // when there is nothing there yet.
-  final needsVersion =
-      metadata.reviewNotes != null ||
-      metadata.locales.any(
-        (l) => l.version.isNotEmpty || l.screenshots.isNotEmpty,
-      );
+  final needsVersion = listingNeedsVersion(metadata);
   if (needsVersion) {
     if (versionName == null) {
+      // Unreachable via [runAsc], which asks the same question offline before
+      // a credential is loaded — see the check beside [listingPublish]. Kept
+      // because a missing version name must never be discovered *here*: by
+      // this point the app-level half has been written, and a run that fails
+      // after writing half a listing is the failure this file is built to
+      // avoid. The offline check is the one that fires; this one is the
+      // invariant refusing to depend on it.
       fail(
         'pushing descriptions or screenshots needs --version-name, because '
         'Apple scopes them to a version rather than to the app',
@@ -534,8 +685,24 @@ Future<void> runAsc(
   AscDefaults defaults = AscDefaults.none,
   AscConfirm? confirm,
 }) async {
+  // Set once there is a store, so a [fail] that happens after a write can
+  // still name what the run left behind. Null before then, which is exactly
+  // when there is nothing to name.
+  AppStore? started;
+
   Never fail(String message) {
     stderr.writeln('cux_ship appstore ${cmd.name}: $message');
+    // **[fail] exits rather than throwing, so it reaches no catch clause.**
+    // That made the whole left-behind report miss its likeliest trigger: on a
+    // promote, `notesFor` runs after the version is created and the build
+    // attached, and it fails when CHANGELOG.md has no section for the version
+    // — the ordinary mistake — so the run created a version, exited 1, and
+    // said nothing about it. The report has to hang off this path too, or the
+    // claim it makes is only true for the failures nobody meets.
+    final store = started;
+    if (store != null) {
+      _reportStateLeftBehind(store);
+    }
     exit(1);
   }
 
@@ -841,8 +1008,41 @@ Future<void> runAsc(
     }
   }
 
-  /// Release notes for [forVersion], resolved late because promotion does not
-  /// know its version until Apple has said what is on TestFlight.
+  // Decided here, once, and read at both sites below. See [ListingPublish]
+  // for why this is an enum and not two conditions.
+  final publish = listingPublish(
+    hasMetadata: metadata != null,
+    hasArtifact: ipaPath != null,
+    promote: promote,
+  );
+
+  // **Offline, because it is answerable offline.** A tree carrying
+  // descriptions or screenshots needs a version to hang them off, and a run
+  // that discovers that *during* the publish has already written the
+  // app-level half — content rights, categories, the age rating — and then
+  // exits. Asking here keeps the promise this command makes: everything
+  // checkable without a network is checked before a credential is loaded.
+  if (publish != ListingPublish.none &&
+      versionName == null &&
+      listingNeedsVersion(metadata!)) {
+    fail(
+      'pushing descriptions or screenshots needs --version-name, because '
+      'Apple scopes them to a version rather than to the app',
+    );
+  }
+
+  /// Release notes for [forVersion].
+  ///
+  /// **This used to say it was "resolved late because promotion does not know
+  /// its version until Apple has said what is on TestFlight", and that is not
+  /// true.** Both callers pass a `--version-name` that was known before any
+  /// network call — promote requires one. The late resolution is now just
+  /// where it happens to sit, and it has a cost: on a promote this runs after
+  /// the version is created and the build attached, so a CHANGELOG.md missing
+  /// a section for the version — the ordinary mistake — fails with those two
+  /// already done. [fail] now reports what was left behind, which makes that
+  /// survivable rather than silent; moving the changelog read into the offline
+  /// phase would make it not happen at all, and is the better fix.
   String? notesFor(String forVersion) {
     if (changelogPath == null) {
       return literalNotes;
@@ -943,6 +1143,7 @@ Future<void> runAsc(
 
   final writer = Writer(client, dryRun: dryRun);
   final store = AppStore(client, writer, platform: platform);
+  started = store;
 
   if (dryRun) {
     stdout.writeln(
@@ -1114,12 +1315,12 @@ Future<void> runAsc(
           // Said out loud rather than done quietly, because what testers read
           // then differs from what Play users read.
           var testFlightNotes = notes;
-          if (needsStrippingForTestFlight(notes)) {
-            testFlightNotes = stripForTestFlight(notes);
+          if (needsStrippingForApple(notes)) {
+            testFlightNotes = stripForApple(notes);
             stdout.writeln(
               '    TestFlight rejects emoji, so they are stripped from the '
               'notes\n'
-              '    (the App Store release notes keep them)',
+              '    (Play publishes them verbatim)',
             );
           }
           await store.setWhatToTest(build, locale, testFlightNotes);
@@ -1155,13 +1356,22 @@ Future<void> runAsc(
     // deliberate exception, the same one Play's `--listing-only` is: nothing is
     // being shipped for the copy to be ahead of, and moving the live page now
     // is the entire purpose of the command.
-    if (metadata != null && ipaPath != null) {
+    if (publish == ListingPublish.none && metadata != null) {
       stdout.writeln(
         '==> listing: untouched — an upload does not publish it.\n'
         '    Publish deliberately with --metadata and no artifact.',
       );
-    } else if (metadata != null) {
-      await _publishAscListing(store, app, metadata, locale, versionName, fail);
+    } else if (publish == ListingPublish.shared) {
+      // Non-null by construction: [listingPublish] returns [none] when there
+      // is no metadata, and this is the only thing that reads [shared].
+      await _publishAscListing(
+        store,
+        app,
+        metadata!,
+        locale,
+        versionName,
+        fail,
+      );
     }
 
     // -------------------------------------------------------------- promote
@@ -1270,8 +1480,25 @@ Future<void> runAsc(
             );
           } else {
             stdout.writeln('==> release notes');
+            // The App Store refuses emoji in `whatsNew` too — measured, after
+            // this file spent a release asserting the opposite. Announced
+            // more loudly than the TestFlight strip above, and with the
+            // characters named: this is copy a shopper reads, and quietly
+            // publishing something other than what the changelog says is the
+            // failure mode worth spending three lines to avoid.
+            var releaseNotes = notes;
+            if (needsStrippingForApple(notes)) {
+              releaseNotes = stripForApple(notes);
+              stdout.writeln(
+                '    the App Store rejects emoji in "What\'s New", so these '
+                'are stripped:\n'
+                '      ${_removedCharacters(notes, releaseNotes)}\n'
+                '    what ships here differs from CHANGELOG.md; Play '
+                'publishes it verbatim',
+              );
+            }
             await store.writeVersionLocalization(version, locale, {
-              'whatsNew': notes,
+              'whatsNew': releaseNotes,
             });
           }
         }
@@ -1279,16 +1506,26 @@ Future<void> runAsc(
           stdout.writeln('==> phased release');
           await store.enablePhasedRelease(version);
         }
-        // **The listing publishes here, and only here.** This is the moment
-        // it becomes what a shopper reads, and the version record it hangs
-        // off exists by now — which is what makes it possible at all. Before
-        // the submission, so a review sees the copy that was meant to
-        // accompany it rather than the previous release's.
-        if (metadata != null) {
+        // **On a promotion the listing publishes here, and nowhere else** —
+        // which [publish] now makes true rather than merely stated.
+        //
+        // Scoped to the promotion on purpose. The sentence this replaces said
+        // "here, and only here" flatly, which was false twice over: it was
+        // false of the promote it described, because the shared site fired as
+        // well, and it is still false of the program, because a listing-only
+        // run publishes at the shared site by design. Being exact about which
+        // run it is talking about is the difference between a comment that
+        // survives the next reader and the one that did not.
+        //
+        // This is the moment the listing becomes what a shopper reads, and
+        // the version record it hangs off exists by now, which is what makes
+        // it possible at all. Before the submission, so a review sees the copy
+        // that was meant to accompany it rather than the previous release's.
+        if (publish == ListingPublish.afterVersion) {
           await _publishAscListing(
             store,
             app,
-            metadata,
+            metadata!,
             locale,
             versionName,
             fail,
@@ -1307,18 +1544,186 @@ Future<void> runAsc(
     }
   } on AscApiException catch (e) {
     stderr.writeln('asc_upload: $e');
+    _reportStateLeftBehind(store);
     exitCode = 1;
   } on ProcessingTimeout catch (e) {
     // Caught rather than left to the runtime: an uncaught exception exits 255
     // with a stack trace, and a stack trace above the one sentence that says
     // "read the e-mail" is how that sentence gets skimmed past.
     stderr.writeln('asc_upload: $e');
+    _reportStateLeftBehind(store);
     exitCode = 1;
   } on MetadataException catch (e) {
     stderr.writeln('asc_upload: ${e.message}');
+    _reportStateLeftBehind(store);
     exitCode = 1;
+  } catch (_) {
+    // Anything not named above — a StateError from a response shaped wrongly,
+    // a SocketException mid-promote — still exits having possibly created a
+    // version. Rethrown so the exit code and stack trace are unchanged; the
+    // report is the only thing added, because the state left behind is a fact
+    // about the run rather than about which exception ended it.
+    _reportStateLeftBehind(store);
+    rethrow;
   } finally {
     client.close();
+  }
+}
+
+/// Says whether a category write moved a relationship nobody asked it to.
+///
+/// **A category PATCH names only what the tree declares, so it always omits
+/// the rest** — the other category, and the four subcategory slots this tool
+/// has never managed. Everything says omission leaves them alone: JSON:API
+/// specifies it, spaceship has a separate explicit-null path for clearing
+/// which would be redundant otherwise, and fastlane omits the same four
+/// across a very large number of apps without it being a known bug.
+///
+/// That is a good argument and it is still inference. This turns it into a
+/// reading, on the rare run that writes a category at all — and if it is ever
+/// wrong, it is wrong on somebody's published listing, which is worth two GETs
+/// to find out about on the first occurrence rather than the hundredth.
+///
+/// Never fails the run. The write has already happened, so there is nothing
+/// left to protect by throwing, and a diagnostic that can take down a publish
+/// is worse than the uncertainty it was added to remove.
+Future<void> _checkCategoriesNothingElseMoved(
+  AppStore store,
+  Map<String, dynamic> appInfo, {
+  required Map<String, String?>? before,
+  required Set<String> declared,
+}) async {
+  final after = before == null
+      ? null
+      : await store.categoryRelationships(appInfo);
+  if (before == null || after == null) {
+    // Said out loud. A check that silently did not happen is indistinguishable
+    // from one that passed, and this package's whole argument is that those
+    // are different.
+    stdout.writeln(
+      '    (could not read the category relationships back, so nothing '
+      'confirms\n'
+      '     the other categories were left alone)',
+    );
+    return;
+  }
+
+  final moved = unrequestedCategoryChanges(
+    before: before,
+    after: after,
+    declared: declared,
+  );
+  if (moved.isEmpty) {
+    return;
+  }
+  // Loud, and on stderr, because this would mean the PATCH cleared a
+  // relationship it did not name — a category quietly disappearing from a
+  // published listing, and a fact about Apple's API that this package has
+  // been assuming the opposite of.
+  stderr.writeln(
+    '  WARNING: writing the categories also changed '
+    '${moved.join(", ")},\n'
+    '  which ${moved.length == 1 ? 'was' : 'were'} not in the metadata tree. '
+    'Apple appears to clear\n'
+    '  category relationships a PATCH does not name. Check the listing in App '
+    'Store\n'
+    '  Connect, and please report this — cux_ship assumes the opposite.',
+  );
+  for (final name in moved) {
+    stderr.writeln(
+      '    $name: ${before[name] ?? '(unset)'} -> ${after[name] ?? '(unset)'}',
+    );
+  }
+}
+
+/// The distinct characters stripping removed, named so the notice says what
+/// it changed rather than that it changed something.
+///
+/// Each is printed with its code point, because the one Apple complained
+/// about that is easiest to miss is invisible: a bare U+FE0F renders as
+/// nothing at all, and "so these are stripped:" followed by what looks like
+/// an empty line is worse than saying nothing.
+String _removedCharacters(String original, String stripped) {
+  final kept = stripped.runes.toSet();
+  final removed = <int>[];
+  for (final rune in original.runes) {
+    // Whitespace also disappears — stripping tidies the double spaces and
+    // trailing indents an excised emoji leaves behind — and naming a newline
+    // as a character the App Store rejects would be false. Only runes the
+    // rule actually refuses are listed.
+    if (!kept.contains(rune) &&
+        !removed.contains(rune) &&
+        needsStrippingForApple(String.fromCharCode(rune))) {
+      removed.add(rune);
+    }
+  }
+  return removed
+      .map(
+        (rune) =>
+            '${String.fromCharCode(rune)} '
+            '(U+${rune.toRadixString(16).toUpperCase().padLeft(4, '0')})',
+      )
+      .join(', ');
+}
+
+/// Names the version record a failing run left behind, if it left one.
+///
+/// **A command that exits non-zero reads as "nothing happened", and here that
+/// is false.** Creating the version is one of the first things a promotion
+/// does, so a failure anywhere after it — the listing, the submission — exits
+/// 1 having already changed what App Store Connect holds. The creation is
+/// printed when it happens, but that line is above an error and gets skimmed
+/// past, which invites the one response that is wrong: run it again. The
+/// rerun then behaves differently from the first, because `ensureVersion`
+/// adopts the record rather than making a second one.
+///
+/// Written to stderr beside the error rather than to stdout, so it survives
+/// the same redirection the error does.
+void _reportStateLeftBehind(AppStore store) {
+  final change = store.versionChange;
+  if (change != null) {
+    // **The two cases want opposite remedies, so they get separate sentences.**
+    // A created version can be deleted. A renamed one is a record that existed
+    // before this run — usually the "1.0" Apple makes with the app — and
+    // deleting it is wrong; putting the name back is the undo, which needs the
+    // name it had.
+    final was = change.previousVersionString;
+    stderr.writeln(switch (change.change) {
+      VersionChange.created =>
+        '  This run created App Store version ${change.versionString} '
+            'before it failed,\n'
+            '  and that record is still there. Running the command again '
+            'adopts it rather\n'
+            '  than making a second one. Delete it in App Store Connect if '
+            'the failure\n'
+            '  means it should not exist.',
+      VersionChange.renamed =>
+        '  This run renamed an existing editable version '
+            '${was == null ? '' : 'from $was '}to '
+            '${change.versionString}\n'
+            '  before it failed. That record predates this run, so deleting '
+            'it is not the\n'
+            '  undo — ${was == null ? 'renaming it back is' : 'renaming it '
+                      'back to $was is'}. Running the command again adopts it '
+            'as it now stands.',
+    });
+  }
+
+  final submission = store.createdReviewSubmission;
+  if (submission != null) {
+    // Reported separately because the advice is the opposite: an empty
+    // container is not litter to clear up, it is what the next attempt
+    // reuses — and deleting it is the one thing that would make a rerun
+    // behave worse.
+    stderr.writeln(
+      '  It also opened review submission $submission, which may be empty.\n'
+      '  Leave it: an unsubmitted container blocks a new one, so if it is '
+      'still\n'
+      '  there the next run reuses it rather than failing on an error that '
+      'does\n'
+      '  not say why. An empty one may equally have gone by then, which is '
+      'fine.',
+    );
   }
 }
 

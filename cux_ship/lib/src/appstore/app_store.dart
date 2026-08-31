@@ -58,6 +58,562 @@ const editableVersionStates = {
   'INVALID_BINARY',
 };
 
+/// The states in which the *app-level* half of a listing can still be written.
+///
+/// **`appInfos` and `appStoreVersions` are two resources with two rules, and
+/// this package used one constant for both.** A version in
+/// `WAITING_FOR_REVIEW` is with Apple and a push against it is rightly refused
+/// — that is [editableVersionStates] and it is unchanged. The `appInfos`
+/// record beside it still accepts a `PATCH`, measured against a live account;
+/// it is also what fastlane's `fetch_edit_app_info` has selected for years.
+///
+/// The gate was this package's own invention, and it cost more than an
+/// unnecessary refusal: `promote --platform macos` failed with 409 while the
+/// *iOS* side sat in review, and because the listing publish opens the
+/// promotion it failed before anything else — no version created, no build
+/// attached, no submission made.
+/// **Enumerated, not spread from [editableVersionStates].** Deriving it would
+/// undercut the argument for splitting them: a list that takes five of its six
+/// states from the other resource by reference is not independent of it, and a
+/// reader cannot see what it contains without going to look.
+///
+/// The provenance differs per state and is worth keeping visible.
+/// `WAITING_FOR_REVIEW` is measured — Apple accepted a `PATCH` against a record
+/// in it — and is what fastlane's `fetch_edit_app_info` selects. The first three
+/// are fastlane's list too. `METADATA_REJECTED` and `INVALID_BINARY` are
+/// neither measured nor fastlane's; they are here because this package has
+/// accepted them on an `appInfos` record for as long as it has had one code
+/// path for both resources, and dropping them now would newly refuse a metadata
+/// push against a metadata-rejected app — which is exactly when somebody is
+/// pushing metadata. Removing an accepted state needs the same evidence as
+/// adding one, and nothing here has it.
+const editableAppInfoStates = {
+  'PREPARE_FOR_SUBMISSION',
+  'DEVELOPER_REJECTED',
+  'REJECTED',
+  'METADATA_REJECTED',
+  'INVALID_BINARY',
+  'WAITING_FOR_REVIEW',
+};
+
+/// The `appInfos` states that mean the record *is* the App Store page — the
+/// one shoppers are reading now, or the one Apple has already approved to
+/// become it.
+///
+/// Never a write target. An app that has ever shipped has at least two
+/// `appInfos` records, and writing to this one edits what is already
+/// published without any review seeing the change.
+const publishedAppInfoStates = {
+  'READY_FOR_SALE',
+  'PENDING_DEVELOPER_RELEASE',
+  'PREORDER_READY_FOR_SALE',
+  'REPLACED_WITH_NEW_VERSION',
+  'REMOVED_FROM_SALE',
+  'DEVELOPER_REMOVED_FROM_SALE',
+};
+
+/// Whether an `appInfos` record is being picked to read from or to write to.
+enum AppInfoUse {
+  /// Comparing against what is already there. Reading changes nothing, so any
+  /// record can answer it and the published one is an acceptable last resort.
+  read,
+
+  /// Publishing. Only a state known to be writable will do.
+  write,
+}
+
+/// Which of [infos] to use, or null when there is none to use.
+///
+/// **The two uses have opposite defaults, and that is the whole point.**
+///
+///     read  : writable, else anything not published, else the published one
+///     write : writable, else nothing
+///
+/// The write side enumerates what may be written and refuses everything else,
+/// rather than enumerating what may not and permitting the rest. Apple has
+/// changed this enum before — fastlane shrank its own list in 2024 for exactly
+/// that reason — so "a state this package has not seen" is a live case, not a
+/// hypothetical, and the two directions fail very differently: an unrecognised
+/// state that refuses costs somebody thirty seconds reading the message, and
+/// an unrecognised state that writes lands a change somewhere nobody examined
+/// and says nothing. That is [AppLevelChanges.unverifiable]'s argument applied
+/// to states instead of values.
+///
+/// So `IN_REVIEW` is not a write target: it is not in [editableAppInfoStates],
+/// and nothing else makes a record writable. The line between it and
+/// `WAITING_FOR_REVIEW` is the one fastlane draws — `fetch_live_app_info`
+/// takes `IN_REVIEW`, `fetch_edit_app_info` takes `WAITING_FOR_REVIEW` — and
+/// it is the same line the measurement behind [editableAppInfoStates] was
+/// taken on. Queued for review and actively under review are plausibly
+/// different to Apple, and this package has evidence about only one of them.
+///
+/// A record whose `appStoreState` Apple did not report is likewise not a write
+/// target: absence is a fact about the response, not about the record, the
+/// same reading as [betaGroupKind]. It is still preferred over the published
+/// record for *reading*, because the one thing an unreported state is not is
+/// `READY_FOR_SALE` — that state gets reported.
+///
+/// The read side keeps its fallbacks because a comparison against any record
+/// is worth having: a run that finds nothing to change never demands a write
+/// target at all, which is what lets a promote through while the only records
+/// are ones nothing may be written to.
+///
+/// Both uses return the same record whenever the write returns one, because
+/// [use] is read only after the writable branch has already failed.
+Map<String, dynamic>? selectAppInfo(
+  List<Map<String, dynamic>> infos,
+  AppInfoUse use,
+) {
+  Map<String, dynamic>? firstWhere(bool Function(String? state) matches) {
+    for (final info in infos) {
+      if (matches(_attributes(info)['appStoreState'] as String?)) {
+        return info;
+      }
+    }
+    return null;
+  }
+
+  final writable = firstWhere(
+    (state) => state != null && editableAppInfoStates.contains(state),
+  );
+  if (writable != null) {
+    return writable;
+  }
+  if (use == AppInfoUse.write) {
+    return null;
+  }
+
+  final unpublished = firstWhere(
+    (state) => state == null || !publishedAppInfoStates.contains(state),
+  );
+  if (unpublished != null) {
+    return unpublished;
+  }
+
+  return infos.isEmpty ? null : infos.first;
+}
+
+/// The `appInfos` record to write to, or a refusal that says why there is
+/// none and what would have gone into it.
+///
+/// **Reached only once something actually needs writing**, so a run that would
+/// change nothing does not fail for want of a record it was never going to
+/// touch. And reached before the first write, so the failure stays atomic.
+///
+/// [fields] names what the write would have carried. Naming it is the
+/// difference between "something could not be published" and a sentence
+/// somebody can act on.
+Map<String, dynamic> requireWritableAppInfo(
+  List<Map<String, dynamic>> infos, {
+  List<String> fields = const [],
+}) {
+  final target = selectAppInfo(infos, AppInfoUse.write);
+  if (target != null) {
+    return target;
+  }
+  if (infos.isEmpty) {
+    throw AscApiException(404, [
+      'the app has no appInfos record at all',
+    ], request: 'GET /v1/appInfos');
+  }
+  final states = infos
+      .map(
+        (info) => _attributes(info)['appStoreState'] as String? ?? '(unstated)',
+      )
+      .join(', ');
+  // Deliberately unlike the 409 Apple returns when it rejects a *value*: that
+  // one names a field and is answered by changing the metadata, this one is
+  // answered by waiting or by making a version in App Store Connect. Two
+  // errors with the same status that call for opposite actions should not
+  // read alike.
+  //
+  // It does not claim the blocker is the published page. It often is, but
+  // `IN_REVIEW` and any state this package does not recognise land here too,
+  // and naming the states is what lets the reader tell which.
+  throw AscApiException(409, [
+    if (fields.isEmpty) ...[
+      'no appInfos record is in a state that can be written to ($states).',
+    ] else ...[
+      'no appInfos record is in a state that can be written to ($states), and '
+          '${fields.join(", ")} would have to be written.',
+    ],
+    'Writable states are ${editableAppInfoStates.join(", ")}. A record under '
+        'review becomes writable when that review finishes, or if the '
+        'submission is cancelled in App Store Connect. The published record '
+        'never becomes writable, because editing it would change what is '
+        'already on sale without a review seeing it.',
+    // **Apple's own hint here is wrong, and it was measured wrong.** Its 409
+    // says "Create the next version first", which sounds authoritative and
+    // does not work: `appInfos` records belong to the *app* and versions are
+    // per-platform, so creating a macOS version produced no new record on an
+    // app whose two records were READY_FOR_SALE and WAITING_FOR_REVIEW. Said
+    // here because following that advice costs a release cycle to disprove.
+    'Creating a version does not necessarily help: appInfos records are '
+        'app-level while versions are per-platform, so a new version for one '
+        'platform need not produce a record to write to. Apple\'s own error '
+        'suggests otherwise; it was measured not to.',
+  ], request: 'GET /v1/appInfos');
+}
+
+/// Every `appCategories` relationship an `appInfos` record carries.
+///
+/// **cux_ship manages the first two and has never touched the other four.**
+/// They are listed because the *check* has to cover what the write does not:
+/// a category PATCH names only the relationships the tree declares, so it
+/// always omits these four, and the open question is whether omitting a
+/// relationship disturbs it.
+///
+/// Three things say it does not, and none of them is a measurement:
+///
+///   - JSON:API specifies that a relationship missing from a PATCH keeps its
+///     current value.
+///   - spaceship carries a separate explicit `data: nil` path for *clearing*
+///     one, which would be redundant if omitting already cleared it. Two
+///     distinct behaviours only make sense if they differ.
+///   - fastlane omits any relationship its configuration does not name, so
+///     anyone who set subcategories in App Store Connect and did not repeat
+///     them in a Deliverfile would lose them on every deploy. That is not a
+///     known bug, and it is a large population.
+///
+/// **An attempt to settle it by reading a live account came back inconclusive,
+/// and is recorded here so nobody repeats it.** The idea was sound — if
+/// omission cleared, an app whose categories this tool has written would have
+/// lost its subcategories already. But all four slots on both records of the
+/// app in question were null and always had been, so there was nothing there
+/// to survive, and "omission is safe" and "omission clears and there was
+/// nothing to clear" produce identical readings. Settling it needs an account
+/// holding a subcategory the metadata tree does not name.
+///
+/// So the argument above is inference, which is what
+/// [unrequestedCategoryChanges] exists to convert into a reading — on real
+/// writes, as they happen.
+const categoryRelationshipNames = [
+  'primaryCategory',
+  'primarySubcategoryOne',
+  'primarySubcategoryTwo',
+  'secondaryCategory',
+  'secondarySubcategoryOne',
+  'secondarySubcategoryTwo',
+];
+
+/// The category relationships [appInfo] reports, by relationship name.
+///
+/// A name maps to the `appCategories` id, or to null when Apple reported the
+/// relationship as explicitly unset. A name is **absent** when the response
+/// carried no `data` for it at all — which is a third thing, meaning "not
+/// reported", and is why a comparison must not treat it as either value.
+Map<String, String?> readCategoryRelationships(Map<String, dynamic> appInfo) {
+  final relationships = appInfo['relationships'];
+  if (relationships is! Map<String, dynamic>) {
+    return const {};
+  }
+  final reported = <String, String?>{};
+  for (final name in categoryRelationshipNames) {
+    final link = relationships[name];
+    if (link is! Map<String, dynamic> || !link.containsKey('data')) {
+      continue;
+    }
+    final data = link['data'];
+    reported[name] = data is Map<String, dynamic>
+        ? data['id'] as String?
+        : null;
+  }
+  return reported;
+}
+
+/// Category relationships that moved without the tree asking them to.
+///
+/// **The point is the ones nobody named.** A PATCH that sets `primaryCategory`
+/// omits the other five, and if Apple treated an omitted relationship as a
+/// clear, this is where that would show up — as a `secondarySubcategoryOne`
+/// that held a value before the write and holds none after it, on a run that
+/// reported success.
+///
+/// Only names present in **both** readings are compared. One that is absent
+/// from either was never reported, and absence cannot be evidence of a change
+/// any more than it can be evidence of a match.
+List<String> unrequestedCategoryChanges({
+  required Map<String, String?> before,
+  required Map<String, String?> after,
+  required Set<String> declared,
+}) {
+  final changed = <String>[];
+  for (final name in categoryRelationshipNames) {
+    if (declared.contains(name) ||
+        !before.containsKey(name) ||
+        !after.containsKey(name)) {
+      continue;
+    }
+    if (before[name] != after[name]) {
+      changed.add(name);
+    }
+  }
+  return changed;
+}
+
+/// How a refusal names the age-rating answers.
+const ageRatingField = 'age rating';
+
+String _localeField(String locale, Iterable<String> attributes) =>
+    '$locale ${attributes.join(", ")}';
+
+/// What an app-level listing publish would change, and nothing it would not.
+///
+/// **Decided before anything is written, and consumed by the writes rather
+/// than recomputed beside them.** A flat "does something need writing?" bool
+/// beside a set of writers lets the check and the action disagree — the check
+/// says a record is needed, the writers then write something else, or nothing.
+/// Here the writers can only write what this says.
+class AppLevelChanges {
+  AppLevelChanges({
+    required this.categories,
+    required this.ageRating,
+    required this.localizations,
+    required this.contentRights,
+    required this.unverifiable,
+  });
+
+  /// `primaryCategory` / `secondaryCategory` -> the `appCategories` id to set.
+  ///
+  /// **Every declared category, or none — because the tree is the unit of
+  /// ownership.** The comparison is per field, which is the part a wrong
+  /// answer hides; the payload is not narrowed below what the tree declares,
+  /// because what the tree declares is what this repository claims to own.
+  ///
+  /// It is deliberately *not* justified by "we never send partial
+  /// relationships documents", which would be false: a tree declaring only
+  /// `primaryCategory` has always sent exactly that one relationship, and
+  /// still does. Whether Apple leaves an unmentioned relationship alone is
+  /// therefore a question this package's existing behaviour already depends
+  /// on, and narrowing further would neither raise nor settle it — it would
+  /// only trade a known payload for a smaller one, saving one relationship in
+  /// a PATCH that is happening anyway.
+  ///
+  /// Note this is the opposite granularity from [ageRating], which is also
+  /// sent whole but for an unrelated reason — see there. Two deliberate
+  /// decisions, not one inconsistency.
+  final Map<String, String> categories;
+
+  /// The answers to push and the declaration to push them to.
+  ///
+  /// One field rather than an id and a map that must agree: an id with no
+  /// answers and answers with no id are both meaningless, and a pair cannot
+  /// drift apart.
+  ///
+  /// **[values] is always the whole declared set, never the differing keys**,
+  /// and here the reason is Apple's validation rather than ownership: it
+  /// checks these answers against each other — `socialMediaAgeRestricted` is
+  /// accepted only when `ageAssurance` and `socialMedia` are both true — so a
+  /// payload narrowed to one flipped answer would arrive without the two it
+  /// depends on and be rejected with a 409. Measured against a live account.
+  final ({String declarationId, Map<String, Object?> values})? ageRating;
+
+  /// locale -> the `appInfoLocalizations` attributes that differ.
+  final Map<String, Map<String, String>> localizations;
+
+  /// `apps.contentRightsDeclaration`, when it differs; null when it does not.
+  ///
+  /// **Two independent properties, and it has both.** It is an attribute of
+  /// the *app*, so writing it needs no `appInfos` record and it is not gated
+  /// on acquiring one — which is why it is not counted by [needsAppInfo]. And
+  /// it is still a write, so it belongs in the diff and is skipped when it
+  /// would change nothing.
+  final String? contentRights;
+
+  /// Fields whose current value could not be read, named the way a refusal
+  /// should name them.
+  ///
+  /// Each is also queued for writing where there is somewhere to write it: a
+  /// value that cannot be shown to match is treated as differing, because the
+  /// alternative is skipping a write on the strength of not knowing.
+  ///
+  /// Never holds [contentRights] — that one needs no record, so failing to
+  /// read it must not drag the publish into demanding one.
+  final List<String> unverifiable;
+
+  /// Whether any of this needs an `appInfos` record to write to.
+  bool get needsAppInfo =>
+      categories.isNotEmpty ||
+      ageRating != null ||
+      localizations.isNotEmpty ||
+      unverifiable.isNotEmpty;
+
+  /// Whether the whole app-level half would write nothing at all.
+  bool get isEmpty => !needsAppInfo && contentRights == null;
+
+  /// The app-level fields a write would touch, deduplicated and named for a
+  /// refusal or a progress line.
+  List<String> get appInfoFields => <String>{
+    ...categories.keys,
+    if (ageRating != null) ...{ageRatingField},
+    for (final entry in localizations.entries) ...{
+      _localeField(entry.key, entry.value.keys),
+    },
+    ...unverifiable,
+  }.toList();
+}
+
+/// Whether [metadata] carries anything Apple scopes to a version rather than
+/// to the app — copyright, review notes, listing text, screenshots.
+///
+/// One function because two places ask it: the offline argument check, which
+/// is where a missing `--version-name` should be caught, and the publish
+/// itself, which must not discover it after writing the app-level half.
+/// **Every field the version-scoped half writes, and the count is the check.**
+/// That half writes four things — copyright, review notes, per-locale listing
+/// text, screenshots — and this predicate named three. A tree carrying only
+/// `info/copyright.txt` therefore reported that it needed no version, so no
+/// version was created, the copyright was never written, and nothing said so.
+/// Long-standing, and exactly the silent skip the rest of this file argues
+/// against; it survived because the predicate was written inline beside the
+/// three fields somebody was thinking about at the time.
+bool listingNeedsVersion(AppStoreMetadata metadata) =>
+    metadata.copyright != null ||
+    metadata.reviewNotes != null ||
+    metadata.locales.any(
+      (locale) => locale.version.isNotEmpty || locale.screenshots.isNotEmpty,
+    );
+
+/// Whether [metadata] declares anything that lives on the app rather than on
+/// a version.
+///
+/// A tree carrying only descriptions and screenshots declares none of it, and
+/// a run over one should not report that the app-level half "already matches":
+/// that would announce a comparison nobody asked for.
+bool declaresAppLevelFields(AppStoreMetadata metadata) =>
+    metadata.categories.isNotEmpty ||
+    metadata.ageRating != null ||
+    metadata.contentRights != null ||
+    metadata.locales.any((locale) => locale.appInfo.isNotEmpty);
+
+/// Compares [metadata] against what App Store Connect already holds.
+///
+/// Pure: every input is a value a caller has already read, so the comparison
+/// itself is testable with literals. That matters more here than anywhere
+/// else in this file — fastlane shipped a version of exactly this diff that
+/// compared the wrong attribute name (#21657), so privacy-URL changes were
+/// silently decided to be no-ops and never uploaded. A comparison that is
+/// wrong in one field fails silently by construction.
+///
+/// [appInfo] is the record [selectAppInfo] chose to read, or null when the app
+/// has none. [appInfoLocalizations] is null when there was no record to read
+/// them from, which is not the same as an empty list: empty means the locale
+/// genuinely does not exist yet and the write creates it.
+AppLevelChanges appLevelChanges({
+  required AppStoreMetadata metadata,
+  required String? currentContentRights,
+  required Map<String, dynamic>? appInfo,
+  required Map<String, dynamic>? ageRatingDeclaration,
+  required List<Map<String, dynamic>>? appInfoLocalizations,
+}) {
+  final differingCategories = <String>[];
+  final localizations = <String, Map<String, String>>{};
+  final unverifiable = <String>[];
+
+  final relationships = appInfo?['relationships'];
+  for (final entry in metadata.categories.entries) {
+    final link = relationships is Map<String, dynamic>
+        ? relationships[entry.key]
+        : null;
+    // A relationship carrying `data` is authoritative even when that data is
+    // null — "no secondary category" is spelled exactly that way. A
+    // relationship *without* `data` is the un-included read, which says
+    // nothing about what is set, so it cannot be evidence of a match.
+    if (link is Map<String, dynamic> && link.containsKey('data')) {
+      final data = link['data'];
+      final current = data is Map<String, dynamic> ? data['id'] : null;
+      if (current != entry.value) {
+        differingCategories.add(entry.key);
+      }
+      continue;
+    }
+    differingCategories.add(entry.key);
+    unverifiable.add(entry.key);
+  }
+  // Compared field by field, sent whole. See [AppLevelChanges.categories].
+  final categories = differingCategories.isEmpty
+      ? const <String, String>{}
+      : Map<String, String>.of(metadata.categories);
+
+  ({String declarationId, Map<String, Object?> values})? ageRating;
+  final wantedAgeRating = metadata.ageRating;
+  final declaration = ageRatingDeclaration;
+  if (wantedAgeRating != null) {
+    final declarationId = declaration == null ? null : _id(declaration);
+    if (declaration == null || declarationId == null) {
+      // Nothing to write to. Recorded rather than dropped, so it still makes
+      // this a run that needs a record and the caller reports it instead of
+      // quietly publishing everything else.
+      unverifiable.add(ageRatingField);
+    } else {
+      final current = declaration['attributes'];
+      if (current is! Map<String, dynamic>) {
+        ageRating = (declarationId: declarationId, values: wantedAgeRating);
+        unverifiable.add(ageRatingField);
+      } else if (wantedAgeRating.entries.any(
+        // `!containsKey` first, and it is not redundant. `age-rating.json` is
+        // arbitrary JSON, so a declared answer may itself be null — and then
+        // an attribute Apple did not report at all reads `null == null` and
+        // counts as matching, skipping the write on the strength of a
+        // non-reading. The same three-state collapse the category comparison
+        // above refuses, and it hides in the one comparison where both sides
+        // can legitimately be null.
+        (answer) =>
+            !current.containsKey(answer.key) ||
+            current[answer.key] != answer.value,
+      )) {
+        // The PATCH carries exactly the keys the repository declares and
+        // overwrites rather than merges, so it changes nothing precisely when
+        // every one of those keys already matches. Apple's own extra keys are
+        // not this repository's to have an opinion about.
+        ageRating = (declarationId: declarationId, values: wantedAgeRating);
+      }
+    }
+  }
+
+  for (final localeMetadata in metadata.locales) {
+    final wantedText = localeMetadata.appInfo;
+    if (wantedText.isEmpty) {
+      continue;
+    }
+    if (appInfoLocalizations == null) {
+      localizations[localeMetadata.locale] = Map.of(wantedText);
+      unverifiable.add(_localeField(localeMetadata.locale, wantedText.keys));
+      continue;
+    }
+    final existing = appInfoLocalizations
+        .where(
+          (localization) =>
+              _attributes(localization)['locale'] == localeMetadata.locale,
+        )
+        .toList();
+    if (existing.isEmpty) {
+      // The locale has no record yet, so every field differs and the write
+      // creates one. Not unverifiable: absence was read, not assumed.
+      localizations[localeMetadata.locale] = Map.of(wantedText);
+      continue;
+    }
+    final current = _attributes(existing.first);
+    final differing = <String, String>{
+      for (final entry in wantedText.entries) ...{
+        if (current[entry.key] != entry.value) ...{entry.key: entry.value},
+      },
+    };
+    if (differing.isNotEmpty) {
+      localizations[localeMetadata.locale] = differing;
+    }
+  }
+
+  final wantedRights = metadata.contentRights;
+  return AppLevelChanges(
+    categories: categories,
+    ageRating: ageRating,
+    localizations: localizations,
+    contentRights: wantedRights == currentContentRights ? null : wantedRights,
+    unverifiable: unverifiable,
+  );
+}
+
 /// Performs writes, or describes them and does nothing.
 class Writer {
   Writer(this.client, {required this.dryRun});
@@ -265,14 +821,41 @@ class ProcessingTimeout implements Exception {
       '  transferring the artifact a second time.';
 }
 
+/// What a run did to an App Store version record, when it did something that
+/// outlives the run.
+///
+/// **Both of these change what the *next* run finds.** `ensureVersion` adopts
+/// an existing editable version rather than making a second one, so a promote
+/// that fails after this point has already moved the state its rerun starts
+/// from. A failure that does not say so invites the one response that is
+/// wrong — run it again — and the second run behaves differently from the
+/// first for a reason nothing printed.
+enum VersionChange {
+  /// A version record that did not exist before this run.
+  created,
+
+  /// An existing editable version, renamed to the requested version string.
+  /// The name it had before is gone.
+  renamed,
+}
+
 /// An app record, which is the one thing in this whole pipeline that a human
 /// had to create by hand — `POST /v1/apps` does not exist.
 class App {
-  App(this.id, this.name, this.bundleId);
+  App(this.id, this.name, this.bundleId, {this.contentRights});
 
   final String id;
   final String name;
   final String bundleId;
+
+  /// `contentRightsDeclaration` as the app record reported it, or null.
+  ///
+  /// Carried on the record this was already read from rather than fetched
+  /// again, and nullable for two reasons that happen to want the same thing:
+  /// Apple returns null until somebody answers the question, and a response
+  /// that did not carry the attribute at all cannot be evidence either. Both
+  /// mean "cannot be shown to match", and both are answered by writing it.
+  final String? contentRights;
 }
 
 class AppStore {
@@ -281,6 +864,32 @@ class AppStore {
   final AscClient client;
   final Writer writer;
   final AscPlatform platform;
+
+  /// What this run did to a version record, or null if it did nothing to one.
+  ///
+  /// Set by [ensureVersion] only when a write actually happened — never on a
+  /// dry run, which leaves nothing behind to report. Read by the failure path,
+  /// so a run that exits non-zero still names what it left.
+  ({VersionChange change, String versionString, String? previousVersionString})?
+  versionChange;
+
+  /// The `reviewSubmissions` container this run created, if it created one.
+  ///
+  /// The sibling of [versionChange], and found the same way — by a run that
+  /// failed at `POST /v1/reviewSubmissionItems`, leaving a submission in
+  /// READY_FOR_REVIEW with no version in it and nothing in the output saying
+  /// so. Unlike the version, a rerun *adopts* this one where it still exists:
+  /// [submitForReview] looks for an open container first, because an
+  /// unsubmitted one from an earlier attempt blocks a new one and Apple's
+  /// error does not say so.
+  ///
+  /// "Where it still exists" is deliberate. An empty container was seen to
+  /// disappear once its version was removed from it in the console, so it is
+  /// not something to rely on finding — which is why the failure says to leave
+  /// it rather than that it will be there. Leaving it is right either way: if
+  /// it survives the next run reuses it, and if it does not the next run makes
+  /// one. Deleting it is the only move that can make the rerun worse.
+  String? createdReviewSubmission;
 
   Future<App> resolveApp(String bundleId) async {
     final apps = await client.getAll(
@@ -309,6 +918,7 @@ class AppStore {
       _id(app)!,
       _attributes(app)['name'] as String? ?? '(unnamed)',
       bundleId,
+      contentRights: _attributes(app)['contentRightsDeclaration'] as String?,
     );
   }
 
@@ -737,9 +1347,18 @@ class AppStore {
       );
       if (renamed == null) {
         // Dry run: report the existing record, which is the one a real run
-        // would have edited, so later steps describe the right thing.
+        // would have edited, so later steps describe the right thing. Nothing
+        // was written, so there is nothing for a failure to report.
         return existing;
       }
+      versionChange = (
+        change: VersionChange.renamed,
+        versionString: versionString,
+        // Carried because putting it back is the remedy, and a message that
+        // says "renamed something to 1.1.3" without saying what it was called
+        // cannot be acted on.
+        previousVersionString: was is String ? was : null,
+      );
       final data = renamed['data'];
       return data is Map<String, dynamic> ? data : existing;
     }
@@ -759,7 +1378,15 @@ class AppStore {
       },
     }, describe: 'App Store version $versionString');
     final data = created?['data'];
-    return data is Map<String, dynamic> ? data : null;
+    if (data is! Map<String, dynamic>) {
+      return null;
+    }
+    versionChange = (
+      change: VersionChange.created,
+      versionString: versionString,
+      previousVersionString: null,
+    );
+    return data;
   }
 
   /// Points an App Store version at a build App Store Connect already holds.
@@ -874,32 +1501,82 @@ class AppStore {
 
   // ---------------------------------------------------------------- app info
 
-  /// The editable `appInfos` record, which is where the name, subtitle,
-  /// category and age rating live.
+  /// Every `appInfos` record of [app] — where the name, subtitle, category
+  /// and age rating live.
   ///
-  /// An app always has at least one, and once a version is live it has two —
-  /// the public one and the one being prepared. Writing to the wrong one
-  /// silently edits what is already on the App Store.
-  Future<Map<String, dynamic>> editableAppInfo(App app) async {
-    final infos = await client.getAll('/v1/apps/${app.id}/appInfos');
-    for (final info in infos) {
-      final state = _attributes(info)['appStoreState'] as String?;
-      if (state == null || editableVersionStates.contains(state)) {
-        return info;
+  /// An app always has at least one, and once a version is live it has two:
+  /// the public one and the one being prepared. Which of them to use is
+  /// [selectAppInfo]'s decision, taken over this whole list rather than by
+  /// returning the first acceptable record, because deciding *what to write*
+  /// comes before demanding something to write to.
+  ///
+  /// **The `include` is load-bearing, not an optimisation.** Without it the
+  /// category relationships come back as links only — no `data` key at all,
+  /// verified against a live account — so the record cannot answer which
+  /// category is set, and every comparison against it would have to assume a
+  /// difference and write.
+  Future<List<Map<String, dynamic>>> appInfos(App app) => client.getAll(
+    '/v1/apps/${app.id}/appInfos',
+    query: {'include': 'primaryCategory,secondaryCategory'},
+  );
+
+  /// The `ageRatingDeclarations` record hanging off [appInfo], or null when
+  /// Apple reported none.
+  Future<Map<String, dynamic>?> ageRatingDeclaration(
+    Map<String, dynamic> appInfo,
+  ) async {
+    final info = await client.get(
+      '/v1/appInfos/${_id(appInfo)}',
+      query: {'include': 'ageRatingDeclaration'},
+    );
+    final included = info['included'];
+    if (included is List) {
+      for (final resource in included.whereType<Map<String, dynamic>>()) {
+        if (resource['type'] == 'ageRatingDeclarations') {
+          return resource;
+        }
       }
     }
-    if (infos.isEmpty) {
-      throw AscApiException(404, [
-        'the app has no appInfos record at all',
-      ], request: 'GET /v1/appInfos');
-    }
-    throw AscApiException(409, [
-      'every appInfos record is in a state that cannot be edited '
-          '(${infos.map((i) => _attributes(i)['appStoreState']).join(", ")}).',
-      'Create the next version first, or cancel the submission in App Store '
-          'Connect.',
-    ], request: 'GET /v1/appInfos');
+    return null;
   }
+
+  /// Every category relationship [appInfo] reports, or null if they could not
+  /// be read.
+  ///
+  /// **Null rather than an exception, and null rather than empty.** This is
+  /// only ever called to check a write that has already happened, so throwing
+  /// would turn a successful publish into a failure over a diagnostic. And
+  /// the caller has to be able to say "could not check" rather than printing
+  /// nothing, which an empty map would invite.
+  ///
+  /// The `include` names four relationships this package otherwise never
+  /// mentions. If Apple does not accept one, the read fails and this returns
+  /// null — the check goes unmade and says so, rather than taking the whole
+  /// publish down with it.
+  Future<Map<String, String?>?> categoryRelationships(
+    Map<String, dynamic> appInfo,
+  ) async {
+    try {
+      final info = await client.get(
+        '/v1/appInfos/${_id(appInfo)}',
+        query: {'include': categoryRelationshipNames.join(',')},
+      );
+      final data = info['data'];
+      return data is Map<String, dynamic>
+          ? readCategoryRelationships(data)
+          : null;
+    } on AscApiException {
+      return null;
+    }
+  }
+
+  /// Every `appInfoLocalizations` record of [appInfo].
+  ///
+  /// Read once and passed to both the comparison and the write, so the two
+  /// cannot disagree about whether a locale already exists.
+  Future<List<Map<String, dynamic>>> appInfoLocalizations(
+    Map<String, dynamic> appInfo,
+  ) => client.getAll('/v1/appInfos/${_id(appInfo)}/appInfoLocalizations');
 
   /// Declares whether the app carries third-party content.
   ///
@@ -916,6 +1593,21 @@ class AppStore {
     }, describe: 'content rights: $declaration');
   }
 
+  /// Sets [categories], which [AppLevelChanges] has already decided is either
+  /// the whole declared set or empty.
+  ///
+  /// **Do not narrow this to the fields that differ.** It is tempting — the
+  /// comparison upstream is per field, so the differing ones are known — and
+  /// the saving is one relationship in a request that is happening anyway.
+  /// The declared set is the unit because the tree is what this repository
+  /// owns; a category the tree does not name is not in [categories] at all,
+  /// and is left to whatever App Store Connect holds.
+  ///
+  /// Which is worth stating precisely, because the obvious defence of this is
+  /// wrong: the document sent here **is** partial whenever the tree declares
+  /// one category and Apple holds two. That has always been true of this
+  /// method. So "never send a partial relationships document" is not a rule
+  /// this package follows and must not be offered as the reason.
   Future<void> writeCategories(
     Map<String, dynamic> appInfo,
     Map<String, String> categories,
@@ -924,8 +1616,9 @@ class AppStore {
       return;
     }
     final relationships = <String, dynamic>{
-      for (final entry in categories.entries)
+      for (final entry in categories.entries) ...{
         entry.key: relation('appCategories', entry.value),
+      },
     };
     await writer.patch('/v1/appInfos/${_id(appInfo)}', {
       'data': {
@@ -936,17 +1629,21 @@ class AppStore {
     }, describe: 'categories: ${categories.values.join(", ")}');
   }
 
+  /// Writes [attributes] for [locale], creating the localization if [existing]
+  /// — the records [appInfoLocalizations] already returned — has none.
+  ///
+  /// The list is passed in rather than read again so that the comparison which
+  /// produced [attributes] and the choice between POST and PATCH are made from
+  /// the same reading.
   Future<void> writeAppInfoLocalization(
     Map<String, dynamic> appInfo,
     String locale,
-    Map<String, String> attributes,
-  ) async {
+    Map<String, String> attributes, {
+    required List<Map<String, dynamic>> existing,
+  }) async {
     if (attributes.isEmpty) {
       return;
     }
-    final existing = await client.getAll(
-      '/v1/appInfos/${_id(appInfo)}/appInfoLocalizations',
-    );
     final match = existing
         .where((l) => _attributes(l)['locale'] == locale)
         .toList();
@@ -973,35 +1670,20 @@ class AppStore {
   ///
   /// The App Store analogue of `store/play/data-safety.csv`: owned by the
   /// repository, re-asserted on every push, and overwritten rather than merged.
+  ///
+  /// Takes the declaration id and the answers as one value from
+  /// [AppLevelChanges], because the id it writes to has to be the id the
+  /// answers were compared against.
   Future<void> writeAgeRating(
-    Map<String, dynamic> appInfo,
-    Map<String, Object?> declaration,
+    ({String declarationId, Map<String, Object?> values}) ageRating,
   ) async {
-    final info = await client.get(
-      '/v1/appInfos/${_id(appInfo)}',
-      query: {'include': 'ageRatingDeclaration'},
-    );
-    final included = info['included'];
-    String? declarationId;
-    if (included is List) {
-      for (final resource in included.whereType<Map<String, dynamic>>()) {
-        if (resource['type'] == 'ageRatingDeclarations') {
-          declarationId = _id(resource);
-        }
-      }
-    }
-    if (declarationId == null) {
-      throw AscApiException(404, [
-        'the app has no ageRatingDeclaration to write to',
-      ], request: 'GET /v1/appInfos');
-    }
-    await writer.patch('/v1/ageRatingDeclarations/$declarationId', {
+    await writer.patch('/v1/ageRatingDeclarations/${ageRating.declarationId}', {
       'data': {
         'type': 'ageRatingDeclarations',
-        'id': declarationId,
-        'attributes': declaration,
+        'id': ageRating.declarationId,
+        'attributes': ageRating.values,
       },
-    }, describe: 'age rating (${declaration.length} answers)');
+    }, describe: 'age rating (${ageRating.values.length} answers)');
   }
 
   /// Pushes what the reviewer is told, which hangs off the version.
@@ -1231,6 +1913,9 @@ class AppStore {
       }, describe: 'review submission');
       final data = created?['data'];
       submissionId = data is Map<String, dynamic> ? _id(data) : null;
+      // Only when one was really made. A dry run creates nothing, so it has
+      // nothing to leave behind and nothing to report.
+      createdReviewSubmission = submissionId;
     }
 
     if (submissionId == null) {
