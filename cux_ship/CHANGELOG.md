@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+**A listing publish that is going to be refused is refused before it writes
+anything.** `_publishAscListing` acquired the `appInfos` record before writing
+app-level fields and the version *after* them — so a run against a version
+Apple will not let anyone edit wrote the content rights, the categories, the
+age rating and the localized name, and only then took a 409 naming the
+version. Half applied, and needing a diff against the store to notice.
+
+That satisfied "acquire before write" for each resource separately while
+breaking it for the pair, which is not a weaker form of the rule but a
+different one that happens to coincide when there is a single resource. Every
+acquisition that can refuse now happens before any write: the writable record,
+the age-rating declaration, the version name, the version, and the review
+contact — which refuses a half-set `APPLE_REVIEW_CONTACT_*` environment and
+had been read beside the write it feeds, so its own reason for existing
+described what it then did.
+
+It needs app-level drift and an unusable version together, which is the
+combination nobody arranges deliberately and everybody meets after a
+rejection. Found by a consuming project pointing a `--listing-only` run at a
+released version; it wrote nothing only because that tree happened to match.
+
 **A publish that changes nothing now writes nothing, including the version
 text.** 3.6.1 compared the app-level half and the screenshots before writing
 them, and rewrote the copyright, the review notes and every localized listing
