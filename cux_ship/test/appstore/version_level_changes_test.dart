@@ -65,7 +65,7 @@ AppStoreMetadata _metadata({
 VersionLevelChanges _changes({
   required AppStoreMetadata metadata,
   Map<String, dynamic>? version,
-  List<Map<String, dynamic>>? localizations = const [],
+  List<Map<String, dynamic>> localizations = const [],
   Map<String, dynamic>? reviewDetail,
   ReviewContact? contact,
 }) => versionLevelChanges(
@@ -226,20 +226,6 @@ void main() {
       expect(changes.localizations, {
         'fr-FR': {'description': 'Roulez mieux.'},
       });
-      expect(changes.unverifiable, isEmpty);
-    });
-
-    test('localizations that could not be read are written, and named', () {
-      final changes = _changes(
-        metadata: _metadata(
-          text: {
-            'en-US': {'description': 'Ride better.'},
-          },
-        ),
-        localizations: null,
-      );
-      expect(changes.localizations, isNotEmpty);
-      expect(changes.unverifiable, ['en-US description']);
     });
 
     test('a locale carrying only app-level text asks for no version write', () {

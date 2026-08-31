@@ -721,7 +721,6 @@ class VersionLevelChanges {
     required this.copyright,
     required this.localizations,
     required this.reviewDetails,
-    required this.unverifiable,
   });
 
   /// `appStoreVersions.copyright`, when it differs; null when it does not.
@@ -737,11 +736,6 @@ class VersionLevelChanges {
   /// written, and the pair is what has to be compared.
   final ({String notes, ReviewContact? contact})? reviewDetails;
 
-  /// Fields whose current value could not be read, named for a report. Each is
-  /// also queued for writing: a value that cannot be shown to match is treated
-  /// as differing, the same reading [appLevelChanges] takes.
-  final List<String> unverifiable;
-
   bool get isEmpty =>
       copyright == null && localizations.isEmpty && reviewDetails == null;
 }
@@ -752,18 +746,22 @@ class VersionLevelChanges {
 /// wrong in one field skips a write and reports success, which is the quietest
 /// way this package can fail.
 ///
-/// [localizations] is null when they could not be read — not the same as an
-/// empty list, which means the locale genuinely has no record yet and the
-/// write creates one.
+/// [localizations] carries no "could not be read" case, unlike its app-level
+/// twin: `versionLocalizations` returns a list or throws, so a caller has
+/// either read them or has already failed. An empty list is a reading — the
+/// locale genuinely has no record yet and the write creates one.
+///
+/// The nullable version of this parameter, and the `unverifiable` list it fed,
+/// were written by symmetry with [appLevelChanges], where the null case is
+/// real. Here no caller could reach them, so the documented degrade-to-write
+/// path did not exist and the message announcing it could never print.
 VersionLevelChanges versionLevelChanges({
   required AppStoreMetadata metadata,
   required Map<String, dynamic> version,
-  required List<Map<String, dynamic>>? localizations,
+  required List<Map<String, dynamic>> localizations,
   required Map<String, dynamic>? reviewDetail,
   required ReviewContact? contact,
 }) {
-  final unverifiable = <String>[];
-
   final wantedCopyright = metadata.copyright;
   final currentCopyright = _attributes(version)['copyright'] as String?;
   final copyright =
@@ -775,11 +773,6 @@ VersionLevelChanges versionLevelChanges({
   for (final localeMetadata in metadata.locales) {
     final wanted = localeMetadata.version;
     if (wanted.isEmpty) {
-      continue;
-    }
-    if (localizations == null) {
-      differing[localeMetadata.locale] = Map.of(wanted);
-      unverifiable.add('${localeMetadata.locale} ${wanted.keys.join(", ")}');
       continue;
     }
     final existing = localizations
@@ -834,7 +827,6 @@ VersionLevelChanges versionLevelChanges({
     copyright: copyright,
     localizations: differing,
     reviewDetails: reviewDetails,
-    unverifiable: unverifiable,
   );
 }
 
@@ -1855,7 +1847,6 @@ class AppStore {
     }, describe: attributes.keys.join(', '));
   }
 
-  /// Writes one locale's version-scoped fields, including the release notes.
   /// Writes [attributes] for [locale], creating the localization when
   /// [existing] — the records [versionLocalizations] already returned — has
   /// none.
@@ -2234,9 +2225,8 @@ class AppStore {
   /// which comes back as "we were unable to evaluate your app", days later,
   /// with nothing to fix.
   ///
-  /// Created where the version has no review detail yet and patched where it
-  /// has. Apple may then demand contact fields on the create; that error is left
-  /// to speak for itself rather than pre-empted with invented values, because a
+  /// Apple may demand contact fields on the create; that error is left to
+  /// speak for itself rather than pre-empted with invented values, because a
   /// wrong contact is worse than a missing one.
   /// Writes the reviewer-facing notes and contact, creating the record when
   /// [existing] — what [reviewDetail] already returned — is null.

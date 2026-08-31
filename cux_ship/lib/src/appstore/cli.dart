@@ -656,17 +656,17 @@ Future<void> _publishAscListing(
         version: version,
         localizations: localizations,
         reviewDetail: existingReviewDetail,
-        contact: ReviewContact.fromEnvironment(),
+        // **Only read when there are notes to send it with.**
+        // `fromEnvironment` refuses a half-set contact and a malformed phone
+        // number — guards that protect a review-detail write. Calling it
+        // unconditionally made those guards fire on runs that never make that
+        // write: a tree carrying only a description would exit non-zero over
+        // `APPLE_REVIEW_CONTACT_*` it does not use, *after* the app-level half
+        // had been written. Correct for the tree it was written against, and
+        // a partial failure for one without review notes.
+        contact: needsReviewDetail ? ReviewContact.fromEnvironment() : null,
       );
 
-      if (versionChanges.unverifiable.isNotEmpty) {
-        stdout.writeln(
-          '==> could not read the current '
-          '${versionChanges.unverifiable.join(", ")}, so '
-          '${versionChanges.unverifiable.length == 1 ? 'it is' : 'they are'} '
-          'written rather than assumed unchanged',
-        );
-      }
       if (versionChanges.isEmpty && declaresVersionText(metadata)) {
         stdout.writeln('==> version text: already matches, nothing written');
       }
