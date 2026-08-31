@@ -702,14 +702,13 @@ Future<void> _publishAscListing(
           );
         }
         if (localeMetadata.screenshots.isNotEmpty) {
-          // Found in the reading already taken above rather than fetched
-          // again per locale. The same "compare what you already read" the
-          // rest of this function does — and the reason the version-level
-          // comparison costs nothing: these records were being read and
-          // discarded at every write site.
-          final localization = localizationFor(
-            localizations,
+          // Found in the reading already taken above when it is there, and
+          // re-read when it is not — because the write a few lines up may
+          // have just created it. See [localizationForUpload].
+          final localization = await store.localizationForUpload(
+            version,
             localeMetadata.locale,
+            known: localizations,
           );
           if (localization == null) {
             stdout.writeln(

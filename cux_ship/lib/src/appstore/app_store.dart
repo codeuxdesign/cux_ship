@@ -1996,6 +1996,33 @@ class AppStore {
     return data is Map<String, dynamic> && data['id'] != null ? data : null;
   }
 
+  /// The localization for [locale], re-read only when [known] does not have
+  /// it.
+  ///
+  /// **The cache is right for every locale that already existed and wrong for
+  /// the one that did not.** Screenshots hang off the localization record, and
+  /// a locale publishing for the first time has that record *created* by the
+  /// listing-text write a few lines earlier — after [known] was read. Looking
+  /// it up in [known] then finds nothing and reports "no localization yet, so
+  /// its screenshots are skipped", so a first publish uploads the text and
+  /// silently none of the images.
+  ///
+  /// That is exactly what a straight cache substitution cost, and it looked
+  /// like an optimisation because the common case — a locale Apple already
+  /// holds — is unaffected. So the re-read survives for precisely the case it
+  /// was there for, and nowhere else.
+  Future<Map<String, dynamic>?> localizationForUpload(
+    Map<String, dynamic> version,
+    String locale, {
+    required List<Map<String, dynamic>> known,
+  }) async {
+    final cached = localizationFor(known, locale);
+    if (cached != null) {
+      return cached;
+    }
+    return versionLocalization(version, locale);
+  }
+
   /// The `appStoreVersionLocalizations` record for [locale], or null.
   Future<Map<String, dynamic>?> versionLocalization(
     Map<String, dynamic> version,
