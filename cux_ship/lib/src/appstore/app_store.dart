@@ -351,6 +351,109 @@ List<String> unrequestedCategoryChanges({
   return changed;
 }
 
+/// One screenshot as Apple reports it, reduced to what identifies its bytes.
+///
+/// Both nullable, and a null is never a match: [fileName] is absent from a
+/// sparse response and [checksum] is absent until the upload is committed, and
+/// neither absence is evidence that the file on disk is already published.
+typedef PublishedScreenshot = ({String? fileName, String? checksum});
+
+/// One screenshot as the metadata tree has it.
+typedef LocalScreenshot = ({String fileName, String checksum});
+
+/// The checksum Apple stores for a screenshot's bytes.
+///
+/// **One function, because the value that gets committed and the value that
+/// gets compared have to be the same value.** If the commit wrote one digest
+/// and the next run's comparison computed another, every screenshot would
+/// re-upload for ever and the skip would silently never fire — the quiet
+/// half-failure this whole change exists to remove.
+String checksumOf(List<int> bytes) => md5.convert(bytes).toString();
+
+/// [file] reduced to what identifies it to Apple.
+LocalScreenshot localScreenshot(File file) => (
+  fileName: file.uri.pathSegments.last,
+  checksum: checksumOf(file.readAsBytesSync()),
+);
+
+/// The `fileName` and `sourceFileChecksum` of [screenshot].
+PublishedScreenshot readPublishedScreenshot(Map<String, dynamic> screenshot) {
+  final attributes = _attributes(screenshot);
+  return (
+    fileName: attributes['fileName'] as String?,
+    checksum: attributes['sourceFileChecksum'] as String?,
+  );
+}
+
+/// Whether Apple already holds exactly [local], in that order.
+///
+/// **The comparison that stops a release rewriting images nobody changed.**
+/// `--metadata` deleted the whole screenshot set and re-uploaded every file on
+/// every run, which SHIPPING.md called harmless. It was not: four assets going
+/// up immediately before a submission is what put a version in front of Apple
+/// while its screenshots were still being ingested, and the submission was
+/// refused with `appStoreVersions … is not in valid state` — a message about
+/// the version, for a problem with its assets.
+///
+/// **Order is part of the comparison, not a detail.** Screenshots are shown in
+/// the order they were uploaded, so the same files in a different order are a
+/// different listing. Comparing as sequences means a reorder re-uploads, which
+/// is correct; comparing as sets would silently leave the old order in place.
+///
+/// Conservative in the one direction that matters. Any doubt — a length that
+/// differs, a name or checksum Apple did not report — is a mismatch, which
+/// costs an upload that was not needed. The opposite mistake leaves the
+/// published listing showing something the tree does not.
+bool screenshotsAlreadyPublished({
+  required List<PublishedScreenshot> published,
+  required List<LocalScreenshot> local,
+}) {
+  if (published.length != local.length || local.isEmpty) {
+    return false;
+  }
+  for (var i = 0; i < local.length; i++) {
+    if (published[i].fileName != local[i].fileName ||
+        published[i].checksum != local[i].checksum) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/// Apple's ingestion verdict on a screenshot, or null if it did not report one.
+///
+/// `COMPLETE`, `FAILED`, `AWAITING_UPLOAD` and `UPLOAD_COMPLETE` are the states
+/// seen in the wild. Null is not one of them: it means the response carried no
+/// `assetDeliveryState`, which is a fact about the response.
+String? screenshotDeliveryState(Map<String, dynamic> screenshot) {
+  final state = _attributes(screenshot)['assetDeliveryState'];
+  return state is Map<String, dynamic> ? state['state'] as String? : null;
+}
+
+/// Why Apple rejected a screenshot, in its own words.
+///
+/// **The half that was being thrown away.** A screenshot refused for an alpha
+/// channel or the wrong dimensions used to be reported as `uploaded` and was
+/// then simply absent from the listing, because the commit response carrying
+/// this was discarded. The shape is `assetDeliveryState.errors[]`, each entry
+/// a `code` and a `description` — the same reading fastlane's `error_messages`
+/// takes.
+List<String> screenshotDeliveryErrors(Map<String, dynamic> screenshot) {
+  final state = _attributes(screenshot)['assetDeliveryState'];
+  if (state is! Map<String, dynamic>) {
+    return const [];
+  }
+  final errors = state['errors'];
+  if (errors is! List) {
+    return const [];
+  }
+  return [
+    for (final error in errors.whereType<Map<String, dynamic>>()) ...{
+      [error['code'], error['description']].whereType<String>().join(' - '),
+    },
+  ].where((message) => message.isNotEmpty).toList();
+}
+
 /// How a refusal names the age-rating answers.
 const ageRatingField = 'age rating';
 
@@ -1772,6 +1875,24 @@ class AppStore {
     String? setId;
     if (existing.isNotEmpty) {
       setId = _id(existing.first);
+
+      // **Compare before deleting anything.** Re-uploading images nobody
+      // changed is not free: it is the whole reason a promotion could submit a
+      // version whose assets Apple had not finished ingesting.
+      final published = await client.getAll(
+        '/v1/appScreenshotSets/$setId/appScreenshots',
+      );
+      if (screenshotsAlreadyPublished(
+        published: published.map(readPublishedScreenshot).toList(),
+        local: files.map(localScreenshot).toList(),
+      )) {
+        stdout.writeln(
+          '    $displayType: ${files.length} screenshot(s) already published, '
+          'unchanged',
+        );
+        return;
+      }
+
       await writer.delete(
         '/v1/appScreenshotSets/$setId',
         describe: 'cleared $displayType',
@@ -1800,8 +1921,99 @@ class AppStore {
     }
     setId = _id(data);
 
+    final uploaded = <String>[];
     for (final file in files) {
-      await _uploadScreenshot(setId!, file);
+      final screenshotId = await _uploadScreenshot(setId!, file);
+      if (screenshotId != null) {
+        uploaded.add(screenshotId);
+      }
+    }
+    await awaitScreenshotProcessing(uploaded);
+  }
+
+  /// Waits until Apple has finished ingesting [screenshotIds], or says why it
+  /// will not.
+  ///
+  /// **Committing an upload is not the same as Apple accepting it.** The commit
+  /// returns while the asset is still `AWAITING_UPLOAD` or `UPLOAD_COMPLETE`;
+  /// `COMPLETE` and `FAILED` arrive later, and until then the version they hang
+  /// off is not in a state Apple will add to a review submission. That is
+  /// exactly how `promote --metadata` failed with `appStoreVersions … is not in
+  /// valid state` — a message about the version, for a problem with its assets,
+  /// on a run that had reported every screenshot `uploaded`.
+  ///
+  /// So this is two guarantees in one loop: nothing is submitted while assets
+  /// are in flight, and a rejected asset is reported instead of vanishing. With
+  /// the unchanged-screenshot skip above, the common release uploads nothing
+  /// and this returns immediately.
+  Future<void> awaitScreenshotProcessing(
+    List<String> screenshotIds, {
+    Duration timeout = const Duration(minutes: 10),
+    Duration poll = const Duration(seconds: 5),
+  }) async {
+    if (screenshotIds.isEmpty || writer.dryRun) {
+      return;
+    }
+    final deadline = DateTime.now().add(timeout);
+    final pending = [...screenshotIds];
+    var announced = false;
+
+    while (pending.isNotEmpty) {
+      final stillPending = <String>[];
+      for (final id in pending) {
+        final screenshot = await client.get('/v1/appScreenshots/$id');
+        final data = screenshot['data'];
+        if (data is! Map<String, dynamic>) {
+          // Apple answered without a resource. Not evidence that the asset is
+          // fine, and not evidence that it is broken either — keep asking.
+          stillPending.add(id);
+          continue;
+        }
+        final state = screenshotDeliveryState(data);
+        if (state == 'COMPLETE') {
+          continue;
+        }
+        if (state == 'FAILED') {
+          final why = screenshotDeliveryErrors(data);
+          throw AscApiException(422, [
+            'Apple rejected the screenshot '
+                '${_attributes(data)['fileName'] ?? id}.',
+            ...why,
+            if (why.isEmpty)
+              'It reported no reason, which usually means the image\'s '
+                  'dimensions or colour space; `screenshots flatten` removes '
+                  'the alpha channel Apple refuses.',
+          ], request: 'GET /v1/appScreenshots');
+        }
+        stillPending.add(id);
+      }
+      pending
+        ..clear()
+        ..addAll(stillPending);
+      if (pending.isEmpty) {
+        return;
+      }
+      if (DateTime.now().isAfter(deadline)) {
+        // Ours, not Apple's — every poll was answered. Said plainly, because
+        // the tempting reading of a timeout here is that the upload failed,
+        // and it did not: the assets are there and still being processed.
+        throw AscApiException(504, [
+          'Apple has not finished processing ${pending.length} screenshot(s) '
+              'after ${timeout.inMinutes} minutes.',
+          'They are uploaded; this run stopped waiting rather than submit a '
+              'version whose assets are still in flight, which Apple refuses '
+              'with an error naming the version instead of the screenshots.',
+          'Re-running publishes the listing again and should find them ready.',
+        ], request: 'GET /v1/appScreenshots');
+      }
+      if (!announced) {
+        stdout.writeln(
+          '      waiting for Apple to process '
+          '${pending.length} screenshot(s)',
+        );
+        announced = true;
+      }
+      await Future<void>.delayed(poll);
     }
   }
 
@@ -1811,7 +2023,9 @@ class AppStore {
   /// occupies the slot and is never shown, so a run that uploaded bytes and
   /// stopped would leave a listing that looks empty and cannot be re-uploaded
   /// into cleanly.
-  Future<void> _uploadScreenshot(String setId, File file) async {
+  /// Uploads [file] into [setId] and returns the `appScreenshots` id, so the
+  /// caller can wait for Apple to say whether it accepted it.
+  Future<String?> _uploadScreenshot(String setId, File file) async {
     final bytes = file.readAsBytesSync();
     final name = file.uri.pathSegments.last;
 
@@ -1848,18 +2062,37 @@ class AppStore {
     }
 
     // MD5 of the whole file, which is what Apple compares against what it
-    // received. Not a security property — Apple picked the algorithm.
-    await client.patch('/v1/appScreenshots/$screenshotId', {
+    // received. Not a security property — Apple picked the algorithm. The same
+    // value is what [screenshotsAlreadyPublished] compares on the next run, so
+    // committing it is also what makes the upload skippable next time.
+    final committed = await client.patch('/v1/appScreenshots/$screenshotId', {
       'data': {
         'type': 'appScreenshots',
         'id': screenshotId,
         'attributes': {
           'uploaded': true,
-          'sourceFileChecksum': md5.convert(bytes).toString(),
+          'sourceFileChecksum': checksumOf(bytes),
         },
       },
     });
-    stdout.writeln('      uploaded $name');
+
+    // **"uploaded" now means the bytes are with Apple, not that Apple kept
+    // them.** This line used to print unconditionally beside a discarded
+    // response, so a screenshot refused during ingestion was reported as
+    // uploaded and was then simply missing from the listing. The verdict
+    // arrives later; [awaitScreenshotProcessing] collects it. An immediate
+    // FAILED is still worth catching here, where the file name is at hand.
+    final verdict = committed['data'];
+    if (verdict is Map<String, dynamic> &&
+        screenshotDeliveryState(verdict) == 'FAILED') {
+      final why = screenshotDeliveryErrors(verdict);
+      throw AscApiException(422, [
+        'Apple rejected the screenshot $name.',
+        ...why,
+      ], request: 'PATCH /v1/appScreenshots');
+    }
+    stdout.writeln('      sent $name');
+    return screenshotId;
   }
 
   // -------------------------------------------------------------- submission

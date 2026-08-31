@@ -70,6 +70,33 @@ says should never be quiet. Play still gets them verbatim, and the changelog's
 "emoji are welcome and encouraged" rule is unaffected — absorbing Apple's
 restriction is the tool's job, not the changelog's.
 
+**Screenshots that have not changed are no longer re-uploaded, and a
+screenshot Apple rejects is no longer reported as uploaded.** `--metadata`
+deleted the whole screenshot set and re-uploaded every file on every run. That
+was recorded as known and harmless. It was neither: four assets going up
+immediately before a submission is what made `promote --metadata` fail with
+`appStoreVersions '…' is not in valid state` — a message about the version, for
+a problem with its screenshots, on a run that had reported every one of them
+uploaded. Measured: the identical request, replayed forty minutes later with
+no upload, was accepted.
+
+The set is now compared before it is deleted, by file name and by the same MD5
+Apple stores as `sourceFileChecksum` — which this package already computed in
+order to commit it. Order is part of the comparison, because screenshots are
+shown in the order they were uploaded and the same files rearranged are a
+different listing. Anything that cannot be shown to match is re-uploaded, so
+the cost of doubt is an upload nobody needed rather than a listing nobody
+updated.
+
+Underneath that was the quieter defect. Committing an upload returns a
+verdict, and the response was discarded — so a screenshot refused during
+ingestion for an alpha channel or the wrong dimensions printed `uploaded` and
+was then simply absent from the listing, with nothing in the run saying so.
+The run now waits for Apple to finish with each asset and reports a rejection
+in Apple's own words. With unchanged screenshots skipped there is usually
+nothing to wait for, so the wait costs nothing on the release where nothing
+moved.
+
 **A category write now checks that nothing else moved.** A category `PATCH`
 names only the relationships the metadata tree declares, so it always omits
 the rest — the other category, and the four subcategory slots this package has
