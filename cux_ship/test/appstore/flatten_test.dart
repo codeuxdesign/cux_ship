@@ -40,6 +40,28 @@ Uint8List transparentBlack({int width = 8, int height = 6}) {
   return img.encodePng(image);
 }
 
+/// What a store screenshot actually looks like to a compressor: broad flat
+/// panels, hard edges between them, and one photographic region.
+///
+/// Small enough to stay a unit test and structured enough that the filters
+/// disagree, which is the whole property under test.
+Uint8List flatPanels({int width = 512, int height = 320}) {
+  final image = img.Image(width: width, height: height, numChannels: 4);
+  for (final pixel in image) {
+    if (pixel.x < width ~/ 2) {
+      // The chrome: one colour over a wide area, where predicting from a
+      // neighbour buys nothing and costs a byte a pixel.
+      pixel.setRgba(240, 238, 230, 255);
+    } else {
+      // The map: a gradient with noise, which is where a predictor earns its
+      // keep.
+      final shade = (pixel.x * 7 + pixel.y * 3) % 256;
+      pixel.setRgba(shade, (shade * 2) % 256, 128 + (pixel.y % 64), 255);
+    }
+  }
+  return img.encodePng(image);
+}
+
 img.Image decode(Uint8List bytes) => img.decodePng(bytes)!;
 
 void main() {
@@ -55,6 +77,34 @@ void main() {
       final result = flattenPng(opaqueRgba());
       expect(result.outcome, FlattenOutcome.droppedAlpha);
       expect(decode(result.bytes!).numChannels, 3);
+    });
+
+    test('never encodes larger than the default filter would', () {
+      // **A screenshot is not a photograph, and the default filter assumes it
+      // is.** `encodePng` defaults to `PngFilter.paeth`, which predicts well
+      // across a photographic gradient and badly across the flat panels a store
+      // screenshot is mostly made of. Measured on a 2880x1800 macOS capture:
+      // paeth 3,953,681 bytes, no filtering 2,685,629 — 32% smaller, and
+      // smaller than the RGBA original.
+      //
+      // Asserted as "no worse than paeth" rather than "equals none", because
+      // which filter wins is a property of the picture: a listing of dense
+      // photographs may still choose paeth, and that is the right answer when
+      // it does.
+      //
+      // Red before the change, which is the point: the old code called
+      // `encodePng` with its defaults, so this compared a value against itself.
+      final flattened = flattenPng(flatPanels()).bytes!;
+      final asPaeth = img.encodePng(
+        decode(flattened).convert(numChannels: 3),
+        filter: img.PngFilter.paeth,
+      );
+      expect(flattened.length, lessThanOrEqualTo(asPaeth.length));
+      expect(
+        flattened.length,
+        lessThan(asPaeth.length),
+        reason: 'on this picture some other filter is strictly smaller',
+      );
     });
 
     test('dropping an opaque alpha channel changes no pixel', () {

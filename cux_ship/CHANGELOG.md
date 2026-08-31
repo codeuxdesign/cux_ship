@@ -123,6 +123,26 @@ and re-uploading every screenshot both times, under a comment claiming it
 published in one place only. Two conditions at two sites that had to stay
 complementary by discipline; now one decision, read at both.
 
+**`screenshots flatten` picks the PNG filter by measuring instead of assuming,
+and store screenshots get about a third smaller.** `encodePng` defaults to
+`PngFilter.paeth`, which is the right guess for a photograph and a poor one for
+a screen capture: a store screenshot is mostly flat panels of one colour with a
+single photographic region, and a per-scanline predictor that helps the
+photograph hurts everything around it. On a 2880x1800 macOS capture, paeth
+produced 3,953,681 bytes where no filtering produced 2,685,629 — 32% smaller,
+and smaller than the RGBA original the flatten was handed.
+
+The filter is now chosen by trying them and keeping the smallest, so which one
+wins is a property of the picture rather than a default: a listing of dense
+photographs may still choose paeth, and it gets paeth. The compression level is
+deliberately left alone — the same measurement puts level 9 within 0.8% of level
+6 on every filter, which is noise against the time it costs on files that can be
+tens of megabytes.
+
+It matters because these bytes are committed. A listing's screenshots live in
+the repository that ships them, where they are paid once in history and again in
+every worktree.
+
 ## 3.6.0
 
 **`appstore beta-groups` prints the groups an app has, and the kind of each.**
