@@ -64,8 +64,7 @@ const editableVersionStates = {
 /// this package used one constant for both.** A version in
 /// `WAITING_FOR_REVIEW` is with Apple and a push against it is rightly refused
 /// — that is [editableVersionStates] and it is unchanged. The `appInfos`
-/// record beside it still accepts a `PATCH`, measured against a live account;
-/// it is also what fastlane's `fetch_edit_app_info` has selected for years.
+/// record beside it still accepts a `PATCH`, measured against a live account.
 ///
 /// The gate was this package's own invention, and it cost more than an
 /// unnecessary refusal: `promote --platform macos` failed with 409 while the
@@ -79,9 +78,8 @@ const editableVersionStates = {
 ///
 /// The provenance differs per state and is worth keeping visible.
 /// `WAITING_FOR_REVIEW` is measured — Apple accepted a `PATCH` against a record
-/// in it — and is what fastlane's `fetch_edit_app_info` selects. The first three
-/// are fastlane's list too. `METADATA_REJECTED` and `INVALID_BINARY` are
-/// neither measured nor fastlane's; they are here because this package has
+/// in it. The first three have never been in question. `METADATA_REJECTED` and
+/// `INVALID_BINARY` are *not* measured; they are here because this package has
 /// accepted them on an `appInfos` record for as long as it has had one code
 /// path for both resources, and dropping them now would newly refuse a metadata
 /// push against a metadata-rejected app — which is exactly when somebody is
@@ -131,21 +129,20 @@ enum AppInfoUse {
 ///
 /// The write side enumerates what may be written and refuses everything else,
 /// rather than enumerating what may not and permitting the rest. Apple has
-/// changed this enum before — fastlane shrank its own list in 2024 for exactly
-/// that reason — so "a state this package has not seen" is a live case, not a
-/// hypothetical, and the two directions fail very differently: an unrecognised
+/// changed this enum before, so "a state this package has not seen" is a live
+/// case rather than a hypothetical, and the two directions fail very
+/// differently: an unrecognised
 /// state that refuses costs somebody thirty seconds reading the message, and
 /// an unrecognised state that writes lands a change somewhere nobody examined
 /// and says nothing. That is [AppLevelChanges.unverifiable]'s argument applied
 /// to states instead of values.
 ///
 /// So `IN_REVIEW` is not a write target: it is not in [editableAppInfoStates],
-/// and nothing else makes a record writable. The line between it and
-/// `WAITING_FOR_REVIEW` is the one fastlane draws — `fetch_live_app_info`
-/// takes `IN_REVIEW`, `fetch_edit_app_info` takes `WAITING_FOR_REVIEW` — and
-/// it is the same line the measurement behind [editableAppInfoStates] was
-/// taken on. Queued for review and actively under review are plausibly
-/// different to Apple, and this package has evidence about only one of them.
+/// and nothing else makes a record writable. Queued for review and actively
+/// under review are plausibly different things to Apple, and the measurement
+/// behind [editableAppInfoStates] was taken on the first of them only —
+/// extending it to the second would be assuming where the boundary sits
+/// rather than having looked.
 ///
 /// A record whose `appStoreState` Apple did not report is likewise not a write
 /// target: absence is a fact about the response, not about the record, the
@@ -263,17 +260,15 @@ Map<String, dynamic> requireWritableAppInfo(
 /// always omits these four, and the open question is whether omitting a
 /// relationship disturbs it.
 ///
-/// Three things say it does not, and none of them is a measurement:
+/// Two things say it does not, and neither is a measurement:
 ///
 ///   - JSON:API specifies that a relationship missing from a PATCH keeps its
 ///     current value.
-///   - spaceship carries a separate explicit `data: nil` path for *clearing*
-///     one, which would be redundant if omitting already cleared it. Two
-///     distinct behaviours only make sense if they differ.
-///   - fastlane omits any relationship its configuration does not name, so
-///     anyone who set subcategories in App Store Connect and did not repeat
-///     them in a Deliverfile would lose them on every deploy. That is not a
-///     known bug, and it is a large population.
+///   - Established clients of this API distinguish *omitting* a relationship
+///     from setting it explicitly null, and only the second is documented as
+///     clearing. Two distinct spellings only make sense if they differ — and
+///     partial category documents are sent against a very large number of apps
+///     without lost subcategories being a known problem.
 ///
 /// **An attempt to settle it by reading a live account came back inconclusive,
 /// and is recorded here so nobody repeats it.** The idea was sound — if
@@ -483,8 +478,7 @@ String? screenshotDeliveryState(Map<String, dynamic> screenshot) {
 /// channel or the wrong dimensions used to be reported as `uploaded` and was
 /// then simply absent from the listing, because the commit response carrying
 /// this was discarded. The shape is `assetDeliveryState.errors[]`, each entry
-/// a `code` and a `description` — the same reading fastlane's `error_messages`
-/// takes.
+/// a `code` and a `description`.
 List<String> screenshotDeliveryErrors(Map<String, dynamic> screenshot) {
   final state = _attributes(screenshot)['assetDeliveryState'];
   if (state is! Map<String, dynamic>) {
@@ -505,10 +499,10 @@ List<String> screenshotDeliveryErrors(Map<String, dynamic> screenshot) {
 ///
 /// `SCHEDULED` is Apple's third and is deliberately absent: it is meaningless
 /// without an `earliestReleaseDate` beside it, and an enum value that needs a
-/// second argument nobody can pass is a trap rather than a feature. fastlane
-/// reaches the same shape from the other direction — it has no scheduled
-/// *value* either, only an `auto_release_date` option that implies one. If this
-/// ever grows, it grows as `--release-date`, not as a third value here.
+/// second argument nobody can pass is a trap rather than a feature. If this
+/// ever grows, it grows as `--release-date` implying the type, not as a third
+/// value here — a date is the thing actually missing, so a date is what the
+/// flag should ask for.
 const requestableReleaseTypes = {'MANUAL', 'AFTER_APPROVAL'};
 
 /// Apple's third release type, which this tool reads but will not write.
@@ -555,8 +549,7 @@ enum ReleaseTypeChange {
 /// **Unset changes nothing.** An absent flag must leave App Store Connect as it
 /// is rather than normalise to a value this tool prefers; a release quietly
 /// switched to automatic because nobody passed a flag would be worse than the
-/// silence this exists to fix. fastlane draws the same line and says so out
-/// loud when it declines to set one.
+/// silence this exists to fix.
 ///
 /// A [current] Apple did not report is treated as differing, not as matching —
 /// absence is a fact about the response, the same reading [appLevelChanges]
@@ -716,9 +709,9 @@ bool declaresAppLevelFields(AppStoreMetadata metadata) =>
 ///
 /// Pure: every input is a value a caller has already read, so the comparison
 /// itself is testable with literals. That matters more here than anywhere
-/// else in this file — fastlane shipped a version of exactly this diff that
-/// compared the wrong attribute name (#21657), so privacy-URL changes were
-/// silently decided to be no-ops and never uploaded. A comparison that is
+/// else in this file: a diff of this shape that compares the wrong attribute
+/// name decides a real change is a no-op and never uploads it, which has
+/// happened in shipped release tooling. A comparison that is
 /// wrong in one field fails silently by construction.
 ///
 /// [appInfo] is the record [selectAppInfo] chose to read, or null when the app

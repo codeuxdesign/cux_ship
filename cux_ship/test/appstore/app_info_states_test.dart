@@ -4,7 +4,7 @@
 // and the two resources do not have the same rule. A version in
 // WAITING_FOR_REVIEW is with Apple and a push against it is rightly refused;
 // the `appInfos` record beside it accepts a PATCH — measured against a live
-// account, and what fastlane's `fetch_edit_app_info` has selected for years.
+// account.
 //
 // One constant for both meant `promote --platform macos` failed with 409
 // while the *iOS* side sat in review, and failed at the first thing the
@@ -94,9 +94,9 @@ void main() {
       // IN_REVIEW is in neither list, and under a "refuse what is not
       // published" rule it would have been selected — a record Apple is
       // actively reviewing, reached through a fallback rather than through
-      // the state the widening was measured on. fastlane draws the line here
-      // too: fetch_live_app_info takes IN_REVIEW, fetch_edit_app_info takes
-      // WAITING_FOR_REVIEW.
+      // the state the widening was measured on. Queued for review and
+      // actively under review are plausibly different things to Apple, and
+      // only the first was measured.
       final infos = [_info('reviewing', 'IN_REVIEW')];
       expect(selectAppInfo(infos, AppInfoUse.write), isNull);
       // Still readable, so a run that changes nothing is not blocked by it.

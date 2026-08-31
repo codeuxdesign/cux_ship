@@ -3,9 +3,9 @@
 // Deciding what needs writing is what lets a publish stop demanding an
 // editable record it was never going to touch. It is also the single most
 // silent thing in this package: a comparison that is wrong in one field skips
-// a write and reports success. fastlane shipped exactly that — #21657
-// compared the wrong attribute name, so privacy-URL changes were decided to
-// be no-ops and never uploaded, and nothing anywhere said so.
+// a write and reports success. Shipped release tooling has done exactly that:
+// a diff comparing the wrong attribute name decided privacy-URL changes were
+// no-ops and never uploaded them, and nothing anywhere said so.
 //
 // Hence a test per field, and a test per *reason* a field can be decided
 // equal: because it matched, or because nothing could be read.
@@ -128,9 +128,9 @@ void main() {
     });
 
     test('each of the two is compared against its own relationship', () {
-      // The #21657 shape: read the right key, or a secondary-category change
-      // is silently decided to be a no-op. Only the secondary differs here,
-      // and noticing it is the whole assertion.
+      // Read the right key, or a secondary-category change is silently
+      // decided to be a no-op. Only the secondary differs here, and noticing
+      // it is the whole assertion.
       final changes = _changes(
         metadata: _metadata(
           categories: {
@@ -383,8 +383,8 @@ void main() {
     });
 
     test('a changed privacy policy URL is noticed', () {
-      // fastlane's #21657 verbatim: the field whose comparison was wrong, so
-      // the change was silently never uploaded.
+      // The field a wrong comparison hides best: a URL changes, the diff
+      // says nothing changed, and the listing keeps the old one.
       final changes = _changes(
         metadata: _metadata(
           appInfoText: {

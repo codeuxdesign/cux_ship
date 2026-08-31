@@ -1636,9 +1636,10 @@ Future<void> runAsc(
 /// **A category PATCH names only what the tree declares, so it always omits
 /// the rest** — the other category, and the four subcategory slots this tool
 /// has never managed. Everything says omission leaves them alone: JSON:API
-/// specifies it, spaceship has a separate explicit-null path for clearing
-/// which would be redundant otherwise, and fastlane omits the same four
-/// across a very large number of apps without it being a known bug.
+/// specifies it, established clients of this API distinguish omitting a
+/// relationship from setting it explicitly null, and partial category
+/// documents go out against a very large number of apps without lost
+/// subcategories being a known problem.
 ///
 /// That is a good argument and it is still inference. This turns it into a
 /// reading, on the rare run that writes a category at all — and if it is ever
