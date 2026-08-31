@@ -10,6 +10,8 @@
 // exit non-zero having already written something, which is the failure shape
 // the rest of this package is built around. The principle did not stop at the
 // set boundary on purpose; it stopped where the bugs did.
+import 'dart:io';
+
 import 'package:cux_ship/src/appstore/app_store.dart';
 import 'package:cux_ship_verify/metadata.dart';
 import 'package:test/test.dart';
@@ -315,6 +317,48 @@ void main() {
           contact: _contact,
         ).reviewDetails,
         isNotNull,
+      );
+    });
+
+    test('the value compared is the value sent, not the file on disk', () {
+      // **The hazard, closed by the loader and pinned here.**
+      // `review-notes.md` carries a repository-facing half below a marker
+      // that never reaches Apple, so the file is far longer than the field:
+      // measured downstream at 5838 characters on disk against 2867 stored.
+      //
+      // A comparison that diffed the file against `appStoreReviewDetail.notes`
+      // would differ on every run for ever, on any tree using the marker —
+      // and it would fail in the *safe* direction, so it would never look
+      // like a bug, only like a feature that quietly never fires.
+      //
+      // It cannot happen, because `loadMetadata` puts the processed text in
+      // `metadata.reviewNotes` and the same value is handed to the writer. A
+      // fixture without a marker would pass either way, which is why this one
+      // has one.
+      final dir = Directory.systemTemp.createTempSync('cux_review_notes');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final file = File('${dir.path}${Platform.pathSeparator}review-notes.md')
+        ..writeAsStringSync(
+          'Log in as demo.\n\n'
+          '$reviewNotesMarker\n\n'
+          '# Maintaining these notes\n\nNot for Apple.\n',
+        );
+
+      final facing = readReviewNotes(file);
+      expect(facing, 'Log in as demo.');
+      expect(facing.length, lessThan(file.readAsStringSync().length));
+
+      // Apple holds what was sent — the processed half — so nothing differs.
+      expect(
+        _changes(
+          metadata: _metadata(reviewNotes: facing),
+          reviewDetail: _reviewDetail({
+            'notes': facing,
+            ..._contactAttributes(),
+          }),
+          contact: _contact,
+        ).reviewDetails,
+        isNull,
       );
     });
 
