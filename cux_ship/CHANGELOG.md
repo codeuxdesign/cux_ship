@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.6.1
 
 **`appstore promote` can say how the release should start, and always says how
 it will.** `appStoreVersions.releaseType` decides what happens once Apple
