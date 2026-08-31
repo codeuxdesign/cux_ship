@@ -51,6 +51,25 @@ exits non-zero having already changed what App Store Connect holds — and
 "exit 1" reads as "nothing happened". The failure now names the version it
 left behind and that a rerun will adopt rather than duplicate.
 
+**The App Store rejects emoji in "What's New" too, and this package said it
+did not.** The stripper existed and was applied to TestFlight only, under a
+notice that told you in so many words that "the App Store release notes keep
+them". That claim was reasoned from published listings carrying emoji — which
+is evidence about the *description*, a different field with a different rule —
+and nothing had ever exercised it, because the only prior submission for the
+app in question was a first release and a first release has no "What's New" at
+all. The first second-release to meet it got a 409 naming `🧭, 🗺, 🌍` and a
+bare variation selector, after the version had been created and the build
+attached.
+
+Release notes are now stripped for both surfaces, by one rule rather than two
+lists that would drift apart. The App Store notice names the exact characters
+removed, with code points, because one of them is invisible and because this
+is copy a shopper reads: publishing something other than what CHANGELOG.md
+says should never be quiet. Play still gets them verbatim, and the changelog's
+"emoji are welcome and encouraged" rule is unaffected — absorbing Apple's
+restriction is the tool's job, not the changelog's.
+
 **Fixed: `promote --metadata` published the whole listing twice**, clearing
 and re-uploading every screenshot both times, under a comment claiming it
 published in one place only. Two conditions at two sites that had to stay

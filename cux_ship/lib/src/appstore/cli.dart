@@ -68,10 +68,10 @@ import '../notes_source.dart';
 import '../reachable.dart';
 import '../release.dart' show ReleaseException;
 import 'app_store.dart';
+import 'apple_notes.dart';
 import 'asc_client.dart';
 import 'beta_release.dart';
 import 'signing_report.dart';
-import 'testflight_notes.dart';
 
 /// Which App Store Connect operation [runAsc] performs.
 ///
@@ -1249,12 +1249,12 @@ Future<void> runAsc(
           // Said out loud rather than done quietly, because what testers read
           // then differs from what Play users read.
           var testFlightNotes = notes;
-          if (needsStrippingForTestFlight(notes)) {
-            testFlightNotes = stripForTestFlight(notes);
+          if (needsStrippingForApple(notes)) {
+            testFlightNotes = stripForApple(notes);
             stdout.writeln(
               '    TestFlight rejects emoji, so they are stripped from the '
               'notes\n'
-              '    (the App Store release notes keep them)',
+              '    (Play publishes them verbatim)',
             );
           }
           await store.setWhatToTest(build, locale, testFlightNotes);
@@ -1414,8 +1414,25 @@ Future<void> runAsc(
             );
           } else {
             stdout.writeln('==> release notes');
+            // The App Store refuses emoji in `whatsNew` too — measured, after
+            // this file spent a release asserting the opposite. Announced
+            // more loudly than the TestFlight strip above, and with the
+            // characters named: this is copy a shopper reads, and quietly
+            // publishing something other than what the changelog says is the
+            // failure mode worth spending three lines to avoid.
+            var releaseNotes = notes;
+            if (needsStrippingForApple(notes)) {
+              releaseNotes = stripForApple(notes);
+              stdout.writeln(
+                '    the App Store rejects emoji in "What\'s New", so these '
+                'are stripped:\n'
+                '      ${_removedCharacters(notes, releaseNotes)}\n'
+                '    what ships here differs from CHANGELOG.md; Play '
+                'publishes it verbatim',
+              );
+            }
             await store.writeVersionLocalization(version, locale, {
-              'whatsNew': notes,
+              'whatsNew': releaseNotes,
             });
           }
         }
@@ -1468,6 +1485,30 @@ Future<void> runAsc(
   } finally {
     client.close();
   }
+}
+
+/// The distinct characters stripping removed, named so the notice says what
+/// it changed rather than that it changed something.
+///
+/// Each is printed with its code point, because the one Apple complained
+/// about that is easiest to miss is invisible: a bare U+FE0F renders as
+/// nothing at all, and "so these are stripped:" followed by what looks like
+/// an empty line is worse than saying nothing.
+String _removedCharacters(String original, String stripped) {
+  final kept = stripped.runes.toSet();
+  final removed = <int>[];
+  for (final rune in original.runes) {
+    if (!kept.contains(rune) && !removed.contains(rune)) {
+      removed.add(rune);
+    }
+  }
+  return removed
+      .map(
+        (rune) =>
+            '${String.fromCharCode(rune)} '
+            '(U+${rune.toRadixString(16).toUpperCase().padLeft(4, '0')})',
+      )
+      .join(', ');
 }
 
 /// Names the version record a failing run left behind, if it left one.
