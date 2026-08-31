@@ -1631,10 +1631,12 @@ void _reportStateLeftBehind(AppStore store) {
     // behave worse.
     stderr.writeln(
       '  It also opened review submission $submission, which may be empty.\n'
-      '  Leave it: an unsubmitted container blocks a new one, so the next '
-      'run\n'
-      '  reuses this one rather than failing on an error that does not say '
-      'why.',
+      '  Leave it: an unsubmitted container blocks a new one, so if it is '
+      'still\n'
+      '  there the next run reuses it rather than failing on an error that '
+      'does\n'
+      '  not say why. An empty one may equally have gone by then, which is '
+      'fine.',
     );
   }
 }

@@ -825,11 +825,17 @@ class AppStore {
   /// The sibling of [versionChange], and found the same way — by a run that
   /// failed at `POST /v1/reviewSubmissionItems`, leaving a submission in
   /// READY_FOR_REVIEW with no version in it and nothing in the output saying
-  /// so. Unlike the version, a rerun *does* adopt this one; [submitForReview]
-  /// looks for an open container first, because an unsubmitted one from an
-  /// earlier attempt blocks a new one and Apple's error does not say so. That
-  /// is worth stating in the failure rather than leaving somebody to discover
-  /// that an empty container is both harmless and load-bearing.
+  /// so. Unlike the version, a rerun *adopts* this one where it still exists:
+  /// [submitForReview] looks for an open container first, because an
+  /// unsubmitted one from an earlier attempt blocks a new one and Apple's
+  /// error does not say so.
+  ///
+  /// "Where it still exists" is deliberate. An empty container was seen to
+  /// disappear once its version was removed from it in the console, so it is
+  /// not something to rely on finding — which is why the failure says to leave
+  /// it rather than that it will be there. Leaving it is right either way: if
+  /// it survives the next run reuses it, and if it does not the next run makes
+  /// one. Deleting it is the only move that can make the rerun worse.
   String? createdReviewSubmission;
 
   Future<App> resolveApp(String bundleId) async {
