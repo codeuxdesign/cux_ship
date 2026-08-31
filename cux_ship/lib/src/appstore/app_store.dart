@@ -241,12 +241,30 @@ Map<String, dynamic> requireWritableAppInfo(
 /// always omits these four, and the open question is whether omitting a
 /// relationship disturbs it.
 ///
-/// The evidence says it does not — JSON:API says a missing relationship keeps
-/// its current value, spaceship has a separate explicit `data: nil` path for
-/// *clearing* one (which would be redundant if omission cleared), and fastlane
-/// has omitted these same four across an enormous number of apps for years
-/// without it being a known bug. That is inference, not measurement, which is
-/// what [unrequestedCategoryChanges] exists to convert.
+/// Three things say it does not, and none of them is a measurement:
+///
+///   - JSON:API specifies that a relationship missing from a PATCH keeps its
+///     current value.
+///   - spaceship carries a separate explicit `data: nil` path for *clearing*
+///     one, which would be redundant if omitting already cleared it. Two
+///     distinct behaviours only make sense if they differ.
+///   - fastlane omits any relationship its configuration does not name, so
+///     anyone who set subcategories in App Store Connect and did not repeat
+///     them in a Deliverfile would lose them on every deploy. That is not a
+///     known bug, and it is a large population.
+///
+/// **An attempt to settle it by reading a live account came back inconclusive,
+/// and is recorded here so nobody repeats it.** The idea was sound — if
+/// omission cleared, an app whose categories this tool has written would have
+/// lost its subcategories already. But all four slots on both records of the
+/// app in question were null and always had been, so there was nothing there
+/// to survive, and "omission is safe" and "omission clears and there was
+/// nothing to clear" produce identical readings. Settling it needs an account
+/// holding a subcategory the metadata tree does not name.
+///
+/// So the argument above is inference, which is what
+/// [unrequestedCategoryChanges] exists to convert into a reading — on real
+/// writes, as they happen.
 const categoryRelationshipNames = [
   'primaryCategory',
   'primarySubcategoryOne',
