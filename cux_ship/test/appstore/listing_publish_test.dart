@@ -7,10 +7,23 @@
 // and re-uploaded twice, under a comment saying "the listing publishes here,
 // and only here".
 //
-// So the interesting assertion in this file is not any single row of the
-// table — it is the last test, which says no input can make two sites act.
-// That is the property the enum exists to hold, and a pair of complementary
-// conditions could not state it at all.
+// **This header used to say the interesting assertion here was the one that
+// proved no input can make two sites act. There was never such an assertion,
+// and it cannot be written in this file.** Two attempts at it compared one
+// enum value against two distinct constants — false for every possible
+// implementation, killed by no mutation — and the second shipped under a
+// comment claiming otherwise. The retraction reached the test and not this
+// paragraph, which is the last place the claim stood.
+//
+// What this file covers is [listingPublish]: which runs get a publish, and
+// which of the two sites is chosen. That is all of the function's behaviour
+// and none of the call sites'.
+//
+// The property that no call site can double-publish is held structurally
+// rather than tested — `publish` is one `final` local, decided once, read at
+// two sites that compare it against distinct constants of one enum, so a
+// single value cannot select both. Observing it for real would mean driving
+// `runAsc` against a fake client and counting listing writes.
 import 'package:cux_ship/src/appstore/cli.dart';
 import 'package:test/test.dart';
 

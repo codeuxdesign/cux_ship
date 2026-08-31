@@ -9,6 +9,8 @@
 //
 // Hence a test per field, and a test per *reason* a field can be decided
 // equal: because it matched, or because nothing could be read.
+import 'dart:io';
+
 import 'package:cux_ship/src/appstore/app_store.dart';
 import 'package:cux_ship_verify/metadata.dart';
 import 'package:test/test.dart';
@@ -559,6 +561,20 @@ void main() {
       final metadata = AppStoreMetadata();
       metadata.locales.add(
         LocaleMetadata('en-US')..version['description'] = 'A driving app.',
+      );
+      expect(listingNeedsVersion(metadata), isTrue);
+    });
+
+    test('screenshots need one', () {
+      // The term nothing pinned. Deleting `locale.screenshots.isNotEmpty`
+      // from the predicate used to survive the whole suite — a screenshots-
+      // only tree would then create no version, upload nothing, and say
+      // nothing. Which made "five tests pin the predicate field by field" an
+      // undercount, in the commit that fixed an undercount.
+      final metadata = AppStoreMetadata();
+      metadata.locales.add(
+        LocaleMetadata('en-US')
+          ..screenshots['APP_DESKTOP'] = [File('01-rides.png')],
       );
       expect(listingNeedsVersion(metadata), isTrue);
     });
