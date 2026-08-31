@@ -1566,6 +1566,11 @@ class AppStore {
 
     if (editable.isNotEmpty) {
       final existing = editable.first;
+      // **Refused before the rename, not after.** A refusal that fired after
+      // the version string had been patched would leave the version renamed
+      // and its release type untouched — the half-applied run this file's
+      // ordering exists to prevent.
+      refuseScheduledRelease(existing, releaseType);
       final was = _attributes(existing)['versionString'];
       final renamed = await writer.patch(
         '/v1/appStoreVersions/${_id(existing)}',
@@ -1581,8 +1586,10 @@ class AppStore {
       if (renamed == null) {
         // Dry run: report the existing record, which is the one a real run
         // would have edited, so later steps describe the right thing. Nothing
-        // was written, so there is nothing for a failure to report.
-        return existing;
+        // was written, so there is nothing for a failure to report — but the
+        // release type still goes through, so the rehearsal prints the write
+        // it would make here too.
+        return _applyReleaseType(existing, releaseType);
       }
       versionChange = (
         change: VersionChange.renamed,
@@ -1593,7 +1600,17 @@ class AppStore {
         previousVersionString: was is String ? was : null,
       );
       final data = renamed['data'];
-      return data is Map<String, dynamic> ? data : existing;
+      // **The renamed version gets the release type too.** It did not, and
+      // the comment above claimed it did: an explicit `--release-type` was
+      // silently dropped on the one path the function's own comment calls the
+      // common first-release case — Apple's auto-created "1.0" adopted under
+      // a new name. The flag was accepted, nothing was written, and the run
+      // exited zero, which is the failure this whole option exists to fix,
+      // reproduced inside the fix for it.
+      return _applyReleaseType(
+        data is Map<String, dynamic> ? data : existing,
+        releaseType,
+      );
     }
 
     final created = await writer.post('/v1/appStoreVersions', {
@@ -1710,41 +1727,53 @@ class AppStore {
   /// acknowledged rather than what was true a moment earlier. On a dry run the
   /// writer returns null and the pre-write record comes back unchanged, which
   /// is correct: nothing was written, so nothing about it has changed.
+  /// Throws when [requested] would change a version away from `SCHEDULED`.
+  ///
+  /// Separate from [_applyReleaseType] so it can run *before* a write. The
+  /// rename path patches the version string first; refusing after that would
+  /// leave the version renamed and its release type untouched — half applied,
+  /// which is the failure this file's ordering exists to prevent.
+  void refuseScheduledRelease(Map<String, dynamic> version, String? requested) {
+    final current = _attributes(version)['releaseType'] as String?;
+    if (releaseTypeChange(requested: requested, current: current) !=
+        ReleaseTypeChange.refuseScheduled) {
+      return;
+    }
+    throw AscApiException(409, [
+      'version ${_attributes(version)['versionString']} is scheduled to '
+          'release, and changing that away from SCHEDULED would decide what '
+          'happens to the date beside it.',
+      'This tool has no way to say, so it will not guess. Change the release '
+          'option in App Store Connect, or drop --release-type to leave the '
+          'schedule alone.',
+    ], request: 'PATCH /v1/appStoreVersions');
+  }
+
   Future<Map<String, dynamic>> _applyReleaseType(
     Map<String, dynamic> version,
     String? requested,
   ) async {
+    // Throws on a scheduled version. First, so the refusal happens before the
+    // write on every path that reaches here.
+    refuseScheduledRelease(version, requested);
     final current = _attributes(version)['releaseType'] as String?;
-    switch (releaseTypeChange(requested: requested, current: current)) {
-      case ReleaseTypeChange.leaveAlone:
-      case ReleaseTypeChange.alreadySet:
-        return version;
-      case ReleaseTypeChange.refuseScheduled:
-        throw AscApiException(409, [
-          'version ${_attributes(version)['versionString']} is scheduled to '
-              'release, and changing that away from SCHEDULED would decide '
-              'what happens to the date beside it.',
-          'This tool has no way to say, so it will not guess. Change the '
-              'release option in App Store Connect, or drop --release-type to '
-              'leave the schedule alone.',
-        ], request: 'PATCH /v1/appStoreVersions');
-      case ReleaseTypeChange.write:
-        final patched = await writer.patch(
-          '/v1/appStoreVersions/${_id(version)}',
-          {
-            'data': {
-              'type': 'appStoreVersions',
-              'id': _id(version),
-              'attributes': {'releaseType': requested},
-            },
-            // Both values, so the dry run's "would update:" line says what it
-            // would change *from* — the half that tells you whether to care.
-          },
-          describe: 'release type ${current ?? '(not reported)'} -> $requested',
-        );
-        final data = patched?['data'];
-        return data is Map<String, dynamic> ? data : version;
+    if (releaseTypeChange(requested: requested, current: current) !=
+        ReleaseTypeChange.write) {
+      // leaveAlone or alreadySet — either way App Store Connect already says
+      // what this run wants it to say.
+      return version;
     }
+    final patched = await writer.patch('/v1/appStoreVersions/${_id(version)}', {
+      'data': {
+        'type': 'appStoreVersions',
+        'id': _id(version),
+        'attributes': {'releaseType': requested},
+      },
+      // Both values, so the dry run's "would update:" line says what it
+      // would change *from* — the half that tells you whether to care.
+    }, describe: 'release type ${current ?? '(not reported)'} -> $requested');
+    final data = patched?['data'];
+    return data is Map<String, dynamic> ? data : version;
   }
 
   /// Whether [version] is the first this app has ever had on this platform.

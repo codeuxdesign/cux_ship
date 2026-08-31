@@ -46,13 +46,21 @@ class _FakeClient implements AscClient {
     'data': {'type': 'appStoreVersions', 'id': 'new-version'},
   };
 
+  /// Every PATCH body this fake was given, so a test can assert what was
+  /// written rather than only what was returned — the release type was
+  /// dropped from a body while the return value looked entirely correct.
+  final List<Map<String, dynamic>> patched = [];
+
   @override
   Future<Map<String, dynamic>> patch(
     String path,
     Map<String, dynamic> body,
-  ) async => {
-    'data': {'type': 'appStoreVersions', 'id': 'renamed-version'},
-  };
+  ) async {
+    patched.add(body);
+    return {
+      'data': {'type': 'appStoreVersions', 'id': 'renamed-version'},
+    };
+  }
 
   // Anything these tests do not reach throws rather than answering, so a
   // reader cannot mistake silence for a canned response.
@@ -66,10 +74,18 @@ AppStore _store(AscClient client, {required bool dryRun}) => AppStore(
   platform: AscPlatform.macos,
 );
 
-Map<String, dynamic> _version(String versionString, String state) => {
+Map<String, dynamic> _version(
+  String versionString,
+  String state, {
+  String? releaseType,
+}) => {
   'type': 'appStoreVersions',
   'id': 'existing',
-  'attributes': {'versionString': versionString, 'appStoreState': state},
+  'attributes': {
+    'versionString': versionString,
+    'appStoreState': state,
+    'releaseType': ?releaseType,
+  },
 };
 
 void main() {
@@ -121,6 +137,83 @@ void main() {
     await store.ensureVersion(app, '1.1.3', create: true);
 
     expect(store.versionChange, isNull);
+  });
+
+  test('an adopted version gets the release type it was asked for', () async {
+    // **The path that dropped it.** `ensureVersion` renames Apple's
+    // auto-created "1.0" rather than making a second version — the function's
+    // own comment calls this the common first-release case — and the rename
+    // PATCH carried only the version string. An explicit --release-type was
+    // accepted, never written, and the run exited zero: the silent loss this
+    // option exists to prevent, on the path nobody tested.
+    final client = _FakeClient(
+      existing: [_version('1.0.0', 'PREPARE_FOR_SUBMISSION')],
+    );
+    final store = _store(client, dryRun: false);
+
+    await store.ensureVersion(
+      app,
+      '1.1.3',
+      create: true,
+      releaseType: 'AFTER_APPROVAL',
+    );
+
+    expect(
+      client.patched.any(
+        (body) =>
+            ((body['data'] as Map<String, dynamic>)['attributes']
+                as Map<String, dynamic>?)?['releaseType'] ==
+            'AFTER_APPROVAL',
+      ),
+      isTrue,
+      reason: 'the rename path never wrote the release type',
+    );
+  });
+
+  test('an adopted version with no flag is left exactly as it was', () async {
+    // The other half, and the load-bearing one: unset must change nothing.
+    final client = _FakeClient(
+      existing: [_version('1.0.0', 'PREPARE_FOR_SUBMISSION')],
+    );
+    final store = _store(client, dryRun: false);
+
+    await store.ensureVersion(app, '1.1.3', create: true);
+
+    expect(
+      client.patched.any(
+        (body) =>
+            ((body['data'] as Map<String, dynamic>)['attributes']
+                    as Map<String, dynamic>?)
+                ?.containsKey('releaseType') ??
+            false,
+      ),
+      isFalse,
+      reason: 'no flag was passed, so nothing should mention releaseType',
+    );
+  });
+
+  test('a scheduled version is refused before it is renamed', () async {
+    // The ordering claim, which nothing tested. Refusing *after* the version
+    // string had been patched would leave the version renamed and its release
+    // type untouched — half applied, which is the failure this file's
+    // ordering exists to prevent. Asserting the throw alone would pass either
+    // way; what makes it a real test is that nothing was written.
+    final client = _FakeClient(
+      existing: [
+        _version('1.0.0', 'PREPARE_FOR_SUBMISSION', releaseType: 'SCHEDULED'),
+      ],
+    );
+    final store = _store(client, dryRun: false);
+
+    await expectLater(
+      store.ensureVersion(app, '1.1.3', create: true, releaseType: 'MANUAL'),
+      throwsA(isA<AscApiException>()),
+    );
+    expect(
+      client.patched,
+      isEmpty,
+      reason: 'the version was renamed before the refusal fired',
+    );
   });
 
   test('a rename records the name it took away', () async {
