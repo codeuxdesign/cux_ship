@@ -353,9 +353,14 @@ List<String> unrequestedCategoryChanges({
 
 /// One screenshot as Apple reports it, reduced to what identifies its bytes.
 ///
-/// Both nullable, and a null is never a match: [fileName] is absent from a
-/// sparse response and [checksum] is absent until the upload is committed, and
-/// neither absence is evidence that the file on disk is already published.
+/// All three nullable, and a null is never a match. [fileName] is absent from
+/// a sparse response, [checksum] is absent until the upload is committed, and
+/// [deliveryState] is absent when Apple reported no `assetDeliveryState` —
+/// none of which is evidence that the file on disk is already published.
+///
+/// [deliveryState] is part of the identity rather than a detail beside it:
+/// the checksum is committed before ingestion finishes, so name and checksum
+/// alone match an asset Apple went on to reject.
 typedef PublishedScreenshot = ({
   String? fileName,
   String? checksum,
@@ -380,7 +385,7 @@ LocalScreenshot localScreenshot(File file) => (
   checksum: checksumOf(file.readAsBytesSync()),
 );
 
-/// The `fileName` and `sourceFileChecksum` of [screenshot].
+/// The `fileName`, `sourceFileChecksum` and delivery state of [screenshot].
 PublishedScreenshot readPublishedScreenshot(Map<String, dynamic> screenshot) {
   final attributes = _attributes(screenshot);
   return (
