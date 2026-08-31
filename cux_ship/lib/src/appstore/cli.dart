@@ -1506,12 +1506,21 @@ Future<void> runAsc(
           stdout.writeln('==> phased release');
           await store.enablePhasedRelease(version);
         }
-        // **The listing publishes here, and only here** — which [publish]
-        // now makes true rather than merely stated. This is the moment it
-        // becomes what a shopper reads, and the version record it hangs off
-        // exists by now, which is what makes it possible at all. Before the
-        // submission, so a review sees the copy that was meant to accompany
-        // it rather than the previous release's.
+        // **On a promotion the listing publishes here, and nowhere else** —
+        // which [publish] now makes true rather than merely stated.
+        //
+        // Scoped to the promotion on purpose. The sentence this replaces said
+        // "here, and only here" flatly, which was false twice over: it was
+        // false of the promote it described, because the shared site fired as
+        // well, and it is still false of the program, because a listing-only
+        // run publishes at the shared site by design. Being exact about which
+        // run it is talking about is the difference between a comment that
+        // survives the next reader and the one that did not.
+        //
+        // This is the moment the listing becomes what a shopper reads, and
+        // the version record it hangs off exists by now, which is what makes
+        // it possible at all. Before the submission, so a review sees the copy
+        // that was meant to accompany it rather than the previous release's.
         if (publish == ListingPublish.afterVersion) {
           await _publishAscListing(
             store,

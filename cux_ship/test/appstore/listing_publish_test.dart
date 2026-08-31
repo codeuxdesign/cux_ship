@@ -20,10 +20,12 @@
 // and none of the call sites'.
 //
 // The property that no call site can double-publish is held structurally
-// rather than tested — `publish` is one `final` local, decided once, read at
-// two sites that compare it against distinct constants of one enum, so a
-// single value cannot select both. Observing it for real would mean driving
-// `runAsc` against a fake client and counting listing writes.
+// rather than tested — `publish` is one `final` local, decided once, and read
+// at four places, two of which choose a publish site by comparing it against
+// distinct constants of one enum. A single value cannot select both. (The
+// other two reads gate the offline version-name check and the "listing
+// untouched" notice, and publish nothing.) Observing it for real would mean
+// driving `runAsc` against a fake client and counting listing writes.
 import 'package:cux_ship/src/appstore/cli.dart';
 import 'package:test/test.dart';
 
