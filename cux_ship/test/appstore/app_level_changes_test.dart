@@ -304,6 +304,31 @@ void main() {
       expect(changes.needsAppInfo, isTrue);
     });
 
+    test('a null answer Apple never reported is not a match', () {
+      // The three-state collapse that hides in the one comparison where both
+      // sides can legitimately be null. `age-rating.json` is arbitrary JSON,
+      // so a declared answer may be null — and a `!=` alone would then read
+      // an attribute Apple omitted as `null == null`, call it unchanged, and
+      // skip the write on the strength of a reading that never happened.
+      final changes = _changes(
+        metadata: _metadata(ageRating: const {'gambling': null}),
+        appInfo: _appInfo(),
+        ageRatingDeclaration: _declaration({'violenceCartoon': 'NONE'}),
+      );
+      expect(changes.ageRating, isNotNull);
+    });
+
+    test('a null answer Apple did report as null does match', () {
+      // The other half: `data` present and null is an answer, and answers
+      // that agree are not a write.
+      final changes = _changes(
+        metadata: _metadata(ageRating: const {'gambling': null}),
+        appInfo: _appInfo(),
+        ageRatingDeclaration: _declaration({'gambling': null}),
+      );
+      expect(changes.ageRating, isNull);
+    });
+
     test('a repository with no age rating asks for nothing', () {
       final changes = _changes(
         metadata: _metadata(),

@@ -450,8 +450,14 @@ ListingPublish listingPublish({
   }
   // An upload carrying an artifact publishes nothing: these writes reach
   // `appStoreVersionLocalizations` through `ensureVersion`, which *creates*
-  // the version record. Checked before [promote] because the two are not
-  // mutually exclusive in the argument parser's eyes.
+  // the version record.
+  //
+  // Ordered before [promote] so the combination has a defined answer rather
+  // than a reachability argument. Today it cannot arise — promote's parser
+  // declares neither `--artifact` nor `--manifest`, and `defaults.artifact`
+  // only comes from the latter — but that is a fact about two other functions,
+  // and a decision table that depends on one staying true is the shape this
+  // enum exists to stop.
   if (hasArtifact) {
     return ListingPublish.none;
   }
@@ -601,13 +607,16 @@ Future<void> _publishAscListing(
   // The version-scoped half needs a version to hang off. Created when
   // absent, because a listing push before the first release is exactly
   // when there is nothing there yet.
-  final needsVersion =
-      metadata.reviewNotes != null ||
-      metadata.locales.any(
-        (l) => l.version.isNotEmpty || l.screenshots.isNotEmpty,
-      );
+  final needsVersion = listingNeedsVersion(metadata);
   if (needsVersion) {
     if (versionName == null) {
+      // Unreachable via [runAsc], which asks the same question offline before
+      // a credential is loaded — see the check beside [listingPublish]. Kept
+      // because a missing version name must never be discovered *here*: by
+      // this point the app-level half has been written, and a run that fails
+      // after writing half a listing is the failure this file is built to
+      // avoid. The offline check is the one that fires; this one is the
+      // invariant refusing to depend on it.
       fail(
         'pushing descriptions or screenshots needs --version-name, because '
         'Apple scopes them to a version rather than to the app',
@@ -676,8 +685,24 @@ Future<void> runAsc(
   AscDefaults defaults = AscDefaults.none,
   AscConfirm? confirm,
 }) async {
+  // Set once there is a store, so a [fail] that happens after a write can
+  // still name what the run left behind. Null before then, which is exactly
+  // when there is nothing to name.
+  AppStore? started;
+
   Never fail(String message) {
     stderr.writeln('cux_ship appstore ${cmd.name}: $message');
+    // **[fail] exits rather than throwing, so it reaches no catch clause.**
+    // That made the whole left-behind report miss its likeliest trigger: on a
+    // promote, `notesFor` runs after the version is created and the build
+    // attached, and it fails when CHANGELOG.md has no section for the version
+    // — the ordinary mistake — so the run created a version, exited 1, and
+    // said nothing about it. The report has to hang off this path too, or the
+    // claim it makes is only true for the failures nobody meets.
+    final store = started;
+    if (store != null) {
+      _reportStateLeftBehind(store);
+    }
     exit(1);
   }
 
@@ -991,8 +1016,33 @@ Future<void> runAsc(
     promote: promote,
   );
 
-  /// Release notes for [forVersion], resolved late because promotion does not
-  /// know its version until Apple has said what is on TestFlight.
+  // **Offline, because it is answerable offline.** A tree carrying
+  // descriptions or screenshots needs a version to hang them off, and a run
+  // that discovers that *during* the publish has already written the
+  // app-level half — content rights, categories, the age rating — and then
+  // exits. Asking here keeps the promise this command makes: everything
+  // checkable without a network is checked before a credential is loaded.
+  if (publish != ListingPublish.none &&
+      versionName == null &&
+      listingNeedsVersion(metadata!)) {
+    fail(
+      'pushing descriptions or screenshots needs --version-name, because '
+      'Apple scopes them to a version rather than to the app',
+    );
+  }
+
+  /// Release notes for [forVersion].
+  ///
+  /// **This used to say it was "resolved late because promotion does not know
+  /// its version until Apple has said what is on TestFlight", and that is not
+  /// true.** Both callers pass a `--version-name` that was known before any
+  /// network call — promote requires one. The late resolution is now just
+  /// where it happens to sit, and it has a cost: on a promote this runs after
+  /// the version is created and the build attached, so a CHANGELOG.md missing
+  /// a section for the version — the ordinary mistake — fails with those two
+  /// already done. [fail] now reports what was left behind, which makes that
+  /// survivable rather than silent; moving the changelog read into the offline
+  /// phase would make it not happen at all, and is the better fix.
   String? notesFor(String forVersion) {
     if (changelogPath == null) {
       return literalNotes;
@@ -1093,6 +1143,7 @@ Future<void> runAsc(
 
   final writer = Writer(client, dryRun: dryRun);
   final store = AppStore(client, writer, platform: platform);
+  started = store;
 
   if (dryRun) {
     stdout.writeln(
@@ -1497,6 +1548,14 @@ Future<void> runAsc(
     stderr.writeln('asc_upload: ${e.message}');
     _reportStateLeftBehind(store);
     exitCode = 1;
+  } catch (_) {
+    // Anything not named above — a StateError from a response shaped wrongly,
+    // a SocketException mid-promote — still exits having possibly created a
+    // version. Rethrown so the exit code and stack trace are unchanged; the
+    // report is the only thing added, because the state left behind is a fact
+    // about the run rather than about which exception ended it.
+    _reportStateLeftBehind(store);
+    rethrow;
   } finally {
     client.close();
   }
@@ -1579,7 +1638,13 @@ String _removedCharacters(String original, String stripped) {
   final kept = stripped.runes.toSet();
   final removed = <int>[];
   for (final rune in original.runes) {
-    if (!kept.contains(rune) && !removed.contains(rune)) {
+    // Whitespace also disappears — stripping tidies the double spaces and
+    // trailing indents an excised emoji leaves behind — and naming a newline
+    // as a character the App Store rejects would be false. Only runes the
+    // rule actually refuses are listed.
+    if (!kept.contains(rune) &&
+        !removed.contains(rune) &&
+        needsStrippingForApple(String.fromCharCode(rune))) {
       removed.add(rune);
     }
   }
@@ -1608,19 +1673,31 @@ String _removedCharacters(String original, String stripped) {
 void _reportStateLeftBehind(AppStore store) {
   final change = store.versionChange;
   if (change != null) {
-    final what = switch (change.change) {
+    // **The two cases want opposite remedies, so they get separate sentences.**
+    // A created version can be deleted. A renamed one is a record that existed
+    // before this run — usually the "1.0" Apple makes with the app — and
+    // deleting it is wrong; putting the name back is the undo, which needs the
+    // name it had.
+    final was = change.previousVersionString;
+    stderr.writeln(switch (change.change) {
       VersionChange.created =>
-        'created App Store version ${change.versionString}',
+        '  This run created App Store version ${change.versionString} '
+            'before it failed,\n'
+            '  and that record is still there. Running the command again '
+            'adopts it rather\n'
+            '  than making a second one. Delete it in App Store Connect if '
+            'the failure\n'
+            '  means it should not exist.',
       VersionChange.renamed =>
-        'renamed an existing editable version to ${change.versionString}',
-    };
-    stderr.writeln(
-      '  This run $what before it failed, and that record is still there.\n'
-      '  Running the command again will adopt it rather than make a second '
-      'one.\n'
-      '  Delete it in App Store Connect if the failure means it should not '
-      'exist.',
-    );
+        '  This run renamed an existing editable version '
+            '${was == null ? '' : 'from $was '}to '
+            '${change.versionString}\n'
+            '  before it failed. That record predates this run, so deleting '
+            'it is not the\n'
+            '  undo — ${was == null ? 'renaming it back is' : 'renaming it '
+                      'back to $was is'}. Running the command again adopts it '
+            'as it now stands.',
+    });
   }
 
   final submission = store.createdReviewSubmission;

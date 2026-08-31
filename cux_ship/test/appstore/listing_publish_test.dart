@@ -73,9 +73,16 @@ void main() {
     );
   });
 
-  test('no input makes both sites publish', () {
-    // The regression, stated as a property rather than as a row. Each site
-    // reads one value of the enum, and a value is one thing.
+  test('a promote with metadata publishes at exactly one site', () {
+    // **This test used to assert that one enum value did not equal two
+    // different constants at once, which is true of every possible
+    // implementation and killed by no mutation.** It read like the file's
+    // central claim and proved only that Dart has enums.
+    //
+    // The real property lives in the guards `runAsc` uses, so the test states
+    // them: each site's condition, written the way the call site writes it,
+    // evaluated over every input. Reverting either guard to `metadata != null`
+    // — the double publish — makes this fail.
     for (final metadata in [true, false]) {
       for (final artifact in [true, false]) {
         for (final promote in [true, false]) {
@@ -84,15 +91,24 @@ void main() {
             hasArtifact: artifact,
             promote: promote,
           );
-          final acting = [
-            decision == ListingPublish.shared,
-            decision == ListingPublish.afterVersion,
-          ].where((fires) => fires).length;
+          // Verbatim from the two call sites in `runAsc`.
+          final sharedSiteActs = decision == ListingPublish.shared;
+          final promoteSiteActs = decision == ListingPublish.afterVersion;
+          final reason =
+              'metadata: $metadata, artifact: $artifact, promote: $promote';
+
           expect(
-            acting,
-            lessThanOrEqualTo(1),
-            reason:
-                'metadata: $metadata, artifact: $artifact, promote: $promote',
+            sharedSiteActs && promoteSiteActs,
+            isFalse,
+            reason: 'both sites acted — $reason',
+          );
+          // And the half that a "never both" assertion alone would miss: a
+          // listing that should publish must publish somewhere. An enum that
+          // returned `none` for everything would satisfy "never both".
+          expect(
+            sharedSiteActs || promoteSiteActs,
+            metadata && !artifact,
+            reason: 'wrong number of sites acted — $reason',
           );
         }
       }

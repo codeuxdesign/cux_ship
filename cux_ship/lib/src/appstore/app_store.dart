@@ -72,7 +72,29 @@ const editableVersionStates = {
 /// *iOS* side sat in review, and because the listing publish opens the
 /// promotion it failed before anything else — no version created, no build
 /// attached, no submission made.
-const editableAppInfoStates = {...editableVersionStates, 'WAITING_FOR_REVIEW'};
+/// **Enumerated, not spread from [editableVersionStates].** Deriving it would
+/// undercut the argument for splitting them: a list that takes five of its six
+/// states from the other resource by reference is not independent of it, and a
+/// reader cannot see what it contains without going to look.
+///
+/// The provenance differs per state and is worth keeping visible.
+/// `WAITING_FOR_REVIEW` is measured — Apple accepted a `PATCH` against a record
+/// in it — and is what fastlane's `fetch_edit_app_info` selects. The first three
+/// are fastlane's list too. `METADATA_REJECTED` and `INVALID_BINARY` are
+/// neither measured nor fastlane's; they are here because this package has
+/// accepted them on an `appInfos` record for as long as it has had one code
+/// path for both resources, and dropping them now would newly refuse a metadata
+/// push against a metadata-rejected app — which is exactly when somebody is
+/// pushing metadata. Removing an accepted state needs the same evidence as
+/// adding one, and nothing here has it.
+const editableAppInfoStates = {
+  'PREPARE_FOR_SUBMISSION',
+  'DEVELOPER_REJECTED',
+  'REJECTED',
+  'METADATA_REJECTED',
+  'INVALID_BINARY',
+  'WAITING_FOR_REVIEW',
+};
 
 /// The `appInfos` states that mean the record *is* the App Store page — the
 /// one shoppers are reading now, or the one Apple has already approved to
@@ -431,6 +453,18 @@ class AppLevelChanges {
   }.toList();
 }
 
+/// Whether [metadata] carries anything Apple scopes to a version rather than
+/// to the app — descriptions, screenshots, review notes.
+///
+/// One function because two places ask it: the offline argument check, which
+/// is where a missing `--version-name` should be caught, and the publish
+/// itself, which must not discover it after writing the app-level half.
+bool listingNeedsVersion(AppStoreMetadata metadata) =>
+    metadata.reviewNotes != null ||
+    metadata.locales.any(
+      (locale) => locale.version.isNotEmpty || locale.screenshots.isNotEmpty,
+    );
+
 /// Whether [metadata] declares anything that lives on the app rather than on
 /// a version.
 ///
@@ -508,7 +542,16 @@ AppLevelChanges appLevelChanges({
         ageRating = (declarationId: declarationId, values: wantedAgeRating);
         unverifiable.add(ageRatingField);
       } else if (wantedAgeRating.entries.any(
-        (answer) => current[answer.key] != answer.value,
+        // `!containsKey` first, and it is not redundant. `age-rating.json` is
+        // arbitrary JSON, so a declared answer may itself be null — and then
+        // an attribute Apple did not report at all reads `null == null` and
+        // counts as matching, skipping the write on the strength of a
+        // non-reading. The same three-state collapse the category comparison
+        // above refuses, and it hides in the one comparison where both sides
+        // can legitimately be null.
+        (answer) =>
+            !current.containsKey(answer.key) ||
+            current[answer.key] != answer.value,
       )) {
         // The PATCH carries exactly the keys the repository declares and
         // overwrites rather than merges, so it changes nothing precisely when
@@ -818,7 +861,8 @@ class AppStore {
   /// Set by [ensureVersion] only when a write actually happened — never on a
   /// dry run, which leaves nothing behind to report. Read by the failure path,
   /// so a run that exits non-zero still names what it left.
-  ({VersionChange change, String versionString})? versionChange;
+  ({VersionChange change, String versionString, String? previousVersionString})?
+  versionChange;
 
   /// The `reviewSubmissions` container this run created, if it created one.
   ///
@@ -1301,6 +1345,10 @@ class AppStore {
       versionChange = (
         change: VersionChange.renamed,
         versionString: versionString,
+        // Carried because putting it back is the remedy, and a message that
+        // says "renamed something to 1.1.3" without saying what it was called
+        // cannot be acted on.
+        previousVersionString: was is String ? was : null,
       );
       final data = renamed['data'];
       return data is Map<String, dynamic> ? data : existing;
@@ -1327,6 +1375,7 @@ class AppStore {
     versionChange = (
       change: VersionChange.created,
       versionString: versionString,
+      previousVersionString: null,
     );
     return data;
   }

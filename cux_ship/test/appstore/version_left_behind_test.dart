@@ -123,6 +123,28 @@ void main() {
     expect(store.versionChange, isNull);
   });
 
+  test('a rename records the name it took away', () async {
+    // The remedy for an adopted record is putting the name back, not deleting
+    // it — and a message that says "renamed something to 1.1.3" without
+    // saying what it was called cannot be acted on.
+    final store = _store(
+      _FakeClient(existing: [_version('1.0.0', 'PREPARE_FOR_SUBMISSION')]),
+      dryRun: false,
+    );
+
+    await store.ensureVersion(app, '1.1.3', create: true);
+
+    expect(store.versionChange?.previousVersionString, '1.0.0');
+  });
+
+  test('a created version has no previous name to report', () async {
+    final store = _store(_FakeClient(), dryRun: false);
+
+    await store.ensureVersion(app, '1.1.3', create: true);
+
+    expect(store.versionChange?.previousVersionString, isNull);
+  });
+
   test('creating a review submission is recorded too', () async {
     // The sibling, found by a run that failed at POST reviewSubmissionItems
     // and left a container in READY_FOR_REVIEW with no version in it.
