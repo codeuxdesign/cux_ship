@@ -672,6 +672,23 @@ class AppLevelChanges {
   }.toList();
 }
 
+/// The record for [locale] among [localizations], or null when it has none.
+///
+/// A lookup in a list already in hand, not a request. Its existence is the
+/// point: every write site here used to fetch these records for itself and
+/// throw them away.
+Map<String, dynamic>? localizationFor(
+  List<Map<String, dynamic>> localizations,
+  String locale,
+) {
+  for (final localization in localizations) {
+    if (_attributes(localization)['locale'] == locale) {
+      return localization;
+    }
+  }
+  return null;
+}
+
 /// What a version-level publish would change, and nothing it would not.
 ///
 /// **The sibling of [AppLevelChanges], and it arrived later for a reason worth
@@ -689,6 +706,16 @@ class AppLevelChanges {
 /// shape this file spends most of its comments on. *A run that changes nothing
 /// writes nothing* did not stop at the set boundary on purpose; it stopped
 /// where the bugs did.
+///
+/// **And it was the cheapest of the three, not the most expensive**, which is
+/// worth saying because the order they were built in implies the opposite.
+/// Both writers already read the current values in order to choose between
+/// POST and PATCH, and threw them away; the comparison needed no new request
+/// and no `?include=`. Categories were the awkward one — the bare read returns
+/// no `data` key for a relationship at all, measured against a live account,
+/// so comparing them needed a changed query. Doing this half actually *removes*
+/// requests, because one reading now serves every locale instead of one per
+/// write site.
 class VersionLevelChanges {
   VersionLevelChanges({
     required this.copyright,
