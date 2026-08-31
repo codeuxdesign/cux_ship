@@ -17,24 +17,14 @@ import 'package:crypto/crypto.dart';
 import 'package:cux_ship/src/provenance.dart' show uploadCollisionExit;
 import 'package:test/test.dart';
 
-/// The entrypoint, resolved against both layouts — CI runs from the package
-/// directory, a developer from the workspace root, and a path that does not
-/// resolve would make every case here pass while running nothing.
-final String _cli = () {
-  for (final candidate in ['bin/cux_ship.dart', 'cux_ship/bin/cux_ship.dart']) {
-    final file = File(candidate);
-    if (file.existsSync()) {
-      return file.absolute.path;
-    }
-  }
-  throw StateError(
-    'cannot find bin/cux_ship.dart from ${Directory.current.path}',
-  );
-}();
+import 'cli_snapshot.dart';
 
+/// Runs the entrypoint — as a snapshot rather than from source, because
+/// compiling it per invocation was most of this package's test time. See
+/// cli_snapshot.dart.
 ProcessResult _run(List<String> args, {String? cwd}) => Process.runSync(
   Platform.resolvedExecutable,
-  ['--enable-asserts', _cli, ...args],
+  ['--enable-asserts', cliSnapshot, ...args],
   workingDirectory: cwd,
 );
 

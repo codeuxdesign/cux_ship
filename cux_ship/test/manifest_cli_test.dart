@@ -14,20 +14,11 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
-/// The entrypoint, resolved against both layouts — CI runs `dart test` from the
-/// package directory, a developer runs it from the workspace root, and a path
-/// that does not resolve would make every case here pass while running nothing.
-final String _cli = () {
-  for (final candidate in ['bin/cux_ship.dart', 'cux_ship/bin/cux_ship.dart']) {
-    final file = File(candidate);
-    if (file.existsSync()) {
-      return file.absolute.path;
-    }
-  }
-  throw StateError(
-    'cannot find bin/cux_ship.dart from ${Directory.current.path}',
-  );
-}();
+import 'cli_snapshot.dart';
+
+// The entrypoint is spawned as a snapshot rather than from source, because
+// compiling it per invocation was most of this package's test time. See
+// cli_snapshot.dart.
 
 late Directory _dist;
 
@@ -48,7 +39,7 @@ String _artifact() {
 
 ProcessResult _run(List<String> args) => Process.runSync(
   Platform.resolvedExecutable,
-  ['--enable-asserts', _cli, 'manifest', 'write', ...args],
+  ['--enable-asserts', cliSnapshot, 'manifest', 'write', ...args],
   workingDirectory: _dist.path,
 );
 

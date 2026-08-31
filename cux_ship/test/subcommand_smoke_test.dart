@@ -27,6 +27,8 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
+import 'cli_snapshot.dart';
+
 /// A repository shaped like a consumer: a store block, and the trees it names.
 Directory _repo() {
   final dir = Directory.systemTemp.createTempSync('cux_ship_smoke');
@@ -47,37 +49,20 @@ play:
   return dir;
 }
 
-/// The entrypoint to spawn, found rather than assumed.
+/// Runs the CLI in [repo] and returns its combined output.
 ///
-/// **This is asserted rather than interpolated, because getting it wrong fails
-/// in the vacuous direction.** A first version built the path from
-/// `Directory.current`, which resolves from the workspace root and not from the
-/// package directory — and CI runs `dart test` with `working-directory:
-/// cux_ship`. The subprocess then died with "No such file or directory", which
-/// contains none of the phrases below, so every case that exists to pin the
-/// 3.2.0 crash passed while asserting nothing.
-///
-/// A test for a silent failure that can itself fail silently is worse than no
-/// test, so the path is resolved against both layouts and its absence is a
-/// hard error at load.
-final String _cli = () {
-  for (final candidate in ['bin/cux_ship.dart', 'cux_ship/bin/cux_ship.dart']) {
-    final file = File(candidate);
-    if (file.existsSync()) {
-      return file.absolute.path;
-    }
-  }
-  throw StateError(
-    'cannot find bin/cux_ship.dart from ${Directory.current.path} — these '
-    'tests spawn the CLI, and a path that does not resolve makes every one of '
-    'them pass without running anything',
-  );
-}();
-
-/// Runs the CLI from source in [repo] and returns its combined output.
+/// A snapshot rather than the source, because every case here spawns the binary
+/// and compiling it per invocation was most of this package's test time — see
+/// cli_snapshot.dart, which also explains why the entrypoint is found rather
+/// than interpolated. That last part is load-bearing: a first version built the
+/// path from `Directory.current`, which resolves from the workspace root and
+/// not from the package directory, and CI runs `dart test` with
+/// `working-directory: cux_ship`. The subprocess then died with "No such file
+/// or directory", which contains none of the phrases below, so every case that
+/// exists to pin the 3.2.0 crash passed while asserting nothing.
 ProcessResult _run(Directory repo, List<String> args) => Process.runSync(
   Platform.resolvedExecutable,
-  ['--enable-asserts', _cli, ...args],
+  ['--enable-asserts', cliSnapshot, ...args],
   workingDirectory: repo.path,
 );
 

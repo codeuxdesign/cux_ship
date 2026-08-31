@@ -20,32 +20,15 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
+import 'cli_snapshot.dart';
+
 late Directory _root;
 
-/// The real CLI, so the test exercises the path a caller does.
-///
-/// Found by walking up rather than resolved against the working directory: this
-/// suite is run both from the package and from the workspace root, and a
-/// relative path is correct in exactly one of those.
-final _binary = _findBinary();
-
-String _findBinary() {
-  for (
-    var dir = Directory.current;
-    dir.parent.path != dir.path;
-    dir = dir.parent
-  ) {
-    final candidate = File('${dir.path}/bin/cux_ship.dart');
-    if (candidate.existsSync()) {
-      return candidate.path;
-    }
-    final nested = File('${dir.path}/cux_ship/bin/cux_ship.dart');
-    if (nested.existsSync()) {
-      return nested.path;
-    }
-  }
-  throw StateError('cannot find bin/cux_ship.dart from ${Directory.current}');
-}
+// The real CLI, so the test exercises the path a caller does — as a snapshot
+// rather than from source, because compiling it per invocation was most of this
+// package's test time. See cli_snapshot.dart, which also finds the entrypoint
+// against both layouts: this suite is run from the package and from the
+// workspace root, and a relative path is correct in exactly one of those.
 
 void _write(String path, String contents) {
   final file = File('${_root.path}/$path')
@@ -96,8 +79,8 @@ void main() {
       'sh',
       [
         '-c',
-        'exec dart run $_binary secrets exec $flags -- '
-            'sh -c "env > seen.txt"',
+        'exec "${Platform.resolvedExecutable}" "$cliSnapshot" '
+            'secrets exec $flags -- sh -c "env > seen.txt"',
       ],
       workingDirectory: _root.path,
       environment: inherited,
