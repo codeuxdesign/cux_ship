@@ -80,13 +80,17 @@ a problem with its screenshots, on a run that had reported every one of them
 uploaded. Measured: the identical request, replayed forty minutes later with
 no upload, was accepted.
 
-The set is now compared before it is deleted, by file name and by the same MD5
-Apple stores as `sourceFileChecksum` — which this package already computed in
+The set is now compared before it is deleted, by delivery state and by file
+name and by the same MD5 Apple stores as `sourceFileChecksum` — which this package already computed in
 order to commit it. Order is part of the comparison, because screenshots are
 shown in the order they were uploaded and the same files rearranged are a
 different listing. Anything that cannot be shown to match is re-uploaded, so
 the cost of doubt is an upload nobody needed rather than a listing nobody
-updated.
+updated. Only an asset Apple reports as `COMPLETE` counts as published: the
+checksum is committed before ingestion finishes, so name and checksum alone
+would match one that later failed, or one still in flight when an earlier run
+gave up — republishing neither, which is both of the defects below arriving
+back through the skip meant to remove them.
 
 Underneath that was the quieter defect. Committing an upload returns a
 verdict, and the response was discarded — so a screenshot refused during

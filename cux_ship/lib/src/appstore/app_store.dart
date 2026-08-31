@@ -356,7 +356,11 @@ List<String> unrequestedCategoryChanges({
 /// Both nullable, and a null is never a match: [fileName] is absent from a
 /// sparse response and [checksum] is absent until the upload is committed, and
 /// neither absence is evidence that the file on disk is already published.
-typedef PublishedScreenshot = ({String? fileName, String? checksum});
+typedef PublishedScreenshot = ({
+  String? fileName,
+  String? checksum,
+  String? deliveryState,
+});
 
 /// One screenshot as the metadata tree has it.
 typedef LocalScreenshot = ({String fileName, String checksum});
@@ -382,6 +386,7 @@ PublishedScreenshot readPublishedScreenshot(Map<String, dynamic> screenshot) {
   return (
     fileName: attributes['fileName'] as String?,
     checksum: attributes['sourceFileChecksum'] as String?,
+    deliveryState: screenshotDeliveryState(screenshot),
   );
 }
 
@@ -412,8 +417,16 @@ bool screenshotsAlreadyPublished({
     return false;
   }
   for (var i = 0; i < local.length; i++) {
+    // **The checksum is committed before Apple has finished with the file**,
+    // so name and checksum alone can match an asset that later came back
+    // FAILED, or one still being ingested when a previous run timed out and
+    // told the caller to try again. Skipping on that reading would republish
+    // neither — leaving a listing missing an image, or racing the submission
+    // — which are the two defects this skip exists to remove, reintroduced
+    // through the skip itself. Only COMPLETE is evidence that Apple kept it.
     if (published[i].fileName != local[i].fileName ||
-        published[i].checksum != local[i].checksum) {
+        published[i].checksum != local[i].checksum ||
+        published[i].deliveryState != 'COMPLETE') {
       return false;
     }
   }

@@ -37,8 +37,11 @@ Map<String, dynamic> _screenshot({
 
 const _absent = Object();
 
-PublishedScreenshot _published(String? name, String? sum) =>
-    (fileName: name, checksum: sum);
+PublishedScreenshot _published(
+  String? name,
+  String? sum, {
+  String? state = 'COMPLETE',
+}) => (fileName: name, checksum: sum, deliveryState: state);
 
 LocalScreenshot _local(String name, String sum) =>
     (fileName: name, checksum: sum);
@@ -131,6 +134,41 @@ void main() {
       );
     });
 
+    test('an asset Apple has not finished with is not a match', () {
+      // The checksum is committed before ingestion completes, so name and
+      // checksum can match an asset that is still in flight. Skipping on that
+      // would race the submission — the defect this skip exists to remove.
+      expect(
+        screenshotsAlreadyPublished(
+          published: [_published('01.png', 'aaa', state: 'UPLOAD_COMPLETE')],
+          local: [_local('01.png', 'aaa')],
+        ),
+        isFalse,
+      );
+    });
+
+    test('an asset Apple rejected is never a match', () {
+      // Otherwise the rerun skips it and the listing stays missing an image,
+      // permanently and silently.
+      expect(
+        screenshotsAlreadyPublished(
+          published: [_published('01.png', 'aaa', state: 'FAILED')],
+          local: [_local('01.png', 'aaa')],
+        ),
+        isFalse,
+      );
+    });
+
+    test('an asset with no reported state is not a match either', () {
+      expect(
+        screenshotsAlreadyPublished(
+          published: [_published('01.png', 'aaa', state: null)],
+          local: [_local('01.png', 'aaa')],
+        ),
+        isFalse,
+      );
+    });
+
     test('two empty lists are not a match', () {
       // Nothing published and nothing to publish means there is no set to
       // compare; the caller only reaches this with files in hand, and
@@ -144,12 +182,23 @@ void main() {
   });
 
   group('reading a published screenshot', () {
-    test('both fields are read from attributes', () {
+    test('all three fields are read, delivery state included', () {
+      // The state is part of the identity for comparison purposes: an asset
+      // Apple has not kept is not the asset on disk, whatever its checksum.
+      expect(
+        readPublishedScreenshot(
+          _screenshot(fileName: '01.png', checksum: 'aaa', state: 'COMPLETE'),
+        ),
+        (fileName: '01.png', checksum: 'aaa', deliveryState: 'COMPLETE'),
+      );
+    });
+
+    test('a screenshot with no delivery state reports null for it', () {
       expect(
         readPublishedScreenshot(
           _screenshot(fileName: '01.png', checksum: 'aaa'),
-        ),
-        (fileName: '01.png', checksum: 'aaa'),
+        ).deliveryState,
+        isNull,
       );
     });
 
