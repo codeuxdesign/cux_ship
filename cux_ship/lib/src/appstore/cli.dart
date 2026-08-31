@@ -596,10 +596,13 @@ Future<void> _publishAscListing(
   //
   // **No test holds this ordering**, and that is stated rather than hoped:
   // `_publishAscListing` is private and needs credentials and a store to
-  // reach, so moving this line back below the writes fails nothing. Verified
-  // by mutation rather than assumed. The suite pins that the refusal is a
+  // reach, so moving this block back below the writes fails nothing. Verified
+  // by mutation rather than assumed, twice — once here and once by a review
+  // that repeated it. The suite pins that the refusal is a
   // read which writes nothing — what makes the hoist free — and this comment
   // is the only thing holding where it sits.
+  // Created when absent, because a listing push before the first release is
+  // exactly when there is nothing there yet.
   final needsVersion = listingNeedsVersion(metadata);
   if (needsVersion && versionName == null) {
     // Unreachable via [runAsc], which asks the same question offline before a
@@ -612,6 +615,24 @@ Future<void> _publishAscListing(
   }
   final version = needsVersion
       ? await store.ensureVersion(app, versionName!, create: true)
+      : null;
+
+  // **The review contact is an acquisition too, and it refuses.**
+  // `fromEnvironment` rejects a half-set contact and a malformed phone
+  // number, so it belongs with the other refusals rather than beside the
+  // write it feeds. It sat in the version half — after content rights,
+  // categories, the age rating and the localized name — where its own doc
+  // comment's reason for existing ("a partial set fails after the rest of the
+  // listing has already been written") described exactly what it then did.
+  //
+  // Read here even though nothing else in this block is offline, because the
+  // invariant above is about *when a refusal happens*, not about what it
+  // reads. Whether it earns a place in `runAsc`'s offline phase beside the
+  // version-name check is a separate question; this is the part that stops it
+  // half-applying a listing.
+  final needsReviewDetail = metadata.reviewNotes != null;
+  final reviewContact = needsReviewDetail
+      ? ReviewContact.fromEnvironment()
       : null;
 
   final contentRights = changes.contentRights;
@@ -676,7 +697,6 @@ Future<void> _publishAscListing(
       // this rather than reading again, so the comparison and the action
       // cannot disagree.
       final localizations = await store.versionLocalizations(version);
-      final needsReviewDetail = metadata.reviewNotes != null;
       final existingReviewDetail = needsReviewDetail
           ? await store.reviewDetail(version)
           : null;
@@ -685,15 +705,9 @@ Future<void> _publishAscListing(
         version: version,
         localizations: localizations,
         reviewDetail: existingReviewDetail,
-        // **Only read when there are notes to send it with.**
-        // `fromEnvironment` refuses a half-set contact and a malformed phone
-        // number — guards that protect a review-detail write. Calling it
-        // unconditionally made those guards fire on runs that never make that
-        // write: a tree carrying only a description would exit non-zero over
-        // `APPLE_REVIEW_CONTACT_*` it does not use, *after* the app-level half
-        // had been written. Correct for the tree it was written against, and
-        // a partial failure for one without review notes.
-        contact: needsReviewDetail ? ReviewContact.fromEnvironment() : null,
+        // Acquired above, with the other refusals, and only when there are
+        // notes to send it with — see there.
+        contact: reviewContact,
       );
 
       if (versionChanges.isEmpty && declaresVersionText(metadata)) {
