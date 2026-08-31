@@ -667,7 +667,7 @@ Future<void> _publishAscListing(
           'written rather than assumed unchanged',
         );
       }
-      if (versionChanges.isEmpty && metadata.copyright != null) {
+      if (versionChanges.isEmpty && declaresVersionText(metadata)) {
         stdout.writeln('==> version text: already matches, nothing written');
       }
 

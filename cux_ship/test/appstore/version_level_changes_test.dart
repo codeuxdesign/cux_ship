@@ -75,6 +75,40 @@ VersionLevelChanges _changes({
 );
 
 void main() {
+  group('does the tree declare version text', () {
+    // The line that says "already matches" was gated on `copyright != null`,
+    // which is true of the tree it was written against and false of a tree
+    // carrying a description and no copyright — which would then print
+    // nothing and read as though the comparison had not run. The same
+    // undercount `listingNeedsVersion` shipped with, one release apart.
+    test('copyright alone counts', () {
+      expect(declaresVersionText(_metadata(copyright: '© 2026')), isTrue);
+    });
+
+    test('review notes alone count', () {
+      expect(declaresVersionText(_metadata(reviewNotes: 'Log in.')), isTrue);
+    });
+
+    test('listing text alone counts', () {
+      expect(
+        declaresVersionText(
+          _metadata(
+            text: {
+              'en-US': {'description': 'Ride better.'},
+            },
+          ),
+        ),
+        isTrue,
+      );
+    });
+
+    test('a tree with none of them does not', () {
+      final metadata = AppStoreMetadata();
+      metadata.locales.add(LocaleMetadata('en-US')..appInfo['name'] = 'Ride');
+      expect(declaresVersionText(metadata), isFalse);
+    });
+  });
+
   group('copyright', () {
     test('an unchanged copyright is not rewritten', () {
       expect(

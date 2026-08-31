@@ -838,6 +838,23 @@ VersionLevelChanges versionLevelChanges({
   );
 }
 
+/// Whether [metadata] declares any version-scoped *text* — copyright, review
+/// notes, or per-locale listing fields.
+///
+/// Screenshots are deliberately excluded: they report their own skip line per
+/// display type, so counting them here would announce "already matches" for a
+/// tree that declares nothing this sentence is about.
+///
+/// Its own predicate because the obvious shortcut is wrong in the way this
+/// package keeps being wrong. This was `metadata.copyright != null` — a proxy
+/// that happens to hold for the tree it was written against, and silently
+/// says nothing for a tree carrying a description and no copyright. The same
+/// undercount [listingNeedsVersion] shipped with, one release apart.
+bool declaresVersionText(AppStoreMetadata metadata) =>
+    metadata.copyright != null ||
+    metadata.reviewNotes != null ||
+    metadata.locales.any((locale) => locale.version.isNotEmpty);
+
 /// Whether [metadata] carries anything Apple scopes to a version rather than
 /// to the app — copyright, review notes, listing text, screenshots.
 ///
