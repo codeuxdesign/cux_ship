@@ -407,6 +407,57 @@ typedef AscConfirm = void Function(String summary);
 /// [args] comes from [buildAscParser] for the same [cmd], so an option that
 /// belongs to another subcommand is simply absent rather than null — hence the
 /// `opt`/`flag` readers below. Anything still missing falls back to [defaults].
+/// Whether a run publishes the App Store listing, and at which point.
+///
+/// **One decision, taken once and read at both places that act on it.** The
+/// listing publish is reachable from two sites — the shared one after the
+/// upload block, and the one inside the promote block that runs after the
+/// build is attached and before the submission. Each used to carry its own
+/// condition (`metadata != null` at both), and both were true for a
+/// promote-with-metadata: the whole listing published twice, every screenshot
+/// cleared and re-uploaded twice, under a comment claiming "the listing
+/// publishes here, and only here".
+///
+/// Complementary conditions at two sites are the defect this file keeps
+/// producing — the same shape as the `--beta-group` publish it took 3.5.0 to
+/// close. An enum cannot be true in two places at once.
+enum ListingPublish {
+  /// Nothing to publish, or an artifact upload, which deliberately leaves the
+  /// listing alone.
+  none,
+
+  /// At the shared site: a listing-only invocation, which is the whole point
+  /// of the command.
+  shared,
+
+  /// Inside the promote block, after the build is attached and before the
+  /// submission — so a review sees the copy meant to accompany it, from a
+  /// version record that exists by then.
+  afterVersion,
+}
+
+/// Decides [ListingPublish] from what the run was asked to do.
+///
+/// Pure, and separate from [runAsc], because a decision buried in a method
+/// that needs credentials to reach is a decision nothing will check.
+ListingPublish listingPublish({
+  required bool hasMetadata,
+  required bool hasArtifact,
+  required bool promote,
+}) {
+  if (!hasMetadata) {
+    return ListingPublish.none;
+  }
+  // An upload carrying an artifact publishes nothing: these writes reach
+  // `appStoreVersionLocalizations` through `ensureVersion`, which *creates*
+  // the version record. Checked before [promote] because the two are not
+  // mutually exclusive in the argument parser's eyes.
+  if (hasArtifact) {
+    return ListingPublish.none;
+  }
+  return promote ? ListingPublish.afterVersion : ListingPublish.shared;
+}
+
 /// Publishes the App Store listing from a metadata tree.
 ///
 /// **Its own function because two commands need it, for opposite reasons.** A
@@ -427,31 +478,107 @@ Future<void> _publishAscListing(
   // upload or a promote.
   Never Function(String) fail,
 ) async {
-  final appInfo = await store.editableAppInfo(app);
+  // **Decide what needs writing before demanding something to write to.**
+  //
+  // The app-level half used to open with `editableAppInfo`, which threw when
+  // no record was in an editable state — so a promotion whose listing was
+  // already correct still failed, and failed before the version was created,
+  // the build attached or the submission made. Nothing downstream ran.
+  //
+  // The order below is what keeps a failure atomic. The collection is read
+  // once; the comparison runs against the record [selectAppInfo] would read;
+  // the writable record is only demanded once something is known to need one,
+  // and that demand throws while nothing has been written yet. Every write,
+  // content rights included, happens after it.
+  final infos = await store.appInfos(app);
+  final readable = selectAppInfo(infos, AppInfoUse.read);
 
-  final contentRights = metadata.contentRights;
+  // Both sub-resources are read once, here, and the same readings serve the
+  // comparison and the write below — so the two cannot disagree about which
+  // declaration the answers were checked against, or about whether a locale
+  // already has a record.
+  final declaration = readable == null || metadata.ageRating == null
+      ? null
+      : await store.ageRatingDeclaration(readable);
+  final localizations =
+      readable == null || !metadata.locales.any((l) => l.appInfo.isNotEmpty)
+      ? null
+      : await store.appInfoLocalizations(readable);
+
+  final changes = appLevelChanges(
+    metadata: metadata,
+    currentContentRights: app.contentRights,
+    appInfo: readable,
+    ageRatingDeclaration: declaration,
+    appInfoLocalizations: localizations,
+  );
+
+  if (changes.unverifiable.isNotEmpty) {
+    // Said out loud: these are being written because they could not be shown
+    // to already match, which is not the same as knowing they differ.
+    stdout.writeln(
+      '==> could not read the current ${changes.unverifiable.join(", ")}, '
+      'so ${changes.unverifiable.length == 1 ? 'it is' : 'they are'} '
+      'written rather than assumed unchanged',
+    );
+  }
+
+  Map<String, dynamic>? appInfo;
+  if (changes.needsAppInfo) {
+    // Throws here, before the first write, naming what would have gone in.
+    // [selectAppInfo] picks the same record for a write as for the read
+    // above whenever a write target exists at all, so what was compared is
+    // what is written.
+    appInfo = requireWritableAppInfo(infos, fields: changes.appInfoFields);
+  } else if (changes.isEmpty && declaresAppLevelFields(metadata)) {
+    // Only when the tree actually declares app-level fields. Saying "already
+    // matches" about fields nobody asked for would report a comparison that
+    // never happened.
+    stdout.writeln('==> app-level listing: already matches, nothing written');
+  }
+
+  if (metadata.ageRating != null &&
+      changes.ageRating == null &&
+      changes.unverifiable.contains(ageRatingField)) {
+    // There is a record but no declaration hanging off it to write answers
+    // to. Raised here, beside the other acquisition and still before the
+    // first write, because publishing everything *except* the age rating
+    // would leave a version Apple refuses to review — and doing it after
+    // content rights had gone up would turn a clean failure into a
+    // half-applied change.
+    throw AscApiException(404, [
+      'the app has no ageRatingDeclaration to write to',
+    ], request: 'GET /v1/appInfos');
+  }
+
+  final contentRights = changes.contentRights;
   if (contentRights != null) {
     stdout.writeln('==> content rights');
     await store.writeContentRights(app, contentRights);
   }
 
-  if (metadata.categories.isNotEmpty) {
-    stdout.writeln('==> categories');
-    await store.writeCategories(appInfo, metadata.categories);
-  }
-  final ageRating = metadata.ageRating;
-  if (ageRating != null) {
-    stdout.writeln('==> age rating');
-    await store.writeAgeRating(appInfo, ageRating);
-  }
+  if (appInfo != null) {
+    if (changes.categories.isNotEmpty) {
+      stdout.writeln('==> categories');
+      await store.writeCategories(appInfo, changes.categories);
+    }
+    final ageRating = changes.ageRating;
+    if (ageRating != null) {
+      stdout.writeln('==> age rating');
+      await store.writeAgeRating(ageRating);
+    }
 
-  for (final localeMetadata in metadata.locales) {
-    if (localeMetadata.appInfo.isNotEmpty) {
-      stdout.writeln('==> ${localeMetadata.locale}: name and subtitle');
+    for (final entry in changes.localizations.entries) {
+      stdout.writeln('==> ${entry.key}: ${entry.value.keys.join(", ")}');
       await store.writeAppInfoLocalization(
         appInfo,
-        localeMetadata.locale,
-        localeMetadata.appInfo,
+        entry.key,
+        entry.value,
+        // The reading the comparison was made from. Non-null whenever there
+        // is a localization to write: `changes.localizations` is only
+        // populated for locales the metadata asks for, which is exactly what
+        // made this read happen.
+        existing: localizations ?? const [],
       );
     }
   }
@@ -841,6 +968,14 @@ Future<void> runAsc(
     }
   }
 
+  // Decided here, once, and read at both sites below. See [ListingPublish]
+  // for why this is an enum and not two conditions.
+  final publish = listingPublish(
+    hasMetadata: metadata != null,
+    hasArtifact: ipaPath != null,
+    promote: promote,
+  );
+
   /// Release notes for [forVersion], resolved late because promotion does not
   /// know its version until Apple has said what is on TestFlight.
   String? notesFor(String forVersion) {
@@ -1155,13 +1290,22 @@ Future<void> runAsc(
     // deliberate exception, the same one Play's `--listing-only` is: nothing is
     // being shipped for the copy to be ahead of, and moving the live page now
     // is the entire purpose of the command.
-    if (metadata != null && ipaPath != null) {
+    if (publish == ListingPublish.none && metadata != null) {
       stdout.writeln(
         '==> listing: untouched — an upload does not publish it.\n'
         '    Publish deliberately with --metadata and no artifact.',
       );
-    } else if (metadata != null) {
-      await _publishAscListing(store, app, metadata, locale, versionName, fail);
+    } else if (publish == ListingPublish.shared) {
+      // Non-null by construction: [listingPublish] returns [none] when there
+      // is no metadata, and this is the only thing that reads [shared].
+      await _publishAscListing(
+        store,
+        app,
+        metadata!,
+        locale,
+        versionName,
+        fail,
+      );
     }
 
     // -------------------------------------------------------------- promote
@@ -1279,16 +1423,17 @@ Future<void> runAsc(
           stdout.writeln('==> phased release');
           await store.enablePhasedRelease(version);
         }
-        // **The listing publishes here, and only here.** This is the moment
-        // it becomes what a shopper reads, and the version record it hangs
-        // off exists by now — which is what makes it possible at all. Before
-        // the submission, so a review sees the copy that was meant to
-        // accompany it rather than the previous release's.
-        if (metadata != null) {
+        // **The listing publishes here, and only here** — which [publish]
+        // now makes true rather than merely stated. This is the moment it
+        // becomes what a shopper reads, and the version record it hangs off
+        // exists by now, which is what makes it possible at all. Before the
+        // submission, so a review sees the copy that was meant to accompany
+        // it rather than the previous release's.
+        if (publish == ListingPublish.afterVersion) {
           await _publishAscListing(
             store,
             app,
-            metadata,
+            metadata!,
             locale,
             versionName,
             fail,
