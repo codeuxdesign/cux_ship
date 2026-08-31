@@ -64,8 +64,7 @@ const editableVersionStates = {
 /// this package used one constant for both.** A version in
 /// `WAITING_FOR_REVIEW` is with Apple and a push against it is rightly refused
 /// — that is [editableVersionStates] and it is unchanged. The `appInfos`
-/// record beside it still accepts a `PATCH`, measured against a live account;
-/// it is also what fastlane's `fetch_edit_app_info` has selected for years.
+/// record beside it still accepts a `PATCH`, measured against a live account.
 ///
 /// The gate was this package's own invention, and it cost more than an
 /// unnecessary refusal: `promote --platform macos` failed with 409 while the
@@ -79,9 +78,8 @@ const editableVersionStates = {
 ///
 /// The provenance differs per state and is worth keeping visible.
 /// `WAITING_FOR_REVIEW` is measured — Apple accepted a `PATCH` against a record
-/// in it — and is what fastlane's `fetch_edit_app_info` selects. The first three
-/// are fastlane's list too. `METADATA_REJECTED` and `INVALID_BINARY` are
-/// neither measured nor fastlane's; they are here because this package has
+/// in it. The first three have never been in question. `METADATA_REJECTED` and
+/// `INVALID_BINARY` are *not* measured; they are here because this package has
 /// accepted them on an `appInfos` record for as long as it has had one code
 /// path for both resources, and dropping them now would newly refuse a metadata
 /// push against a metadata-rejected app — which is exactly when somebody is
@@ -131,21 +129,20 @@ enum AppInfoUse {
 ///
 /// The write side enumerates what may be written and refuses everything else,
 /// rather than enumerating what may not and permitting the rest. Apple has
-/// changed this enum before — fastlane shrank its own list in 2024 for exactly
-/// that reason — so "a state this package has not seen" is a live case, not a
-/// hypothetical, and the two directions fail very differently: an unrecognised
+/// changed this enum before, so "a state this package has not seen" is a live
+/// case rather than a hypothetical, and the two directions fail very
+/// differently: an unrecognised
 /// state that refuses costs somebody thirty seconds reading the message, and
 /// an unrecognised state that writes lands a change somewhere nobody examined
 /// and says nothing. That is [AppLevelChanges.unverifiable]'s argument applied
 /// to states instead of values.
 ///
 /// So `IN_REVIEW` is not a write target: it is not in [editableAppInfoStates],
-/// and nothing else makes a record writable. The line between it and
-/// `WAITING_FOR_REVIEW` is the one fastlane draws — `fetch_live_app_info`
-/// takes `IN_REVIEW`, `fetch_edit_app_info` takes `WAITING_FOR_REVIEW` — and
-/// it is the same line the measurement behind [editableAppInfoStates] was
-/// taken on. Queued for review and actively under review are plausibly
-/// different to Apple, and this package has evidence about only one of them.
+/// and nothing else makes a record writable. Queued for review and actively
+/// under review are plausibly different things to Apple, and the measurement
+/// behind [editableAppInfoStates] was taken on the first of them only —
+/// extending it to the second would be assuming where the boundary sits
+/// rather than having looked.
 ///
 /// A record whose `appStoreState` Apple did not report is likewise not a write
 /// target: absence is a fact about the response, not about the record, the
@@ -263,17 +260,15 @@ Map<String, dynamic> requireWritableAppInfo(
 /// always omits these four, and the open question is whether omitting a
 /// relationship disturbs it.
 ///
-/// Three things say it does not, and none of them is a measurement:
+/// Two things say it does not, and neither is a measurement:
 ///
 ///   - JSON:API specifies that a relationship missing from a PATCH keeps its
 ///     current value.
-///   - spaceship carries a separate explicit `data: nil` path for *clearing*
-///     one, which would be redundant if omitting already cleared it. Two
-///     distinct behaviours only make sense if they differ.
-///   - fastlane omits any relationship its configuration does not name, so
-///     anyone who set subcategories in App Store Connect and did not repeat
-///     them in a Deliverfile would lose them on every deploy. That is not a
-///     known bug, and it is a large population.
+///   - Established clients of this API distinguish *omitting* a relationship
+///     from setting it explicitly null, and only the second is documented as
+///     clearing. Two distinct spellings only make sense if they differ — and
+///     partial category documents are sent against a very large number of apps
+///     without lost subcategories being a known problem.
 ///
 /// **An attempt to settle it by reading a live account came back inconclusive,
 /// and is recorded here so nobody repeats it.** The idea was sound — if
@@ -483,8 +478,7 @@ String? screenshotDeliveryState(Map<String, dynamic> screenshot) {
 /// channel or the wrong dimensions used to be reported as `uploaded` and was
 /// then simply absent from the listing, because the commit response carrying
 /// this was discarded. The shape is `assetDeliveryState.errors[]`, each entry
-/// a `code` and a `description` — the same reading fastlane's `error_messages`
-/// takes.
+/// a `code` and a `description`.
 List<String> screenshotDeliveryErrors(Map<String, dynamic> screenshot) {
   final state = _attributes(screenshot)['assetDeliveryState'];
   if (state is! Map<String, dynamic>) {
@@ -499,6 +493,81 @@ List<String> screenshotDeliveryErrors(Map<String, dynamic> screenshot) {
       [error['code'], error['description']].whereType<String>().join(' - '),
     },
   ].where((message) => message.isNotEmpty).toList();
+}
+
+/// The `releaseType` values `--release-type` will send.
+///
+/// `SCHEDULED` is Apple's third and is deliberately absent: it is meaningless
+/// without an `earliestReleaseDate` beside it, and an enum value that needs a
+/// second argument nobody can pass is a trap rather than a feature. If this
+/// ever grows, it grows as `--release-date` implying the type, not as a third
+/// value here — a date is the thing actually missing, so a date is what the
+/// flag should ask for.
+const requestableReleaseTypes = {'MANUAL', 'AFTER_APPROVAL'};
+
+/// Apple's third release type, which this tool reads but will not write.
+const scheduledReleaseType = 'SCHEDULED';
+
+/// Why [value] cannot be sent as a release type, or null when it can.
+///
+/// Validated here rather than by `allowed:` on the option, because the args
+/// package's rejection is one generic line and `SCHEDULED` deserves a sentence
+/// that says what is missing.
+String? releaseTypeRefusal(String value) {
+  if (requestableReleaseTypes.contains(value)) {
+    return null;
+  }
+  if (value == scheduledReleaseType) {
+    return 'SCHEDULED needs an earliestReleaseDate beside it, and there is no '
+        'flag to give it one. Set the date in App Store Connect; '
+        '--release-type takes ${requestableReleaseTypes.join(" or ")}.';
+  }
+  return 'unknown release type "$value" — '
+      '--release-type takes ${requestableReleaseTypes.join(" or ")}';
+}
+
+/// What a run should do about the release type of a version that exists.
+enum ReleaseTypeChange {
+  /// No `--release-type`, so whatever App Store Connect holds stands. The
+  /// default, and the only behaviour before the flag existed.
+  leaveAlone,
+
+  /// Apple already holds what was asked for.
+  alreadySet,
+
+  /// Apple holds something else, and it can be written.
+  write,
+
+  /// Apple holds `SCHEDULED`. Changing away from it decides what happens to
+  /// the `earliestReleaseDate` beside it, and this tool has no way to say —
+  /// so it refuses rather than guessing whether Apple keeps a stale date.
+  refuseScheduled,
+}
+
+/// Whether [requested] needs writing over [current].
+///
+/// **Unset changes nothing.** An absent flag must leave App Store Connect as it
+/// is rather than normalise to a value this tool prefers; a release quietly
+/// switched to automatic because nobody passed a flag would be worse than the
+/// silence this exists to fix.
+///
+/// A [current] Apple did not report is treated as differing, not as matching —
+/// absence is a fact about the response, the same reading [appLevelChanges]
+/// takes of an unreported category.
+ReleaseTypeChange releaseTypeChange({
+  required String? requested,
+  required String? current,
+}) {
+  if (requested == null) {
+    return ReleaseTypeChange.leaveAlone;
+  }
+  if (current == scheduledReleaseType) {
+    return ReleaseTypeChange.refuseScheduled;
+  }
+  if (current == requested) {
+    return ReleaseTypeChange.alreadySet;
+  }
+  return ReleaseTypeChange.write;
 }
 
 /// How a refusal names the age-rating answers.
@@ -640,9 +709,9 @@ bool declaresAppLevelFields(AppStoreMetadata metadata) =>
 ///
 /// Pure: every input is a value a caller has already read, so the comparison
 /// itself is testable with literals. That matters more here than anywhere
-/// else in this file — fastlane shipped a version of exactly this diff that
-/// compared the wrong attribute name (#21657), so privacy-URL changes were
-/// silently decided to be no-ops and never uploaded. A comparison that is
+/// else in this file: a diff of this shape that compares the wrong attribute
+/// name decides a real change is a no-op and never uploads it, which has
+/// happened in shipped release tooling. A comparison that is
 /// wrong in one field fails silently by construction.
 ///
 /// [appInfo] is the record [selectAppInfo] chose to read, or null when the app
@@ -1434,6 +1503,7 @@ class AppStore {
     App app,
     String versionString, {
     required bool create,
+    String? releaseType,
   }) async {
     final versions = await client.getAll(
       '/v1/apps/${app.id}/appStoreVersions',
@@ -1455,7 +1525,7 @@ class AppStore {
                 'edit it again.',
         ], request: 'GET /v1/appStoreVersions');
       }
-      return version;
+      return _applyReleaseType(version, releaseType);
     }
 
     if (!create) {
@@ -1469,9 +1539,15 @@ class AppStore {
     // always finds an editable version under the wrong name, and creating a
     // second one is rejected — the console renames instead, and so does this.
     //
-    // Only the version string is touched. releaseType and anything else set in
-    // the console is left alone, because adopting a version is not a licence to
-    // overwrite decisions made about it.
+    // Only the version string is touched, and anything set in the console is
+    // left alone, because adopting a version is not a licence to overwrite
+    // decisions made about it.
+    //
+    // `releaseType` is the one exception, and only when [releaseType] was
+    // asked for explicitly. An unset flag still leaves it exactly as Apple has
+    // it — the rule above is unchanged for every run that does not name a
+    // value. A flag that was passed *is* a decision about this version, which
+    // is the thing the rule protects, so it is written rather than ignored.
     final all = await client.getAll(
       '/v1/apps/${app.id}/appStoreVersions',
       query: {'filter[platform]': platform.api},
@@ -1483,6 +1559,11 @@ class AppStore {
 
     if (editable.isNotEmpty) {
       final existing = editable.first;
+      // **Refused before the rename, not after.** A refusal that fired after
+      // the version string had been patched would leave the version renamed
+      // and its release type untouched — the half-applied run this file's
+      // ordering exists to prevent.
+      _refuseScheduledRelease(existing, releaseType);
       final was = _attributes(existing)['versionString'];
       final renamed = await writer.patch(
         '/v1/appStoreVersions/${_id(existing)}',
@@ -1498,8 +1579,10 @@ class AppStore {
       if (renamed == null) {
         // Dry run: report the existing record, which is the one a real run
         // would have edited, so later steps describe the right thing. Nothing
-        // was written, so there is nothing for a failure to report.
-        return existing;
+        // was written, so there is nothing for a failure to report — but the
+        // release type still goes through, so the rehearsal prints the write
+        // it would make here too.
+        return _applyReleaseType(existing, releaseType);
       }
       versionChange = (
         change: VersionChange.renamed,
@@ -1510,7 +1593,17 @@ class AppStore {
         previousVersionString: was is String ? was : null,
       );
       final data = renamed['data'];
-      return data is Map<String, dynamic> ? data : existing;
+      // **The renamed version gets the release type too.** It did not, and
+      // the comment above claimed it did: an explicit `--release-type` was
+      // silently dropped on the one path the function's own comment calls the
+      // common first-release case — Apple's auto-created "1.0" adopted under
+      // a new name. The flag was accepted, nothing was written, and the run
+      // exited zero, which is the failure this whole option exists to fix,
+      // reproduced inside the fix for it.
+      return _applyReleaseType(
+        data is Map<String, dynamic> ? data : existing,
+        releaseType,
+      );
     }
 
     final created = await writer.post('/v1/appStoreVersions', {
@@ -1519,10 +1612,11 @@ class AppStore {
         'attributes': {
           'platform': platform.api,
           'versionString': versionString,
-          // Manual: a release that goes live the instant Apple approves it
-          // takes the decision away from whoever is watching. Play's
-          // production track is equally a deliberate act.
-          'releaseType': 'MANUAL',
+          // Manual unless asked otherwise: a release that goes live the
+          // instant Apple approves it takes the decision away from whoever is
+          // watching. Play's production track is equally a deliberate act.
+          // `--release-type` is how somebody takes that decision on purpose.
+          'releaseType': releaseType ?? 'MANUAL',
         },
         'relationships': {'app': relation('apps', app.id)},
       },
@@ -1616,6 +1710,66 @@ class AppStore {
         describe: '$locale: ${attributes.keys.join(", ")}',
       );
     }
+  }
+
+  /// Throws when [requested] would change [version] away from `SCHEDULED`.
+  ///
+  /// Its own function so it can run *before* a write. The rename path patches
+  /// the version string first; refusing after that would leave the version
+  /// renamed and its release type untouched — half applied, which is the
+  /// failure this file's ordering exists to prevent.
+  void _refuseScheduledRelease(
+    Map<String, dynamic> version,
+    String? requested,
+  ) {
+    final current = _attributes(version)['releaseType'] as String?;
+    if (releaseTypeChange(requested: requested, current: current) !=
+        ReleaseTypeChange.refuseScheduled) {
+      return;
+    }
+    throw AscApiException(409, [
+      'version ${_attributes(version)['versionString']} is scheduled to '
+          'release, and changing that away from SCHEDULED would decide what '
+          'happens to the date beside it.',
+      'This tool has no way to say, so it will not guess. Change the release '
+          'option in App Store Connect, or drop --release-type to leave the '
+          'schedule alone.',
+    ], request: 'PATCH /v1/appStoreVersions');
+  }
+
+  /// Writes [requested] onto [version] when it differs, and returns the record
+  /// that now describes it.
+  ///
+  /// **Returns the PATCH's own response rather than the record it was handed**,
+  /// so a caller reporting the effective release type reports what Apple
+  /// acknowledged rather than what was true a moment earlier. On a dry run the
+  /// writer returns null and the pre-write record comes back unchanged, which
+  /// is correct: nothing was written, so nothing about it has changed.
+  Future<Map<String, dynamic>> _applyReleaseType(
+    Map<String, dynamic> version,
+    String? requested,
+  ) async {
+    // Throws on a scheduled version. First, so the refusal happens before the
+    // write on every path that reaches here.
+    _refuseScheduledRelease(version, requested);
+    final current = _attributes(version)['releaseType'] as String?;
+    if (releaseTypeChange(requested: requested, current: current) !=
+        ReleaseTypeChange.write) {
+      // leaveAlone or alreadySet — either way App Store Connect already says
+      // what this run wants it to say.
+      return version;
+    }
+    final patched = await writer.patch('/v1/appStoreVersions/${_id(version)}', {
+      'data': {
+        'type': 'appStoreVersions',
+        'id': _id(version),
+        'attributes': {'releaseType': requested},
+      },
+      // Both values, so the dry run's "would update:" line says what it
+      // would change *from* — the half that tells you whether to care.
+    }, describe: 'release type ${current ?? '(not reported)'} -> $requested');
+    final data = patched?['data'];
+    return data is Map<String, dynamic> ? data : version;
   }
 
   /// Whether [version] is the first this app has ever had on this platform.

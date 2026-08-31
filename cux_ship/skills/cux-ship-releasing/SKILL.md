@@ -126,14 +126,50 @@ Refusals a release runner will actually hit, each meaning what it says:
 
 ## What cannot be undone
 
-- **`play promote` and `appstore promote` are public immediately.** Both print
-  everything they inferred and wait. Read the summary; do not reflexively pass
-  `--yes`. In CI `--yes` is required, because with no terminal the command
-  refuses rather than assuming yes — that refusal is a feature.
-- **`--dry-run` is not offline.** It authenticates, opens a real store edit, does
-  every step, then deletes the edit instead of committing. That makes it *safe*,
-  not *credential-free*, and it fails if no app record exists yet. The genuinely
-  offline checks are `cux_ship verify` and the test-suite functions.
+- **`play promote` is public immediately. `appstore promote` is not, and the
+  difference is a setting you can now name.** Play's production track goes live
+  on promotion. An App Store promotion submits for *review*, and what happens
+  once Apple approves is the version's `releaseType`: `MANUAL` waits for
+  somebody to press release, `AFTER_APPROVAL` goes out on approval. cux_ship
+  creates new versions `MANUAL` and leaves existing ones alone, so the
+  irreversible moment on the App Store is usually later than the promote — but
+  `--release-type AFTER_APPROVAL` makes it the promote, and then it is as
+  irreversible as Play. The run prints the effective release type either way,
+  read back from Apple rather than from the flag.
+- **Both print everything they inferred and wait.** Read the summary; do not
+  reflexively pass `--yes`. In CI `--yes` is required, because with no terminal
+  the command refuses rather than assuming yes — that refusal is a feature.
+- **`--dry-run` is not offline, and the two stores rehearse differently.** Both
+  authenticate, so neither is *credential-free*; the genuinely offline checks
+  are `cux_ship verify` and the test-suite functions.
+
+  On **Play** it opens a real edit, does every step inside it, and deletes the
+  edit instead of committing, so Google validates the contents and then throws
+  them away. A strong rehearsal, with two edges: the checks `edits.commit`
+  performs are never reached, because the edit is deleted rather than
+  committed, and the data-safety declaration is a separate API outside the
+  edit that a dry run does not send at all.
+
+  On the **App Store** there is no edit to open: App Store Connect has no edit
+  transaction, so every write lands the moment it is made and a rehearsal can
+  only mean *do every read, print every write, perform none*. Apple therefore
+  never sees the writes and never validates them, which is a weaker promise —
+  a dry run that prints cleanly can still fail for real on a value Apple
+  rejects.
+
+  **Weaker again on `appstore promote`, when the version does not exist yet.**
+  Creating it is a write, so a dry run creates none, and everything hanging off
+  the version is then skipped — the listing publish and the submission
+  included. That is the ordinary repeat release, and there a green
+  `appstore promote --dry-run` has exercised almost none of the promote path:
+  read it as "the arguments and the reads are sound", not "this would have
+  worked".
+
+  When the version *does* already exist — the requested one, or the editable
+  one cux_ship adopts by renaming — the dry run has a record to work from and
+  rehearses the rest as would-writes. So how much a promote dry run proves
+  depends on state you may not have checked. The line it prints about creating
+  or renaming the version is the tell.
 - **A published pub.dev version is permanent** (retraction is a seven-day window,
   not an undo), if you are working on cux_ship itself.
 

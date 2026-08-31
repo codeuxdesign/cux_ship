@@ -3,10 +3,10 @@
 // A category PATCH names only the relationships the metadata tree declares, so
 // it always omits the rest — the other category, and the four subcategory
 // slots this package has never managed. Everything says omission leaves them
-// alone: JSON:API specifies it, spaceship carries a separate explicit-null
-// path for *clearing* one that would be redundant if omitting cleared, and
-// fastlane omits the same four across a very large number of apps without it
-// being a known bug.
+// alone: JSON:API specifies it, established clients of this API distinguish
+// omitting a relationship from setting it explicitly null, and partial
+// category documents go out against a very large number of apps without lost
+// subcategories being a known problem.
 //
 // That is a good argument and it is still inference. The read-back turns it
 // into a reading. These tests are about the two things that would make the

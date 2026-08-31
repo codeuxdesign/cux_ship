@@ -329,6 +329,18 @@ ArgParser buildAscParser(AscCommand cmd) {
           help:
               "Release over Apple's seven-day phased schedule once approved. "
               'Not a fraction — Apple runs the schedule itself.',
+        )
+        ..addOption(
+          'release-type',
+          // Deliberately no `allowed:`. The args package would reject
+          // SCHEDULED with one generic line, and SCHEDULED is the value that
+          // most needs a sentence explaining what is missing.
+          help:
+              'What starts the public release once Apple approves: MANUAL, or '
+              'AFTER_APPROVAL to go out on approval. A different axis from '
+              '--phased, which is how fast it rolls out once started. Unset '
+              'leaves whatever App Store Connect holds — a new version is '
+              'created MANUAL, an existing one is not touched.',
         );
     case AscCommand.betaRelease:
     case AscCommand.builds:
@@ -794,6 +806,24 @@ Future<void> runAsc(
       'promotion to a group publishes no listing',
     );
   }
+  // Validated post-parse rather than by `allowed:`, so SCHEDULED gets the
+  // sentence it needs instead of the parser's generic one.
+  final releaseType = opt('release-type');
+  if (releaseType != null) {
+    final refusal = releaseTypeRefusal(releaseType);
+    if (refusal != null) {
+      fail(refusal);
+    }
+    // The same shape as the --metadata refusal above: a promotion to a group
+    // creates no App Store version, so there is nothing for a release type to
+    // apply to, and silently ignoring it would be the quieter failure.
+    if (betaGroup != null) {
+      fail(
+        '--release-type and --beta-group ask for opposite things on promote: '
+        'a promotion to a group creates no App Store version to release',
+      );
+    }
+  }
   final metadataPath =
       (cmd == AscCommand.upload || cmd == AscCommand.promote) &&
           !noMetadata &&
@@ -1114,6 +1144,7 @@ Future<void> runAsc(
         changelogPath: changelogPath,
         locale: locale,
         phased: flag('phased'),
+        releaseType: releaseType,
       ),
     );
   }
@@ -1466,9 +1497,32 @@ Future<void> runAsc(
         app,
         versionName!,
         create: true,
+        releaseType: releaseType,
       );
 
       if (version != null) {
+        // **Effective, not intended** — the consuming project's rule, which
+        // this package applies throughout (see `baked_facts.dart`). Read off
+        // the record Apple acknowledged rather than off the flag, because the
+        // interesting case is the run where nobody passed one: tonight's
+        // release went out MANUAL after somebody had decided otherwise, and
+        // no line anywhere said so.
+        //
+        // Promote only. A listing publish also creates a version, but it is
+        // not deciding how a release starts — the promote that later adopts
+        // that version is, and this is where the decision lands.
+        //
+        // Suppressed on a dry run, where nothing was written: printing the
+        // record's current value beside a flag asking for a different one
+        // would be an "effective" line a real run falsifies.
+        final effective =
+            (version['attributes'] as Map<String, dynamic>?)?['releaseType'];
+        if (!dryRun && effective is String) {
+          stdout.writeln(
+            '==> release type: $effective'
+            '${effective == 'MANUAL' ? ' — release it yourself once approved' : ''}',
+          );
+        }
         await store.attachBuild(version, chosen);
 
         final notes = notesFor(versionName);
@@ -1582,9 +1636,10 @@ Future<void> runAsc(
 /// **A category PATCH names only what the tree declares, so it always omits
 /// the rest** — the other category, and the four subcategory slots this tool
 /// has never managed. Everything says omission leaves them alone: JSON:API
-/// specifies it, spaceship has a separate explicit-null path for clearing
-/// which would be redundant otherwise, and fastlane omits the same four
-/// across a very large number of apps without it being a known bug.
+/// specifies it, established clients of this API distinguish omitting a
+/// relationship from setting it explicitly null, and partial category
+/// documents go out against a very large number of apps without lost
+/// subcategories being a known problem.
 ///
 /// That is a good argument and it is still inference. This turns it into a
 /// reading, on the rare run that writes a category at all — and if it is ever
@@ -1752,6 +1807,7 @@ String _summarizeAsc({
   required String? changelogPath,
   required String locale,
   required bool phased,
+  required String? releaseType,
 }) {
   final rows = <String, String?>{
     'app': '$bundleId ($platform)',
@@ -1768,6 +1824,10 @@ String _summarizeAsc({
     'notes from': changelogPath,
     'locale': locale,
     'phased': phased ? 'yes — over Apple\'s seven-day schedule' : null,
+    // Null when unset, like every other row: nothing changes, so there is
+    // nothing for the summary to say. The effective value is printed later,
+    // from the record Apple acknowledged.
+    'release type': releaseType,
   };
 
   final heading = switch (cmd) {

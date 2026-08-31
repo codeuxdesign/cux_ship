@@ -2,14 +2,36 @@
 
 ## Unreleased
 
+**`appstore promote` can say how the release should start, and always says how
+it will.** `appStoreVersions.releaseType` decides what happens once Apple
+approves — wait for somebody to press release, or go out on approval — and
+there was no flag for it. Asked how a release should go out, a maintainer chose
+automatic; the version cux_ship created was `MANUAL`, because that was
+hardcoded. Nothing was rejected and nothing was reported: the decision had
+nowhere to go, and the default stood. It only did not matter because manual is
+the safer end of that mistake.
+
+`--release-type MANUAL|AFTER_APPROVAL` now carries it. **An unset flag still
+changes nothing** — a new version is created `MANUAL` as before, an existing
+one is left exactly as App Store Connect has it. A tool that normalised the
+unset case to its own preference would be the same failure running the other
+way. `SCHEDULED` is refused rather than approximated: Apple takes it, but only
+beside an `earliestReleaseDate` this tool has no way to send, and a version
+already scheduled is refused rather than silently rescheduled.
+
+And the run prints the effective release type, read back from the record Apple
+acknowledged rather than from the flag — *print effective configuration, never
+intended*. That line is the half that would have caught this, because the run
+it needed to catch passed no flag at all.
+
+
 **`promote` no longer fails because the *other* platform is in review.** An app
 has one set of app-level records shared by both platforms, so
 `promote --platform macos` refused with 409 whenever the iOS side sat in
 `WAITING_FOR_REVIEW` — and refused at the first thing a promotion does, so
 nothing downstream ran: no version created, no build attached, no submission
 made. The gate was this package's own invention. Apple accepts a `PATCH`
-against an `appInfos` record in that state, and fastlane's
-`fetch_edit_app_info` has selected it for years. `editableVersionStates` is
+against an `appInfos` record in that state. `editableVersionStates` is
 unchanged, because it is also what refuses a push against a *version* that is
 with Apple, and that refusal is correct; the app-level half now has its own
 list.
@@ -105,9 +127,9 @@ moved.
 names only the relationships the metadata tree declares, so it always omits
 the rest — the other category, and the four subcategory slots this package has
 never managed. Everything says omission leaves them alone: JSON:API specifies
-it, fastlane's spaceship carries a separate explicit-null path for *clearing*
-one that would be redundant if omitting cleared, and fastlane omits the same
-four across a very large number of apps without it being a known bug.
+it, established clients of this API distinguish omitting a relationship from
+setting it explicitly null, and partial category documents go out against a
+very large number of apps without lost subcategories being a known problem.
 
 That is a good argument, and it was still only inference about somebody's
 published listing. On the rare run that writes a category at all, the six
