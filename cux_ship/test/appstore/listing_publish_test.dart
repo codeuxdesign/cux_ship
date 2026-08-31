@@ -73,16 +73,27 @@ void main() {
     );
   });
 
-  test('a promote with metadata publishes at exactly one site', () {
-    // **This test used to assert that one enum value did not equal two
-    // different constants at once, which is true of every possible
-    // implementation and killed by no mutation.** It read like the file's
-    // central claim and proved only that Dart has enums.
+  test('a publish is decided for exactly the runs that should have one', () {
+    // **Two attempts at this test were vacuous, and the second was worse than
+    // the first, because it came with a comment claiming it was not.**
     //
-    // The real property lives in the guards `runAsc` uses, so the test states
-    // them: each site's condition, written the way the call site writes it,
-    // evaluated over every input. Reverting either guard to `metadata != null`
-    // — the double publish — makes this fail.
+    // Both wrote `decision == shared && decision == afterVersion` and asserted
+    // it false. One variable against two distinct constants is false for every
+    // possible implementation — no mutation can kill it. The second version
+    // dressed it up as "the two call sites" and claimed that reverting a guard
+    // in `runAsc` would make it fail. It would not: those guards are in
+    // `runAsc`, and restating them here over a return value observes nothing
+    // about them.
+    //
+    // **So the honest scope of this file is `listingPublish` itself**, and
+    // that is what is asserted: which runs get a publish decided at all. It is
+    // falsifiable — an enum that never published, or one that published for an
+    // artifact upload, fails here.
+    //
+    // The property that no *call site* can double-publish is not testable from
+    // here. It is held structurally instead: the two sites read one value, and
+    // a value is one thing. Testing it would mean driving `runAsc` against a
+    // fake client and counting listing writes, which nothing here does.
     for (final metadata in [true, false]) {
       for (final artifact in [true, false]) {
         for (final promote in [true, false]) {
@@ -91,24 +102,11 @@ void main() {
             hasArtifact: artifact,
             promote: promote,
           );
-          // Verbatim from the two call sites in `runAsc`.
-          final sharedSiteActs = decision == ListingPublish.shared;
-          final promoteSiteActs = decision == ListingPublish.afterVersion;
-          final reason =
-              'metadata: $metadata, artifact: $artifact, promote: $promote';
-
           expect(
-            sharedSiteActs && promoteSiteActs,
-            isFalse,
-            reason: 'both sites acted — $reason',
-          );
-          // And the half that a "never both" assertion alone would miss: a
-          // listing that should publish must publish somewhere. An enum that
-          // returned `none` for everything would satisfy "never both".
-          expect(
-            sharedSiteActs || promoteSiteActs,
+            decision != ListingPublish.none,
             metadata && !artifact,
-            reason: 'wrong number of sites acted — $reason',
+            reason:
+                'metadata: $metadata, artifact: $artifact, promote: $promote',
           );
         }
       }

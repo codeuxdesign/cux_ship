@@ -540,6 +540,52 @@ void main() {
     });
   });
 
+  group('does the tree need a version', () {
+    // The version-scoped half writes four things, and this predicate has to
+    // name all four or the ones it omits are written nowhere and reported
+    // nowhere. It named three.
+    test('a copyright-only tree needs one', () {
+      expect(listingNeedsVersion(_metadata()..copyright = '© 2026'), isTrue);
+    });
+
+    test('review notes need one', () {
+      expect(
+        listingNeedsVersion(_metadata()..reviewNotes = 'Log in as demo.'),
+        isTrue,
+      );
+    });
+
+    test('listing text needs one', () {
+      final metadata = AppStoreMetadata();
+      metadata.locales.add(
+        LocaleMetadata('en-US')..version['description'] = 'A driving app.',
+      );
+      expect(listingNeedsVersion(metadata), isTrue);
+    });
+
+    test('an app-level-only tree does not', () {
+      // Name, subtitle, categories and the age rating all hang off the app,
+      // so a tree carrying only those can publish without a version.
+      expect(
+        listingNeedsVersion(
+          _metadata(
+            categories: {'primaryCategory': 'NAVIGATION'},
+            ageRating: const {'gambling': false},
+            contentRights: 'USES_THIRD_PARTY_CONTENT',
+            appInfoText: {
+              'en-US': {'name': 'Hold The Wheel'},
+            },
+          ),
+        ),
+        isFalse,
+      );
+    });
+
+    test('an empty tree does not', () {
+      expect(listingNeedsVersion(_metadata()), isFalse);
+    });
+  });
+
   group('the whole diff', () {
     test('a listing that already matches writes nothing at all', () {
       final changes = _changes(

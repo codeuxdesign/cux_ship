@@ -454,12 +454,21 @@ class AppLevelChanges {
 }
 
 /// Whether [metadata] carries anything Apple scopes to a version rather than
-/// to the app — descriptions, screenshots, review notes.
+/// to the app — copyright, review notes, listing text, screenshots.
 ///
 /// One function because two places ask it: the offline argument check, which
 /// is where a missing `--version-name` should be caught, and the publish
 /// itself, which must not discover it after writing the app-level half.
+/// **Every field the version-scoped half writes, and the count is the check.**
+/// That half writes four things — copyright, review notes, per-locale listing
+/// text, screenshots — and this predicate named three. A tree carrying only
+/// `info/copyright.txt` therefore reported that it needed no version, so no
+/// version was created, the copyright was never written, and nothing said so.
+/// Long-standing, and exactly the silent skip the rest of this file argues
+/// against; it survived because the predicate was written inline beside the
+/// three fields somebody was thinking about at the time.
 bool listingNeedsVersion(AppStoreMetadata metadata) =>
+    metadata.copyright != null ||
     metadata.reviewNotes != null ||
     metadata.locales.any(
       (locale) => locale.version.isNotEmpty || locale.screenshots.isNotEmpty,
