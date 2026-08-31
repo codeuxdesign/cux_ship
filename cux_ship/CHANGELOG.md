@@ -70,6 +70,23 @@ says should never be quiet. Play still gets them verbatim, and the changelog's
 "emoji are welcome and encouraged" rule is unaffected — absorbing Apple's
 restriction is the tool's job, not the changelog's.
 
+**A category write now checks that nothing else moved.** A category `PATCH`
+names only the relationships the metadata tree declares, so it always omits
+the rest — the other category, and the four subcategory slots this package has
+never managed. Everything says omission leaves them alone: JSON:API specifies
+it, fastlane's spaceship carries a separate explicit-null path for *clearing*
+one that would be redundant if omitting cleared, and fastlane omits the same
+four across a very large number of apps without it being a known bug.
+
+That is a good argument, and it was still only inference about somebody's
+published listing. On the rare run that writes a category at all, the six
+relationships are now read before and after, and anything that moved without
+the tree asking is reported. If the reading cannot be taken, it says so rather
+than passing quietly — a check that silently did not happen is otherwise
+indistinguishable from one that found nothing. It never fails the run: the
+write has already landed by then, and a diagnostic that can take down a
+publish is worse than the uncertainty it was added to remove.
+
 **Fixed: `promote --metadata` published the whole listing twice**, clearing
 and re-uploading every screenshot both times, under a comment claiming it
 published in one place only. Two conditions at two sites that had to stay

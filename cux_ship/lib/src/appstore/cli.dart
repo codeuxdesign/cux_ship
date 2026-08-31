@@ -560,7 +560,22 @@ Future<void> _publishAscListing(
   if (appInfo != null) {
     if (changes.categories.isNotEmpty) {
       stdout.writeln('==> categories');
+      // Read every relationship first, including the four subcategory slots
+      // this tool never writes — the check has to cover what the PATCH omits,
+      // because omission is the thing in question. Skipped on a dry run,
+      // which writes nothing for a read-back to be evidence about.
+      final before = store.writer.dryRun
+          ? null
+          : await store.categoryRelationships(appInfo);
       await store.writeCategories(appInfo, changes.categories);
+      if (!store.writer.dryRun) {
+        await _checkCategoriesNothingElseMoved(
+          store,
+          appInfo,
+          before: before,
+          declared: changes.categories.keys.toSet(),
+        );
+      }
     }
     final ageRating = changes.ageRating;
     if (ageRating != null) {
@@ -1484,6 +1499,72 @@ Future<void> runAsc(
     exitCode = 1;
   } finally {
     client.close();
+  }
+}
+
+/// Says whether a category write moved a relationship nobody asked it to.
+///
+/// **A category PATCH names only what the tree declares, so it always omits
+/// the rest** — the other category, and the four subcategory slots this tool
+/// has never managed. Everything says omission leaves them alone: JSON:API
+/// specifies it, spaceship has a separate explicit-null path for clearing
+/// which would be redundant otherwise, and fastlane omits the same four
+/// across a very large number of apps without it being a known bug.
+///
+/// That is a good argument and it is still inference. This turns it into a
+/// reading, on the rare run that writes a category at all — and if it is ever
+/// wrong, it is wrong on somebody's published listing, which is worth two GETs
+/// to find out about on the first occurrence rather than the hundredth.
+///
+/// Never fails the run. The write has already happened, so there is nothing
+/// left to protect by throwing, and a diagnostic that can take down a publish
+/// is worse than the uncertainty it was added to remove.
+Future<void> _checkCategoriesNothingElseMoved(
+  AppStore store,
+  Map<String, dynamic> appInfo, {
+  required Map<String, String?>? before,
+  required Set<String> declared,
+}) async {
+  final after = before == null
+      ? null
+      : await store.categoryRelationships(appInfo);
+  if (before == null || after == null) {
+    // Said out loud. A check that silently did not happen is indistinguishable
+    // from one that passed, and this package's whole argument is that those
+    // are different.
+    stdout.writeln(
+      '    (could not read the category relationships back, so nothing '
+      'confirms\n'
+      '     the other categories were left alone)',
+    );
+    return;
+  }
+
+  final moved = unrequestedCategoryChanges(
+    before: before,
+    after: after,
+    declared: declared,
+  );
+  if (moved.isEmpty) {
+    return;
+  }
+  // Loud, and on stderr, because this would mean the PATCH cleared a
+  // relationship it did not name — a category quietly disappearing from a
+  // published listing, and a fact about Apple's API that this package has
+  // been assuming the opposite of.
+  stderr.writeln(
+    '  WARNING: writing the categories also changed '
+    '${moved.join(", ")},\n'
+    '  which ${moved.length == 1 ? 'was' : 'were'} not in the metadata tree. '
+    'Apple appears to clear\n'
+    '  category relationships a PATCH does not name. Check the listing in App '
+    'Store\n'
+    '  Connect, and please report this — cux_ship assumes the opposite.',
+  );
+  for (final name in moved) {
+    stderr.writeln(
+      '    $name: ${before[name] ?? '(unset)'} -> ${after[name] ?? '(unset)'}',
+    );
   }
 }
 

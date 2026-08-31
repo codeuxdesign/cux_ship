@@ -233,6 +233,84 @@ Map<String, dynamic> requireWritableAppInfo(
   ], request: 'GET /v1/appInfos');
 }
 
+/// Every `appCategories` relationship an `appInfos` record carries.
+///
+/// **cux_ship manages the first two and has never touched the other four.**
+/// They are listed because the *check* has to cover what the write does not:
+/// a category PATCH names only the relationships the tree declares, so it
+/// always omits these four, and the open question is whether omitting a
+/// relationship disturbs it.
+///
+/// The evidence says it does not — JSON:API says a missing relationship keeps
+/// its current value, spaceship has a separate explicit `data: nil` path for
+/// *clearing* one (which would be redundant if omission cleared), and fastlane
+/// has omitted these same four across an enormous number of apps for years
+/// without it being a known bug. That is inference, not measurement, which is
+/// what [unrequestedCategoryChanges] exists to convert.
+const categoryRelationshipNames = [
+  'primaryCategory',
+  'primarySubcategoryOne',
+  'primarySubcategoryTwo',
+  'secondaryCategory',
+  'secondarySubcategoryOne',
+  'secondarySubcategoryTwo',
+];
+
+/// The category relationships [appInfo] reports, by relationship name.
+///
+/// A name maps to the `appCategories` id, or to null when Apple reported the
+/// relationship as explicitly unset. A name is **absent** when the response
+/// carried no `data` for it at all — which is a third thing, meaning "not
+/// reported", and is why a comparison must not treat it as either value.
+Map<String, String?> readCategoryRelationships(Map<String, dynamic> appInfo) {
+  final relationships = appInfo['relationships'];
+  if (relationships is! Map<String, dynamic>) {
+    return const {};
+  }
+  final reported = <String, String?>{};
+  for (final name in categoryRelationshipNames) {
+    final link = relationships[name];
+    if (link is! Map<String, dynamic> || !link.containsKey('data')) {
+      continue;
+    }
+    final data = link['data'];
+    reported[name] = data is Map<String, dynamic>
+        ? data['id'] as String?
+        : null;
+  }
+  return reported;
+}
+
+/// Category relationships that moved without the tree asking them to.
+///
+/// **The point is the ones nobody named.** A PATCH that sets `primaryCategory`
+/// omits the other five, and if Apple treated an omitted relationship as a
+/// clear, this is where that would show up — as a `secondarySubcategoryOne`
+/// that held a value before the write and holds none after it, on a run that
+/// reported success.
+///
+/// Only names present in **both** readings are compared. One that is absent
+/// from either was never reported, and absence cannot be evidence of a change
+/// any more than it can be evidence of a match.
+List<String> unrequestedCategoryChanges({
+  required Map<String, String?> before,
+  required Map<String, String?> after,
+  required Set<String> declared,
+}) {
+  final changed = <String>[];
+  for (final name in categoryRelationshipNames) {
+    if (declared.contains(name) ||
+        !before.containsKey(name) ||
+        !after.containsKey(name)) {
+      continue;
+    }
+    if (before[name] != after[name]) {
+      changed.add(name);
+    }
+  }
+  return changed;
+}
+
 /// How a refusal names the age-rating answers.
 const ageRatingField = 'age rating';
 
@@ -1378,6 +1456,36 @@ class AppStore {
       }
     }
     return null;
+  }
+
+  /// Every category relationship [appInfo] reports, or null if they could not
+  /// be read.
+  ///
+  /// **Null rather than an exception, and null rather than empty.** This is
+  /// only ever called to check a write that has already happened, so throwing
+  /// would turn a successful publish into a failure over a diagnostic. And
+  /// the caller has to be able to say "could not check" rather than printing
+  /// nothing, which an empty map would invite.
+  ///
+  /// The `include` names four relationships this package otherwise never
+  /// mentions. If Apple does not accept one, the read fails and this returns
+  /// null — the check goes unmade and says so, rather than taking the whole
+  /// publish down with it.
+  Future<Map<String, String?>?> categoryRelationships(
+    Map<String, dynamic> appInfo,
+  ) async {
+    try {
+      final info = await client.get(
+        '/v1/appInfos/${_id(appInfo)}',
+        query: {'include': categoryRelationshipNames.join(',')},
+      );
+      final data = info['data'];
+      return data is Map<String, dynamic>
+          ? readCategoryRelationships(data)
+          : null;
+    } on AscApiException {
+      return null;
+    }
   }
 
   /// Every `appInfoLocalizations` record of [appInfo].
