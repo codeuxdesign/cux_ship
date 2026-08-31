@@ -46,7 +46,11 @@ done
 
 die() { echo "release: $*" >&2; exit 1; }
 
-VERSION=$(sed -n 's/^version: *//p' "$PACKAGE/pubspec.yaml" | head -1)
+# `sed ... | head -1` would be the obvious spelling and is unsafe here: under
+# `set -o pipefail` the writer takes SIGPIPE when head exits first, and the
+# assignment then fails the script. Ending the sed itself is equivalent and
+# has no second process to race.
+VERSION=$(sed -n 's/^version: *//p;/^version: /q' "$PACKAGE/pubspec.yaml")
 [ -n "$VERSION" ] || die "could not read version from $PACKAGE/pubspec.yaml"
 
 # The tag this release will carry. Prefixed for every member except cux_ship,
@@ -74,7 +78,14 @@ git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null &&
 #
 # A dedicated release commit makes them the same commit by construction. See
 # docs/RELEASING.md; this only enforces it.
-SET_BY=$(git log --format=%H -S"version: $VERSION" -- "$PACKAGE/pubspec.yaml" | head -1)
+# **`-1` rather than `| head -1`, and this is why the script could not run.**
+# `git log` keeps walking after head has taken its line, gets SIGPIPE, and with
+# `set -o pipefail` the pipeline reports 141 — so the assignment fails and
+# `set -e` kills the script before it prints anything at all. It exited 141
+# with no output, which reads like nothing ran rather than like a broken
+# guard, and it sits above the publish where a silent death is safe but
+# indistinguishable from the tool not existing.
+SET_BY=$(git log -1 --format=%H -S"version: $VERSION" -- "$PACKAGE/pubspec.yaml")
 HEAD_SHA=$(git rev-parse HEAD)
 if [ "$SET_BY" != "$HEAD_SHA" ]; then
   BEHIND=$(git rev-list --count "$SET_BY..$HEAD_SHA" 2>/dev/null || echo '?')
