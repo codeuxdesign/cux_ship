@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.6.2
 
 **A listing publish that is going to be refused is refused before it writes
 anything.** `_publishAscListing` acquired the `appInfos` record before writing
