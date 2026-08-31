@@ -215,11 +215,21 @@ Map<String, dynamic> requireWritableAppInfo(
       'no appInfos record is in a state that can be written to ($states), and '
           '${fields.join(", ")} would have to be written.',
     ],
-    'Writable states are ${editableAppInfoStates.join(", ")}. A record being '
-        'reviewed becomes writable when the review finishes; the published '
-        'record never does, because editing it would change what is already '
-        'on sale without a review seeing it — create the next version in App '
-        'Store Connect for that.',
+    'Writable states are ${editableAppInfoStates.join(", ")}. A record under '
+        'review becomes writable when that review finishes, or if the '
+        'submission is cancelled in App Store Connect. The published record '
+        'never becomes writable, because editing it would change what is '
+        'already on sale without a review seeing it.',
+    // **Apple's own hint here is wrong, and it was measured wrong.** Its 409
+    // says "Create the next version first", which sounds authoritative and
+    // does not work: `appInfos` records belong to the *app* and versions are
+    // per-platform, so creating a macOS version produced no new record on an
+    // app whose two records were READY_FOR_SALE and WAITING_FOR_REVIEW. Said
+    // here because following that advice costs a release cycle to disprove.
+    'Creating a version does not necessarily help: appInfos records are '
+        'app-level while versions are per-platform, so a new version for one '
+        'platform need not produce a record to write to. Apple\'s own error '
+        'suggests otherwise; it was measured not to.',
   ], request: 'GET /v1/appInfos');
 }
 

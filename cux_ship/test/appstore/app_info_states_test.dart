@@ -218,7 +218,7 @@ void main() {
                   contains('primaryCategory'),
                   contains('age rating'),
                   contains('READY_FOR_SALE'),
-                  contains('create the next version'),
+                  contains('never becomes writable'),
                 ),
               ),
         ),
@@ -227,9 +227,8 @@ void main() {
 
     test('this 409 does not read like the 409 Apple returns for a value', () {
       // Two errors with the same status calling for opposite actions: this
-      // one is answered in App Store Connect, Apple's is answered by changing
-      // the metadata. Saying "cancel the submission" here would be the wrong
-      // advice now that a submitted record is a legal write target.
+      // one is about which record may be written at all, Apple's is answered
+      // by changing the metadata.
       late final AscApiException refusal;
       try {
         requireWritableAppInfo([_info('live', 'READY_FOR_SALE')]);
@@ -239,7 +238,26 @@ void main() {
       }
       final text = refusal.details.join(' ');
       expect(text, contains('no appInfos record is in a state'));
-      expect(text, isNot(contains('cancel the submission')));
+    });
+
+    test('it contradicts Apple\'s own advice, which was measured wrong', () {
+      // Apple's 409 says "Create the next version first". It sounds
+      // authoritative and does not work: appInfos records are app-level and
+      // versions are per-platform, so creating a macOS version produced no
+      // new record on an app holding READY_FOR_SALE and WAITING_FOR_REVIEW.
+      // Repeating that advice would cost a release cycle to disprove, so the
+      // refusal says plainly that it is wrong.
+      late final AscApiException refusal;
+      try {
+        requireWritableAppInfo([_info('live', 'READY_FOR_SALE')]);
+        fail('expected a refusal');
+      } on AscApiException catch (e) {
+        refusal = e;
+      }
+      final text = refusal.details.join(' ');
+      expect(text, contains('app-level'));
+      expect(text, contains('per-platform'));
+      expect(text, contains('measured not to'));
     });
 
     test('the refusal names the blocking state, whatever it is', () {
@@ -256,7 +274,7 @@ void main() {
       }
       final text = refusal.details.join(' ');
       expect(text, contains('IN_REVIEW'));
-      expect(text, contains('when the review finishes'));
+      expect(text, contains('when that review finishes'));
       // The states it *would* accept, so the message answers "what now".
       expect(text, contains('WAITING_FOR_REVIEW'));
     });
