@@ -62,7 +62,33 @@ Uint8List flatPanels({int width = 512, int height = 320}) {
   return img.encodePng(image);
 }
 
+/// A genuinely 16-bit PNG — `Format.uint16`, encoded and decoded, so its IHDR
+/// really does say depth 16 rather than a stub claiming to.
+///
+/// This is what a macOS `--no-chrome` capture produces, and what made the
+/// remedy for the alpha channel produce a set carrying the other refusal.
+/// [numChannels] 3 is the case the old code returned "nothing to write" for.
+Uint8List deepPng({int numChannels = 3, int width = 8, int height = 6}) {
+  final image = img.Image(
+    width: width,
+    height: height,
+    numChannels: numChannels,
+    format: img.Format.uint16,
+  );
+  for (final pixel in image) {
+    // 65535 and 256 are chosen to tell rescaling from truncation: rescaled
+    // they are 255 and 1, and truncated to the low byte they would be 255
+    // and 0.
+    pixel.setRgba(65535, 256, 32768, 65535);
+  }
+  return img.encodePng(image);
+}
+
 img.Image decode(Uint8List bytes) => img.decodePng(bytes)!;
+
+/// The bit depth as the file itself carries it, out of the IHDR rather than
+/// out of the decoder — the byte a store reads.
+int depthOf(Uint8List png) => png[24];
 
 void main() {
   group('flattenPng', () {
@@ -149,6 +175,98 @@ void main() {
       final once = flattenPng(opaqueRgba()).bytes!;
       final twice = flattenPng(once);
       expect(twice.outcome, FlattenOutcome.alreadyOpaque);
+      expect(twice.changed, isFalse);
+    });
+
+    test('a 16-bit PNG with no alpha channel is still re-encoded', () {
+      // The case that used to return "nothing to write" and leave a 48-bit
+      // file in place: `numChannels < 4` returned before anything looked at
+      // the depth, so `verify` refused a file the remedy said it had fixed.
+      expect(depthOf(deepPng()), 16, reason: 'the fixture must be the defect');
+
+      final result = flattenPng(deepPng());
+      expect(result.outcome, FlattenOutcome.alreadyOpaque);
+      expect(result.reducedBitDepth, isTrue);
+      expect(result.changed, isTrue);
+      expect(depthOf(result.bytes!), 8);
+    });
+
+    test('a 16-bit RGBA PNG loses both the channel and the depth', () {
+      // `convert(numChannels: 3)` preserves the source format, so this path
+      // did rewrite the file and handed back a 48-bit RGB PNG — the alpha
+      // removed and the depth the stores also refuse left where it was.
+      final result = flattenPng(deepPng(numChannels: 4));
+
+      expect(result.outcome, FlattenOutcome.droppedAlpha);
+      expect(result.reducedBitDepth, isTrue);
+      expect(depthOf(result.bytes!), 8);
+      expect(decode(result.bytes!).numChannels, 3);
+    });
+
+    test('a 16-bit image with real transparency reports both', () {
+      // The compositing path builds an 8-bit canvas, so the depth was already
+      // being fixed here by accident — and reported as nothing, which is the
+      // half that was wrong. A `--check` run that named only the transparency
+      // would leave a reader thinking the depth survived.
+      final deep = img.Image(
+        width: 8,
+        height: 6,
+        numChannels: 4,
+        format: img.Format.uint16,
+      );
+      for (final pixel in deep) {
+        pixel.setRgba(0, 0, 0, 0);
+      }
+      final result = flattenPng(img.encodePng(deep));
+
+      expect(result.outcome, FlattenOutcome.compositedOntoBackground);
+      expect(result.reducedBitDepth, isTrue);
+      expect(depthOf(result.bytes!), 8);
+    });
+
+    test('reducing the depth rescales rather than truncates', () {
+      // The difference between a re-encode and a corrupted image. Channel
+      // values 65535 and 256 rescale to 255 and 1; taking the low byte of
+      // each would give 255 and 0, which passes a "depth is 8 now" assertion
+      // while having thrown the picture away.
+      final pixel = decode(flattenPng(deepPng()).bytes!).getPixel(0, 0);
+
+      expect([pixel.r, pixel.g, pixel.b], [255, 1, 128]);
+    });
+
+    test('an 8-bit image is not widened', () {
+      final result = flattenPng(rgbNoAlpha());
+
+      expect(result.reducedBitDepth, isFalse);
+      expect(result.changed, isFalse);
+    });
+
+    test('a 4-bit greyscale PNG is left alone', () {
+      // The other half of `> 8` rather than `!= 8`, and a real 4-bit file
+      // rather than an argument about one: below 8 bits is a greyscale or
+      // palettised PNG whose samples no store has been seen to refuse, and
+      // rewriting a committed screenshot to fix nothing is not free.
+      final shallow = img.encodePng(
+        img.Image(
+          width: 8,
+          height: 6,
+          numChannels: 1,
+          format: img.Format.uint4,
+        ),
+      );
+      expect(depthOf(shallow), 4, reason: 'the fixture must really be 4-bit');
+
+      final result = flattenPng(shallow);
+
+      expect(result.reducedBitDepth, isFalse);
+      expect(result.changed, isFalse);
+    });
+
+    test('is idempotent over the depth too', () {
+      final once = flattenPng(deepPng()).bytes!;
+      final twice = flattenPng(once);
+
+      expect(twice.reducedBitDepth, isFalse);
       expect(twice.changed, isFalse);
     });
 

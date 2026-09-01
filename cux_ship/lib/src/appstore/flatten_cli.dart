@@ -1,22 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// Removes the alpha channel from store screenshots, in place.
+// Removes the alpha channel from store screenshots, and reduces them to 8 bits
+// per channel, in place.
 //
 //   cux_ship screenshots flatten store/appstore/listings
 //   cux_ship screenshots flatten --check store/appstore/listings
 //
-// A top-level subcommand rather than one under `appstore`, because stripping an
-// alpha channel is an operation on an image. Apple is merely the store that
-// refuses one.
+// A top-level subcommand rather than one under `appstore`, because both of
+// those are operations on an image. Apple and Play are merely the stores that
+// refuse the states they produce — Apple's "Images can't include alpha channels
+// or transparencies", Play's "JPEG or 24-bit PNG (no alpha)".
 //
-// The decision this makes lives in lib/flatten.dart and is tested there; this
-// file is the file walking and the writing. Run it after capturing screenshots
-// and before committing them.
+// The decision this makes lives in flatten.dart and is tested there; this file
+// is the file walking and the writing. Run it after capturing screenshots and
+// before committing them.
 //
-// Deliberately a separate step from publishing: cux_ship_appstore *refuses* an
-// alpha channel rather than stripping one, because the bytes Apple receives
+// Deliberately a separate step from publishing: both upload paths *refuse* an
+// alpha channel rather than stripping one, because the bytes a store receives
 // have to be the bytes committed in the repository. So the fix belongs at
-// capture time and the uploader's check stays strict.
+// capture time and the uploaders' checks stay strict.
 import 'dart:io';
 
 import 'package:args/args.dart';
@@ -70,7 +72,7 @@ void runFlatten(ArgResults args) {
   files.sort((a, b) => a.path.compareTo(b.path));
 
   var changed = 0;
-  var opaque = 0;
+  var unchanged = 0;
   for (final file in files) {
     final FlattenResult result;
     try {
@@ -83,16 +85,22 @@ void runFlatten(ArgResults args) {
     }
 
     if (!result.changed) {
-      opaque++;
+      unchanged++;
       continue;
     }
     changed++;
 
-    // Said out loud, because compositing is the one outcome that changes
-    // pixels rather than just the encoding.
-    final note = result.outcome == FlattenOutcome.compositedOntoBackground
-        ? ' (had real transparency — composited onto white)'
-        : '';
+    // Both said out loud, and both because a reader who is told only "flattened"
+    // cannot tell which of the two refusals this file was under. Compositing is
+    // the one outcome that changes pixels rather than just the encoding, and a
+    // depth reduction is the one that fires on a file with no alpha channel at
+    // all — where "flattened" on its own reads as a no-op that wrote anyway.
+    final notes = <String>[
+      if (result.outcome == FlattenOutcome.compositedOntoBackground)
+        'had real transparency — composited onto white',
+      if (result.reducedBitDepth) 'was 16 bits per channel — reduced to 8',
+    ];
+    final note = notes.isEmpty ? '' : ' (${notes.join('; ')})';
     if (check) {
       stdout.writeln('  would flatten ${file.path}$note');
       continue;
@@ -107,7 +115,7 @@ void runFlatten(ArgResults args) {
   }
 
   stdout.writeln(
-    '${files.length} PNG(s): $opaque already opaque, '
+    '${files.length} PNG(s): $unchanged already 8-bit and opaque, '
     '$changed ${check ? "would be flattened" : "flattened"}',
   );
   if (check && changed > 0) {

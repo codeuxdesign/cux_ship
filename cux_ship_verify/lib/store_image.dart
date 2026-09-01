@@ -300,12 +300,11 @@ String? imageEncodingProblem(ImageInfo image, StoreImageRules rules) {
   if (image.format == ImageFormat.png && image.bitDepth > 8) {
     return 'is ${image.bitDepth} bits per channel; ${rules.store} takes 8 — '
         '${rules.depthRule}.\n'
-        '  `screenshots flatten` does not fix this: it removes the alpha '
-        'channel and\n'
-        '  leaves the depth where it found it. Re-export at 8 bits per '
-        'channel — a\n'
-        '  macOS `--no-chrome` capture writes 16 — or, with ImageMagick:\n'
-        '    magick <file> -depth 8 <file>';
+        '  Reduce it, and change nothing else about the image:\n'
+        '    cux_ship screenshots flatten <path>\n'
+        '  It rescales rather than truncating, so the picture survives. A '
+        'macOS\n'
+        '  `--no-chrome` capture is the usual source of a 16-bit screenshot.';
   }
   return null;
 }

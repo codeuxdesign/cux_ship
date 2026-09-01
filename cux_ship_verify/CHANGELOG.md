@@ -22,10 +22,10 @@ saying whose it publishes under, rather than by remembering.
 **`ImageInfo` carries `bitDepth`, and both stores refuse more than 8.** Play
 asks for a 24-bit PNG; a 16-bit-per-channel PNG is 48-bit and every check in
 this package accepted it, for both stores. Not hypothetical: a consuming
-project's macOS capture fallback writes depth 16, `screenshots flatten`
-preserves it — it removes the alpha channel and leaves the depth alone — and
-Apple refuses the set at ingestion. The remedy documented for one failure
-produced a set the store rejects.
+project's macOS capture fallback writes depth 16 and Apple refuses the set at
+ingestion, so the remedy documented for one failure produced a set the store
+rejects. `cux_ship screenshots flatten` preserved the depth too, and is fixed
+alongside this — the message names it because it now reaches that state.
 
 The two rules have different provenance and the messages say which. Play's is
 Play's, quoted. Apple publishes no bit depth for screenshots at all, so that one

@@ -911,6 +911,11 @@ where it is not the image is composited onto a background rather than having the
 channel discarded, because discarding it turns a blank capture into a solid
 black rectangle.
 
+It also reduces 16 bits per channel to 8 — a 48-bit PNG where the stores ask for
+24, which is what a macOS `--no-chrome` capture writes. That rescales rather
+than truncating, so the picture survives; below 8 bits is left alone, because no
+store has been seen to refuse a palettised screenshot.
+
 It sits at the top level rather than under `appstore` because stripping an alpha
 channel is an operation on an image, and because both stores refuse one — Apple
 says *"Images can't include alpha channels or transparencies"* and Play asks for
@@ -921,10 +926,6 @@ reports what would change and exits 2 without rewriting, for CI.
 It is deliberately a separate step from publishing: both upload paths *refuse*
 an alpha channel rather than silently fixing one, so the corrected file is the
 one committed and reviewed.
-
-**What it does not do is bit depth.** A 16-bit-per-channel PNG is 48-bit where
-the stores ask for 24, and flatten leaves the depth where it found it — so
-`verify` names that separately and tells you to re-export.
 
 ## Not implemented
 

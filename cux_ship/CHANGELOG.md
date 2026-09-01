@@ -21,6 +21,27 @@ cux_ship_verify now answer for both. A re-check that can disagree with the check
 is worth less than no re-check, because it makes a green `verify` mean less than
 it says.
 
+**`screenshots flatten` reduces 16 bits per channel to 8, and used to preserve
+it.** `flattenPng` returned "already opaque" with nothing to write whenever the
+image had fewer than four channels, so a 48-bit RGB capture was left exactly as
+found; and where it did rewrite, `convert(numChannels: 3)` preserves the source
+format, so a 16-bit RGBA capture came back with the alpha channel gone and the
+depth untouched. Both are reachable from one capture — a macOS `--no-chrome`
+fallback writes depth 16 — which made this the remedy those checks name for a
+state it could not reach.
+
+Conversion rescales rather than truncating: 65535 becomes 255 and 256 becomes
+1, where taking the low byte of each would satisfy "the depth is 8 now" having
+thrown the picture away. Below 8 bits is left alone, matching the checks —
+a palettised PNG's entries are already 8-bit and no store has been seen to
+refuse one.
+
+`FlattenOutcome` still answers only about the alpha channel, and the depth is
+`FlattenResult.reducedBitDepth` beside it. The two are independent, and an enum
+answering both would have to invent a precedence and then hide whichever answer
+lost. `--check` reports both and now exits 2 on a file whose only problem is
+depth, which it previously passed.
+
 **This needs the cux_ship_verify that ships `store_image.dart`, and the
 constraint here still says `^1.9.0`.** Raise it on the release branch, once that
 version exists: the workspace cannot resolve a constraint naming a version no
