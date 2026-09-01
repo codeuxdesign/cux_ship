@@ -65,7 +65,7 @@ it printed, `data safety declaration updated`, said the same thing on the run
 that changed something and the run that changed nothing, which is why this took
 so long to notice.
 
-Everything else here already skips when it matches: images carry a sha256, so a
+The listing images already skip when they match: each carries a sha256, so a
 listing publish says `4 phoneScreenshots unchanged` and sends nothing.
 `applications.dataSafety` cannot be made to work that way — v3 has no GET for
 the labels and the POST answers `$Empty`, so a run genuinely cannot tell an
