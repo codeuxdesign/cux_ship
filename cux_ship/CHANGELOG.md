@@ -36,6 +36,14 @@ thrown the picture away. Below 8 bits is left alone, matching the checks —
 a palettised PNG's entries are already 8-bit and no store has been seen to
 refuse one.
 
+**And it flattens a greyscale-with-alpha PNG, which the same gate called
+opaque.** PNG colour type 4 decodes to *two* channels, so "fewer than four
+channels" declared "already opaque" a file the checks refuse for its alpha
+channel — and pointed the user back at this command. The gate now asks whether
+the image has an alpha channel; where such a file carries real transparency it
+is promoted to RGBA before compositing, because `compositeImage` reads a
+two-channel colour as fully opaque.
+
 `FlattenOutcome` still answers only about the alpha channel, and the depth is
 `FlattenResult.reducedBitDepth` beside it. The two are independent, and an enum
 answering both would have to invent a precedence and then hide whichever answer

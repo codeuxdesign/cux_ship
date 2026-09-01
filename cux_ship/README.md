@@ -911,8 +911,9 @@ where it is not the image is composited onto a background rather than having the
 channel discarded, because discarding it turns a blank capture into a solid
 black rectangle.
 
-It also reduces 16 bits per channel to 8 — a 48-bit PNG where the stores ask for
-24, which is what a macOS `--no-chrome` capture writes. That rescales rather
+It also reduces 16 bits per channel to 8 — a 48-bit PNG, which is what a macOS
+`--no-chrome` capture writes, and which Play's *"24-bit PNG"* rules out and
+Apple has been observed to refuse at ingestion. That rescales rather
 than truncating, so the picture survives; below 8 bits is left alone, because no
 store has been seen to refuse a palettised screenshot.
 

@@ -8,12 +8,13 @@
 // Getting that wrong corrupts a store screenshot in a way nobody notices until
 // it is public, which is the same reason lib/metadata.dart is tested.
 //
-// Why this exists at all: both stores reject any transparency, and **every
-// screen capture has an alpha channel** whether or not it uses one. `sips`
-// cannot remove it while staying PNG — it writes RGBA whatever flags it is
-// given — so the alternatives were a lossy JPEG conversion or a Homebrew
-// install of ImageMagick. Verified equivalent to `magick mogrify -alpha off`:
-// pixel for pixel identical on a real capture.
+// Why this exists at all: both stores reject a transparent screenshot — the
+// one alpha channel either store wants is Play's app icon, which this tool is
+// not for — and **every screen capture has an alpha channel** whether or not
+// it uses one. `sips` cannot remove it while staying PNG — it writes RGBA
+// whatever flags it is given — so the alternatives were a lossy JPEG
+// conversion or a Homebrew install of ImageMagick. Verified equivalent to
+// `magick mogrify -alpha off`: pixel for pixel identical on a real capture.
 //
 // **Bit depth arrived later, and the reason it had to is worth keeping.** The
 // checks in cux_ship_verify refuse more than 8 bits per channel on both store
@@ -56,7 +57,8 @@ class FlattenResult {
   final FlattenOutcome outcome;
 
   /// Whether the image was re-encoded from more than 8 bits per channel down
-  /// to 8 — a 48-bit PNG where both stores ask for 24.
+  /// to 8 — a 48-bit PNG, which Play's "24-bit PNG" rules out and Apple has
+  /// been observed to refuse at ingestion.
   ///
   /// Independent of [outcome], and true on any of its values: a 16-bit capture
   /// may or may not also carry an alpha channel.
@@ -110,7 +112,12 @@ FlattenResult flattenPng(
   // screenshot to fix nothing.
   final tooDeep = image.bitsPerChannel > 8;
 
-  if (image.numChannels < 4) {
+  // Asked of the image rather than spelled as `numChannels < 4`, because PNG
+  // colour type 4 — greyscale with alpha — decodes to *two* channels.
+  // `readImageInfo` counts colour type 4 as alpha and its message names this
+  // command as the remedy, so a four-channel gate declared "already opaque"
+  // exactly a state the checker refuses.
+  if (!image.hasAlpha) {
     if (!tooDeep) {
       return const FlattenResult(FlattenOutcome.alreadyOpaque, null);
     }
@@ -165,7 +172,16 @@ FlattenResult flattenPng(
       background & 0xFF,
     ),
   );
-  img.compositeImage(flat, image);
+  // Promoted to four channels first when the source is greyscale-with-alpha:
+  // `compositeImage` blends through `drawPixel`, which reads a colour of fewer
+  // than four channels as fully opaque (`c.length < 4` in its alpha term) — so
+  // handing it the two-channel image directly would paint every transparent
+  // pixel as solid grey. The scan above is unaffected: `Pixel.a` on a
+  // two-channel pixel does return the real alpha.
+  img.compositeImage(
+    flat,
+    image.numChannels == 2 ? image.convert(numChannels: 4) : image,
+  );
   return FlattenResult(
     FlattenOutcome.compositedOntoBackground,
     _smallestPng(flat),

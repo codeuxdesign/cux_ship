@@ -84,6 +84,20 @@ Uint8List deepPng({int numChannels = 3, int width = 8, int height = 6}) {
   return img.encodePng(image);
 }
 
+/// Greyscale with an alpha channel — PNG colour type 4, which decodes to two
+/// channels. `readImageInfo` counts colour type 4 as alpha and both stores'
+/// messages name this command as the remedy, so a gate written as
+/// `numChannels < 4` called opaque exactly a state the checker refuses.
+Uint8List greyAlpha({int alpha = 255, int width = 8, int height = 6}) {
+  final image = img.Image(width: width, height: height, numChannels: 2);
+  for (final pixel in image) {
+    pixel
+      ..r = pixel.x * 30 % 256
+      ..a = alpha;
+  }
+  return img.encodePng(image);
+}
+
 img.Image decode(Uint8List bytes) => img.decodePng(bytes)!;
 
 /// The bit depth as the file itself carries it, out of the IHDR rather than
@@ -103,6 +117,29 @@ void main() {
       final result = flattenPng(opaqueRgba());
       expect(result.outcome, FlattenOutcome.droppedAlpha);
       expect(decode(result.bytes!).numChannels, 3);
+    });
+
+    test('a greyscale-with-alpha PNG has its channel dropped too', () {
+      // PNG colour type 4 decodes to *two* channels, so the question has to be
+      // whether the image has an alpha channel, not whether it has four — the
+      // check refuses this file and points here, and "already opaque" would
+      // send the user in a circle.
+      final bytes = greyAlpha();
+      expect(bytes[25], 4, reason: 'the fixture must really be colour type 4');
+
+      final result = flattenPng(bytes);
+      expect(result.outcome, FlattenOutcome.droppedAlpha);
+      final after = decode(result.bytes!);
+      expect(after.hasAlpha, isFalse);
+      // The luminance survives — replicated into RGB, not zeroed or shuffled.
+      expect(after.getPixel(3, 0).r, 90);
+    });
+
+    test('transparent greyscale is composited rather than discarded', () {
+      final result = flattenPng(greyAlpha(alpha: 0));
+      expect(result.outcome, FlattenOutcome.compositedOntoBackground);
+      final pixel = decode(result.bytes!).getPixel(0, 0);
+      expect([pixel.r, pixel.g, pixel.b], [255, 255, 255]);
     });
 
     test('never encodes larger than the default filter would', () {
