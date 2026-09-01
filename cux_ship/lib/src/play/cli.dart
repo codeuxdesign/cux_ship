@@ -133,6 +133,21 @@ ServiceAccountCredentials _loadCredentials() {
 /// Going direct also surfaces Play's rejection text in full. Its validation
 /// gates questions on other answers, undocumented, one complaint at a time, and
 /// that text is the only way to find out which cell it objects to.
+///
+/// **There is no read to compare against, which is why the caller gates this
+/// on a flag rather than on a difference.** Everything else published here
+/// skips when it already matches — images have a sha256 per file, so
+/// `_publishMetadata` can say `4 phoneScreenshots unchanged` and send nothing.
+/// `applications.dataSafety` is write-only: v3 has no GET for the labels and
+/// the POST answers `$Empty`, so a run cannot tell an unchanged declaration
+/// from a changed one. Sending it regardless is not free — Play files every
+/// POST as a pending **App content → Data safety** change, and an app uploaded
+/// weekly accumulates one per upload under "Changes not yet submitted for
+/// review" with nothing in the CSV having moved.
+///
+/// The alternative, hashing the CSV against a last-sent value, needs state that
+/// outlives the process and lives outside the repository, which is worse than
+/// the problem it solves.
 Future<void> _publishDataSafety(
   AuthClient client,
   String packageName,
@@ -1033,7 +1048,18 @@ ArgParser buildPlayParser(PlayCommand cmd) {
         )
         ..addOption(
           'data-safety',
-          help: 'CSV of Data Safety answers, exported from the console.',
+          help:
+              'CSV of Data Safety answers, exported from the console. Checked '
+              'on every upload; sent only with --send-data-safety.',
+        )
+        ..addFlag(
+          'send-data-safety',
+          negatable: false,
+          help:
+              'Publish the --data-safety declaration. Play queues one for '
+              'review whether or not it differs from what it already holds, '
+              'and offers no way to read back what that is, so sending it is '
+              'asked for rather than assumed.',
         )
         ..addMultiOption(
           'delete-locale',
@@ -1177,6 +1203,13 @@ Future<void> runPlay(
   final dataSafetyPath = upload
       ? (opt('data-safety') ?? defaults.dataSafety)
       : null;
+  // **The path is inferred; sending it is not.** Every consumer passes the
+  // declaration on every upload — `upload.sh` assembling these arguments is the
+  // point of `upload.sh` — and Play files each POST as a pending "App content →
+  // Data safety" change even when the CSV has not moved in months. So the file
+  // being present means *check it*, and this flag means *send it*. See
+  // [_publishDataSafety] for why a comparison cannot stand in for the flag.
+  final sendDataSafety = flag('send-data-safety');
   final deleteLocales = multi('delete-locale');
 
   // Promotion is the deliberate opposite of a build: it publishes bits Play
@@ -1195,14 +1228,28 @@ Future<void> runPlay(
   // listing typo should not need an artifact to fix. Requiring at least one
   // stops a no-argument invocation from opening and committing an empty edit,
   // which succeeds and does nothing.
+  //
+  // A declaration that will only be *checked* is not one of the jobs: with the
+  // send behind a flag, a run carrying nothing else would open and commit that
+  // empty edit again, which is the case this guard exists for.
   if (cmd == PlayCommand.upload &&
       aabPath == null &&
       metadataPath == null &&
-      dataSafetyPath == null &&
+      !sendDataSafety &&
       deleteLocales.isEmpty) {
     _fail(
-      'nothing to do — pass --aab, --metadata, --data-safety or '
+      'nothing to do — pass --aab, --metadata, --send-data-safety or '
       '--delete-locale',
+    );
+  }
+
+  // Said here rather than at the send, which is after the commit: a flag
+  // naming a file that was never resolved is a typo, and finding out once the
+  // release is public is finding out too late to matter.
+  if (sendDataSafety && dataSafetyPath == null) {
+    _fail(
+      '--send-data-safety has nothing to send — pass --data-safety, or put '
+      'the CSV at store/play/data-safety.csv',
     );
   }
 
@@ -1265,14 +1312,20 @@ Future<void> runPlay(
     }
   }
 
+  // **The declaration this run will send, or null because it will not.** The
+  // one gate, deliberately: the POST is after the commit and past every test
+  // this package can run offline, so a second condition down there would be a
+  // second thing to get right where nothing can watch. Assigned here, where
+  // the same `sendDataSafety` also decides what the run says it is doing, and
+  // the notice is the observable that the CSV was left unsent.
   String? dataSafetyCsv;
   if (dataSafetyPath != null) {
     final f = File(dataSafetyPath);
     if (!f.existsSync()) {
       _fail('no such data safety CSV: $dataSafetyPath');
     }
-    dataSafetyCsv = f.readAsStringSync();
-    if (dataSafetyCsv.trim().isEmpty) {
+    final csv = f.readAsStringSync();
+    if (csv.trim().isEmpty) {
       _fail('$dataSafetyPath is empty');
     }
     // **This is the one input whose failure lands after the release is
@@ -1280,12 +1333,26 @@ Future<void> runPlay(
     // and `--dry-run` does not send it at all — so this is the last moment
     // anything can refuse a broken declaration. Structure only; whether the
     // answers are true is not a question this can ask.
-    final problems = checkDataSafety(dataSafetyCsv, where: dataSafetyPath);
+    //
+    // Checked whether or not this run sends it, because the check is free and
+    // the run that does send is the one that cannot afford to meet a broken
+    // CSV — a declaration that only ever gets checked on the day it is
+    // published is checked on the worst day.
+    final problems = checkDataSafety(csv, where: dataSafetyPath);
     if (problems.isNotEmpty) {
       _fail(
         'the data safety declaration would be sent after the release is '
         'committed, and it is not well formed:\n'
         '${problems.map((ReleaseProblem p) => '    $p').join('\n')}',
+      );
+    }
+
+    if (sendDataSafety) {
+      dataSafetyCsv = csv;
+    } else {
+      stdout.writeln(
+        '==> data safety declaration checked, not sent — pass '
+        '--send-data-safety when it has changed',
       );
     }
   }
@@ -1393,7 +1460,10 @@ Future<void> runPlay(
         versionCode: opt('version-code'),
         aabPath: aabPath,
         metadataPath: metadataPath,
-        dataSafetyPath: dataSafetyPath,
+        // The summary is what is about to happen, so a declaration that will
+        // only be checked does not belong in it — the line above already said
+        // so, and listing the path here would read as a publish.
+        dataSafetyPath: sendDataSafety ? dataSafetyPath : null,
         changelogPath: changelogPath,
         deleteLocales: deleteLocales,
         rollout: opt('rollout'),
@@ -1615,9 +1685,14 @@ Future<void> runPlay(
     // declaration is not versioned with a release and applies to the app as a
     // whole, so sending it first would change what Play shows users even if the
     // edit then failed to commit and the release never happened.
+    //
+    // "sent" rather than "updated": Play offers no read of the labels it
+    // holds, so a run knows what it posted and not what changed. The old line
+    // claimed the second and was printed on every upload, which is how a
+    // pending Data safety review sat in the console after each one.
     if (dataSafetyCsv != null) {
       await _publishDataSafety(client, packageName, dataSafetyCsv);
-      stdout.writeln('==> data safety declaration updated');
+      stdout.writeln('==> data safety declaration sent');
     }
   } on _Abort catch (e) {
     stderr.writeln('cux_ship play: ${e.message}');

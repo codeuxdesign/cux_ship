@@ -56,6 +56,34 @@ version exists: the workspace cannot resolve a constraint naming a version no
 member is at, so a feature branch cannot raise it and then be tested. Publishing
 `cux_ship` against `^1.9.0` would let a consumer resolve a `cux_ship_verify`
 without `imageEncodingProblem` in it, and fail to compile.
+**Play's data safety declaration is published when you ask for it, and checked
+every time.** `play upload` sent the CSV on every run that was given one, and
+Play files each POST as a pending **App content → Data safety** change whether
+or not an answer moved — so an app uploaded weekly accumulated one unsubmitted
+review per upload, against a declaration nobody had touched in months. The line
+it printed, `data safety declaration updated`, said the same thing on the run
+that changed something and the run that changed nothing, which is why this took
+so long to notice.
+
+Everything else here already skips when it matches: images carry a sha256, so a
+listing publish says `4 phoneScreenshots unchanged` and sends nothing.
+`applications.dataSafety` cannot be made to work that way — v3 has no GET for
+the labels and the POST answers `$Empty`, so a run genuinely cannot tell an
+unchanged declaration from a changed one. The alternative, remembering the last
+CSV sent, is state outside the repository, which is worse than the problem.
+
+So `--data-safety` now means *check this*, and the new `--send-data-safety`
+means *publish it* — and the output distinguishes `data safety declaration
+sent` from `data safety declaration checked, not sent`, which are different
+facts and only one of them was previously sayable. The structure check still
+runs on every upload, because the run that publishes is the one that cannot
+afford to meet a broken CSV.
+
+**Breaking for anyone passing `--data-safety`,** which is the intended usage: a
+build script that passes it on every upload keeps validating the declaration
+and stops publishing it. Add `--send-data-safety` to the run after you edit the
+CSV. A run whose only argument was `--data-safety` now refuses as `nothing to
+do` rather than committing an empty edit.
 
 ## 3.6.2
 
