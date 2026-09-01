@@ -34,9 +34,10 @@ Directory _repo({
   // ProjectContext looks for the repository root via git.
   Process.runSync('git', ['init', '-q'], workingDirectory: dir.path);
 
-  final shots = Directory('${dir.path}/store/play/listings/en-US/images/'
-      'phoneScreenshots')
-    ..createSync(recursive: true);
+  final shots = Directory(
+    '${dir.path}/store/play/listings/en-US/images/'
+    'phoneScreenshots',
+  )..createSync(recursive: true);
   for (final name in ['00.png', '01.png']) {
     File('${shots.path}/$name').writeAsBytesSync(
       _png(1080, 2400, colourType: colourType, depth: depth, trns: trns),
@@ -67,27 +68,22 @@ List<int> _png(
     ...be32(width), ...be32(height),
     depth, colourType, 0, 0, 0,
     ...be32(0), // CRC, unchecked
-    if (trns) ...[
-      ...be32(2), ...'tRNS'.codeUnits, 0, 0, ...be32(0),
-    ],
+    if (trns) ...[...be32(2), ...'tRNS'.codeUnits, 0, 0, ...be32(0)],
     ...be32(0), ...'IEND'.codeUnits, ...be32(0),
   ];
 }
 
-ProcessResult _upload(Directory repo) => Process.runSync(
-  Platform.resolvedExecutable,
-  [
-    '--enable-asserts',
-    cliSnapshot,
-    'play',
-    'upload',
-    '--package',
-    'design.codeux.consumer',
-    '--metadata',
-    'store/play',
-  ],
-  workingDirectory: repo.path,
-);
+ProcessResult _upload(Directory repo) =>
+    Process.runSync(Platform.resolvedExecutable, [
+      '--enable-asserts',
+      cliSnapshot,
+      'play',
+      'upload',
+      '--package',
+      'design.codeux.consumer',
+      '--metadata',
+      'store/play',
+    ], workingDirectory: repo.path);
 
 void main() {
   test('an alpha channel is refused before any credential is read', () {
