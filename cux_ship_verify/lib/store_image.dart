@@ -35,7 +35,7 @@ class ImageInfo {
   final bool hasAlpha;
 
   /// Bits per **channel**, which is what PNG's IHDR and JPEG's frame header
-  /// both carry — 8 in the 24-bit RGB PNG both stores ask for, and 16 in the
+  /// both carry — 8 in the 24-bit RGB PNG Play asks for by name, and 16 in the
   /// 48-bit one a macOS capture can produce.
   ///
   /// Per channel rather than per pixel deliberately, because the stores state
@@ -250,8 +250,9 @@ String? imageEncodingProblem(ImageInfo image, StoreImageRules rules) {
   }
 
   // **`> 8` rather than `!= 8`, and the difference is whether this is checking
-  // a rule or inventing one.** What both stores ask for is eight bits per
-  // channel and what has been observed refused is sixteen. Fewer than eight is
+  // a rule or inventing one.** Play asks for eight bits per channel by name —
+  // "24-bit PNG" — and Apple, publishing no depth at all, has been observed
+  // refusing sixteen at ingestion. Fewer than eight is
   // a greyscale or palettised PNG, whose palette entries are eight bits each —
   // so "24-bit" is arguably what it already is, no store has been seen to
   // refuse one, and failing it would be this package enforcing a rule with no
