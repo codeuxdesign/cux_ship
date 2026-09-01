@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased
+
+**The Play tree is checked for the alpha channel it was already measuring.**
+`readImageInfo` has computed `hasAlpha` since the App Store tree was first
+checked, and `checkPlayTree` called it, used `width` and `height` for the
+320/3840 edge bounds, and dropped the rest. So a Play listing whose screenshots
+carried transparency passed every offline check here and was refused during
+ingestion — after the upload and after the processing wait. Play states the
+same rule Apple does, *"JPEG or 24-bit PNG (no alpha)"*, for every slot but the
+app icon, which is specified as *"32-bit PNG (with alpha)"* and is the one image
+in either store that wants one.
+
+That the capability was present, correct, and enforced on one of two paths is
+the part worth naming. It is not a missing check; it is a check written at a
+call site instead of beside the thing it checks. So both trees now call
+`imageEncodingProblem` in the new `store_image.dart`, under a `StoreImageRules`
+naming the store and quoting its words — a third store path gets the rules by
+saying whose it publishes under, rather than by remembering.
+
+**`ImageInfo` carries `bitDepth`, and both stores refuse more than 8.** Play
+asks for a 24-bit PNG; a 16-bit-per-channel PNG is 48-bit and every check in
+this package accepted it, for both stores. Not hypothetical: a consuming
+project's macOS capture fallback writes depth 16, `screenshots flatten`
+preserves it — it removes the alpha channel and leaves the depth alone — and
+Apple refuses the set at ingestion. The remedy documented for one failure
+produced a set the store rejects.
+
+The two rules have different provenance and the messages say which. Play's is
+Play's, quoted. Apple publishes no bit depth for screenshots at all, so that one
+is this package's, resting on a set Apple actually refused — deliberately the
+same evidence bar the aspect-ratio rule fails and is still left unchecked for.
+
+Fewer than 8 bits is *not* refused: a greyscale or palettised PNG has 8-bit
+palette entries, no store has been seen to refuse one, and failing it would be
+this package inventing a rule.
+
 ## 1.9.0
 
 **`checkPlayTree`** — the Play listing tree, offline. Text limits, the two

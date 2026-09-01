@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+**The Play uploader checks an image's alpha channel and bit depth, and stops
+parsing PNG headers itself.** `_loadImages` validated extension, count and
+dimensions before uploading and checked neither — so `play upload --metadata`
+sent a listing Play refuses during ingestion, having read the very header that
+says so.
+
+It re-checks rather than trusting `verify`, and the reason is that `verify` is
+not on this path: `runPlay` does call `checkPlayTree`, but only when the
+repository declares listing requirements, so a project with no `play:` block in
+`.cux-ship.yaml` uploaded with that check skipped entirely — and it is the
+project least likely to have run `cux_ship verify` first.
+
+The second hand-rolled header parser is gone with it. It read dimensions and
+nothing else, which is how one of the two copies of an image check ended up
+never being told about alpha; `readImageInfo` and `imageEncodingProblem` in
+cux_ship_verify now answer for both. A re-check that can disagree with the check
+is worth less than no re-check, because it makes a green `verify` mean less than
+it says.
+
+**This needs the cux_ship_verify that ships `store_image.dart`, and the
+constraint here still says `^1.9.0`.** Raise it on the release branch, once that
+version exists: the workspace cannot resolve a constraint naming a version no
+member is at, so a feature branch cannot raise it and then be tested. Publishing
+`cux_ship` against `^1.9.0` would let a consumer resolve a `cux_ship_verify`
+without `imageEncodingProblem` in it, and fail to compile.
+
 ## 3.6.2
 
 **A listing publish that is going to be refused is refused before it writes

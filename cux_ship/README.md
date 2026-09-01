@@ -905,19 +905,26 @@ that introduces the problem.
 ## Flattening screenshots
 
 `cux_ship screenshots flatten` removes the alpha channel from PNG screenshots,
-which Apple rejects outright and which every simulator and emulator capture
-carries even when every pixel is opaque; where the alpha is genuinely opaque the
-channel is dropped exactly, and where it is not the image is composited onto a
-background rather than having the channel discarded, because discarding it turns
-a blank capture into a solid black rectangle.
+which every simulator and emulator capture carries even when every pixel is
+opaque; where the alpha is genuinely opaque the channel is dropped exactly, and
+where it is not the image is composited onto a background rather than having the
+channel discarded, because discarding it turns a blank capture into a solid
+black rectangle.
 
 It sits at the top level rather than under `appstore` because stripping an alpha
-channel is an operation on an image. Apple is merely the store that refuses one.
-`--check` reports what would change and exits 2 without rewriting, for CI.
+channel is an operation on an image, and because both stores refuse one — Apple
+says *"Images can't include alpha channels or transparencies"* and Play asks for
+*"JPEG or 24-bit PNG (no alpha)"* in every slot but the app icon, which is the
+one image either store wants an alpha channel in. `--check` reports what would
+change and exits 2 without rewriting, for CI.
 
-It is deliberately a separate step from publishing: `cux_ship_appstore` *refuses*
+It is deliberately a separate step from publishing: both upload paths *refuse*
 an alpha channel rather than silently fixing one, so the corrected file is the
 one committed and reviewed.
+
+**What it does not do is bit depth.** A 16-bit-per-channel PNG is 48-bit where
+the stores ask for 24, and flatten leaves the depth where it found it — so
+`verify` names that separately and tells you to re-export.
 
 ## Not implemented
 

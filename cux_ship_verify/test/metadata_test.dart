@@ -19,13 +19,14 @@ Uint8List png({
   required int width,
   required int height,
   int colourType = 2, // truecolour, no alpha
+  int depth = 8, // bits per channel; 16 makes this a 48-bit PNG
   bool trns = false,
 }) {
   final bytes = <int>[
     0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // signature
     ...be32(13), ...'IHDR'.codeUnits,
     ...be32(width), ...be32(height),
-    8, colourType, 0, 0, 0,
+    depth, colourType, 0, 0, 0,
     ...be32(0), // CRC, unchecked
   ];
   if (trns) {
@@ -43,12 +44,12 @@ List<int> be32(int value) => [
 ];
 
 /// A minimal JPEG: SOI, then an SOF0 carrying the dimensions.
-Uint8List jpeg({required int width, required int height}) =>
+Uint8List jpeg({required int width, required int height, int depth = 8}) =>
     Uint8List.fromList([
       0xFF, 0xD8, // SOI
       0xFF, 0xC0, // SOF0
       0x00, 0x11, // segment length
-      0x08, // precision
+      depth, // precision
       (height >> 8) & 0xFF, height & 0xFF,
       (width >> 8) & 0xFF, width & 0xFF,
       0x03, // components
@@ -256,6 +257,20 @@ void main() {
       expect(load, throwsMetadata(contains('alpha channel')));
     });
 
+    test('16 bits per channel is refused', () {
+      // A 48-bit PNG, which every dimension and alpha check here accepts and
+      // Apple refuses at ingestion. It is not hypothetical: a macOS
+      // `--no-chrome` capture writes depth 16, and `screenshots flatten`
+      // preserves it — so the remedy for one failure produced a set the store
+      // would not take.
+      writeValidTree();
+      writeBytes(
+        'listings/en-US/screenshots/APP_IPHONE_67/01-ride.png',
+        png(width: 1290, height: 2796, depth: 16),
+      );
+      expect(load, throwsMetadata(contains('16 bits per channel')));
+    });
+
     test('more than ten is refused', () {
       writeValidTree();
       // Ten more alongside the one writeValidTree left, so eleven in total.
@@ -442,10 +457,25 @@ $reviewNotesMarker
       );
     });
 
+    test('reads the PNG bit depth', () {
+      // The IHDR byte before the colour type, and the one nothing read until
+      // a 48-bit capture passed every check both stores have.
+      expect(readImageInfo(png(width: 1, height: 1))!.bitDepth, 8);
+      expect(readImageInfo(png(width: 1, height: 1, depth: 16))!.bitDepth, 16);
+    });
+
     test('reads JPEG dimensions', () {
       final info = readImageInfo(jpeg(width: 800, height: 600))!;
       expect(info.width, 800);
       expect(info.height, 600);
+    });
+
+    test('reads the JPEG sample precision as the bit depth', () {
+      // Same field, different name in the two formats. Read from the frame
+      // header, one byte before the height the dimensions come from — so a
+      // wrong offset here would show up as wrong dimensions too.
+      expect(readImageInfo(jpeg(width: 8, height: 8))!.bitDepth, 8);
+      expect(readImageInfo(jpeg(width: 8, height: 8, depth: 12))!.bitDepth, 12);
     });
 
     test('returns null for anything else', () {

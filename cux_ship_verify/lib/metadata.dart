@@ -16,6 +16,14 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'store_image.dart';
+
+// [ImageInfo] and [readImageInfo] used to be declared here, and moved out when
+// the Play tree turned out to be reading them and consulting only the
+// dimensions. Re-exported rather than left behind an import, because that is
+// exactly the header this file's callers already reach for them through.
+export 'store_image.dart';
+
 /// Thrown for anything wrong with the tree. Always actionable: it names the
 /// file and says what would have to be true instead.
 class MetadataException implements Exception {
@@ -495,27 +503,20 @@ List<File> _loadScreenshots(
       throw MetadataException('$name is not a readable PNG or JPEG');
     }
 
-    // Apple rejects any transparency outright — "Images can't contain alpha
-    // channels or transparencies" — and every screen capture carries an alpha
-    // channel as a matter of course, even when every pixel in it is opaque.
-    // `xcrun simctl io screenshot` and the Android emulator both write RGBA.
-    // So this is the check most likely to fire and the least visible from
-    // looking at the image, and it is worth catching here because Apple
-    // catches it only after the file has been uploaded.
+    // Alpha and bit depth, from [appStoreImageRules] rather than written out
+    // here — the Play tree asks the same two questions of the same parser, and
+    // the version of this that *was* written out here is the reason the Play
+    // tree never asked the first of them.
     //
-    // The remedies are worth spelling out because the obvious one does not
-    // work: `sips` re-adds an alpha channel whenever it writes a PNG, whatever
-    // flags it is given, so a PNG round trip through it changes nothing.
-    if (image.hasAlpha) {
-      throw MetadataException(
-        '$name has an alpha channel; Apple rejects screenshots with '
-        'transparency.\n'
-        '  Fix every screenshot in the tree, in place:\n'
-        '    tool/flatten-screenshots.sh\n'
-        '  Pure Dart, nothing to install. Note that `sips` cannot do this '
-        'while staying\n'
-        '  PNG — it writes RGBA whatever flags it is given.',
-      );
+    // Both are worth catching offline for the same reason: Apple validates
+    // them after the file has been uploaded, one at a time. Alpha is the check
+    // most likely to fire and the least visible from looking at the image —
+    // every screen capture carries the channel as a matter of course, opaque
+    // or not, and `xcrun simctl io screenshot` and the Android emulator both
+    // write RGBA.
+    final encoding = imageEncodingProblem(image, appStoreImageRules);
+    if (encoding != null) {
+      throw MetadataException('$name $encoding');
     }
 
     if (!spec.accepts(image.width, image.height)) {
@@ -528,126 +529,6 @@ List<File> _loadScreenshots(
     }
   }
   return files;
-}
-
-/// What a screenshot has to satisfy, read straight out of the file header.
-class ImageInfo {
-  const ImageInfo({
-    required this.width,
-    required this.height,
-    required this.hasAlpha,
-  });
-
-  final int width;
-  final int height;
-  final bool hasAlpha;
-}
-
-int _be16(List<int> bytes, int offset) =>
-    (bytes[offset] << 8) | bytes[offset + 1];
-
-int _be32(List<int> bytes, int offset) =>
-    (bytes[offset] << 24) |
-    (bytes[offset + 1] << 16) |
-    (bytes[offset + 2] << 8) |
-    bytes[offset + 3];
-
-/// Dimensions and transparency of a PNG or JPEG, or null if [bytes] is neither.
-///
-/// Hand-rolled rather than a dependency, on the same reasoning as the copy in
-/// cux_ship_play: this reads a handful of integers out of a header, and
-/// `package:image` is a decoder for a dozen formats. The check it enables is
-/// worth having because Apple validates screenshots at submission — after they
-/// have already been uploaded one at a time.
-ImageInfo? readImageInfo(List<int> bytes) {
-  // PNG: IHDR is required to be the first chunk, so everything needed sits at
-  // a fixed offset — 8 signature, 4 length, 4 type, width, height, bit depth,
-  // colour type.
-  if (bytes.length >= 26 &&
-      bytes[0] == 0x89 &&
-      bytes[1] == 0x50 &&
-      bytes[2] == 0x4E &&
-      bytes[3] == 0x47) {
-    final colourType = bytes[25];
-    // 4 is greyscale+alpha and 6 is RGBA. A tRNS chunk makes types 0 and 2
-    // transparent too, so it counts as alpha even though the colour type
-    // alone does not say so.
-    final hasAlphaChannel = colourType == 4 || colourType == 6;
-    return ImageInfo(
-      width: _be32(bytes, 16),
-      height: _be32(bytes, 20),
-      hasAlpha: hasAlphaChannel || _hasTrnsChunk(bytes),
-    );
-  }
-
-  // JPEG: walk the marker segments to the start-of-frame, the only one that
-  // carries the dimensions. JPEG has no alpha channel at all.
-  if (bytes.length >= 4 && bytes[0] == 0xFF && bytes[1] == 0xD8) {
-    var i = 2;
-    while (i + 9 < bytes.length) {
-      if (bytes[i] != 0xFF) {
-        i++;
-        continue;
-      }
-      final marker = bytes[i + 1];
-      // Padding, and the standalone markers that carry no length field.
-      if (marker == 0xFF ||
-          marker == 0x01 ||
-          (marker >= 0xD0 && marker <= 0xD9)) {
-        i += 2;
-        continue;
-      }
-      // Every SOFn except the three that are not frame headers at all: DHT
-      // (C4), JPG (C8) and DAC (CC).
-      final isFrameHeader =
-          marker >= 0xC0 &&
-          marker <= 0xCF &&
-          marker != 0xC4 &&
-          marker != 0xC8 &&
-          marker != 0xCC;
-      if (isFrameHeader) {
-        return ImageInfo(
-          width: _be16(bytes, i + 7),
-          height: _be16(bytes, i + 5),
-          hasAlpha: false,
-        );
-      }
-      final length = _be16(bytes, i + 2);
-      // A segment shorter than its own length field means the file is corrupt;
-      // stop rather than loop forever on it.
-      if (length < 2) {
-        return null;
-      }
-      i += 2 + length;
-    }
-  }
-  return null;
-}
-
-/// Whether a PNG carries a tRNS chunk, which makes a palette or truecolour
-/// image transparent without changing its colour type.
-///
-/// Walks the chunk list rather than scanning for the bytes anywhere in the
-/// file, because "tRNS" can occur inside compressed image data by chance.
-bool _hasTrnsChunk(List<int> bytes) {
-  var offset = 8;
-  while (offset + 8 <= bytes.length) {
-    final length = _be32(bytes, offset);
-    if (length < 0) {
-      return false;
-    }
-    final type = String.fromCharCodes(bytes.sublist(offset + 4, offset + 8));
-    if (type == 'tRNS') {
-      return true;
-    }
-    if (type == 'IDAT' || type == 'IEND') {
-      // tRNS is required to appear before the image data, so there is no point
-      // walking the rest of a multi-megabyte file.
-      return false;
-    }
-    offset += 12 + length;
-  }
-  return false;
 }
 
 Map<String, Object?> _loadAgeRating(File file) {

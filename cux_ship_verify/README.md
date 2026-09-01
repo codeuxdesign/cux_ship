@@ -2,7 +2,8 @@
 
 Catches what the App Store and Google Play would otherwise reject **after** you
 have uploaded — a release note over the cap, a screenshot carrying an alpha
-channel, a missing iPad set, a listing field a few characters too long.
+channel or sixteen bits per channel, a missing iPad set, a listing field a few
+characters too long.
 
 Runs offline, needs no credentials, and has **no dependencies at all**. That
 last part is the point: this belongs in your `dev_dependencies` so the checks

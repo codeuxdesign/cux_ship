@@ -6,10 +6,22 @@ import 'package:test/test.dart';
 
 /// A minimal valid PNG of the given size, built by hand.
 ///
-/// `readImageInfo` reads the IHDR and nothing else, so a real encoder is not
+/// `readImageInfo` reads the IHDR and the chunk list, so a real encoder is not
 /// needed — and pulling one in would cost this package the zero dependencies
 /// that are the reason it can live in a consumer's dev_dependencies.
-List<int> _png(int width, int height) {
+///
+/// [colourType], [depth] and [trns] exist so the fixtures can be the genuinely
+/// broken states rather than a mocked `ImageInfo`: a colour-type-6 PNG really
+/// does carry an alpha channel, and a colour-type-2 PNG with a tRNS chunk is
+/// transparent while its colour type says otherwise — which is the case a
+/// naive check misses.
+List<int> _png(
+  int width,
+  int height, {
+  int colourType = 2, // truecolour, no alpha
+  int depth = 8, // bits per channel; 16 makes this a 48-bit PNG
+  bool trns = false,
+}) {
   void be32(List<int> out, int value) => out.addAll([
     (value >> 24) & 0xFF,
     (value >> 16) & 0xFF,
@@ -21,9 +33,29 @@ List<int> _png(int width, int height) {
   bytes.addAll('IHDR'.codeUnits);
   be32(bytes, width);
   be32(bytes, height);
-  bytes.addAll([8, 2, 0, 0, 0]); // 8-bit RGB, no alpha
+  bytes.addAll([depth, colourType, 0, 0, 0]);
+  be32(bytes, 0);
+  if (trns) {
+    be32(bytes, 2);
+    bytes.addAll('tRNS'.codeUnits);
+    bytes.addAll([0, 0]);
+    be32(bytes, 0);
+  }
+  be32(bytes, 0);
+  bytes.addAll('IEND'.codeUnits);
   be32(bytes, 0);
   return bytes;
+}
+
+/// Replaces one already-written image in a tree with [bytes].
+///
+/// The trees come out of [_tree], which knows about sizes and nothing else.
+/// Overwriting afterwards keeps every existing call site unchanged rather than
+/// widening its record type for three fields only these cases use.
+void _replaceImage(Directory dir, String locale, String type, List<int> bytes) {
+  File(
+    '${dir.path}/listings/$locale/images/$type/00.png',
+  ).writeAsBytesSync(bytes);
 }
 
 /// Builds a Play tree and returns its path.
@@ -113,6 +145,109 @@ void main() {
         },
       );
       expect(checkPlayTree(dir.path), isEmpty);
+    });
+  });
+
+  // Play states the same rule Apple does — "JPEG or 24-bit PNG (no alpha)" —
+  // for every slot but the icon, and this tree used to check neither half of
+  // it. `readImageInfo` was called here for its dimensions, and the `hasAlpha`
+  // beside them, already computed and already enforced on the App Store path,
+  // was dropped. So a listing Play refuses during ingestion passed offline.
+  group('image encoding', () {
+    Directory fullTree() => _tree(
+      locales: {'en-US': _text},
+      images: {'en-US': _fullImages},
+      defaultLanguage: 'en-US',
+    );
+
+    test('an alpha channel in a screenshot is refused', () {
+      final dir = fullTree();
+      _replaceImage(
+        dir,
+        'en-US',
+        'phoneScreenshots',
+        _png(1080, 2424, colourType: 6),
+      );
+      final problems = checkPlayTree(dir.path);
+      expect(problems, hasLength(1));
+      expect(problems.single.message, contains('alpha channel'));
+      expect(problems.single.message, contains('Play refuses transparency'));
+      expect(
+        problems.single.message,
+        contains('screenshots flatten'),
+        reason: 'the remedy this repository already ships',
+      );
+    });
+
+    test('a tRNS chunk counts as transparency too', () {
+      // The case the colour type alone calls opaque, and the one a naive
+      // implementation misses.
+      final dir = fullTree();
+      _replaceImage(
+        dir,
+        'en-US',
+        'phoneScreenshots',
+        _png(1080, 2424, trns: true),
+      );
+      final problems = checkPlayTree(dir.path);
+      expect(problems, hasLength(1));
+      expect(problems.single.message, contains('alpha channel'));
+    });
+
+    test('16 bits per channel in a screenshot is refused', () {
+      // A 48-bit PNG where Play asks for 24-bit. Every dimension check here
+      // accepts it, which is how one reaches a store.
+      final dir = fullTree();
+      _replaceImage(
+        dir,
+        'en-US',
+        'phoneScreenshots',
+        _png(1080, 2424, depth: 16),
+      );
+      final problems = checkPlayTree(dir.path);
+      expect(problems, hasLength(1));
+      expect(problems.single.message, contains('16 bits per channel'));
+      expect(problems.single.message, contains('24-bit PNG'));
+    });
+
+    test('the feature graphic is refused an alpha channel as well', () {
+      // Play states the screenshot rule verbatim for this slot too, so the
+      // check is not screenshot-shaped.
+      final dir = fullTree();
+      _replaceImage(
+        dir,
+        'en-US',
+        'featureGraphic',
+        _png(1024, 500, colourType: 6),
+      );
+      final problems = checkPlayTree(dir.path);
+      expect(problems, hasLength(1));
+      expect(problems.single.message, contains('alpha channel'));
+    });
+
+    test('the icon may carry an alpha channel', () {
+      // The one slot in either store that *asks* for one: Play specifies the
+      // icon as "32-bit PNG (with alpha)". A check written as "no image has
+      // alpha" would refuse the icon Play requires, which is why the rule is a
+      // property of the slot rather than of the tree.
+      final dir = fullTree();
+      _replaceImage(dir, 'en-US', 'icon', _png(512, 512, colourType: 6));
+      expect(checkPlayTree(dir.path), isEmpty);
+    });
+
+    test('the icon is still 8 bits per channel', () {
+      // 32-bit means four 8-bit channels, so the alpha exception does not
+      // carry a depth exception with it.
+      final dir = fullTree();
+      _replaceImage(
+        dir,
+        'en-US',
+        'icon',
+        _png(512, 512, colourType: 6, depth: 16),
+      );
+      final problems = checkPlayTree(dir.path);
+      expect(problems, hasLength(1));
+      expect(problems.single.message, contains('16 bits per channel'));
     });
   });
 
