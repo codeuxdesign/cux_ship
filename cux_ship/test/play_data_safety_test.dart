@@ -159,12 +159,26 @@ void main() {
       // declaration sent`: every upload here dies at the credential before any
       // send could run, so that assertion could not fail — see the top of this
       // file.
+      // And refused with somewhere to go. `Could not find an option named` is
+      // what a parser says about a typo; a flag that was deliberately deleted
+      // is a different event, and the first consumer to upgrade read the
+      // generic version as cux_ship being broken rather than as the flag
+      // having moved.
       for (final flag in ['--data-safety=x.csv', '--send-data-safety']) {
+        final output = _run(repo, [flag]);
         expect(
-          _run(repo, [flag]),
-          contains('Could not find an option named'),
+          output,
+          contains('was removed'),
           reason: '$flag must not be silently accepted',
         );
+        expect(
+          output,
+          contains('cux_ship play data-safety'),
+          reason: '$flag must say where it went',
+        );
+        // The refusal is the whole run: naming the replacement must not read
+        // as an offer to carry on without the flag.
+        expect(output, isNot(contains('About to')));
       }
     });
 

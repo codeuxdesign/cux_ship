@@ -1109,6 +1109,23 @@ ArgParser buildPlayParser(PlayCommand cmd) {
           'metadata',
           help: 'Directory of store listing text and images to publish.',
         )
+        // **Retired, and declared only so the refusal can say where they
+        // went.** To a parser a deleted option and a typo are the same event:
+        // it answers `Could not find an option named "--data-safety"` and
+        // dumps the usage block, which reads as a broken tool rather than a
+        // moved one. The first consumer to upgrade said exactly that — the
+        // failure landed after their script's own progress output, the message
+        // named the flag but not its replacement, and the one line that
+        // mattered sat between twenty flag descriptions and had to be grepped
+        // out of a terminal by somebody who already knew what they were
+        // looking for.
+        //
+        // Hidden, so they are absent from the usage they are not part of, and
+        // refused in [runPlay] rather than accepted here. The break stays as
+        // loud as it was — same exit code, same refusal to run — and stops
+        // being a puzzle.
+        ..addOption('data-safety', hide: true)
+        ..addFlag('send-data-safety', hide: true, negatable: false)
         ..addMultiOption(
           'delete-locale',
           help:
@@ -1206,6 +1223,31 @@ Future<void> runPlay(
   bool flag(String name) => args.options.contains(name) && args.flag(name);
   List<String> multi(String name) =>
       args.options.contains(name) ? args.multiOption(name) : const [];
+
+  // First, ahead of even the package name: somebody running the old command
+  // is owed the sentence "it moved to here", not a different complaint about
+  // a run that was never going to work.
+  final retired = opt('data-safety') != null
+      ? '--data-safety'
+      : (flag('send-data-safety') ? '--send-data-safety' : null);
+  if (retired != null) {
+    _fail(
+      '$retired was removed. Sending the data safety declaration is its own '
+      'command now:\n'
+      '\n'
+      '      cux_ship play data-safety\n'
+      '\n'
+      '  An upload still checks store/play/data-safety.csv on every run and '
+      'no longer\n'
+      '  sends it. Play files every send as a change awaiting review whether '
+      'or not\n'
+      '  an answer moved, and offers no way to read back what it holds, so '
+      'sending is\n'
+      '  asked for rather than done on a cadence. Drop $retired from this '
+      'run, and\n'
+      '  run the command above when you edit the CSV.',
+    );
+  }
 
   final packageName = opt('package') ?? defaults.packageName;
   if (packageName == null) {
