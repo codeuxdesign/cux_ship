@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.10.0
 
 **The Play tree is checked for the alpha channel it was already measuring.**
 `readImageInfo` has computed `hasAlpha` since the App Store tree was first
@@ -50,12 +50,20 @@ accepted, and `ImageInfo` carries `format` so the check can tell. `bitDepth` is
 still read for a JPEG, because it is what the file says.
 
 **`ImageInfo` gained two required fields**, `bitDepth` and `format`, so a
-caller that constructed one itself no longer compiles. Nothing here or in
-`cux_ship` does — it is what `readImageInfo` returns, not something a consumer
-builds — but that is a guess about consumers rather than a fact, and it is a
-required parameter on a public constructor. Flagged for whoever picks the
-version: strictly it is breaking, and the alternative was defaulting the fields,
-which would let a caller construct an `ImageInfo` that lies about the file.
+caller that constructed one itself no longer compiles. **Strictly that is
+breaking, and this is a minor release anyway** — said plainly rather than left
+for a reader to notice.
+
+The reasoning: `ImageInfo` is what `readImageInfo` returns, not something a
+consumer builds, and nothing here or in `cux_ship` constructs one. The
+exception is a test that mocks one, which is the case this release argues
+against anyway — the fixtures here are real PNG and JPEG headers precisely
+because a mocked `ImageInfo` cannot be wrong in the way a real file is. If that
+breaks a suite, add the two fields; there is no behaviour to migrate.
+
+Defaulting them was the alternative and is worse: a default lets a caller
+construct an `ImageInfo` that lies about the file it claims to describe, which
+is the failure this whole release is about.
 
 **The stores' published rules, the three decisions and the research under each
 are in `docs/design/store-image-rules.md`** — including what is deliberately

@@ -60,7 +60,7 @@ dependencies:
   # constraint names a version that does not exist on pub.dev yet, and CI's
   # consumer probe goes red every release. Raise it only when something here
   # actually needs a newer cux_ship_verify.
-  cux_ship_verify: ^1.9.0
+  cux_ship_verify: ^1.10.0
   # ES256 over the .p8 private key. App Store Connect accepts nothing else, and
   # package:crypto has no ECDSA, so this or pointycastle-by-hand were the
   # options.
