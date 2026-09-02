@@ -123,6 +123,17 @@ declaration nobody had touched in months. The line it printed, `data safety
 declaration updated`, said the same thing on the run that changed something and
 the run that changed nothing, which is why this took so long to notice.
 
+> **Added after publication, 2 September 2026.** This shipped with the fix
+> unverified in the only way that counts, and it is now verified. A send that
+> does not happen leaves no trace: no output distinguishes "it stopped sending"
+> from "it never checked", so every run against a real store during development
+> was consistent with both. Only Play Console's App content → Data safety page
+> tells them apart, and only a person can read it. How It Went's build 141 went
+> to internal under this behaviour and no new pending change appeared. One
+> upload, one reading, the negative result intended. Recorded here rather than
+> folded into the text above, because 4.0.0's published tarball says what it
+> said on the day and this note is a fact from after it.
+
 Nothing can send it only when it differs. The listing images can: each carries
 a sha256, so a publish says `4 phoneScreenshots unchanged` and sends nothing.
 `applications.dataSafety` is write-only — v3 has no GET for the labels and the
