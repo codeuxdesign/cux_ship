@@ -134,8 +134,10 @@ ImageInfo? readImageInfo(List<int> bytes) {
           // The frame header's sample precision, which sits between the
           // segment length and the height — the same byte the dimensions are
           // read relative to, so this needs no extra bounds check. 8 for the
-          // baseline SOF0 every capture and export writes; 12 is legal only
-          // under SOF1 and SOF2, and 2 to 16 under the lossless SOF3.
+          // baseline SOF0 every capture and export writes; 12 is legal under
+          // the extended sequential and progressive frames (SOF1, SOF2 and
+          // their arithmetic and hierarchical variants), and 2 to 16 under
+          // the lossless ones.
           bitDepth: bytes[i + 4],
           format: ImageFormat.jpeg,
         );
@@ -235,7 +237,8 @@ const appStoreImageRules = StoreImageRules(
 );
 
 /// Play, for screenshots, the feature graphic and the TV banner — every slot
-/// but the icon.
+/// this package checks but the icon. (Play's Android XR slot says only "PNG or
+/// JPEG"; nothing here uploads to it.)
 const playImageRules = StoreImageRules(
   store: 'Play',
   alphaRule: '"JPEG or 24-bit PNG (no alpha)"',
@@ -289,10 +292,11 @@ String? imageEncodingProblem(ImageInfo image, StoreImageRules rules) {
   // the same shape as the greyscale-with-alpha gate found in review.
   //
   // A >8-bit JPEG is legal and essentially unproducible: baseline SOF0 is
-  // 8-bit by definition, 12 needs SOF1 or SOF2, and reading one needs a
-  // libjpeg built `--with-12bit`, which libjpeg-turbo — Chrome, Skia, most of
-  // Android — is not. So it is a rule with no observed failure and no working
-  // remedy. Measured and argued in docs/design/store-image-rules.md.
+  // 8-bit by definition, 12 needs an extended sequential or progressive frame,
+  // and reading one needs the 12-bit decoder entry points, which Blink and
+  // everything else on libjpeg's 8-bit API do not call. So it is a rule with
+  // no observed failure and no working remedy. Measured and argued in
+  // docs/design/store-image-rules.md.
   if (image.format == ImageFormat.png && image.bitDepth > 8) {
     return 'is ${image.bitDepth} bits per channel; ${rules.store} takes 8 — '
         '${rules.depthRule}.\n'

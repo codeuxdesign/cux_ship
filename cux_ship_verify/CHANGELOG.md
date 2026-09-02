@@ -8,9 +8,9 @@ checked, and `checkPlayTree` called it, used `width` and `height` for the
 320/3840 edge bounds, and dropped the rest. So a Play listing whose screenshots
 carried transparency passed every offline check here and was refused during
 ingestion — after the upload and after the processing wait. Play states the
-same rule Apple does, *"JPEG or 24-bit PNG (no alpha)"*, for every slot but the
-app icon, which is specified as *"32-bit PNG (with alpha)"* and is the one image
-in either store that wants one.
+same rule Apple does, *"JPEG or 24-bit PNG (no alpha)"*, for every slot this
+package checks but the app icon, which is specified as *"32-bit PNG (with
+alpha)"* and is the one image in either store that wants one.
 
 That the capability was present, correct, and enforced on one of two paths is
 the part worth naming. It is not a missing check; it is a check written at a
@@ -43,11 +43,19 @@ observed refusing was a PNG; and `screenshots flatten` cannot open a JPEG —
 it throws, and through the CLI it walks `.png`, so it would skip the file, exit
 0, and leave the refusal standing. Applied to a JPEG the check quoted Play for
 a rule Play does not state and named a remedy that loops. A >8-bit JPEG is
-legal under SOF1 and SOF2 and essentially unproducible — baseline SOF0 is 8-bit
-by definition, and reading 12 needs a libjpeg built `--with-12bit`, which
-libjpeg-turbo is not — so it is accepted, and `ImageInfo` carries `format` so
-the check can tell. `bitDepth` is still read for a JPEG, because it is what the
-file says.
+legal under the extended sequential and progressive frames and essentially
+unproducible — baseline SOF0 is 8-bit by definition, and reading 12 needs
+libjpeg's separate 12-bit entry points, which browsers do not call — so it is
+accepted, and `ImageInfo` carries `format` so the check can tell. `bitDepth` is
+still read for a JPEG, because it is what the file says.
+
+**`ImageInfo` gained two required fields**, `bitDepth` and `format`, so a
+caller that constructed one itself no longer compiles. Nothing here or in
+`cux_ship` does — it is what `readImageInfo` returns, not something a consumer
+builds — but that is a guess about consumers rather than a fact, and it is a
+required parameter on a public constructor. Flagged for whoever picks the
+version: strictly it is breaking, and the alternative was defaulting the fields,
+which would let a caller construct an `ImageInfo` that lies about the file.
 
 **The stores' published rules, the three decisions and the research under each
 are in `docs/design/store-image-rules.md`** — including what is deliberately

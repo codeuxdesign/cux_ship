@@ -47,9 +47,9 @@ List<int> be32(int value) => [
 ///
 /// [marker] is the SOFn, and it is a parameter because sample precision is not
 /// free of it: SOF0 is baseline and 8-bit by definition, and 12 bits is legal
-/// only under SOF1 (extended sequential) or SOF2 (progressive). A 12-bit SOF0
-/// fixture would be a file no encoder can produce, so the one case that needs
-/// depth 12 passes 0xC1 with it.
+/// only under an extended sequential or progressive frame — SOF1 or SOF2 in
+/// the Huffman-coded case. A 12-bit SOF0 fixture would be a file no encoder can
+/// produce, so the cases that need depth 12 pass 0xC1 with it.
 Uint8List jpeg({
   required int width,
   required int height,
@@ -525,6 +525,25 @@ $reviewNotesMarker
 
     test('returns null for anything else', () {
       expect(readImageInfo([0, 1, 2, 3]), isNull);
+    });
+
+    test('the depth rule is PNG-only under either store\'s rules', () {
+      // Pinned on the function rather than through one tree, because the
+      // loader case above exercises Apple's rules only and the Play tree and
+      // uploader share this call. A PNG-only gate that held for one
+      // `StoreImageRules` and not the other would pass that case.
+      final deepJpeg = readImageInfo(
+        jpeg(width: 8, height: 8, depth: 12, marker: 0xC1),
+      )!;
+      final deepPng = readImageInfo(png(width: 1, height: 1, depth: 16))!;
+      for (final rules in [appStoreImageRules, playImageRules]) {
+        expect(imageEncodingProblem(deepJpeg, rules), isNull);
+        expect(
+          imageEncodingProblem(deepPng, rules),
+          contains('16 bits per channel'),
+          reason: 'the control: the same depth in a PNG is still refused',
+        );
+      }
     });
   });
 }

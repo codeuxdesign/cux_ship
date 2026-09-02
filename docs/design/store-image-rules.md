@@ -4,6 +4,12 @@ Status: **implemented**, in `cux_ship_verify/lib/store_image.dart`. This is the
 research and the decisions behind `imageEncodingProblem`, which both store trees
 and the Play uploader call.
 
+A note on the table below: it records what the page states per slot, and the
+*Screenshots* requirement covers several device types at once. Where a claim
+here could not be pinned to a sentence with certainty, it is written to be true
+under either reading rather than asserting the page's structure — a provenance
+document that guesses is worse than one that hedges.
+
 It exists because these are the checks most likely to be argued with. Each one
 refuses a file somebody has committed, offline, on a claim about what a store
 would do — and the first project that legitimately disagrees needs to find the
@@ -22,8 +28,9 @@ paraphrase is where a rule quietly grows.
 | App icon | *"32-bit PNG (with alpha)"*, 512x512 |
 | Feature graphic | *"JPEG or 24-bit PNG (no alpha)"*, 1024x500 |
 | TV banner | *"JPEG or 24-bit PNG (no alpha)"*, 1280x720 |
-| Screenshots | *"JPEG or 24-bit PNG (no alpha)"*, min 320px, max 3840px |
-| Wear OS / TV / Automotive screenshots | *"JPEG or 24-bit PNG (no alpha)"* |
+| Screenshots — phone, tablet, Chromebook, Android TV, Wear OS | *"JPEG or 24-bit PNG (no alpha)"*, min 320px, max 3840px — the *Screenshots* requirement, which all of these sit under |
+| Android Automotive OS screenshots | dimensions only; no format sentence of its own |
+| Android XR screenshots | *"PNG or JPEG, up to 8 MB each"* — no bit depth and no alpha stated; not a slot this package uploads |
 
 [Apple, *Screenshot specifications*](https://developer.apple.com/help/app-store-connect/reference/screenshot-specifications/):
 `.jpg`, `.jpeg` or `.png`; *"Images can't include alpha channels or
@@ -110,13 +117,20 @@ Legal, and essentially unproducible by accident:
 
 - **SOF0 (baseline) is 8-bit by definition.** Every camera, screen capture and
   export writes SOF0.
-- 12-bit is legal only under **SOF1** (extended sequential) or **SOF2**
-  (progressive); the lossless **SOF3** allows 2 to 16, and is a DICOM
-  medical-imaging format, not a screenshot.
-- Reading one needs a libjpeg built `--with-12bit`, which **libjpeg-turbo — what
-  Chrome, Skia and most of Android use — is not by default**. Browsers do not
-  render it. libjpeg cannot support 8-bit and 12-bit simultaneously, because the
-  bits per component is compiled in.
+- 12-bit is legal under the extended sequential and progressive DCT frames —
+  **SOF1** and **SOF2**, and their arithmetic-coded and hierarchical variants
+  SOF5, 6, 9, 10, 13 and 14 (T.81 Table B.1) — and never under SOF0. The
+  lossless frames (**SOF3**, 7, 11, 15) allow 2 to 16, and lossless JPEG is a
+  DICOM medical-imaging format, not a screenshot.
+- Reading one needs a decoder that has it. Historically libjpeg's precision
+  was compiled in — one precision per build, `--with-12bit` / `WITH_12BIT` —
+  and the 8-bit build every browser shipped could not open one. libjpeg-turbo
+  3.0 supports 8, 12 and 16 bits in one build (*"We support 8-bit and 12-bit
+  data precision in lossy mode and 2-bit through 16-bit data precision in
+  lossless mode"*, libjpeg.txt), but only through separate entry points —
+  `jpeg12_read_scanlines()` for 9 to 12 bits — and Blink's JPEG decoder calls
+  the 8-bit `jpeg_read_scanlines()`. So Chrome still does not render one, and
+  neither does anything else built on the 8-bit API.
 
 So a >8-bit JPEG has no observed store refusal, no working remedy in this
 repository, and no pipeline that emits one. It is accepted, and

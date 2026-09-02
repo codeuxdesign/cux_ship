@@ -914,9 +914,9 @@ black rectangle.
 It sits at the top level rather than under `appstore` because stripping an alpha
 channel is an operation on an image, and because both stores refuse one — Apple
 says *"Images can't include alpha channels or transparencies"* and Play asks for
-*"JPEG or 24-bit PNG (no alpha)"* in every slot but the app icon, which is the
-one image either store wants an alpha channel in. `--check` reports what would
-change and exits 2 without rewriting, for CI.
+*"JPEG or 24-bit PNG (no alpha)"* in every slot this tool uploads but the app
+icon, which is the one image either store wants an alpha channel in. `--check`
+reports what would change and exits 2 without rewriting, for CI.
 
 It is deliberately a separate step from publishing: both upload paths *refuse*
 an alpha channel rather than silently fixing one, so the corrected file is the
