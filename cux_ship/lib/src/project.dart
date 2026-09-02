@@ -371,6 +371,25 @@ class ProjectContext {
     return {platform ?? 'ios': appStoreMetadata!};
   }
 
+  /// The App Store metadata tree an upload or promote publishes for
+  /// [platform] when nothing names one.
+  ///
+  /// [appStoreTrees] narrowed to one platform, falling back to the flat
+  /// directory. The publish path used to default to [appStoreMetadata] alone,
+  /// which in a split repository is the parent — a README and two subtrees,
+  /// nothing the loader recognizes — so every `appstore promote` there had to
+  /// pass `--metadata store/appstore/<platform>` by hand while `verify` was
+  /// already resolving the same layout correctly. Two answers to "which tree
+  /// is this platform's" is how one of them stays wrong.
+  ///
+  /// **A split layout missing this platform still yields the parent**, not
+  /// nothing. Nothing would publish the build without a listing and say
+  /// nothing about it; the parent is refused by the loader, naming the path,
+  /// which is what happened before this method existed and is the louder
+  /// failure. `--no-metadata` is the way to say a listing is not wanted.
+  String? appStoreTreeFor(String platform) =>
+      appStoreTrees(platform: platform)[platform] ?? appStoreMetadata;
+
   /// `store/play`, when there is one.
   final String? playMetadata;
 

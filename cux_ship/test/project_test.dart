@@ -341,6 +341,43 @@ void main() {
       expect(read().appStoreTrees(), isEmpty);
       expect(read().appStoreTrees(platform: 'ios'), isEmpty);
     });
+
+    group('the publish default', () {
+      test('names the platform subtree in a split layout', () {
+        // What every Apple promote in a split repository had to pass by hand.
+        split();
+
+        expect(read().appStoreTreeFor('ios'), endsWith('store/appstore/ios'));
+        expect(
+          read().appStoreTreeFor('macos'),
+          endsWith('store/appstore/macos'),
+        );
+      });
+
+      test('is the flat tree in a flat layout, for either platform', () {
+        // The common case, and the one that must not move.
+        write('store/appstore/info/primary_category.txt', 'SPORTS');
+
+        expect(read().appStoreTreeFor('ios'), endsWith('store/appstore'));
+        expect(read().appStoreTreeFor('macos'), endsWith('store/appstore'));
+        expect(
+          read().appStoreTreeFor('macos'),
+          isNot(endsWith('store/appstore/macos')),
+        );
+      });
+
+      test('is the parent when a split layout lacks this platform', () {
+        // Refused by the loader, naming the path, rather than a silent
+        // listing-less publish — the behaviour before the split was honoured.
+        write('store/appstore/ios/info/primary_category.txt', 'SPORTS');
+
+        expect(read().appStoreTreeFor('macos'), endsWith('store/appstore'));
+      });
+
+      test('is nothing when there is no store tree at all', () {
+        expect(read().appStoreTreeFor('ios'), isNull);
+      });
+    });
   });
 
   group('--app-dir', () {

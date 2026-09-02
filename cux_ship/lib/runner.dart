@@ -397,7 +397,9 @@ class _AscSubcommand extends Command<void> {
         artifact: manifest?.artifactPath,
         buildNumber: manifest?.buildNumber,
         changelog: project.changelog,
-        metadata: project.appStoreMetadata,
+        // Per platform, because `store/appstore` is the parent of two trees in
+        // a split repository and a tree in a flat one — see appStoreTreeFor.
+        metadata: project.appStoreTreeFor(platform),
         // Why the requirement could not be derived, when nothing declared one
         // either. Without it this path falls back to requiring nothing and
         // says nothing — which is the silent-pass shape the release removes,

@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+**An App Store upload or promote defaults to the platform's tree in a split
+`store/appstore/{ios,macos}` layout.** The publish path defaulted to
+`store/appstore` alone, which in that layout is the parent — a README and two
+subtrees, nothing the loader recognizes — so every Apple promote in the
+repository that has the layout passed `--metadata store/appstore/<platform>`
+by hand, while `verify` had been resolving the same layout correctly through
+`appStoreTrees` since the layout was introduced. Two answers to "which tree is
+this platform's" is how one of them stays wrong. Found by an audit of that
+repository's release scripts, as a workaround that only existed because of the
+tool. A flat layout is unchanged; an explicit `--metadata` still wins; a split
+layout missing the platform still yields the parent, which the loader refuses
+naming the path, rather than a silent listing-less publish.
+
 ## 4.0.0
 
 **The Play uploader checks an image's alpha channel and bit depth, and stops
