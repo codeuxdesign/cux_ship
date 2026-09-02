@@ -2156,8 +2156,11 @@ class VerifyCommand extends Command<void> {
     // coverage. Every artifact says so itself.
     for (final line in [
       if (changelog != null) 'changelog  $changelog',
+      // What was checked, not what was found: this line prints on the run
+      // that goes on to report the section missing, and once read "has its
+      // section" there.
       if (changelog != null && project.versionName != null) ...[
-        'version    ${project.versionName} (pubspec.yaml) has its section',
+        'section    ${project.versionName} (pubspec.yaml)',
       ],
       for (final tree in appStoreTrees.entries) ...[
         'appstore   ${tree.value} (${tree.key})',

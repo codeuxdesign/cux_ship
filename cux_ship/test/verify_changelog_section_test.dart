@@ -57,7 +57,17 @@ void main() {
 
     final result = _verify([]);
     expect(result.exitCode, 0, reason: '${result.stdout}${result.stderr}');
-    expect('${result.stdout}', contains('version    1.0.1'));
+    expect('${result.stdout}', contains('section    1.0.1 (pubspec.yaml)'));
+  });
+
+  test('the summary names the check, not a result it did not get', () {
+    _write('pubspec.yaml', 'name: consumer\nversion: 1.0.1+2\n');
+    _write('CHANGELOG.md', _shipped);
+
+    final result = _verify([]);
+    expect(result.exitCode, 1, reason: '${result.stdout}${result.stderr}');
+    expect('${result.stdout}', contains('section    1.0.1 (pubspec.yaml)'));
+    expect('${result.stdout}', isNot(contains('has its section')));
   });
 
   test('an empty section is enough', () {
@@ -101,6 +111,6 @@ void main() {
 
     final result = _verify([]);
     expect(result.exitCode, 0, reason: '${result.stdout}${result.stderr}');
-    expect('${result.stdout}', isNot(contains('version    ')));
+    expect('${result.stdout}', isNot(contains('section    ')));
   });
 }
