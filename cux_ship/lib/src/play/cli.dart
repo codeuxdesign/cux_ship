@@ -409,10 +409,17 @@ class _ImageSpec {
     this.exactHeight,
     this.minSide,
     this.maxSide,
+    this.imageRules = playImageRules,
   });
 
   final int minCount;
   final int maxCount;
+
+  /// The encoding rules for the slot — alpha and bit depth, from
+  /// cux_ship_verify so this and `checkPlayTree` cannot drift apart. The icon
+  /// overrides it: Play asks that one for "32-bit PNG (with alpha)" and
+  /// refuses an alpha channel everywhere else.
+  final StoreImageRules imageRules;
 
   /// Set for the fixed-size slots, where Play takes one exact resolution and
   /// rejects everything else.
@@ -428,7 +435,13 @@ class _ImageSpec {
 /// the directory names in the metadata tree — so a typo is caught by the map
 /// lookup rather than by Play.
 const _imageSpecs = <String, _ImageSpec>{
-  'icon': _ImageSpec(1, 1, exactWidth: 512, exactHeight: 512),
+  'icon': _ImageSpec(
+    1,
+    1,
+    exactWidth: 512,
+    exactHeight: 512,
+    imageRules: playIconImageRules,
+  ),
   'featureGraphic': _ImageSpec(1, 1, exactWidth: 1024, exactHeight: 500),
   'tvBanner': _ImageSpec(1, 1, exactWidth: 1280, exactHeight: 720),
   'phoneScreenshots': _ImageSpec(2, 8, minSide: 320, maxSide: 3840),
@@ -607,17 +620,35 @@ List<File> _loadImages(
     final name = '$locale/images/$type/${_basename(f.path)}';
     // Only the header is needed, but a screenshot is a few MB at most and
     // reading it whole saves the parser from having to handle a short buffer.
-    final size = _imageSize(f.readAsBytesSync());
-    if (size == null) {
+    final image = readImageInfo(f.readAsBytesSync());
+    if (image == null) {
       _fail('$name is not a readable PNG or JPEG');
+    }
+
+    // **The uploader re-checks rather than trusting `verify`, and the reason
+    // is that `verify` is not on this path.** `checkPlayTree` does run in
+    // `runPlay`, and it covers exactly this — but only when the repository
+    // declares listing requirements, because that is what the call is guarded
+    // on. A project with no `play:` block in `.cux-ship.yaml` uploads with
+    // that check skipped entirely, and it is the same project least likely to
+    // have run `cux_ship verify` first.
+    //
+    // Which is also why this reads the rules from cux_ship_verify instead of
+    // restating them. The parser under it used to be a second hand-rolled copy
+    // that read dimensions and nothing else; a re-check that can disagree with
+    // the check is worth less than no re-check, because it makes a green
+    // `verify` mean less than it says.
+    final encoding = imageEncodingProblem(image, spec.imageRules);
+    if (encoding != null) {
+      _fail('$name $encoding');
     }
 
     final exactWidth = spec.exactWidth;
     final exactHeight = spec.exactHeight;
     if (exactWidth != null && exactHeight != null) {
-      if (size.width != exactWidth || size.height != exactHeight) {
+      if (image.width != exactWidth || image.height != exactHeight) {
         _fail(
-          '$name is ${size.width}x${size.height}; Play requires exactly '
+          '$name is ${image.width}x${image.height}; Play requires exactly '
           '${exactWidth}x$exactHeight for $type',
         );
       }
@@ -626,12 +657,12 @@ List<File> _loadImages(
     final minSide = spec.minSide;
     final maxSide = spec.maxSide;
     if (minSide != null && maxSide != null) {
-      final shortest = size.width < size.height ? size.width : size.height;
-      final longest = size.width < size.height ? size.height : size.width;
+      final shortest = image.width < image.height ? image.width : image.height;
+      final longest = image.width < image.height ? image.height : image.width;
       if (shortest < minSide || longest > maxSide) {
         _fail(
-          '$name is ${size.width}x${size.height}; Play requires every side of '
-          'a screenshot between $minSide and $maxSide pixels',
+          '$name is ${image.width}x${image.height}; Play requires every side '
+          'of a screenshot between $minSide and $maxSide pixels',
         );
       }
     }
@@ -639,67 +670,12 @@ List<File> _loadImages(
   return files;
 }
 
-int _be16(List<int> b, int o) => (b[o] << 8) | b[o + 1];
-
-int _be32(List<int> b, int o) =>
-    (b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3];
-
-/// Dimensions of a PNG or JPEG, or null if [bytes] is neither.
-///
-/// Hand-rolled rather than a dependency: this reads two integers out of a
-/// header, and `package:image` is a decoder for a dozen formats. The check it
-/// enables is worth having because Play validates image sizes at commit —
-/// after the bundle has already gone up.
-({int width, int height})? _imageSize(List<int> bytes) {
-  // PNG: IHDR is required to be the first chunk, so the dimensions sit at a
-  // fixed offset — 8 signature, 4 length, 4 type, then width and height.
-  if (bytes.length >= 24 &&
-      bytes[0] == 0x89 &&
-      bytes[1] == 0x50 &&
-      bytes[2] == 0x4E &&
-      bytes[3] == 0x47) {
-    return (width: _be32(bytes, 16), height: _be32(bytes, 20));
-  }
-
-  // JPEG: walk the marker segments to the start-of-frame, the only one that
-  // carries the dimensions.
-  if (bytes.length >= 4 && bytes[0] == 0xFF && bytes[1] == 0xD8) {
-    var i = 2;
-    while (i + 9 < bytes.length) {
-      if (bytes[i] != 0xFF) {
-        i++;
-        continue;
-      }
-      final marker = bytes[i + 1];
-      // Padding, and the standalone markers that carry no length field.
-      if (marker == 0xFF ||
-          marker == 0x01 ||
-          (marker >= 0xD0 && marker <= 0xD9)) {
-        i += 2;
-        continue;
-      }
-      // Every SOFn except the three that are not frame headers at all: DHT
-      // (C4), JPG (C8) and DAC (CC).
-      final isFrameHeader =
-          marker >= 0xC0 &&
-          marker <= 0xCF &&
-          marker != 0xC4 &&
-          marker != 0xC8 &&
-          marker != 0xCC;
-      if (isFrameHeader) {
-        return (width: _be16(bytes, i + 7), height: _be16(bytes, i + 5));
-      }
-      final length = _be16(bytes, i + 2);
-      // A segment shorter than its own length field means the file is corrupt;
-      // stop rather than loop forever on it.
-      if (length < 2) {
-        return null;
-      }
-      i += 2 + length;
-    }
-  }
-  return null;
-}
+// The second hand-rolled PNG/JPEG header parser used to live here, reading
+// dimensions and nothing else. It is gone: `readImageInfo` in cux_ship_verify
+// reads the same header and also answers the two questions this path was not
+// asking. Two parsers meant two answers to keep in step, and the one that was
+// never asked about alpha is how a Play listing with transparent screenshots
+// got all the way to an ingestion failure.
 
 /// Writes the metadata into an already-open edit.
 ///

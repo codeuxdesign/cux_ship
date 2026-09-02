@@ -32,6 +32,12 @@ import 'release_problem.dart';
 export 'data_safety.dart';
 export 'play_metadata.dart';
 export 'release_problem.dart';
+// The image header and the encoding rules over it, which are neither store's:
+// both trees here check them, and so does the Play uploader in cux_ship, which
+// reaches this package through this file. Exported so that third caller cannot
+// re-derive them — the last time an image check was written twice, one of the
+// two copies never got the alpha rule.
+export 'store_image.dart';
 
 /// The platforms a release note is filtered for, and the cap each one carries.
 ///

@@ -1,5 +1,66 @@
 # Changelog
 
+## Unreleased
+
+**The Play tree is checked for the alpha channel it was already measuring.**
+`readImageInfo` has computed `hasAlpha` since the App Store tree was first
+checked, and `checkPlayTree` called it, used `width` and `height` for the
+320/3840 edge bounds, and dropped the rest. So a Play listing whose screenshots
+carried transparency passed every offline check here and was refused during
+ingestion — after the upload and after the processing wait. Play states the
+same rule Apple does, *"JPEG or 24-bit PNG (no alpha)"*, for every slot this
+package checks but the app icon, which is specified as *"32-bit PNG (with
+alpha)"* and is the one image in either store that wants one.
+
+That the capability was present, correct, and enforced on one of two paths is
+the part worth naming. It is not a missing check; it is a check written at a
+call site instead of beside the thing it checks. So both trees now call
+`imageEncodingProblem` in the new `store_image.dart`, under a `StoreImageRules`
+naming the store and quoting its words — a third store path gets the rules by
+saying whose it publishes under, rather than by remembering.
+
+**`ImageInfo` carries `bitDepth`, and both stores refuse more than 8.** Play
+asks for a 24-bit PNG; a 16-bit-per-channel PNG is 48-bit and every check in
+this package accepted it, for both stores. Not hypothetical: a consuming
+project's macOS capture fallback writes depth 16, `screenshots flatten`
+preserves it — it removes the alpha channel and leaves the depth alone — and
+Apple refuses the set at ingestion. The remedy documented for one failure
+produced a set the store rejects.
+
+The two rules have different provenance and the messages say which. Play's is
+Play's, quoted. Apple publishes no bit depth for screenshots at all, so that one
+is this package's, resting on a set Apple actually refused — deliberately the
+same evidence bar the aspect-ratio rule fails and is still left unchecked for.
+
+Fewer than 8 bits is *not* refused: a greyscale or palettised PNG has 8-bit
+palette entries, no store has been seen to refuse one, and failing it would be
+this package inventing a rule.
+
+**And the depth rule is PNG-only**, which it was not when first written. Every
+justification under it is PNG's: in *"JPEG or 24-bit PNG (no alpha)"* the
+`24-bit` modifies the PNG, so Play states no JPEG depth; the set Apple was
+observed refusing was a PNG; and `screenshots flatten` cannot open a JPEG —
+it throws, and through the CLI it walks `.png`, so it would skip the file, exit
+0, and leave the refusal standing. Applied to a JPEG the check quoted Play for
+a rule Play does not state and named a remedy that loops. A >8-bit JPEG is
+legal under the extended sequential and progressive frames and essentially
+unproducible — baseline SOF0 is 8-bit by definition, and reading 12 needs
+libjpeg's separate 12-bit entry points, which browsers do not call — so it is
+accepted, and `ImageInfo` carries `format` so the check can tell. `bitDepth` is
+still read for a JPEG, because it is what the file says.
+
+**`ImageInfo` gained two required fields**, `bitDepth` and `format`, so a
+caller that constructed one itself no longer compiles. Nothing here or in
+`cux_ship` does — it is what `readImageInfo` returns, not something a consumer
+builds — but that is a guess about consumers rather than a fact, and it is a
+required parameter on a public constructor. Flagged for whoever picks the
+version: strictly it is breaking, and the alternative was defaulting the fields,
+which would let a caller construct an `ImageInfo` that lies about the file.
+
+**The stores' published rules, the three decisions and the research under each
+are in `docs/design/store-image-rules.md`** — including what is deliberately
+not checked, and what would bring the JPEG half back.
+
 ## 1.9.0
 
 **`checkPlayTree`** — the Play listing tree, offline. Text limits, the two

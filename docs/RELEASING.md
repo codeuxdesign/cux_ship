@@ -74,6 +74,23 @@ dart pub get   # succeeds only once the resolver has it
 It took about twenty seconds, against the "up to 10 minutes" the upload warns
 about — but the API said yes long before that, and the API is not what governs.
 
+## Raise the constraint on the release branch, not before
+
+**`cux_ship`'s `cux_ship_verify: ^x.y.z` is the one version number a feature
+branch cannot set, even when that branch is what makes it wrong.** A branch that
+uses new `cux_ship_verify` API needs a raised constraint and cannot have one:
+the workspace resolves members against each other on disk, so `^1.10.0` while
+`cux_ship_verify` says `1.9.0` fails `pub get` for the whole repository and
+nothing can be run. Historically the constraint moved on the feature commit
+because verify's version had *already* been bumped — the release went first, and
+the ordering was invisible.
+
+So a branch that needs a newer verify says so under `## Unreleased`, and the
+release branch that sets verify's version raises the constraint in the same
+commit. Nothing checks this: publishing `cux_ship` against a constraint that is
+too loose is accepted by pub and fails later, in a consumer's resolution, as a
+compile error in a package they did not write.
+
 ## What is not automated, and why
 
 **Nothing warns that a version line is stale, and nothing warns that a publish

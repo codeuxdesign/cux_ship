@@ -76,11 +76,24 @@ const playListingLimits = <String, int>{
 /// listing without an icon is not a listing, so letting a config omit it would
 /// only ever hide the failure.
 class PlayImageSpec {
-  const PlayImageSpec(this.label, this.width, this.height);
+  const PlayImageSpec(
+    this.label,
+    this.width,
+    this.height, {
+    this.imageRules = playImageRules,
+  });
 
   final String label;
   final int width;
   final int height;
+
+  /// Which encoding rules the slot is under, because Play's are not uniform:
+  /// the icon is the one image in either store that is *asked* for an alpha
+  /// channel ("32-bit PNG (with alpha)") while everything beside it is refused
+  /// one ("JPEG or 24-bit PNG (no alpha)"). Carried by the spec rather than
+  /// decided at the call site, so the exception lives next to the slot it
+  /// belongs to instead of in an `if` somebody has to remember.
+  final StoreImageRules imageRules;
 
   bool accepts(int w, int h) => w == width && h == height;
 
@@ -91,7 +104,7 @@ class PlayImageSpec {
 /// API uses, so a typo fails this lookup rather than being uploaded into the
 /// wrong slot.
 const playRequiredImages = <String, PlayImageSpec>{
-  'icon': PlayImageSpec('app icon', 512, 512),
+  'icon': PlayImageSpec('app icon', 512, 512, imageRules: playIconImageRules),
   'featureGraphic': PlayImageSpec('feature graphic', 1024, 500),
 };
 
@@ -408,6 +421,10 @@ List<ReleaseProblem> _checkLocale(
         problems.add(ReleaseProblem(where, '$name is not a PNG or a JPEG'));
         continue;
       }
+      final encoding = imageEncodingProblem(info, spec.imageRules);
+      if (encoding != null) {
+        problems.add(ReleaseProblem(where, '$name $encoding'));
+      }
       if (!spec.accepts(info.width, info.height)) {
         problems.add(
           ReleaseProblem(
@@ -496,6 +513,17 @@ List<ReleaseProblem> _checkLocale(
         problems.add(ReleaseProblem(where, '$name is not a PNG or a JPEG'));
         continue;
       }
+      // The same two questions the App Store tree asks, from the same place,
+      // because Play's answer to the first is the same as Apple's: "JPEG or
+      // 24-bit PNG (no alpha)". This was the gap — `readImageInfo` was called
+      // here for its dimensions and its `hasAlpha` was dropped on the floor,
+      // so a screenshot tree Play would refuse during ingestion passed every
+      // offline check this package has.
+      final encoding = imageEncodingProblem(info, playImageRules);
+      if (encoding != null) {
+        problems.add(ReleaseProblem(where, '$name $encoding'));
+      }
+
       final shortest = info.width < info.height ? info.width : info.height;
       final longest = info.width < info.height ? info.height : info.width;
       if (shortest < playMinScreenshotEdge) {
