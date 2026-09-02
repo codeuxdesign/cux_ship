@@ -33,6 +33,23 @@ problem: the release commit removes the question rather than answering it.
 
 `tool/release.sh` refuses to publish when the version was not set by `HEAD`.
 
+**It needs no pull request.** Put it straight on `main` — a fast-forward from
+the release branch, or a commit made there. There is nothing in it to review:
+three lines that the script already refuses to publish without, and a heading
+rename it also checks. A PR would be a review of `version: 4.0.0`.
+
+And a merge commit actively costs something here. The tag names the commit that
+set the version, which is the commit that was published; merging the release
+branch with a merge commit makes *that* commit an ancestor rather than the tip,
+and squashing or rebasing it gives it a new SHA and strands the tag on a commit
+that is on no branch. Fast-forward keeps the published commit, the tagged
+commit and the tip of `main` the same object, which is the whole point of the
+section above.
+
+```bash
+git push origin release/4.0.0:main   # after tool/release.sh has published and tagged
+```
+
 ## Tag what was published
 
 The rule the script follows, and the fallback if you ever publish by hand.
