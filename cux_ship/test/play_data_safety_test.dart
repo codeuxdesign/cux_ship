@@ -94,6 +94,20 @@ void main() {
     final output = _run(repo, ['--data-safety', 'safety.csv']);
     expect(output, contains('nothing to do'));
     expect(output, contains('--send-data-safety'));
+    // It says why the CSV was not enough. A refusal that lists four flags at
+    // somebody who did supply one of them reads as the tool not having seen
+    // it.
+    expect(output, contains('checked rather than published'));
+  });
+
+  test('a run with no arguments at all is refused without being told about a '
+      'declaration it does not have', () {
+    // The other half of that message. The fixture has no
+    // store/play/data-safety.csv, so nothing resolves a path and the advice
+    // about publishing one would be about a file that does not exist.
+    final output = _run(repo, []);
+    expect(output, contains('nothing to do'));
+    expect(output, isNot(contains('checked rather than published')));
   });
 
   test(
@@ -103,7 +117,11 @@ void main() {
       // resolved would otherwise surface once the release is already public.
       final output = _run(repo, ['--send-data-safety']);
       expect(output, contains('--send-data-safety has nothing to send'));
-      expect(output, contains('--data-safety'));
+      // The remediation, and deliberately not `contains('--data-safety')`:
+      // that is a substring of `--send-data-safety`, so it would have passed
+      // on the flag name in the first half of the same sentence and asserted
+      // nothing at all.
+      expect(output, contains('store/play/data-safety.csv'));
     },
   );
 

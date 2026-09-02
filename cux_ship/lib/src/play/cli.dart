@@ -1229,17 +1229,34 @@ Future<void> runPlay(
   // stops a no-argument invocation from opening and committing an empty edit,
   // which succeeds and does nothing.
   //
-  // A declaration that will only be *checked* is not one of the jobs: with the
-  // send behind a flag, a run carrying nothing else would open and commit that
-  // empty edit again, which is the case this guard exists for.
+  // A declaration that will only be *checked* is not one of them: with the
+  // send behind a flag, a run whose whole content was a local check would
+  // reach Play for no reason at all.
+  //
+  // **`--send-data-safety` alone still opens an edit it puts nothing in**, and
+  // that is not what this guard is about. The declaration is a separate API
+  // that needs no edit, so a run sending only that commits an empty one and
+  // the commit line calls it a listing update — untrue, and pre-dating this
+  // flag: `--data-safety` alone did the same. Fixing it means making the edit
+  // conditional on there being edit work, which is a change to this function's
+  // transaction and belongs in its own commit, not folded into this one.
   if (cmd == PlayCommand.upload &&
       aabPath == null &&
       metadataPath == null &&
       !sendDataSafety &&
       deleteLocales.isEmpty) {
+    // Two messages, because the user who passed `--data-safety` and the user
+    // who passed nothing need different things said. The first has supplied a
+    // declaration and is owed the reason it was not enough; telling the second
+    // about a flag they did not use is noise.
     _fail(
-      'nothing to do — pass --aab, --metadata, --send-data-safety or '
-      '--delete-locale',
+      dataSafetyPath == null
+          ? 'nothing to do — pass --aab, --metadata, --send-data-safety or '
+                '--delete-locale'
+          : 'nothing to do — the data safety CSV at $dataSafetyPath is '
+                'checked rather than published, so it is not a job on its '
+                'own. Pass --send-data-safety to publish it, or --aab, '
+                '--metadata or --delete-locale.',
     );
   }
 
