@@ -97,12 +97,27 @@ because the frequent command is the cheap place to learn the export is
 malformed. A declaration only ever validated by the command that publishes it
 is validated on the worst possible day.
 
-**Breaking, deliberately loudly.** A build script passing `--data-safety` on
-every upload — the intended usage, and the shape that caused this — now fails
-at argument parsing with `Could not find an option named "--data-safety"`.
-That is the point: the alternative was accepting the flag and silently no
+**Breaking, deliberately loudly — and legibly.** A build script passing
+`--data-safety` on every upload, which is the intended usage and the shape that
+caused this, now fails:
+
+```
+cux_ship play: --data-safety was removed. Sending the data safety declaration
+is its own command now:
+
+      cux_ship play data-safety
+```
+
+Failing is the point: the alternative was accepting the flag and silently no
 longer publishing, which is the same class of quiet wrongness as the `updated`
-line. Drop the flag from the script, and run `cux_ship play data-safety` on the
+line. But the first consumer to upgrade read the parser's own answer —
+`Could not find an option named "--data-safety"` followed by a usage dump — as
+cux_ship being broken rather than as the flag having moved, and they were
+right to. That is what a parser says about a *typo*, and it cannot tell a typo
+from a deletion. So both retired names are still declared, hidden, for no
+reason other than to be refused with somewhere to go.
+
+Drop the flag from the script, and run `cux_ship play data-safety` on the
 occasions you actually edit the CSV.
 
 ## 3.6.2
