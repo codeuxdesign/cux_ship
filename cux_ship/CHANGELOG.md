@@ -45,6 +45,14 @@ the version globbed resolves the commit and is named in the output; none falls
 back to HEAD as before and says so; more than one is refused naming them.
 `--commit` wins outright, and the tag is not consulted.
 
+**A `--dry-run` upload says it *would* record, not that it did.** `recordUpload`
+returns `created` under a dry run to mean the tag would be written, and the
+upload commands printed that as `recorded this upload` with no tag written
+locally or on origin. Found by a consumer rehearsing an upload against 4.0.0 and
+then checking origin for the record: the line had printed, `git tag -l` was
+empty, and the absence read as a push that had failed. The house rule is to
+print what happened, and this line did not.
+
 ## 4.0.0
 
 **The Play uploader checks an image's alpha channel and bit depth, and stops

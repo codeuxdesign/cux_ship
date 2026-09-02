@@ -278,7 +278,15 @@ void _recordUploadIfAsked(
     dryRun: request.dryRun,
   );
   if (result != null) {
+    // What happened, not what was intended. `recordUpload` returns `created`
+    // under a dry run too — it means "would be" there, and its doc says so —
+    // and this line reported it as done: a `--dry-run` upload printed
+    // "recorded this upload" with no tag written locally or on origin, which
+    // a reader checking the rehearsal against the record took as the record
+    // having failed to reach origin.
     stderr.writeln(switch (result) {
+      UploadRecordResult.created when request.dryRun =>
+        '==> would record this upload',
       UploadRecordResult.created => '==> recorded this upload',
       UploadRecordResult.alreadyRecorded => '==> upload already recorded',
     });
