@@ -1227,10 +1227,6 @@ Future<void> runPlay(
   // promotion that branch could never be taken. A correct condition guarding
   // an unreachable path is worse than a wrong one, because it reads as
   // implemented.
-  final metadataPath = opt('metadata') ?? (upload ? defaults.metadata : null);
-  final dataSafetyPath = upload
-      ? (opt('data-safety') ?? defaults.dataSafety)
-      : null;
   // **The path is inferred; sending it is not.** Every consumer passes the
   // declaration on every upload — `upload.sh` assembling these arguments is the
   // point of `upload.sh` — and Play files each POST as a pending "App content →
@@ -1239,6 +1235,37 @@ Future<void> runPlay(
   // [_publishDataSafety] for why a comparison cannot stand in for the flag.
   final sendDataSafety = flag('send-data-safety');
   final deleteLocales = multi('delete-locale');
+
+  // **A run that asked only to send the declaration infers no listing.**
+  //
+  // The default CSV lives at `store/play/data-safety.csv`, inside the directory
+  // that is also the listing tree, so `store/play/` existing is what makes both
+  // defaults resolve. Without this, `--send-data-safety` on its own inferred
+  // `--metadata`, opened an edit and published the live store page — a listing
+  // publication nobody asked for, from a flag whose entire meaning is "send the
+  // declaration". Inference exists to save typing on the ordinary upload, not
+  // to add a job to a run that named its only one.
+  //
+  // An explicit `--metadata` still publishes, and a run carrying an artifact,
+  // locales to delete, or a manifest that resolves one is not declaration-only,
+  // so nothing that worked before changes.
+  final declarationOnly =
+      sendDataSafety &&
+      aabPath == null &&
+      opt('metadata') == null &&
+      deleteLocales.isEmpty;
+
+  // **Resolved for promote as well as upload**, which it was not: the gate
+  // below reads `track == 'production'`, and with metadata null on every
+  // promotion that branch could never be taken. A correct condition guarding
+  // an unreachable path is worse than a wrong one, because it reads as
+  // implemented.
+  final metadataPath =
+      opt('metadata') ??
+      (upload && !declarationOnly ? defaults.metadata : null);
+  final dataSafetyPath = upload
+      ? (opt('data-safety') ?? defaults.dataSafety)
+      : null;
 
   // Promotion is the deliberate opposite of a build: it publishes bits Play
   // already holds, which is the whole reason a wider track can be trusted to

@@ -59,6 +59,34 @@ Directory _repo() {
   return dir;
 }
 
+/// A repository shaped like a real consumer: the CSV in its documented place,
+/// which is *inside* the listing tree.
+///
+/// **That overlap is the whole point of this fixture.** `store/play/` existing
+/// is what makes `--metadata` infer, and the default CSV path is
+/// `store/play/data-safety.csv`, so any project following the docs has both
+/// defaults resolving together. [_repo] deliberately has neither, which is why
+/// it cannot see what these cases see.
+Directory _repoWithTree() {
+  final dir = Directory.systemTemp.createTempSync('cux_ship_ds_tree');
+  addTearDown(() => dir.deleteSync(recursive: true));
+
+  File('${dir.path}/pubspec.yaml').writeAsStringSync(
+    'name: consumer\nversion: 1.0.0+1\nenvironment:\n  sdk: ^3.12.2\n',
+  );
+  Directory(
+    '${dir.path}/store/play/listings/en-US',
+  ).createSync(recursive: true);
+  File('${dir.path}/store/play/data-safety.csv').writeAsStringSync(_csv);
+  for (final name in ['title', 'short_description', 'full_description']) {
+    File(
+      '${dir.path}/store/play/listings/en-US/$name.txt',
+    ).writeAsStringSync('text\n');
+  }
+  Process.runSync('git', ['init', '-q'], workingDirectory: dir.path);
+  return dir;
+}
+
 /// Runs `play upload` in [repo] and returns stdout and stderr together.
 ///
 /// **The service account variable is pointed at a path that does not exist**
@@ -120,6 +148,47 @@ void main() {
           reason: 'exactly one of send/notice must be set, for send=$send',
         );
       }
+    });
+  });
+
+  group('in a repository laid out the way the docs describe', () {
+    late Directory repo;
+    setUp(() => repo = _repoWithTree());
+
+    test('--send-data-safety on its own infers no listing to publish', () {
+      // The case a live test could not reach. `store/play/` holds the CSV *and*
+      // is the listing tree, so inference used to hand this run a listing
+      // publish it never asked for: it opened an edit, patched the details,
+      // rewrote the listing text and printed `committed — store listing
+      // updated`, all from a flag that means "send the declaration".
+      //
+      // Found for real. A consuming project ran exactly this to test the
+      // declaration-only path and published its live store page instead.
+      final output = _run(repo, ['--send-data-safety']);
+      expect(output, contains('data safety   '));
+      expect(output, isNot(contains('listing   ')));
+    });
+
+    test('an explicit --metadata still publishes alongside it', () {
+      // Inference is what is suppressed, not the job. Somebody who names the
+      // tree gets it published, and the declaration-only path is not a way to
+      // refuse them.
+      final output = _run(repo, [
+        '--send-data-safety',
+        '--metadata',
+        'store/play',
+      ]);
+      expect(output, contains('listing   '));
+      expect(output, contains('data safety   '));
+    });
+
+    test('an ordinary upload still infers the listing', () {
+      // The other direction, which is the one that would break every consumer:
+      // suppressing inference too widely would silently stop publishing the
+      // listing on the runs that are supposed to.
+      final output = _run(repo, ['--delete-locale', 'de-DE']);
+      expect(output, contains('listing   '));
+      expect(output, contains('data safety declaration checked, not sent'));
     });
   });
 

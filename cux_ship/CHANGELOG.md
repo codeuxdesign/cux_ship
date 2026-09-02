@@ -92,11 +92,20 @@ store listing — as it did before this change. Only a project keeping the CSV
 outside `store/play/` reaches the `nothing to do` refusal. If what you want is
 to validate an edit and touch nothing, that is `cux_ship verify`.
 
-**A run that sends only the declaration no longer opens an edit.** It used to
-open one, put nothing in it, commit it, and print `committed — store listing
-updated` — a write that changed nothing, described as a change, which is the
-same defect as the `updated` line above. Reachable before this release too, as
-`--data-safety` with nothing else.
+**`--send-data-safety` on its own sends the declaration and nothing else.** Two
+things had to change for that sentence to be true. It no longer opens an edit
+it puts nothing in — it used to open one, commit it, and print `committed —
+store listing updated`, a write that changed nothing described as a change,
+which is the same defect as the `updated` line above. And it no longer infers
+`--metadata`: the default CSV lives at `store/play/data-safety.csv`, *inside*
+the listing tree, so `store/play/` existing made both defaults resolve at once
+and a run asking only to send the declaration published the live store page
+instead. Naming a tree with `--metadata` still publishes it; inference is what
+stopped, and only for a run that carries no artifact, no locales to delete and
+no explicit tree.
+
+Found by a consuming project running exactly that command to test the
+declaration-only path, and publishing its store listing.
 
 ## 3.6.2
 
