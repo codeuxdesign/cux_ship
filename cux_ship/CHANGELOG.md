@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 4.0.0
 
 **The Play uploader checks an image's alpha channel and bit depth, and stops
 parsing PNG headers itself.** `_loadImages` validated extension, count and
