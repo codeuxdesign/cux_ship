@@ -500,10 +500,16 @@ typedef ReleasedCommit = ({String commit, String how});
 /// dereference the tag by hand or default to HEAD — which during a promotion
 /// is very often not the promoted commit.
 ///
-/// Exactly one match resolves. None falls back to HEAD as before, and says so,
-/// because recording can have been turned on after this build went up. More
-/// than one is refused naming them: one build number on two commits is the
-/// collision the record exists to make visible, not something to pick from.
+/// Exactly one match resolves. None is refused, naming `--commit`: with
+/// recording on, every upload since it was switched on carries a record, so no
+/// match means a wrong number or a build from before recording, and HEAD is
+/// the least likely answer to either — a first draft fell back to it and said
+/// so, and review measured that on a real repository as "tagging HEAD" several
+/// commits past anything that was built, followed by doing it. More than one
+/// is refused naming them: one build number on two commits is the collision
+/// the record exists to make visible, not something to pick from. HEAD stays
+/// the default only when nothing asked for a lookup — no build number, or
+/// recording off.
 ReleasedCommit resolveReleasedCommit(
   Git git, {
   required String? commit,
@@ -511,10 +517,15 @@ ReleasedCommit resolveReleasedCommit(
   required TagKindConfig uploadTag,
 }) {
   if (commit != null) {
-    return (commit: commit, how: 'tagging $commit, from --commit');
+    // Shortened only when it is a sha: `HEAD` or a branch name is shown as
+    // typed, and the other lines here print eight characters.
+    final shown = RegExp(r'^[0-9a-fA-F]{9,}$').hasMatch(commit)
+        ? _short(commit)
+        : commit;
+    return (commit: commit, how: 'tagging $shown, from --commit');
   }
-  final head = git.run(['rev-parse', 'HEAD']);
   if (buildNumber == null || !uploadTag.enabled) {
+    final head = git.run(['rev-parse', 'HEAD']);
     return (commit: head, how: 'tagging HEAD, ${_short(head)}');
   }
   // The version is the unknown: a glob for it, and the build number literal,
@@ -528,11 +539,11 @@ ReleasedCommit resolveReleasedCommit(
       .where((line) => line.isNotEmpty)
       .toList();
   if (matches.isEmpty) {
-    return (
-      commit: head,
-      how:
-          'no upload record matches $pattern, so tagging HEAD, '
-          '${_short(head)} — pass --commit if that is not the released commit',
+    throw ReleaseException(
+      'no upload record matches $pattern, so build $buildNumber cannot be '
+      'placed. Recording is on, so either the number is wrong or the build '
+      'went up before recording was — pass --commit to say which commit '
+      'was released. Nothing was tagged.',
     );
   }
   if (matches.length > 1) {

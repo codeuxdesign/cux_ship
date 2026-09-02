@@ -211,21 +211,33 @@ void main() {
       expect(released.how, contains('uploaded/v1.0.3+41'));
     });
 
-    test('no record falls back to HEAD, and says so', () {
+    /// The refusal for a build number no record names.
+    final refusesUnrecorded = throwsA(
+      isA<ReleaseException>().having(
+        (e) => e.message,
+        'message',
+        allOf(contains('no upload record matches'), contains('--commit')),
+      ),
+    );
+
+    test('no record is refused, naming --commit', () {
+      // Recording is on, so every upload since carries a record: no match is a
+      // wrong number or a pre-record build, and HEAD answers neither. A first
+      // draft fell back to HEAD and said so; review measured that as "tagging
+      // HEAD" several commits past anything built, followed by doing it.
       repo();
       record('uploaded/v1.0.3+40', _git.run(['rev-parse', 'HEAD']));
-      final head = moveOn();
+      moveOn();
 
-      final released = resolveReleasedCommit(
-        _git,
-        commit: null,
-        buildNumber: '41',
-        uploadTag: recording,
+      expect(
+        () => resolveReleasedCommit(
+          _git,
+          commit: null,
+          buildNumber: '41',
+          uploadTag: recording,
+        ),
+        refusesUnrecorded,
       );
-
-      expect(released.commit, head);
-      expect(released.how, contains('no upload record'));
-      expect(released.how, contains('HEAD'));
     });
 
     test('two records for one build are refused, naming both', () {
@@ -257,16 +269,18 @@ void main() {
     test('a build number is matched whole, not as a prefix', () {
       repo();
       record('uploaded/v1.0.3+410', _git.run(['rev-parse', 'HEAD']));
-      final head = moveOn();
+      moveOn();
 
-      final released = resolveReleasedCommit(
-        _git,
-        commit: null,
-        buildNumber: '41',
-        uploadTag: recording,
+      expect(
+        () => resolveReleasedCommit(
+          _git,
+          commit: null,
+          buildNumber: '41',
+          uploadTag: recording,
+        ),
+        refusesUnrecorded,
+        reason: '+410 is not build 41',
       );
-
-      expect(released.commit, head, reason: '+410 is not build 41');
     });
 
     test('--commit wins, and the record is not consulted', () {
@@ -284,6 +298,21 @@ void main() {
       expect(released.commit, head.substring(0, 8));
       expect(released.how, contains('--commit'));
       expect(released.how, isNot(contains('uploaded/')));
+    });
+
+    test('a full sha from --commit is shown short, and HEAD as typed', () {
+      repo();
+      final head = _git.run(['rev-parse', 'HEAD']);
+      ReleasedCommit given(String commit) => resolveReleasedCommit(
+        _git,
+        commit: commit,
+        buildNumber: null,
+        uploadTag: recording,
+      );
+
+      expect(given(head).how, contains(head.substring(0, 8)));
+      expect(given(head).how, isNot(contains(head)));
+      expect(given('HEAD').how, contains('tagging HEAD, from --commit'));
     });
 
     test('recording off means HEAD, whatever tags exist', () {

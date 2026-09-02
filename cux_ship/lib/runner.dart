@@ -595,8 +595,8 @@ class _FinishCommand extends Command<void> {
         help:
             'The commit that was released, and what gets tagged. Without it, '
             '--build-number is resolved through the upload record when '
-            'tag.upload is enabled and exactly one tag names that build; '
-            'otherwise HEAD.',
+            'tag.upload is enabled — exactly one tag naming that build, or a '
+            'refusal. HEAD only when neither asked for a lookup.',
       )
       ..addOption(
         'version',

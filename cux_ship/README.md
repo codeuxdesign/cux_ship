@@ -186,16 +186,19 @@ record.** `uploaded/v1.0.3+41` names the commit build 41 was built from — it i
 written from the manifest's `gitSha` before the store is contacted, which is
 the whole reason it exists — so with `tag.upload` on, `--build-number 41` looks
 for exactly one tag in the configured format with that build and the version
-globbed, dereferences it, and says which tag answered. None falls back to HEAD
-as before, and says so, since recording can have been turned on after the
-build went up. More than one is refused naming them: one build number on two
-commits is the collision the record exists to make visible. `--commit` wins
-outright, and the tag is not consulted.
+globbed, dereferences it, and says which tag answered. None is refused, naming
+`--commit`: with recording on, every upload since carries a record, so no match
+means a wrong number or a build from before recording, and HEAD is the least
+likely answer to either. More than one is refused naming them: one build number
+on two commits is the collision the record exists to make visible. `--commit`
+wins outright, and the tag is not consulted. HEAD is the default only when
+nothing asked for a lookup — no `--build-number`, or recording off.
 
 ```
 --commit       what to tag; without it, --build-number is looked up in the
-               upload record, and failing that HEAD. Any commit-ish; resolved
-               before it is compared, so a short sha or HEAD names what you meant
+               upload record when tag.upload is on, and HEAD otherwise. Any
+               commit-ish; resolved before it is compared, so a short sha or
+               HEAD names what you meant
 --version      what was released; defaults to that commit's pubspec.yaml
 --branch       where the bump belongs; defaults to main
 --no-tag / --no-bump / --no-push / --dry-run

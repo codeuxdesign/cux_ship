@@ -41,9 +41,14 @@ store is contacted, and until now it was written on upload and ignored on
 finish. Both consumers dereferenced it by hand or passed HEAD, which during a
 promotion is very often not the promoted commit. Without `--commit`, and with
 `tag.upload` on, exactly one tag in the configured format with that build and
-the version globbed resolves the commit and is named in the output; none falls
-back to HEAD as before and says so; more than one is refused naming them.
-`--commit` wins outright, and the tag is not consulted.
+the version globbed resolves the commit and is named in the output; more than
+one is refused naming them; none is refused too, naming `--commit`, because
+with recording on a build without a record is a wrong number or one from before
+recording, and HEAD answers neither. A first draft fell back to HEAD there and
+said so, and review measured that on a real repository as "tagging HEAD"
+several commits past anything built, followed by doing it. `--commit` wins
+outright, and the tag is not consulted; HEAD remains the default only when
+nothing asked for a lookup.
 
 **A `--dry-run` upload says it *would* record, not that it did.** `recordUpload`
 returns `created` under a dry run to mean the tag would be written, and the
