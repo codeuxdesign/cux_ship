@@ -28,6 +28,7 @@ import 'src/appstore/cli.dart';
 import 'src/appstore/flatten_cli.dart';
 import 'src/asc_platforms.dart';
 import 'src/build_manifest.dart';
+import 'src/changelog_section.dart';
 import 'src/config.dart';
 import 'src/confirm.dart';
 import 'src/deps.dart';
@@ -2062,6 +2063,17 @@ class VerifyCommand extends Command<void> {
         play,
       ),
       if (changelog != null) ...checkChangelogFile(changelog),
+      // **The version about to ship has a section.** checkChangelogFile walks
+      // the headings the file has, so the one it lacks is the one it cannot
+      // report — and the uploaders refuse that version late, on Play after the
+      // prompt and inside an open edit. Two consumer scripts grepped for the
+      // heading themselves before calling anything here; this is that grep,
+      // with the version read from the same pubspec the upload will read.
+      if (changelog != null && project.versionName != null)
+        ?changelogSectionProblem(
+          changelog: changelog,
+          version: project.versionName!,
+        ),
       for (final MapEntry(key: platform, value: tree)
           in appStoreTrees.entries) ...[
         ?_derivationProblem(
@@ -2119,6 +2131,9 @@ class VerifyCommand extends Command<void> {
     // coverage. Every artifact says so itself.
     for (final line in [
       if (changelog != null) 'changelog  $changelog',
+      if (changelog != null && project.versionName != null) ...[
+        'version    ${project.versionName} (pubspec.yaml) has its section',
+      ],
       for (final tree in appStoreTrees.entries) ...[
         'appstore   ${tree.value} (${tree.key})',
       ],

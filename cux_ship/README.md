@@ -872,6 +872,12 @@ cux_ship verify --appstore store/appstore \
   --require-screenshot-type APP_IPAD_PRO_3GEN_129
 ```
 
+The command also checks the one thing the library cannot: that the version in
+`pubspec.yaml` has a section at all. `checkChangelogFile` walks the headings the
+file has, so the version it lacks is the one it never sees — and the uploaders
+refuse that version late, on Play after the prompt and inside an open edit. An
+empty section passes; it is a decision, and what `release finish` leaves.
+
 Or from your own tests, which is where it earns its keep — it then runs on every
 push rather than only at release time. Take
 [`cux_ship_verify`](https://pub.dev/packages/cux_ship_verify) as a

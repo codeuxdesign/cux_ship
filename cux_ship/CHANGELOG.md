@@ -23,6 +23,16 @@ machine without credentials, while the Play message beside it had said `secrets
 exec` all along. Two comments and the no-such-app message pointed at the same
 absent document and are corrected with it.
 
+**`verify` checks that the version in `pubspec.yaml` has a changelog section.**
+`checkChangelogFile` walks the headings the file has, so the version it lacks
+was the one it never looked at, and the uploaders refused it late: on Play
+after the confirmation prompt and inside an open edit. Two of a consumer's
+scripts grepped for `^## <version>` themselves before calling anything here,
+which is the check `verify` should have been. An empty section passes — it is
+a decision, and what `release finish` leaves behind — and only an absent one is
+reported. `--changelog` names the file and `--app-dir` the pubspec, as
+everywhere else.
+
 ## 4.0.0
 
 **The Play uploader checks an image's alpha channel and bit depth, and stops
