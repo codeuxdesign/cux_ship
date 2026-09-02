@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// The data safety declaration is sent when it is asked for, and not otherwise.
+// An upload checks the data safety declaration and never sends it; sending it
+// is `play data-safety`.
 //
 // **This exists because "publish it on every upload" is invisible from the
 // tool's own output.** `applications.dataSafety` is write-only — v3 has no GET
@@ -11,22 +12,21 @@
 // later; both lines claimed an update, the console listed an unsubmitted Data
 // safety change, and nothing in the CSV had changed for weeks.
 //
-// **Two suites, because the subprocess cases cannot see the thing that
-// matters.** The POST is after `edits.commit`; a spawned CLI with no credential
-// stops long before it, so those cases can only ever observe what the run
-// *says*. An earlier version of this file asserted that a non-sending run never
-// prints `data safety declaration sent` — which was unfalsifiable, since the
-// process always died first, and a review proved it by typoing that string and
-// watching all five cases pass.
+// **What these cases can and cannot see.** They spawn the CLI with the service
+// account pointed at a file that does not exist, so every one of them stops at
+// the credential. That is after all argument handling and after the
+// confirmation, and before any network call — so the arguments a run resolved,
+// and what it says it is about to do, are observable, and the POST is not.
 //
-// So the decision itself is a pure function, `planDataSafety`, tested in
-// process against its return value; the subprocess cases cover the arguments
-// and the announcement, which is all they can honestly cover. The one thing
-// still unpinned is the call site handing `plan.send` to the POST — nothing
-// offline reaches it, and this file no longer implies otherwise.
+// An earlier version of this file asserted that a non-sending upload never
+// prints `data safety declaration sent`, which was unfalsifiable: the process
+// always died first, and a review proved it by typoing that string and watching
+// every case pass. The separation of commands is what removed the need for that
+// assertion — `upload` no longer contains the send at all, so the question is
+// which command ran, and that is a fact about the parser rather than about a
+// branch nothing can reach.
 import 'dart:io';
 
-import 'package:cux_ship/src/play/cli.dart';
 import 'package:test/test.dart';
 
 import 'cli_snapshot.dart';
@@ -117,153 +117,149 @@ String _run(Directory repo, List<String> args) {
   return '${result.stdout}${result.stderr}';
 }
 
+/// Runs `play data-safety` in [repo], the same way.
+String _runDataSafety(Directory repo, List<String> args) {
+  final result = Process.runSync(
+    Platform.resolvedExecutable,
+    [
+      '--enable-asserts',
+      cliSnapshot,
+      '--yes',
+      'play',
+      'data-safety',
+      '--package',
+      'com.example.consumer',
+      ...args,
+    ],
+    workingDirectory: repo.path,
+    environment: {
+      'GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_PATH': '${repo.path}/absent.json',
+    },
+  );
+  return '${result.stdout}${result.stderr}';
+}
+
 void main() {
-  group('planDataSafety', () {
-    test('without the flag it hands over nothing to send', () {
-      final plan = planDataSafety(csv: _csv, send: false);
-      // The assertion the subprocess cases cannot make. Restoring the 3.6.2
-      // behaviour means this returning the CSV, and nothing about the printed
-      // output would change.
-      expect(plan.send, isNull);
-      expect(plan.notice, contains('checked, not sent'));
-    });
-
-    test('with the flag it hands over the CSV verbatim', () {
-      final plan = planDataSafety(csv: _csv, send: true);
-      // Verbatim matters: Play validates the whole export, and a declaration
-      // that arrives trimmed or re-joined is rejected one cell at a time.
-      expect(plan.send, _csv);
-      expect(plan.notice, isNull);
-    });
-
-    test('it never both sends and says it did not', () {
-      // The invariant the record exists for. 3.6.2 could hold both positions
-      // at once because the announcement and the POST were separate
-      // statements; here one value carries both and they cannot disagree.
-      for (final send in [true, false]) {
-        final plan = planDataSafety(csv: _csv, send: send);
-        expect(
-          (plan.send == null) != (plan.notice == null),
-          isTrue,
-          reason: 'exactly one of send/notice must be set, for send=$send',
-        );
-      }
-    });
-  });
-
-  group('in a repository laid out the way the docs describe', () {
+  group('play upload', () {
     late Directory repo;
     setUp(() => repo = _repoWithTree());
 
-    test('--send-data-safety on its own infers no listing to publish', () {
-      // The case a live test could not reach. `store/play/` holds the CSV *and*
-      // is the listing tree, so inference used to hand this run a listing
-      // publish it never asked for: it opened an edit, patched the details,
-      // rewrote the listing text and printed `committed — store listing
-      // updated`, all from a flag that means "send the declaration".
-      //
-      // Found for real. A consuming project ran exactly this to test the
-      // declaration-only path and published its live store page instead.
-      final output = _run(repo, ['--send-data-safety']);
-      expect(output, contains('data safety   '));
-      expect(output, isNot(contains('listing   ')));
+    test('never mentions sending the declaration, whatever it is given', () {
+      // The whole bug, in the only form an offline test can put it: the flag
+      // that used to make an upload send is gone, so there is nothing to pass
+      // that would make one send. `--data-safety` and `--send-data-safety` are
+      // both refused by the parser now, which is the loud half of the break —
+      // a caller that used to publish finds out at upgrade rather than by the
+      // console filling with pending reviews.
+      for (final args in [
+        <String>['--delete-locale', 'de-DE'],
+        <String>['--data-safety', 'store/play/data-safety.csv'],
+        <String>['--send-data-safety'],
+      ]) {
+        final output = _run(repo, args);
+        expect(
+          output,
+          isNot(contains('data safety declaration sent')),
+          reason: 'upload must not send, given $args',
+        );
+      }
     });
 
-    test('an explicit --metadata still publishes alongside it', () {
-      // Inference is what is suppressed, not the job. Somebody who names the
-      // tree gets it published, and the declaration-only path is not a way to
-      // refuse them.
-      final output = _run(repo, [
-        '--send-data-safety',
-        '--metadata',
-        'store/play',
-      ]);
-      expect(output, contains('listing   '));
-      expect(output, contains('data safety   '));
+    test('refuses the retired flags by name rather than ignoring them', () {
+      // Silence here would be the worse failure: a script that keeps passing
+      // `--data-safety` and keeps parsing would go on believing it publishes.
+      for (final flag in ['--data-safety=x.csv', '--send-data-safety']) {
+        expect(
+          _run(repo, [flag]),
+          contains('Could not find an option named'),
+          reason: '$flag must not be silently accepted',
+        );
+      }
     });
 
-    test('an ordinary upload still infers the listing', () {
-      // The other direction, which is the one that would break every consumer:
-      // suppressing inference too widely would silently stop publishing the
-      // listing on the runs that are supposed to.
+    test('still checks the declaration it will never send', () {
+      // The reason `upload` reads the CSV at all. A file only ever validated by
+      // the command that publishes it is validated on the day it is published,
+      // which is the worst day for it to be wrong.
+      File(
+        '${repo.path}/store/play/data-safety.csv',
+      ).writeAsStringSync('one,two\n1,2\n');
+      final output = _run(repo, ['--delete-locale', 'de-DE']);
+      expect(output, contains('not well formed'));
+    });
+
+    test('publishes the listing it is asked for, unchanged by any of this', () {
+      // The direction that would break every consumer if the split went wrong.
       final output = _run(repo, ['--delete-locale', 'de-DE']);
       expect(output, contains('listing   '));
-      expect(output, contains('data safety declaration checked, not sent'));
     });
   });
 
-  late Directory repo;
-  setUp(() => repo = _repo());
+  group('play data-safety', () {
+    late Directory repo;
+    setUp(() => repo = _repoWithTree());
 
-  test('a declaration to check is not a job, so a run carrying only one '
-      'refuses instead of committing an empty edit', () {
-    // Before the send was gated this was a real job and the run was valid. It
-    // is now a local check and nothing else, and a run whose entire content is
-    // a local check would open an edit, commit it unchanged and report
-    // success.
-    final output = _run(repo, ['--data-safety', 'safety.csv']);
-    expect(output, contains('nothing to do'));
-    expect(output, contains('--send-data-safety'));
-    // It says why the CSV was not enough. A refusal that lists four flags at
-    // somebody who did supply one of them reads as the tool not having seen
-    // it.
-    expect(output, contains('checked rather than published'));
-  });
-
-  test('a run with no arguments at all is refused without being told about a '
-      'declaration it does not have', () {
-    // The other half of that message. The fixture has no
-    // store/play/data-safety.csv, so nothing resolves a path and the advice
-    // about publishing one would be about a file that does not exist.
-    final output = _run(repo, []);
-    expect(output, contains('nothing to do'));
-    expect(output, isNot(contains('checked rather than published')));
-  });
-
-  test(
-    '--send-data-safety with no CSV refuses before the release, not after',
-    () {
-      // The send is after the commit, so a flag naming a file that was never
-      // resolved would otherwise surface once the release is already public.
-      final output = _run(repo, ['--send-data-safety']);
-      expect(output, contains('--send-data-safety has nothing to send'));
-      // The remediation, and deliberately not `contains('--data-safety')`:
-      // that is a substring of `--send-data-safety`, so it would have passed
-      // on the flag name in the first half of the same sentence and asserted
-      // nothing at all.
+    test('finds the CSV in its documented place and says what it will do', () {
+      final output = _runDataSafety(repo, []);
+      expect(output, contains('About to send the data safety declaration'));
       expect(output, contains('store/play/data-safety.csv'));
-    },
-  );
+      // The claims a release summary would have made here and this one must
+      // not: there is no track, no version and no listing in this command.
+      expect(output, isNot(contains('to track')));
+      expect(output, isNot(contains('notes from')));
+      expect(output, isNot(contains('public immediately')));
+      // Reached the credential, so everything before the POST ran.
+      expect(output, contains('absent.json'));
+    });
 
-  test('without the flag the run says it checked the declaration and did not '
-      'send it', () {
-    final output = _run(repo, [
-      '--data-safety',
-      'safety.csv',
-      '--delete-locale',
-      'de-DE',
-    ]);
-    expect(output, contains('data safety declaration checked, not sent'));
-    // Deliberately no `isNot(contains('declaration sent'))` here. That line is
-    // emitted after `edits.commit` and this process dies at the credential, so
-    // the assertion could never have failed — `planDataSafety` above is what
-    // actually pins it.
-    //
-    // The confirmation prompt does not list a file it will not publish.
-    expect(output, isNot(contains('data safety   ')));
-  });
+    test('a dry run says the file is good and that nothing went', () {
+      final output = _runDataSafety(repo, ['--dry-run']);
+      expect(output, contains('was not sent'));
+      expect(output, isNot(contains('data safety declaration sent')));
+      // No credential is loaded at all, which is what makes this the offline
+      // rehearsal that `play upload --dry-run` is not.
+      expect(output, isNot(contains('absent.json')));
+    });
 
-  test('with the flag the declaration is what the run is for, and the '
-      'confirmation says so', () {
-    final output = _run(repo, [
-      '--send-data-safety',
-      '--data-safety',
-      'safety.csv',
-    ]);
-    expect(output, isNot(contains('checked, not sent')));
-    expect(output, contains('data safety   safety.csv'));
-    // Stopped at the credential, holding the CSV — which is as far as an
-    // offline test can follow it.
-    expect(output, contains('absent.json'));
+    test('refuses a malformed CSV before it loads a credential', () {
+      File(
+        '${repo.path}/store/play/data-safety.csv',
+      ).writeAsStringSync('one,two\n1,2\n');
+      final output = _runDataSafety(repo, []);
+      expect(output, contains('not well formed'));
+      expect(output, isNot(contains('absent.json')));
+    });
+
+    test('names the default path when there is no CSV anywhere', () {
+      final bare = _repo();
+      final output = _runDataSafety(bare, []);
+      expect(output, contains('no data safety CSV'));
+      // The remediation names where it looked, not just the flag.
+      expect(output, contains('store/play/data-safety.csv'));
+    });
+
+    test('takes an explicit --csv outside the listing tree', () {
+      final output = _runDataSafety(repo, [
+        '--csv',
+        'store/play/../play/data-safety.csv',
+      ]);
+      expect(output, contains('About to send the data safety declaration'));
+    });
+
+    test('takes none of the release arguments', () {
+      // It is not a release, so accepting and ignoring `--track` would be a
+      // worse answer than refusing it.
+      for (final flag in [
+        '--track=production',
+        '--aab=x.aab',
+        '--metadata=x',
+      ]) {
+        expect(
+          _runDataSafety(repo, [flag]),
+          contains('Could not find an option named'),
+          reason: '$flag has no meaning for a declaration',
+        );
+      }
+    });
   });
 }

@@ -229,15 +229,28 @@ group block ran, then printing "the listing is untouched" — the inference is
 now suppressed under `--beta-group`, which is what makes the rule above true
 in code rather than only here.
 
-**Two things stay on upload, deliberately.** `--listing-only` remains the
+**One thing stays on upload, deliberately.** `--listing-only` remains the
 explicit escape for *fix the live page now* — an act rather than a cadence. On
 the App Store that act is bounded by the store rather than the tooling: outside
 a version in preparation, only promotional text and app-info fields can change
 without shipping a new version, which is why the `store/appstore/` README
-routes seasonal copy through `promotional_text`. And
-the **data-safety declaration** stays, because the distinction is real: marketing
-copy ahead of production is wrong, while a data-safety declaration ahead of
-production is the *compliant* direction. `upload.sh` already gives that reason.
+routes seasonal copy through `promotional_text`.
+
+**The data-safety declaration used to stay too, and no longer does.** The
+reason it stayed was sound and is unchanged — marketing copy ahead of
+production is wrong, while a data-safety declaration ahead of production is the
+*compliant* direction. What that argument settles is *ordering*, and it was
+read as settling *coupling*: because sending early is safe, sending it with
+every upload looked free. It is not. Play files every send as a change awaiting
+review whether or not an answer moved, and exposes no read of what it holds, so
+nothing can send only on a difference. An app uploading weekly collected one
+pending review per upload against a declaration nobody had touched.
+
+So it is `cux_ship play data-safety`, its own verb. An upload still *checks*
+the declaration, which is the part that belongs on the frequent command; it
+sends nothing. Being early is still the compliant direction — the command is
+just run on purpose rather than as a side effect, which is what the rest of
+this document says about acts versus cadences.
 
 **The residual case, which is the same defect one hop later.** Promoting 1.1
 while trunk's listing already describes 1.2 republishes the skew at promote

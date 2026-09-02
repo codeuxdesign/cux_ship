@@ -139,16 +139,17 @@ Refusals a release runner will actually hit, each meaning what it says:
 - **Both print everything they inferred and wait.** Read the summary; do not
   reflexively pass `--yes`. In CI `--yes` is required, because with no terminal
   the command refuses rather than assuming yes — that refusal is a feature.
-- **Play's data safety declaration is sent only with `--send-data-safety`.**
-  `--data-safety` names the CSV and gets its structure checked on every upload;
-  publishing it is the separate flag. The asymmetry is Play's: it files each
-  POST as a pending *App content → Data safety* change whether or not a single
-  answer moved, and exposes no read of the labels it currently holds, so
-  nothing can send-if-different the way the listing images skip when their
-  sha256 matches. An `upload.sh` that passes the declaration every time — which
-  is the point of having an `upload.sh` — would otherwise leave one unsubmitted
-  review sitting in the console after every upload, forever. Pass the flag on
-  the run after you edit the CSV.
+- **Play's data safety declaration is its own command, `cux_ship play
+  data-safety`.** An upload structure-checks the CSV and never sends it. The
+  asymmetry is Play's: it files each POST as a pending *App content → Data
+  safety* change whether or not a single answer moved, and exposes no read of
+  the labels it currently holds, so nothing can send-if-different the way the
+  listing images skip when their sha256 matches. A wrapper script passes the
+  same arguments every time — that is what makes it a script — so a declaration
+  attached to `upload` went up on every one, leaving an unsubmitted review in
+  the console after each, forever. Run the command after you edit the CSV, and
+  not otherwise. It takes no track and no artifact, because it is not a
+  release: it describes the app.
 - **`--dry-run` is not offline, and the two stores rehearse differently.** Both
   authenticate, so neither is *credential-free*; the genuinely offline checks
   are `cux_ship verify` and the test-suite functions.

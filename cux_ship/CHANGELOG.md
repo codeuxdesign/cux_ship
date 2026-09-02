@@ -57,55 +57,53 @@ member is at, so a feature branch cannot raise it and then be tested. Publishing
 `cux_ship` against `^1.9.0` would let a consumer resolve a `cux_ship_verify`
 without `imageEncodingProblem` in it, and fail to compile.
 
-**Play's data safety declaration is published when you ask for it.**
-`play upload` sent the CSV on every run that was given one, and
-Play files each POST as a pending **App content → Data safety** change whether
-or not an answer moved — so an app uploaded weekly accumulated one unsubmitted
-review per upload, against a declaration nobody had touched in months. The line
-it printed, `data safety declaration updated`, said the same thing on the run
-that changed something and the run that changed nothing, which is why this took
-so long to notice.
+**Play's data safety declaration is its own command.** `play upload` sent the
+CSV on every run that was given one, and Play files each POST as a pending
+**App content → Data safety** change whether or not an answer moved — so an app
+uploaded weekly accumulated one unsubmitted review per upload, against a
+declaration nobody had touched in months. The line it printed, `data safety
+declaration updated`, said the same thing on the run that changed something and
+the run that changed nothing, which is why this took so long to notice.
 
-The listing images already skip when they match: each carries a sha256, so a
-listing publish says `4 phoneScreenshots unchanged` and sends nothing.
-`applications.dataSafety` cannot be made to work that way — v3 has no GET for
-the labels and the POST answers `$Empty`, so a run genuinely cannot tell an
-unchanged declaration from a changed one. The alternative, remembering the last
-CSV sent, is state outside the repository, which is worse than the problem.
+Nothing can send it only when it differs. The listing images can: each carries
+a sha256, so a publish says `4 phoneScreenshots unchanged` and sends nothing.
+`applications.dataSafety` is write-only — v3 has no GET for the labels and the
+POST answers `$Empty` — so a run genuinely cannot tell an unchanged declaration
+from a changed one. Remembering the last CSV sent would need state outside the
+repository, which is worse than the problem.
 
-So `--data-safety` now means *check this*, and the new `--send-data-safety`
-means *publish it* — and the output distinguishes `data safety declaration
-sent` from `data safety declaration checked, not sent`, which are different
-facts and only one of them was previously sayable. The structure check runs on
-every upload as it always did, because the run that publishes is the one that
-cannot afford to meet a broken CSV.
+So sending it is an act you perform, not a thing that happens to you:
 
-**Breaking for anyone passing `--data-safety`,** which is the intended usage: a
-build script that passes it on every upload keeps validating the declaration
-and stops publishing it. Add `--send-data-safety` to the run after you edit the
-CSV.
+```bash
+cux_ship play data-safety                 # store/play/data-safety.csv
+cux_ship play data-safety --csv other.csv
+cux_ship play data-safety --dry-run       # checks it, sends nothing, offline
+```
 
-**`--data-safety` alone is not now a no-op, and the difference matters.** With
-the CSV in its default place, `store/play/data-safety.csv`, `store/play/` is
-also the listing tree, so `--metadata` is inferred and the run publishes your
-store listing — as it did before this change. Only a project keeping the CSV
-outside `store/play/` reaches the `nothing to do` refusal. If what you want is
-to validate an edit and touch nothing, that is `cux_ship verify`.
+It takes no track, no artifact and no release notes, because it is not a
+release — it describes the app. It opens no edit. It prints `data safety
+declaration sent`, never `updated`: with no read of what Play holds, a run
+knows what it posted and not what changed.
 
-**`--send-data-safety` on its own sends the declaration and nothing else.** Two
-things had to change for that sentence to be true. It no longer opens an edit
-it puts nothing in — it used to open one, commit it, and print `committed —
-store listing updated`, a write that changed nothing described as a change,
-which is the same defect as the `updated` line above. And it no longer infers
-`--metadata`: the default CSV lives at `store/play/data-safety.csv`, *inside*
-the listing tree, so `store/play/` existing made both defaults resolve at once
-and a run asking only to send the declaration published the live store page
-instead. Naming a tree with `--metadata` still publishes it; inference is what
-stopped, and only for a run that carries no artifact, no locales to delete and
-no explicit tree.
+This is what every comparable tool does. fastlane's `supply` and Gradle Play
+Publisher do not send the declaration at all; the CLI that does spells it
+`gpc data-safety update`, and fastlane keeps Apple's equivalent in
+`upload_app_privacy_details_to_app_store` rather than inside `deliver`.
 
-Found by a consuming project running exactly that command to test the
-declaration-only path, and publishing its store listing.
+**`play upload` still checks the declaration, and no longer has flags for it.**
+`--data-safety` and the never-released `--send-data-safety` are gone; the CSV
+is found at `store/play/data-safety.csv` and structure-checked on every upload,
+because the frequent command is the cheap place to learn the export is
+malformed. A declaration only ever validated by the command that publishes it
+is validated on the worst possible day.
+
+**Breaking, deliberately loudly.** A build script passing `--data-safety` on
+every upload — the intended usage, and the shape that caused this — now fails
+at argument parsing with `Could not find an option named "--data-safety"`.
+That is the point: the alternative was accepting the flag and silently no
+longer publishing, which is the same class of quiet wrongness as the `updated`
+line. Drop the flag from the script, and run `cux_ship play data-safety` on the
+occasions you actually edit the CSV.
 
 ## 3.6.2
 
