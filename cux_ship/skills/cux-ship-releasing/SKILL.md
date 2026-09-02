@@ -150,9 +150,11 @@ Refusals a release runner will actually hit, each meaning what it says:
   the console after each, forever. Run the command after you edit the CSV, and
   not otherwise. It takes no track and no artifact, because it is not a
   release: it describes the app.
-- **`--dry-run` is not offline, and the two stores rehearse differently.** Both
-  authenticate, so neither is *credential-free*; the genuinely offline checks
-  are `cux_ship verify` and the test-suite functions.
+- **`--dry-run` on an upload is not offline, and the two stores rehearse
+  differently.** Both authenticate, so neither is *credential-free*; the
+  genuinely offline checks are `cux_ship verify`, the test-suite functions, and
+  `play data-safety --dry-run`, which returns before it loads a credential
+  because there is no edit for Play to validate.
 
   On **Play** it opens a real edit, does every step inside it, and deletes the
   edit instead of committing, so Google validates the contents and then throws

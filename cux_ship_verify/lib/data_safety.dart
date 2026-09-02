@@ -2,8 +2,8 @@
 //
 // Play's data safety declaration, checked for **structure only**.
 //
-// This file is the one release input Play never rehearses, and the reason is
-// the API it goes to. It is not part of the edit transaction at all: it is a
+// This file is the one Play input Play never rehearses, and the reason is the
+// API it goes to. It is not part of the edit transaction at all: it is a
 // separate POST to `applications/<pkg>/dataSafety`, which validates only the
 // real send and answers with nothing — so there is no dry run against Play,
 // and no read to compare a candidate against. cux_ship sends it from its own

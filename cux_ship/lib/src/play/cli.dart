@@ -1204,7 +1204,11 @@ class PlayDefaults {
   final ListingRequirements? listingRequirements;
 }
 
-/// Called once, immediately before the edit is committed, with a summary of it.
+/// Called once with a summary of what is about to happen, after every local
+/// check and before any credential is loaded — so a typo is reported without
+/// the prompt in the way, and nothing has touched the network when the question
+/// is put. Not "before the commit", which it never was: an edit does not exist
+/// yet at this point, and `play data-safety` opens none at all.
 typedef PlayConfirm = void Function(String summary);
 
 /// Runs [cmd] against Google Play.
@@ -1338,8 +1342,8 @@ Future<void> runPlay(
   }
 
   // Inference applies only where it makes sense. An upload publishes the
-  // listing and the data-safety declaration when the project has them; a
-  // promote touches neither, so those defaults are not offered to it.
+  // listing and checks the data-safety declaration when the project has them;
+  // a promote touches neither, so those defaults are not offered to it.
   final aabPath = opt('aab') ?? defaults.artifact;
   final buildNumber = opt('build-number') ?? defaults.buildNumber;
   final upload = cmd == PlayCommand.upload;

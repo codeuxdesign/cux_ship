@@ -233,9 +233,12 @@ void main() {
     test('a dry run says the file is good and that nothing went', () {
       final output = _runDataSafety(repo, ['--dry-run']);
       expect(output, contains('was not sent'));
-      expect(output, isNot(contains('data safety declaration sent')));
       // No credential is loaded at all, which is what makes this the offline
-      // rehearsal that `play upload --dry-run` is not.
+      // rehearsal that `play upload --dry-run` is not. This is also the whole
+      // guard against a dry run that falls through and sends: a run that did
+      // would die here, at the credential, so asserting that `declaration
+      // sent` never appears would be the unfalsifiable assertion the top of
+      // this file describes.
       expect(output, isNot(contains('absent.json')));
     });
 
