@@ -7,6 +7,7 @@
 // *refuse*, not only the case where it works.
 import 'dart:io';
 
+import 'package:cux_ship/src/config.dart';
 import 'package:cux_ship/src/release.dart';
 import 'package:pub_semver/pub_semver.dart';
 import 'package:test/test.dart';
@@ -167,6 +168,158 @@ void main() {
         ),
         throwsA(isA<ReleaseException>()),
       );
+    });
+  });
+
+  group('resolveReleasedCommit', () {
+    const recording = TagKindConfig(
+      enabled: true,
+      format: defaultUploadTagFormat,
+    );
+
+    /// A second commit on top of the fixture, so HEAD and the recorded commit
+    /// are different objects — the case the lookup exists for.
+    String moveOn() {
+      write('later.txt', 'work after the build');
+      _git.run(['add', '-A']);
+      _git.run(['commit', '-q', '-m', 'later']);
+      return _git.run(['rev-parse', 'HEAD']);
+    }
+
+    String record(String name, String commit) {
+      _git.run(['tag', '-a', name, commit, '-m', 'build']);
+      return commit;
+    }
+
+    test('one upload record names the commit, and says which tag did', () {
+      repo();
+      final built = record(
+        'uploaded/v1.0.3+41',
+        _git.run(['rev-parse', 'HEAD']),
+      );
+      final head = moveOn();
+
+      final released = resolveReleasedCommit(
+        _git,
+        commit: null,
+        buildNumber: '41',
+        uploadTag: recording,
+      );
+
+      expect(released.commit, built);
+      expect(released.commit, isNot(head));
+      expect(released.how, contains('uploaded/v1.0.3+41'));
+    });
+
+    test('no record falls back to HEAD, and says so', () {
+      repo();
+      record('uploaded/v1.0.3+40', _git.run(['rev-parse', 'HEAD']));
+      final head = moveOn();
+
+      final released = resolveReleasedCommit(
+        _git,
+        commit: null,
+        buildNumber: '41',
+        uploadTag: recording,
+      );
+
+      expect(released.commit, head);
+      expect(released.how, contains('no upload record'));
+      expect(released.how, contains('HEAD'));
+    });
+
+    test('two records for one build are refused, naming both', () {
+      repo();
+      record('uploaded/v1.0.3+41', _git.run(['rev-parse', 'HEAD']));
+      record('uploaded/v1.0.4+41', moveOn());
+
+      expect(
+        () => resolveReleasedCommit(
+          _git,
+          commit: null,
+          buildNumber: '41',
+          uploadTag: recording,
+        ),
+        throwsA(
+          isA<ReleaseException>().having(
+            (e) => e.message,
+            'message',
+            allOf(
+              contains('uploaded/v1.0.3+41'),
+              contains('uploaded/v1.0.4+41'),
+              contains('--commit'),
+            ),
+          ),
+        ),
+      );
+    });
+
+    test('a build number is matched whole, not as a prefix', () {
+      repo();
+      record('uploaded/v1.0.3+410', _git.run(['rev-parse', 'HEAD']));
+      final head = moveOn();
+
+      final released = resolveReleasedCommit(
+        _git,
+        commit: null,
+        buildNumber: '41',
+        uploadTag: recording,
+      );
+
+      expect(released.commit, head, reason: '+410 is not build 41');
+    });
+
+    test('--commit wins, and the record is not consulted', () {
+      repo();
+      record('uploaded/v1.0.3+41', _git.run(['rev-parse', 'HEAD']));
+      final head = moveOn();
+
+      final released = resolveReleasedCommit(
+        _git,
+        commit: head.substring(0, 8),
+        buildNumber: '41',
+        uploadTag: recording,
+      );
+
+      expect(released.commit, head.substring(0, 8));
+      expect(released.how, contains('--commit'));
+      expect(released.how, isNot(contains('uploaded/')));
+    });
+
+    test('recording off means HEAD, whatever tags exist', () {
+      repo();
+      record('uploaded/v1.0.3+41', _git.run(['rev-parse', 'HEAD']));
+      final head = moveOn();
+
+      final released = resolveReleasedCommit(
+        _git,
+        commit: null,
+        buildNumber: '41',
+        uploadTag: const TagKindConfig(
+          enabled: false,
+          format: defaultUploadTagFormat,
+        ),
+      );
+
+      expect(released.commit, head);
+    });
+
+    test('a custom format is what is globbed', () {
+      repo();
+      final built = record('b41-of-1.0.3', _git.run(['rev-parse', 'HEAD']));
+      moveOn();
+
+      final released = resolveReleasedCommit(
+        _git,
+        commit: null,
+        buildNumber: '41',
+        uploadTag: const TagKindConfig(
+          enabled: true,
+          format: 'b{build}-of-{version}',
+        ),
+      );
+
+      expect(released.commit, built);
     });
   });
 

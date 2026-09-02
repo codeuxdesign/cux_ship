@@ -181,9 +181,21 @@ every later run found it locally, said it was leaving it alone, and finished
 green while the remote never received it — leaving the release untagged
 anywhere a later reader looks.
 
+**Without `--commit`, the build number finds the commit through the upload
+record.** `uploaded/v1.0.3+41` names the commit build 41 was built from — it is
+written from the manifest's `gitSha` before the store is contacted, which is
+the whole reason it exists — so with `tag.upload` on, `--build-number 41` looks
+for exactly one tag in the configured format with that build and the version
+globbed, dereferences it, and says which tag answered. None falls back to HEAD
+as before, and says so, since recording can have been turned on after the
+build went up. More than one is refused naming them: one build number on two
+commits is the collision the record exists to make visible. `--commit` wins
+outright, and the tag is not consulted.
+
 ```
---commit       what to tag; defaults to HEAD. Any commit-ish; resolved before
-               it is compared, so a short sha or HEAD names what you meant
+--commit       what to tag; without it, --build-number is looked up in the
+               upload record, and failing that HEAD. Any commit-ish; resolved
+               before it is compared, so a short sha or HEAD names what you meant
 --version      what was released; defaults to that commit's pubspec.yaml
 --branch       where the bump belongs; defaults to main
 --no-tag / --no-bump / --no-push / --dry-run
@@ -940,12 +952,13 @@ one committed and reviewed.
   Connect API. Screenshots are handled; videos are not. They use the same
   three-step reservation/upload/commit flow as a screenshot asset, so the shape
   is already here, but nothing has been written or tested.
-- **Resolving a build number to a commit.** `release finish` takes `--commit`
-  (defaulting to HEAD) rather than working out which commit carries a given
-  store build number, because how a project allocates build numbers is its own
-  business — Hold the Wheel uses `git-buildnumber` and a notes ref. A project
-  that wants `--build-number 41` to find its own commit has to resolve it and
-  pass `--commit`.
+- **Resolving a build number to a commit through anything but the upload
+  record.** `release finish --build-number 41` finds the released commit through
+  `uploaded/v*+41` when `tag.upload` is on, because that tag is this tool's own
+  record and names the manifest's `gitSha`. How a project *allocates* build
+  numbers is still its own business — Hold the Wheel uses `git-buildnumber` and
+  a notes ref — so with recording off, or for a build uploaded before it was
+  turned on, the commit has to be resolved there and passed as `--commit`.
 
 ## Development
 

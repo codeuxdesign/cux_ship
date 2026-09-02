@@ -483,6 +483,76 @@ List<String> finishRelease(Git git, FinishOptions options) {
 
 String _short(String sha) => sha.length > 8 ? sha.substring(0, 8) : sha;
 
+/// The commit `release finish` tags, and one line saying where it came from.
+typedef ReleasedCommit = ({String commit, String how});
+
+/// Which commit was released, when the caller did or did not say.
+///
+/// [commit] wins outright when given: it is the manifest's `gitSha` handed
+/// over by a script that already knows, and no tag is consulted. Otherwise,
+/// with a [buildNumber] and [uploadTag] recording enabled, the upload record
+/// is asked — `uploaded/v{version}+{build}` is this tool's own tag naming the
+/// commit the artifact was built from, so with the version globbed and the
+/// build fixed there is at most one honest answer. This used to be refused as
+/// the project's business, because *allocating* a build number is; but
+/// reading a record this tool wrote is not, and until now the record was
+/// written on upload and ignored on finish, leaving every consumer to
+/// dereference the tag by hand or default to HEAD — which during a promotion
+/// is very often not the promoted commit.
+///
+/// Exactly one match resolves. None falls back to HEAD as before, and says so,
+/// because recording can have been turned on after this build went up. More
+/// than one is refused naming them: one build number on two commits is the
+/// collision the record exists to make visible, not something to pick from.
+ReleasedCommit resolveReleasedCommit(
+  Git git, {
+  required String? commit,
+  required String? buildNumber,
+  required TagKindConfig uploadTag,
+}) {
+  if (commit != null) {
+    return (commit: commit, how: 'tagging $commit, from --commit');
+  }
+  final head = git.run(['rev-parse', 'HEAD']);
+  if (buildNumber == null || !uploadTag.enabled) {
+    return (commit: head, how: 'tagging HEAD, ${_short(head)}');
+  }
+  // The version is the unknown: a glob for it, and the build number literal,
+  // is the format with its two holes filled the two different ways.
+  final pattern = uploadTag.format
+      .replaceAll('{version}', '*')
+      .replaceAll('{build}', buildNumber);
+  final matches = git
+      .run(['tag', '--list', pattern])
+      .split('\n')
+      .where((line) => line.isNotEmpty)
+      .toList();
+  if (matches.isEmpty) {
+    return (
+      commit: head,
+      how:
+          'no upload record matches $pattern, so tagging HEAD, '
+          '${_short(head)} — pass --commit if that is not the released commit',
+    );
+  }
+  if (matches.length > 1) {
+    throw ReleaseException(
+      'build $buildNumber has more than one upload record:\n'
+      '${matches.map((m) => '  $m').join('\n')}\n'
+      'One build number on more than one version is what the record exists '
+      'to catch. Pass --commit to say which was released.',
+    );
+  }
+  final tag = matches.single;
+  // `^{commit}` because the record is an annotated tag, whose own id is not a
+  // commit — the same reason taggedCommit dereferences.
+  final recorded = git.run(['rev-parse', 'refs/tags/$tag^{commit}']);
+  return (
+    commit: recorded,
+    how: 'build $buildNumber was uploaded from ${_short(recorded)}, by $tag',
+  );
+}
+
 /// The commit a tag resolves to, or null when the tag is absent.
 ///
 /// `^{commit}` because these are annotated tags: plain `rev-parse <tag>` yields

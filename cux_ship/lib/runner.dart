@@ -585,8 +585,10 @@ class _FinishCommand extends Command<void> {
       ..addOption(
         'commit',
         help:
-            'The commit that was released, and what gets tagged. Defaults to '
-            'HEAD.',
+            'The commit that was released, and what gets tagged. Without it, '
+            '--build-number is resolved through the upload record when '
+            'tag.upload is enabled and exactly one tag names that build; '
+            'otherwise HEAD.',
       )
       ..addOption(
         'version',
@@ -597,7 +599,10 @@ class _FinishCommand extends Command<void> {
       )
       ..addOption(
         'build-number',
-        help: 'Recorded in the tag message, so a tag names its build.',
+        help:
+            'Recorded in the tag message, so a tag names its build — and, '
+            'without --commit, looked up in the upload record to find the '
+            'commit it was built from.',
       )
       ..addOption(
         'destination',
@@ -665,7 +670,19 @@ class _FinishCommand extends Command<void> {
       );
       final pubspecPath = pubspecPathFor(appDir);
 
-      final commit = args.option('commit') ?? git.run(['rev-parse', 'HEAD']);
+      final config = ProjectConfig.read(git.root);
+      // Said out loud whichever way it went, because the three answers —
+      // what was typed, what the upload record names, HEAD for want of
+      // either — are indistinguishable in a tag and very different in what
+      // they claim.
+      final released = resolveReleasedCommit(
+        git,
+        commit: args.option('commit'),
+        buildNumber: args.option('build-number'),
+        uploadTag: config.uploadTag,
+      );
+      stdout.writeln('==> ${released.how}');
+      final commit = released.commit;
 
       // Read off the released commit rather than the working tree: the tree
       // may already have moved on, and the version that was published is a
@@ -697,7 +714,7 @@ class _FinishCommand extends Command<void> {
         FinishOptions(
           commit: commit,
           version: version,
-          releaseTag: ProjectConfig.read(git.root).releaseTag,
+          releaseTag: config.releaseTag,
           buildNumber: args.option('build-number'),
           appDir: appDir,
           destination: args.option('destination')!,

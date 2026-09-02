@@ -33,6 +33,18 @@ a decision, and what `release finish` leaves behind — and only an absent one i
 reported. `--changelog` names the file and `--app-dir` the pubspec, as
 everywhere else.
 
+**`release finish --build-number N` finds the released commit through the
+upload record.** The README called resolving a build number to a commit the
+project's business, because allocating one is; but `uploaded/v{version}+{build}`
+is this tool's own record, written from the manifest's `gitSha` before the
+store is contacted, and until now it was written on upload and ignored on
+finish. Both consumers dereferenced it by hand or passed HEAD, which during a
+promotion is very often not the promoted commit. Without `--commit`, and with
+`tag.upload` on, exactly one tag in the configured format with that build and
+the version globbed resolves the commit and is named in the output; none falls
+back to HEAD as before and says so; more than one is refused naming them.
+`--commit` wins outright, and the tag is not consulted.
+
 ## 4.0.0
 
 **The Play uploader checks an image's alpha channel and bit depth, and stops
