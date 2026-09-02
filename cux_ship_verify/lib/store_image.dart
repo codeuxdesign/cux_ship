@@ -21,6 +21,13 @@
 // device and per store, and there are dozens of them. What is here is what is
 // true of an image whatever it is a picture of.
 
+/// Which container a header came out of.
+///
+/// Carried because one of the rules below applies to a PNG and not to a JPEG,
+/// and because a check that cannot tell them apart cannot say so. See
+/// `docs/design/store-image-rules.md`.
+enum ImageFormat { png, jpeg }
+
 /// What a screenshot has to satisfy, read straight out of the file header.
 class ImageInfo {
   const ImageInfo({
@@ -28,6 +35,7 @@ class ImageInfo {
     required this.height,
     required this.hasAlpha,
     required this.bitDepth,
+    required this.format,
   });
 
   final int width;
@@ -43,7 +51,14 @@ class ImageInfo {
   /// the call site would mean knowing the channel count, which the header of a
   /// palettised PNG does not give directly. The messages do the arithmetic in
   /// prose instead.
+  ///
+  /// Read for a JPEG too, and *not* checked for one — see
+  /// [imageEncodingProblem]. Reported rather than suppressed because the field
+  /// is what the file says, and a parser that returned 8 for a 12-bit JPEG
+  /// would be lying to whatever asks next.
   final int bitDepth;
+
+  final ImageFormat format;
 }
 
 int _be16(List<int> bytes, int offset) =>
@@ -82,6 +97,7 @@ ImageInfo? readImageInfo(List<int> bytes) {
       height: _be32(bytes, 20),
       hasAlpha: hasAlphaChannel || _hasTrnsChunk(bytes),
       bitDepth: bytes[24],
+      format: ImageFormat.png,
     );
   }
 
@@ -117,8 +133,11 @@ ImageInfo? readImageInfo(List<int> bytes) {
           hasAlpha: false,
           // The frame header's sample precision, which sits between the
           // segment length and the height — the same byte the dimensions are
-          // read relative to, so this needs no extra bounds check.
+          // read relative to, so this needs no extra bounds check. 8 for the
+          // baseline SOF0 every capture and export writes; 12 is legal only
+          // under SOF1 and SOF2, and 2 to 16 under the lossless SOF3.
           bitDepth: bytes[i + 4],
+          format: ImageFormat.jpeg,
         );
       }
       final length = _be16(bytes, i + 2);
@@ -258,7 +277,23 @@ String? imageEncodingProblem(ImageInfo image, StoreImageRules rules) {
   // refuse one, and failing it would be this package enforcing a rule with no
   // failure under it. That is the mistake the aspect-ratio note in
   // play_metadata.dart exists to refuse to make.
-  if (image.bitDepth > 8) {
+  //
+  // **PNG only, and for the same reason.** Every justification under this
+  // check is PNG's: Play states a depth for PNG and none for JPEG — "24-bit"
+  // in "JPEG or 24-bit PNG (no alpha)" modifies the PNG, not the JPEG beside
+  // it — the set Apple was observed refusing was a PNG, and `screenshots
+  // flatten` decodes PNG and nothing else. Applied to a JPEG this quoted Play
+  // for a rule Play does not state, offered a PNG refusal as evidence about a
+  // JPEG, and named a remedy that throws (the CLI walks `.png`, so it would
+  // skip the file, exit 0, and leave verify still refusing it) — a loop, and
+  // the same shape as the greyscale-with-alpha gate found in review.
+  //
+  // A >8-bit JPEG is legal and essentially unproducible: baseline SOF0 is
+  // 8-bit by definition, 12 needs SOF1 or SOF2, and reading one needs a
+  // libjpeg built `--with-12bit`, which libjpeg-turbo — Chrome, Skia, most of
+  // Android — is not. So it is a rule with no observed failure and no working
+  // remedy. Measured and argued in docs/design/store-image-rules.md.
+  if (image.format == ImageFormat.png && image.bitDepth > 8) {
     return 'is ${image.bitDepth} bits per channel; ${rules.store} takes 8 — '
         '${rules.depthRule}.\n'
         '  `screenshots flatten` does not fix this: it removes the alpha '

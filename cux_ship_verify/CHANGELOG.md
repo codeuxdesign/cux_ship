@@ -36,6 +36,23 @@ Fewer than 8 bits is *not* refused: a greyscale or palettised PNG has 8-bit
 palette entries, no store has been seen to refuse one, and failing it would be
 this package inventing a rule.
 
+**And the depth rule is PNG-only**, which it was not when first written. Every
+justification under it is PNG's: in *"JPEG or 24-bit PNG (no alpha)"* the
+`24-bit` modifies the PNG, so Play states no JPEG depth; the set Apple was
+observed refusing was a PNG; and `screenshots flatten` cannot open a JPEG —
+it throws, and through the CLI it walks `.png`, so it would skip the file, exit
+0, and leave the refusal standing. Applied to a JPEG the check quoted Play for
+a rule Play does not state and named a remedy that loops. A >8-bit JPEG is
+legal under SOF1 and SOF2 and essentially unproducible — baseline SOF0 is 8-bit
+by definition, and reading 12 needs a libjpeg built `--with-12bit`, which
+libjpeg-turbo is not — so it is accepted, and `ImageInfo` carries `format` so
+the check can tell. `bitDepth` is still read for a JPEG, because it is what the
+file says.
+
+**The stores' published rules, the three decisions and the research under each
+are in `docs/design/store-image-rules.md`** — including what is deliberately
+not checked, and what would bring the JPEG half back.
+
 ## 1.9.0
 
 **`checkPlayTree`** — the Play listing tree, offline. Text limits, the two

@@ -43,18 +43,28 @@ List<int> be32(int value) => [
   value & 0xFF,
 ];
 
-/// A minimal JPEG: SOI, then an SOF0 carrying the dimensions.
-Uint8List jpeg({required int width, required int height, int depth = 8}) =>
-    Uint8List.fromList([
-      0xFF, 0xD8, // SOI
-      0xFF, 0xC0, // SOF0
-      0x00, 0x11, // segment length
-      depth, // precision
-      (height >> 8) & 0xFF, height & 0xFF,
-      (width >> 8) & 0xFF, width & 0xFF,
-      0x03, // components
-      ...List.filled(9, 0),
-    ]);
+/// A minimal JPEG: SOI, then a start-of-frame carrying the dimensions.
+///
+/// [marker] is the SOFn, and it is a parameter because sample precision is not
+/// free of it: SOF0 is baseline and 8-bit by definition, and 12 bits is legal
+/// only under SOF1 (extended sequential) or SOF2 (progressive). A 12-bit SOF0
+/// fixture would be a file no encoder can produce, so the one case that needs
+/// depth 12 passes 0xC1 with it.
+Uint8List jpeg({
+  required int width,
+  required int height,
+  int depth = 8,
+  int marker = 0xC0,
+}) => Uint8List.fromList([
+  0xFF, 0xD8, // SOI
+  0xFF, marker, // SOFn
+  0x00, 0x11, // segment length
+  depth, // precision
+  (height >> 8) & 0xFF, height & 0xFF,
+  (width >> 8) & 0xFF, width & 0xFF,
+  0x03, // components
+  ...List.filled(9, 0),
+]);
 
 late Directory _root;
 
@@ -271,6 +281,26 @@ void main() {
       expect(load, throwsMetadata(contains('16 bits per channel')));
     });
 
+    test('a 12-bit JPEG is accepted, because the depth rule is PNG-only', () {
+      // Every justification under the depth check is PNG's: Play states a
+      // depth for PNG and none for JPEG, the set Apple was observed refusing
+      // was a PNG, and `screenshots flatten` cannot open a JPEG at all — it
+      // would throw, and through the CLI it would skip the file and exit 0,
+      // leaving this refusal standing. Refusing here would be a rule with no
+      // observed failure and no working remedy.
+      //
+      // SOF1, because 12 bits is illegal under the baseline SOF0.
+      writeValidTree();
+      File(
+        '${_root.path}/listings/en-US/screenshots/APP_IPHONE_67/01-ride.png',
+      ).deleteSync();
+      writeBytes(
+        'listings/en-US/screenshots/APP_IPHONE_67/01-ride.jpg',
+        jpeg(width: 1290, height: 2796, depth: 12, marker: 0xC1),
+      );
+      expect(load, returnsNormally);
+    });
+
     test('more than ten is refused', () {
       writeValidTree();
       // Ten more alongside the one writeValidTree left, so eleven in total.
@@ -475,7 +505,22 @@ $reviewNotesMarker
       // header, one byte before the height the dimensions come from — so a
       // wrong offset here would show up as wrong dimensions too.
       expect(readImageInfo(jpeg(width: 8, height: 8))!.bitDepth, 8);
-      expect(readImageInfo(jpeg(width: 8, height: 8, depth: 12))!.bitDepth, 12);
+      expect(
+        readImageInfo(
+          jpeg(width: 8, height: 8, depth: 12, marker: 0xC1),
+        )!.bitDepth,
+        12,
+      );
+    });
+
+    test('reports which container it read', () {
+      // The depth rule applies to one of these and not the other, so the two
+      // have to be tellable apart after parsing.
+      expect(readImageInfo(png(width: 1, height: 1))!.format, ImageFormat.png);
+      expect(
+        readImageInfo(jpeg(width: 8, height: 8))!.format,
+        ImageFormat.jpeg,
+      );
     });
 
     test('returns null for anything else', () {
