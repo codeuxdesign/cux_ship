@@ -56,8 +56,9 @@ version exists: the workspace cannot resolve a constraint naming a version no
 member is at, so a feature branch cannot raise it and then be tested. Publishing
 `cux_ship` against `^1.9.0` would let a consumer resolve a `cux_ship_verify`
 without `imageEncodingProblem` in it, and fail to compile.
-**Play's data safety declaration is published when you ask for it, and checked
-every time.** `play upload` sent the CSV on every run that was given one, and
+
+**Play's data safety declaration is published when you ask for it.**
+`play upload` sent the CSV on every run that was given one, and
 Play files each POST as a pending **App content → Data safety** change whether
 or not an answer moved — so an app uploaded weekly accumulated one unsubmitted
 review per upload, against a declaration nobody had touched in months. The line
@@ -75,15 +76,27 @@ CSV sent, is state outside the repository, which is worse than the problem.
 So `--data-safety` now means *check this*, and the new `--send-data-safety`
 means *publish it* — and the output distinguishes `data safety declaration
 sent` from `data safety declaration checked, not sent`, which are different
-facts and only one of them was previously sayable. The structure check still
-runs on every upload, because the run that publishes is the one that cannot
-afford to meet a broken CSV.
+facts and only one of them was previously sayable. The structure check runs on
+every upload as it always did, because the run that publishes is the one that
+cannot afford to meet a broken CSV.
 
 **Breaking for anyone passing `--data-safety`,** which is the intended usage: a
 build script that passes it on every upload keeps validating the declaration
 and stops publishing it. Add `--send-data-safety` to the run after you edit the
-CSV. A run whose only argument was `--data-safety` now refuses as `nothing to
-do` rather than committing an empty edit.
+CSV.
+
+**`--data-safety` alone is not now a no-op, and the difference matters.** With
+the CSV in its default place, `store/play/data-safety.csv`, `store/play/` is
+also the listing tree, so `--metadata` is inferred and the run publishes your
+store listing — as it did before this change. Only a project keeping the CSV
+outside `store/play/` reaches the `nothing to do` refusal. If what you want is
+to validate an edit and touch nothing, that is `cux_ship verify`.
+
+**A run that sends only the declaration no longer opens an edit.** It used to
+open one, put nothing in it, commit it, and print `committed — store listing
+updated` — a write that changed nothing, described as a change, which is the
+same defect as the `updated` line above. Reachable before this release too, as
+`--data-safety` with nothing else.
 
 ## 3.6.2
 

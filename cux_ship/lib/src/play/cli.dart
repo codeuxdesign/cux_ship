@@ -124,6 +124,34 @@ ServiceAccountCredentials _loadCredentials() {
   }
 }
 
+/// What a run does with a data safety CSV it has already read and checked:
+/// the text to POST, or the line to print instead. Exactly one is non-null.
+///
+/// **The two halves are returned together because separating them is the bug.**
+/// 3.6.2 printed `data safety declaration updated` beside a POST it made
+/// unconditionally: the announcement and the act were two statements, and
+/// nothing made them agree. A record cannot say "not sent" about a CSV it also
+/// hands over.
+///
+/// Pure, and lifted out of [runPlay], for a reason worth stating plainly: the
+/// POST happens after `edits.commit`, so a test that spawns the CLI without
+/// credentials stops long before it and can only ever observe the *notice*. A
+/// review of this change made the point by inserting an unconditional
+/// `dataSafetyCsv = csv` beside the gate — the run then printed "not sent" and
+/// sent it anyway, and every test still passed. The decision lives here so it
+/// can be pinned directly rather than through its own announcement.
+({String? send, String? notice}) planDataSafety({
+  required String csv,
+  required bool send,
+}) => send
+    ? (send: csv, notice: null)
+    : (
+        send: null,
+        notice:
+            '==> data safety declaration checked, not sent — pass '
+            '--send-data-safety when it has changed',
+      );
+
 /// Sent with a plain POST rather than through `api.applications.dataSafety`,
 /// which cannot handle this endpoint: Play answers a successful declaration with
 /// `204 No Content`, and the generated wrapper casts the body to a Map — so a
@@ -1233,13 +1261,10 @@ Future<void> runPlay(
   // send behind a flag, a run whose whole content was a local check would
   // reach Play for no reason at all.
   //
-  // **`--send-data-safety` alone still opens an edit it puts nothing in**, and
-  // that is not what this guard is about. The declaration is a separate API
-  // that needs no edit, so a run sending only that commits an empty one and
-  // the commit line calls it a listing update — untrue, and pre-dating this
-  // flag: `--data-safety` alone did the same. Fixing it means making the edit
-  // conditional on there being edit work, which is a change to this function's
-  // transaction and belongs in its own commit, not folded into this one.
+  // **`--send-data-safety` alone is deliberately let through**, and opens no
+  // edit at all — see `needsEdit` below. The declaration is a separate API, so
+  // a run sending only that has a real job and nothing to put in a
+  // transaction.
   if (cmd == PlayCommand.upload &&
       aabPath == null &&
       metadataPath == null &&
@@ -1329,13 +1354,12 @@ Future<void> runPlay(
     }
   }
 
-  // **The declaration this run will send, or null because it will not.** The
-  // one gate, deliberately: the POST is after the commit and past every test
-  // this package can run offline, so a second condition down there would be a
-  // second thing to get right where nothing can watch. Assigned here, where
-  // the same `sendDataSafety` also decides what the run says it is doing, and
-  // the notice is the observable that the CSV was left unsent.
+  // **The declaration this run will send, or null because it will not**, and
+  // the line to print when it will not. Both come from [planDataSafety], which
+  // is where the decision is pinned — see its comment for why it is not pinned
+  // here.
   String? dataSafetyCsv;
+  String? dataSafetyNotice;
   if (dataSafetyPath != null) {
     final f = File(dataSafetyPath);
     if (!f.existsSync()) {
@@ -1364,14 +1388,9 @@ Future<void> runPlay(
       );
     }
 
-    if (sendDataSafety) {
-      dataSafetyCsv = csv;
-    } else {
-      stdout.writeln(
-        '==> data safety declaration checked, not sent — pass '
-        '--send-data-safety when it has changed',
-      );
-    }
+    final plan = planDataSafety(csv: csv, send: sendDataSafety);
+    dataSafetyCsv = plan.send;
+    dataSafetyNotice = plan.notice;
   }
 
   final dryRun = flag('dry-run');
@@ -1461,6 +1480,14 @@ Future<void> runPlay(
   // listing rather than being chosen separately.
   final notesLanguage = metadata?.details['defaultLanguage'] ?? 'en-US';
 
+  // Printed here rather than where it was decided, so that it follows every
+  // local refusal instead of preceding some of them. A run that dies on
+  // `--release-notes and --changelog both supply the notes` should not have
+  // already announced what it did with a declaration it is not going to reach.
+  if (dataSafetyNotice != null) {
+    stdout.writeln(dataSafetyNotice);
+  }
+
   // Asked after every offline check and before any credential is loaded, so a
   // typo in the listing tree is reported without the prompt in the way, and
   // nothing has touched the network by the time the question is put.
@@ -1495,6 +1522,45 @@ Future<void> runPlay(
     AndroidPublisherApi.androidpublisherScope,
   ]);
   final api = AndroidPublisherApi(client);
+
+  // **What an edit is for.** Every write below goes through one; the data
+  // safety declaration does not, being a separate API on the application
+  // rather than on a version of it.
+  final needsEdit =
+      aab != null ||
+      promoteFrom != null ||
+      metadata != null ||
+      deleteLocales.isNotEmpty;
+
+  // So a run publishing only the declaration opens no edit. It used to open
+  // one, put nothing in it, commit it, and print `committed — store listing
+  // updated` — a write that changed nothing, announced as a change, which is
+  // the same defect as the `updated` line this flag was added to fix. Reachable
+  // before this flag existed too, as `--data-safety` with nothing else.
+  //
+  // The ordering rule the commit imposes is vacuous here rather than broken.
+  // The declaration is sent after the commit so that a release which failed to
+  // commit cannot leave a declaration describing it; with no edit there is no
+  // release for it to be ahead of.
+  if (!needsEdit) {
+    try {
+      if (dryRun) {
+        stdout.writeln('==> dry run — data safety declaration not sent');
+      } else if (dataSafetyCsv != null) {
+        await _publishDataSafety(client, packageName, dataSafetyCsv);
+        stdout.writeln('==> data safety declaration sent');
+      }
+    } on _Abort catch (e) {
+      // Only _Abort, matching the edit path: `_publishDataSafety` goes through
+      // a plain client rather than the generated API, so a rejection arrives
+      // as this and never as a DetailedApiRequestError.
+      stderr.writeln('cux_ship play: ${e.message}');
+      exitCode = 1;
+    } finally {
+      client.close();
+    }
+    return;
+  }
 
   String? editId;
 

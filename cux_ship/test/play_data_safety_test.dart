@@ -11,14 +11,22 @@
 // later; both lines claimed an update, the console listed an unsubmitted Data
 // safety change, and nothing in the CSV had changed for weeks.
 //
-// Nothing here reaches Play, and nothing here can: the POST is after the commit
-// and past anything an offline suite can follow. So the gate is deliberately
-// *one* condition — the CSV is held for the send or the notice is printed
-// instead, in the same `if` — and these cases assert on the half that happens
-// before a credential is even loaded. Which one ran is the observable for which
-// one the POST will get.
+// **Two suites, because the subprocess cases cannot see the thing that
+// matters.** The POST is after `edits.commit`; a spawned CLI with no credential
+// stops long before it, so those cases can only ever observe what the run
+// *says*. An earlier version of this file asserted that a non-sending run never
+// prints `data safety declaration sent` — which was unfalsifiable, since the
+// process always died first, and a review proved it by typoing that string and
+// watching all five cases pass.
+//
+// So the decision itself is a pure function, `planDataSafety`, tested in
+// process against its return value; the subprocess cases cover the arguments
+// and the announcement, which is all they can honestly cover. The one thing
+// still unpinned is the call site handing `plan.send` to the POST — nothing
+// offline reaches it, and this file no longer implies otherwise.
 import 'dart:io';
 
+import 'package:cux_ship/src/play/cli.dart';
 import 'package:test/test.dart';
 
 import 'cli_snapshot.dart';
@@ -82,6 +90,39 @@ String _run(Directory repo, List<String> args) {
 }
 
 void main() {
+  group('planDataSafety', () {
+    test('without the flag it hands over nothing to send', () {
+      final plan = planDataSafety(csv: _csv, send: false);
+      // The assertion the subprocess cases cannot make. Restoring the 3.6.2
+      // behaviour means this returning the CSV, and nothing about the printed
+      // output would change.
+      expect(plan.send, isNull);
+      expect(plan.notice, contains('checked, not sent'));
+    });
+
+    test('with the flag it hands over the CSV verbatim', () {
+      final plan = planDataSafety(csv: _csv, send: true);
+      // Verbatim matters: Play validates the whole export, and a declaration
+      // that arrives trimmed or re-joined is rejected one cell at a time.
+      expect(plan.send, _csv);
+      expect(plan.notice, isNull);
+    });
+
+    test('it never both sends and says it did not', () {
+      // The invariant the record exists for. 3.6.2 could hold both positions
+      // at once because the announcement and the POST were separate
+      // statements; here one value carries both and they cannot disagree.
+      for (final send in [true, false]) {
+        final plan = planDataSafety(csv: _csv, send: send);
+        expect(
+          (plan.send == null) != (plan.notice == null),
+          isTrue,
+          reason: 'exactly one of send/notice must be set, for send=$send',
+        );
+      }
+    });
+  });
+
   late Directory repo;
   setUp(() => repo = _repo());
 
@@ -134,11 +175,12 @@ void main() {
       'de-DE',
     ]);
     expect(output, contains('data safety declaration checked, not sent'));
-    // The claim the console contradicted. Neither "updated" nor "sent" may
-    // appear on a run that published nothing.
-    expect(output, isNot(contains('data safety declaration sent')));
-    expect(output, isNot(contains('data safety declaration updated')));
-    // And the confirmation prompt does not list a file it will not publish.
+    // Deliberately no `isNot(contains('declaration sent'))` here. That line is
+    // emitted after `edits.commit` and this process dies at the credential, so
+    // the assertion could never have failed — `planDataSafety` above is what
+    // actually pins it.
+    //
+    // The confirmation prompt does not list a file it will not publish.
     expect(output, isNot(contains('data safety   ')));
   });
 
