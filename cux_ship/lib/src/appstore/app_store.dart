@@ -1294,8 +1294,8 @@ class AppStore {
       throw AscApiException(404, [
         'no app with bundle id "$bundleId".',
         'Either the app record has not been created yet — it cannot be created '
-            'over the API, see docs/RELEASING-APPLE.md §1.3 — or this API key '
-            'cannot see it.',
+            'over the API; create it in App Store Connect first — or this API '
+            'key cannot see it.',
       ], request: 'GET /v1/apps');
     }
     // filter[bundleId] is a prefix match on Apple's side, so an app called

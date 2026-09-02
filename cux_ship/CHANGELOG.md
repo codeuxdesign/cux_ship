@@ -15,6 +15,14 @@ tool. A flat layout is unchanged; an explicit `--metadata` still wins; a split
 layout missing the platform still yields the parent, which the loader refuses
 naming the path, rather than a silent listing-less publish.
 
+**The missing-credentials message for App Store Connect names `cux_ship
+secrets exec`.** It named `tool/with-secrets.sh` and `docs/RELEASING-APPLE.md`
+— one repository's wrapper from before `secrets exec` replaced it, which no
+consumer has — in the one message an operator meets on their first run on a
+machine without credentials, while the Play message beside it had said `secrets
+exec` all along. Two comments and the no-such-app message pointed at the same
+absent document and are corrected with it.
+
 ## 4.0.0
 
 **The Play uploader checks an image's alpha channel and bit depth, and stops

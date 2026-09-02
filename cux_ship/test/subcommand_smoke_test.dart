@@ -141,6 +141,33 @@ void main() {
     });
   }
 
+  // The first thing an operator meets on a machine without credentials. It
+  // named `tool/with-secrets.sh` and `docs/RELEASING-APPLE.md`, one
+  // repository's wrapper from before `secrets exec` existed, which no consumer
+  // has — and the Play message beside it had said `secrets exec` all along.
+  test('the missing-credentials message names secrets exec', () {
+    final result = Process.runSync(
+      Platform.resolvedExecutable,
+      [
+        '--enable-asserts',
+        cliSnapshot,
+        'appstore',
+        'builds',
+        '--bundle-id',
+        'design.codeux.consumer',
+      ],
+      workingDirectory: repo.path,
+      // Empty counts as unset, so the test holds on a machine that has them.
+      environment: {'APPLE_API_KEY_ID': '', 'APPLE_API_PRIVATE_KEY_PATH': ''},
+    );
+    final stderr = '${result.stderr}';
+    expect(result.exitCode, isNot(0), reason: stderr);
+    expect(stderr, contains('no App Store Connect credentials'));
+    expect(stderr, contains('`cux_ship secrets exec`'));
+    expect(stderr, isNot(contains('with-secrets')));
+    expect(stderr, isNot(contains('RELEASING-APPLE')));
+  });
+
   // Offline refusals, testable end to end because they fire before any
   // credential is loaded. The build number is required by decision rather
   // than accident — the 2.2.0 `wait` note made the same call — so the

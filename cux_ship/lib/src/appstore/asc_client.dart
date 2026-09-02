@@ -155,7 +155,7 @@ class AscCredentials {
     this.keyFileName,
   });
 
-  /// From the environment `tool/with-secrets.sh` sets up.
+  /// From the environment `cux_ship secrets exec` sets up.
   ///
   /// Returns null rather than throwing when nothing is configured, so a command
   /// that only needs to validate a metadata tree can run with no credentials at

@@ -53,8 +53,8 @@
 //
 // What is *not* here is everything Apple has no API for: creating the app
 // record, the App Privacy questionnaire, the agreements, and pricing. None of
-// them are per-release state, so a normal release touches none of them. See
-// docs/RELEASING-APPLE.md §4.
+// them are per-release state, so a normal release touches none of them; they
+// are done once, by hand, in App Store Connect.
 import 'dart:io';
 
 import 'package:args/args.dart';
@@ -1237,11 +1237,16 @@ Future<void> runAsc(
   try {
     final loaded = AscCredentials.fromEnvironment();
     if (loaded == null) {
+      // The same route the Play message names. This used to send people to a
+      // `tool/with-secrets.sh` and a `docs/RELEASING-APPLE.md` that exist in
+      // no consumer — the names of one repository's wrapper from before
+      // `secrets exec` replaced it, surviving in the one message an operator
+      // meets on their first run without credentials.
       fail(
         'no App Store Connect credentials.\n'
         '  APPLE_API_KEY_ID, APPLE_API_ISSUER_ID and APPLE_API_PRIVATE_KEY_PATH\n'
-        '  are set by tool/with-secrets.sh. Run this through it, or export them\n'
-        '  yourself. See docs/RELEASING-APPLE.md §1.',
+        '  are not set. Run this through `cux_ship secrets exec`, which writes\n'
+        '  the key file and sets all three, or export them yourself.',
       );
     }
     credentials = loaded;
