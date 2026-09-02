@@ -1205,10 +1205,14 @@ class PlayDefaults {
 }
 
 /// Called once with a summary of what is about to happen, after every local
-/// check and before any credential is loaded — so a typo is reported without
-/// the prompt in the way, and nothing has touched the network when the question
-/// is put. Not "before the commit", which it never was: an edit does not exist
-/// yet at this point, and `play data-safety` opens none at all.
+/// check but one and before any credential is loaded — so a typo is reported
+/// without the prompt in the way, and nothing has touched the network when the
+/// question is put. The one is the release notes read from a changelog, which
+/// `runPlay` resolves inside the edit because a promote does not know its
+/// version until Play has said what is on the source track; a section missing
+/// there is reported after the prompt, though still before any bytes go up.
+/// Not "before the commit", which it never was: an edit does not exist yet at
+/// this point, and `play data-safety` opens none at all.
 typedef PlayConfirm = void Function(String summary);
 
 /// Runs [cmd] against Google Play.
@@ -1563,9 +1567,10 @@ Future<void> runPlay(
     stdout.writeln(dataSafetyNote);
   }
 
-  // Asked after every offline check and before any credential is loaded, so a
-  // typo in the listing tree is reported without the prompt in the way, and
-  // nothing has touched the network by the time the question is put.
+  // Asked after every offline check but the changelog's — `notesFor` above
+  // runs inside the edit — and before any credential is loaded, so a typo in
+  // the listing tree is reported without the prompt in the way, and nothing
+  // has touched the network by the time the question is put.
   //
   // --dry-run skips it: the edit is deleted rather than committed, so nothing
   // becomes visible and there is nothing to confirm.
