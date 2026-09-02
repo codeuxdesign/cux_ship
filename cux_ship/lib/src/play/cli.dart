@@ -1448,8 +1448,20 @@ Future<void> runPlay(
   // that runs most often, so it is the cheapest place to find out the export
   // is malformed. Checking it only where it is published would mean checking
   // it for the first time on the day it goes to Play.
+  //
+  // **And it says so, because a silent check and a skipped one look
+  // identical.** The consumer who upgraded to this read their own upload
+  // output — which mentioned the declaration nowhere — and could not tell
+  // whether the CSV was still being validated or whether the check had left
+  // with the flag. Both readings fit, and one of them means quietly losing
+  // the validation. It is the same failure `verify` closed on its success
+  // path in 3.4.0: absence of output reading as coverage.
+  String? dataSafetyNote;
   if (dataSafetyPath != null) {
     _readDataSafety(dataSafetyPath);
+    dataSafetyNote =
+        '==> data safety declaration checked; sending it is '
+        '"cux_ship play data-safety"';
   }
 
   final dryRun = flag('dry-run');
@@ -1538,6 +1550,14 @@ Future<void> runPlay(
   // release notes in a locale the listing does not have, so this follows the
   // listing rather than being chosen separately.
   final notesLanguage = metadata?.details['defaultLanguage'] ?? 'en-US';
+
+  // Printed here rather than where the check ran, so it follows every local
+  // refusal instead of preceding some of them: a run that dies on
+  // `--release-notes and --changelog both supply the notes` should not have
+  // already reported on a declaration it never got to.
+  if (dataSafetyNote != null) {
+    stdout.writeln(dataSafetyNote);
+  }
 
   // Asked after every offline check and before any credential is loaded, so a
   // typo in the listing tree is reported without the prompt in the way, and

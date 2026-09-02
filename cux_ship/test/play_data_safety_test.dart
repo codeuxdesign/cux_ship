@@ -193,6 +193,19 @@ void main() {
       expect(output, contains('not well formed'));
     });
 
+    test('says it checked, so silence cannot be read as skipping', () {
+      // A silent check and an absent check produce identical output, and the
+      // consumer who upgraded to this hit exactly that: their upload mentioned
+      // the declaration nowhere, and "it still validates" and "the check left
+      // with the flag" both fitted. The second reading costs somebody their
+      // structural validation without telling them.
+      final output = _run(repo, ['--delete-locale', 'de-DE']);
+      expect(output, contains('data safety declaration checked'));
+      // And names where sending went, since this is the line a reader who
+      // just dropped the flag will actually see.
+      expect(output, contains('cux_ship play data-safety'));
+    });
+
     test('publishes the listing it is asked for, unchanged by any of this', () {
       // The direction that would break every consumer if the split went wrong.
       final output = _run(repo, ['--delete-locale', 'de-DE']);

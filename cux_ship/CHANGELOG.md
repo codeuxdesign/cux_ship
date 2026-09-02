@@ -90,12 +90,19 @@ Publisher do not send the declaration at all; the CLI that does spells it
 `gpc data-safety update`, and fastlane keeps Apple's equivalent in
 `upload_app_privacy_details_to_app_store` rather than inside `deliver`.
 
-**`play upload` still checks the declaration, and no longer has flags for it.**
-`--data-safety` and the never-released `--send-data-safety` are gone; the CSV
-is found at `store/play/data-safety.csv` and structure-checked on every upload,
-because the frequent command is the cheap place to learn the export is
+**`play upload` still checks the declaration, says so, and no longer has flags
+for it.** `--data-safety` and the never-released `--send-data-safety` are gone;
+the CSV is found at `store/play/data-safety.csv` and structure-checked on every
+upload, because the frequent command is the cheap place to learn the export is
 malformed. A declaration only ever validated by the command that publishes it
 is validated on the worst possible day.
+
+It prints `data safety declaration checked; sending it is "cux_ship play
+data-safety"`, because a silent check and an absent one look identical: the
+first consumer to upgrade dropped the flag, saw an upload that mentioned the
+declaration nowhere, and could not tell whether the validation had survived or
+left with the flag. One of those readings quietly costs you the check. Same
+failure `verify` closed on its success path in 3.4.0.
 
 **Breaking, deliberately loudly — and legibly.** A build script passing
 `--data-safety` on every upload, which is the intended usage and the shape that
