@@ -2,21 +2,18 @@
 //
 // Play's data safety declaration, checked for **structure only**.
 //
-// This file is the one release input with no pre-release check of any kind, and
-// the reason is in cux_ship's own upload path. `play upload --dry-run` discards
-// its edit rather than validating it, and skips the declaration outright —
-// `dry run — data safety declaration not sent`. In a real run it is a separate
-// POST to `applications/<pkg>/dataSafety`, deliberately *after* the commit,
-// because the declaration is not versioned with a release and applies to the
-// app as a whole: sending it first would change what Play shows users even if
-// the edit then failed to commit and the release never happened.
+// This file is the one release input Play never rehearses, and the reason is
+// the API it goes to. It is not part of the edit transaction at all: it is a
+// separate POST to `applications/<pkg>/dataSafety`, which validates only the
+// real send and answers with nothing — so there is no dry run against Play,
+// and no read to compare a candidate against. cux_ship sends it from its own
+// command, `play data-safety`, whose `--dry-run` is this check and nothing
+// more; `play upload` runs this check on every upload and never sends.
 //
-// That ordering is right and is not being changed. It does mean the failure
-// window cannot be closed by reordering — every other Play input fails
-// per-call inside the edit, or at commit, or is rehearsable, and this one is
-// none of those. It fails after the release is already public. So an offline
-// check is not merely the cheapest place to catch a broken declaration; it is
-// the only place.
+// Every other Play input fails per-call inside the edit, or at commit, or is
+// rehearsable, and this one is none of those: it fails at Play, on the day it
+// is sent. So an offline check is not merely the cheapest place to catch a
+// broken declaration; it is the only place before that day.
 //
 // **Structure, never content.** Whether the answers are *true* — whether a
 // declaration matches what an app actually does — is a question about that app,

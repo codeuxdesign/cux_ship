@@ -85,7 +85,7 @@ release — it describes the app. It opens no edit. It prints `data safety
 declaration sent`, never `updated`: with no read of what Play holds, a run
 knows what it posted and not what changed.
 
-This is what every comparable tool does. fastlane's `supply` and Gradle Play
+No comparable tool found does otherwise. fastlane's `supply` and Gradle Play
 Publisher do not send the declaration at all; the CLI that does spells it
 `gpc data-safety update`, and fastlane keeps Apple's equivalent in
 `upload_app_privacy_details_to_app_store` rather than inside `deliver`.

@@ -13,10 +13,12 @@
 // safety change, and nothing in the CSV had changed for weeks.
 //
 // **What these cases can and cannot see.** They spawn the CLI with the service
-// account pointed at a file that does not exist, so every one of them stops at
-// the credential. That is after all argument handling and after the
-// confirmation, and before any network call — so the arguments a run resolved,
-// and what it says it is about to do, are observable, and the POST is not.
+// account pointed at a file that does not exist, so no case gets past the
+// credential: most stop earlier, at a refusal or a dry run, and the ones that
+// would go on to write stop there. That is after all argument handling and
+// after the confirmation, and before any network call — so the arguments a run
+// resolved, and what it says it is about to do, are observable, and the POST
+// is not.
 //
 // An earlier version of this file asserted that a non-sending upload never
 // prints `data safety declaration sent`, which was unfalsifiable: the process
@@ -91,9 +93,9 @@ Directory _repoWithTree() {
 ///
 /// **The service account variable is pointed at a path that does not exist**
 /// rather than left to the environment. A developer with a real one set would
-/// otherwise have these cases authenticate against Google — and the two that
-/// get as far as the credential are the two that must not send anything, so
-/// the one machine where the test could do damage is the one where it would.
+/// otherwise have these cases authenticate against Google — and the cases that
+/// get as far as the credential are exactly the ones that would go on to write,
+/// so the one machine where the test could do damage is the one where it would.
 /// `_loadCredentials` refuses a missing file, which is a deterministic stop
 /// just past the last line these cases assert on.
 String _run(Directory repo, List<String> args) {
@@ -144,30 +146,19 @@ void main() {
     late Directory repo;
     setUp(() => repo = _repoWithTree());
 
-    test('never mentions sending the declaration, whatever it is given', () {
+    test('refuses the retired flags by name rather than ignoring them', () {
       // The whole bug, in the only form an offline test can put it: the flag
       // that used to make an upload send is gone, so there is nothing to pass
-      // that would make one send. `--data-safety` and `--send-data-safety` are
-      // both refused by the parser now, which is the loud half of the break —
-      // a caller that used to publish finds out at upgrade rather than by the
-      // console filling with pending reviews.
-      for (final args in [
-        <String>['--delete-locale', 'de-DE'],
-        <String>['--data-safety', 'store/play/data-safety.csv'],
-        <String>['--send-data-safety'],
-      ]) {
-        final output = _run(repo, args);
-        expect(
-          output,
-          isNot(contains('data safety declaration sent')),
-          reason: 'upload must not send, given $args',
-        );
-      }
-    });
-
-    test('refuses the retired flags by name rather than ignoring them', () {
-      // Silence here would be the worse failure: a script that keeps passing
-      // `--data-safety` and keeps parsing would go on believing it publishes.
+      // that would make one send. Refusing it by name is the loud half of the
+      // break — silence would be the worse failure, because a script that
+      // keeps passing `--data-safety` and keeps parsing would go on believing
+      // it publishes, and find out from the console filling with pending
+      // reviews rather than at upgrade.
+      //
+      // Deliberately no assertion that an upload never prints `data safety
+      // declaration sent`: every upload here dies at the credential before any
+      // send could run, so that assertion could not fail — see the top of this
+      // file.
       for (final flag in ['--data-safety=x.csv', '--send-data-safety']) {
         expect(
           _run(repo, [flag]),
@@ -239,11 +230,15 @@ void main() {
     });
 
     test('takes an explicit --csv outside the listing tree', () {
-      final output = _runDataSafety(repo, [
-        '--csv',
-        'store/play/../play/data-safety.csv',
-      ]);
+      // The default is removed first, so that a run ignoring --csv cannot
+      // pass: an earlier version of this case passed a path that resolved to
+      // the default file, and could not have told the two apart.
+      File('${repo.path}/store/play/data-safety.csv').deleteSync();
+      File('${repo.path}/elsewhere.csv').writeAsStringSync(_csv);
+      final output = _runDataSafety(repo, ['--csv', 'elsewhere.csv']);
       expect(output, contains('About to send the data safety declaration'));
+      expect(output, contains('file   elsewhere.csv'));
+      expect(output, isNot(contains('no data safety CSV')));
     });
 
     test('takes none of the release arguments', () {

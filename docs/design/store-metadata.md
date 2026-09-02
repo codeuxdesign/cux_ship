@@ -347,8 +347,9 @@ its keep only because of 23 Crowdin locales; a single-locale repository gets a
 generation step and nothing else.
 
 **Age ratings and data safety in a shared model.** Programmatic almost nowhere:
-Play's data-safety form and the IARC questionnaire have no API, Apple's is
-Apple-specific JSON, OARS exists only in the AppStream world. These stay
+Play's data-safety form has a write-only API that takes its own CSV export, the
+IARC questionnaire has none, Apple's is Apple-specific JSON, OARS exists only
+in the AppStream world. These stay
 per-store files, and the "what no API can set" tables in the store READMEs
 remain the right artifact.
 

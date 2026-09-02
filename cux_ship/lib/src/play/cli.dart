@@ -163,10 +163,10 @@ String _readDataSafety(String path) {
 /// gates questions on other answers, undocumented, one complaint at a time, and
 /// that text is the only way to find out which cell it objects to.
 ///
-/// **There is no read to compare against, which is why the caller gates this
-/// on a flag rather than on a difference.** The listing images skip when they
-/// already match — each has a sha256, so `_publishMetadata` can say
-/// `4 phoneScreenshots unchanged` and send nothing.
+/// **There is no read to compare against, which is why sending this is its own
+/// command rather than something a run does on a difference.** The listing
+/// images skip when they already match — each has a sha256, so
+/// `_publishMetadata` can say `4 phoneScreenshots unchanged` and send nothing.
 /// `applications.dataSafety` is write-only: v3 has no GET for the labels and
 /// the POST answers `$Empty`, so a run cannot tell an unchanged declaration
 /// from a changed one. Sending it regardless is not free — Play files every

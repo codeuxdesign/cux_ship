@@ -156,10 +156,11 @@ Refusals a release runner will actually hit, each meaning what it says:
 
   On **Play** it opens a real edit, does every step inside it, and deletes the
   edit instead of committing, so Google validates the contents and then throws
-  them away. A strong rehearsal, with two edges: the checks `edits.commit`
+  them away. A strong rehearsal, with one edge: the checks `edits.commit`
   performs are never reached, because the edit is deleted rather than
-  committed, and the data-safety declaration is a separate API outside the
-  edit that a dry run does not send at all.
+  committed. The data-safety declaration is outside the edit and outside
+  `upload` altogether; `play data-safety --dry-run` is the one dry run here
+  that *is* offline, because it checks the CSV and loads no credential.
 
   On the **App Store** there is no edit to open: App Store Connect has no edit
   transaction, so every write lands the moment it is made and a rehearsal can
