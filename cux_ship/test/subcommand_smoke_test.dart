@@ -89,6 +89,7 @@ void main() {
     ['play', 'tracks'],
     ['play', 'listing'],
     ['play', 'version-code'],
+    ['play', 'data-safety'],
     ['verify'],
   ];
 

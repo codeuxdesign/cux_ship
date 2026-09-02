@@ -57,6 +57,80 @@ member is at, so a feature branch cannot raise it and then be tested. Publishing
 `cux_ship` against `^1.9.0` would let a consumer resolve a `cux_ship_verify`
 without `imageEncodingProblem` in it, and fail to compile.
 
+**Play's data safety declaration is its own command.** `play upload` sent the
+CSV on every run that was given one, and Play files each POST as a pending
+**App content → Data safety** change whether or not an answer moved — so an app
+uploaded weekly accumulated one unsubmitted review per upload, against a
+declaration nobody had touched in months. The line it printed, `data safety
+declaration updated`, said the same thing on the run that changed something and
+the run that changed nothing, which is why this took so long to notice.
+
+Nothing can send it only when it differs. The listing images can: each carries
+a sha256, so a publish says `4 phoneScreenshots unchanged` and sends nothing.
+`applications.dataSafety` is write-only — v3 has no GET for the labels and the
+POST answers `$Empty` — so a run genuinely cannot tell an unchanged declaration
+from a changed one. Remembering the last CSV sent would need state outside the
+repository, which is worse than the problem.
+
+So sending it is an act you perform, not a thing that happens to you:
+
+```bash
+cux_ship play data-safety                 # store/play/data-safety.csv
+cux_ship play data-safety --csv other.csv
+cux_ship play data-safety --dry-run       # checks it, sends nothing, offline
+```
+
+It takes no track, no artifact and no release notes, because it is not a
+release — it describes the app. It opens no edit. It prints `data safety
+declaration sent`, never `updated`: with no read of what Play holds, a run
+knows what it posted and not what changed.
+
+No comparable tool found does otherwise. fastlane's `supply` and Gradle Play
+Publisher do not send the declaration at all; the CLI that does spells it
+`gpc data-safety update`, and fastlane keeps Apple's equivalent in
+`upload_app_privacy_details_to_app_store` rather than inside `deliver`.
+
+**`play upload` still checks the declaration, says so, and no longer has flags
+for it.** `--data-safety` and the never-released `--send-data-safety` are gone;
+the CSV is found at `store/play/data-safety.csv` and structure-checked on every
+upload, because the frequent command is the cheap place to learn the export is
+malformed. A declaration only ever validated by the command that publishes it
+is validated on the worst possible day.
+
+It prints `data safety declaration checked; sending it is "cux_ship play
+data-safety"`, because a silent check and an absent one look identical: the
+first consumer to upgrade dropped the flag, saw an upload that mentioned the
+declaration nowhere, and could not tell whether the validation had survived or
+left with the flag. One of those readings quietly costs you the check. Same
+failure `verify` closed on its success path in 3.4.0.
+
+**Breaking, deliberately loudly — and legibly.** A build script passing
+`--data-safety` on every upload, which is the intended usage and the shape that
+caused this, now fails:
+
+```
+cux_ship play: --data-safety was removed. Sending the data safety declaration is its own command now:
+
+      cux_ship play data-safety
+
+  An upload still checks store/play/data-safety.csv on every run and no longer
+  sends it. …
+```
+
+Failing is the point: the alternative was accepting the flag and silently no
+longer publishing, which is the same class of quiet wrongness as the `updated`
+line. But the first consumer to upgrade read the parser's own answer —
+`Could not find an option named "--data-safety"` followed by a usage dump — as
+cux_ship being broken rather than as the flag having moved, and they were
+right to. That is what a parser says about a *typo*, and it cannot tell a typo
+from a deletion. So `--data-safety` is still declared, hidden, for no reason
+other than to be refused with somewhere to go — and `--send-data-safety`
+beside it, which never shipped and so can only be held by somebody who tracked
+this branch, because the one place it is written down is here.
+
+Drop the flag from the script, and run `cux_ship play data-safety` on the
+occasions you actually edit the CSV.
+
 ## 3.6.2
 
 **A listing publish that is going to be refused is refused before it writes

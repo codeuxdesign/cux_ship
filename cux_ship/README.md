@@ -36,7 +36,7 @@ cux_ship appstore upload            play upload            release finish
          appstore beta-release      play tracks            screenshots flatten
          appstore beta-groups       play listing           verify
          appstore builds            play version-code      secrets add
-         appstore versions                                 secrets check
+         appstore versions          play data-safety       secrets check
          appstore screenshot-types                         secrets list
          appstore build-number                             secrets remove
          appstore wait                                     secrets exec

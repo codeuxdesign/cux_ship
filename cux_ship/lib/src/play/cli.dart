@@ -124,6 +124,35 @@ ServiceAccountCredentials _loadCredentials() {
   }
 }
 
+/// The declaration at [path], read and checked for structure, or a refusal.
+///
+/// Shared by the two commands that touch it, and that sharing is the point:
+/// `upload` checks the declaration it will never send, so that the day somebody
+/// runs `play data-safety` is not the day they find out the CSV is malformed.
+/// A file only ever validated by the command that publishes it is validated on
+/// the worst day.
+///
+/// Structure only — whether the answers are *true* is not a question this or
+/// any other program can ask.
+String _readDataSafety(String path) {
+  final file = File(path);
+  if (!file.existsSync()) {
+    _fail('no such data safety CSV: $path');
+  }
+  final csv = file.readAsStringSync();
+  if (csv.trim().isEmpty) {
+    _fail('$path is empty');
+  }
+  final problems = checkDataSafety(csv, where: path);
+  if (problems.isNotEmpty) {
+    _fail(
+      'the data safety declaration is not well formed:\n'
+      '${problems.map((ReleaseProblem p) => '    $p').join('\n')}',
+    );
+  }
+  return csv;
+}
+
 /// Sent with a plain POST rather than through `api.applications.dataSafety`,
 /// which cannot handle this endpoint: Play answers a successful declaration with
 /// `204 No Content`, and the generated wrapper casts the body to a Map — so a
@@ -133,6 +162,21 @@ ServiceAccountCredentials _loadCredentials() {
 /// Going direct also surfaces Play's rejection text in full. Its validation
 /// gates questions on other answers, undocumented, one complaint at a time, and
 /// that text is the only way to find out which cell it objects to.
+///
+/// **There is no read to compare against, which is why sending this is its own
+/// command rather than something a run does on a difference.** The listing
+/// images skip when they already match — each has a sha256, so
+/// `_publishMetadata` can say `4 phoneScreenshots unchanged` and send nothing.
+/// `applications.dataSafety` is write-only: v3 has no GET for the labels and
+/// the POST answers `$Empty`, so a run cannot tell an unchanged declaration
+/// from a changed one. Sending it regardless is not free — Play files every
+/// POST as a pending **App content → Data safety** change, and an app uploaded
+/// weekly accumulates one per upload under "Changes not yet submitted for
+/// review" with nothing in the CSV having moved.
+///
+/// The alternative, hashing the CSV against a last-sent value, needs state that
+/// outlives the process and lives outside the repository, which is worse than
+/// the problem it solves.
 Future<void> _publishDataSafety(
   AuthClient client,
   String packageName,
@@ -916,6 +960,23 @@ Future<void> _publishMetadata(
 enum PlayCommand {
   upload('upload'),
   promote('promote'),
+
+  /// **Its own verb rather than a flag on [upload]**, for the same reason
+  /// [promote] is: it is a different act, not a variation on a release.
+  ///
+  /// The declaration is not versioned with a release — it describes the app —
+  /// and it goes to a different API, needing no edit transaction. Bolted onto
+  /// `upload` it dragged six guards behind it, because every one of that
+  /// command's assumptions (there is an edit, there is a track, there are
+  /// release notes) is false for it; two of those guards were found late, and
+  /// one by publishing a listing nobody asked for.
+  ///
+  /// It is also what everyone else does. `gpc data-safety update` is a
+  /// subcommand; fastlane keeps Apple's equivalent in
+  /// `upload_app_privacy_details_to_app_store` rather than inside `deliver`;
+  /// the community plugin that sends Play's is a separate action. No tool
+  /// found sends it as part of a release.
+  dataSafety('data-safety'),
   tracks('tracks'),
   listing('listing'),
   versionCode('version-code');
@@ -943,6 +1004,23 @@ ArgParser buildPlayParser(PlayCommand cmd) {
       'package',
       help: 'applicationId, e.g. design.codeux.holdthewheel.',
     );
+
+  // An app-level write with no edit, no track and no release, so it takes none
+  // of the release arguments below rather than accepting and ignoring them.
+  if (cmd == PlayCommand.dataSafety) {
+    return parser
+      ..addOption(
+        'csv',
+        help:
+            'CSV of Data Safety answers, exported from the console. Defaults '
+            'to store/play/data-safety.csv.',
+      )
+      ..addFlag(
+        'dry-run',
+        negatable: false,
+        help: 'Check the declaration and print what would be sent.',
+      );
+  }
 
   // `tracks` and `listing` need nothing else; `version-code` needs to know
   // which track to read.
@@ -1031,10 +1109,23 @@ ArgParser buildPlayParser(PlayCommand cmd) {
           'metadata',
           help: 'Directory of store listing text and images to publish.',
         )
-        ..addOption(
-          'data-safety',
-          help: 'CSV of Data Safety answers, exported from the console.',
-        )
+        // **Retired, and declared only so the refusal can say where they
+        // went.** To a parser a deleted option and a typo are the same event:
+        // it answers `Could not find an option named "--data-safety"` and
+        // dumps the usage block, which reads as a broken tool rather than a
+        // moved one. The first consumer to upgrade said exactly that — the
+        // failure landed after their script's own progress output, the message
+        // named the flag but not its replacement, and the one line that
+        // mattered sat between twenty flag descriptions and had to be grepped
+        // out of a terminal by somebody who already knew what they were
+        // looking for.
+        //
+        // Hidden, so they are absent from the usage they are not part of, and
+        // refused in [runPlay] rather than accepted here. The break stays as
+        // loud as it was — same exit code, same refusal to run — and stops
+        // being a puzzle.
+        ..addOption('data-safety', hide: true)
+        ..addFlag('send-data-safety', hide: true, negatable: false)
         ..addMultiOption(
           'delete-locale',
           help:
@@ -1069,6 +1160,7 @@ ArgParser buildPlayParser(PlayCommand cmd) {
     case PlayCommand.tracks:
     case PlayCommand.listing:
     case PlayCommand.versionCode:
+    case PlayCommand.dataSafety:
       throw StateError('unreachable: handled above');
   }
 
@@ -1112,7 +1204,15 @@ class PlayDefaults {
   final ListingRequirements? listingRequirements;
 }
 
-/// Called once, immediately before the edit is committed, with a summary of it.
+/// Called once with a summary of what is about to happen, after every local
+/// check but one and before any credential is loaded — so a typo is reported
+/// without the prompt in the way, and nothing has touched the network when the
+/// question is put. The one is the release notes read from a changelog, which
+/// `runPlay` resolves inside the edit because a promote does not know its
+/// version until Play has said what is on the source track; a section missing
+/// there is reported after the prompt, though still before any bytes go up.
+/// Not "before the commit", which it never was: an edit does not exist yet at
+/// this point, and `play data-safety` opens none at all.
 typedef PlayConfirm = void Function(String summary);
 
 /// Runs [cmd] against Google Play.
@@ -1132,12 +1232,94 @@ Future<void> runPlay(
   List<String> multi(String name) =>
       args.options.contains(name) ? args.multiOption(name) : const [];
 
+  // First, ahead of even the package name: somebody running the old command
+  // is owed the sentence "it moved to here", not a different complaint about
+  // a run that was never going to work.
+  final retired = opt('data-safety') != null
+      ? '--data-safety'
+      : (flag('send-data-safety') ? '--send-data-safety' : null);
+  if (retired != null) {
+    _fail(
+      '$retired was removed. Sending the data safety declaration is its own '
+      'command now:\n'
+      '\n'
+      '      cux_ship play data-safety\n'
+      '\n'
+      '  An upload still checks store/play/data-safety.csv on every run and '
+      'no longer\n'
+      '  sends it. Play files every send as a change awaiting review whether '
+      'or not\n'
+      '  an answer moved, and offers no way to read back what it holds, so '
+      'sending is\n'
+      '  asked for rather than done on a cadence. Drop $retired from this '
+      'run, and\n'
+      '  run the command above when you edit the CSV.',
+    );
+  }
+
   final packageName = opt('package') ?? defaults.packageName;
   if (packageName == null) {
     _fail(
       'no package name — none could be read from android/app/build.gradle.kts, '
       'so pass --package',
     );
+  }
+
+  // **One POST, no edit, no track, no release.** Everything below this belongs
+  // to a release transaction the declaration is not part of, which is why it
+  // returns here rather than threading a special case through all of it.
+  //
+  // Play files every send as a pending "App content → Data safety" change
+  // whether or not an answer moved, and offers no read of the labels it holds
+  // — v3 has no GET and the POST answers `$Empty` — so nothing can send only
+  // when it differs. Running this command *is* the decision, which is the only
+  // honest form the decision can take.
+  if (cmd == PlayCommand.dataSafety) {
+    final csvPath = opt('csv') ?? defaults.dataSafety;
+    if (csvPath == null) {
+      _fail(
+        'no data safety CSV — none was found at store/play/data-safety.csv, '
+        'so pass --csv',
+      );
+    }
+    // Read and checked before the credential, so a malformed export costs
+    // nothing and a broken one never reaches Play.
+    final csv = _readDataSafety(csvPath);
+    final dryRun = flag('dry-run');
+
+    if (confirm != null && !dryRun) {
+      confirm(
+        '\nAbout to send the data safety declaration for $packageName to '
+        'Google Play.\n'
+        '  file   $csvPath\n'
+        '  It replaces what Play holds, applies to the app rather than to a\n'
+        '  release, and appears in the console as a change awaiting review.\n',
+      );
+    }
+
+    if (dryRun) {
+      stdout.writeln('==> dry run — $csvPath is well formed, and was not sent');
+      return;
+    }
+
+    final client = await clientViaServiceAccount(_loadCredentials(), [
+      AndroidPublisherApi.androidpublisherScope,
+    ]);
+    try {
+      await _publishDataSafety(client, packageName, csv);
+      // "sent", never "updated": with no read of what Play holds, this run
+      // knows what it posted and not what changed.
+      stdout.writeln('==> data safety declaration sent');
+    } on _Abort catch (e) {
+      // Only _Abort. `_publishDataSafety` goes through a plain client rather
+      // than the generated API, so a rejection arrives as this and never as a
+      // DetailedApiRequestError.
+      stderr.writeln('cux_ship play: ${e.message}');
+      exitCode = 1;
+    } finally {
+      client.close();
+    }
+    return;
   }
 
   // Reading needs nothing else, so it goes before the upload path's checks and
@@ -1156,6 +1338,7 @@ Future<void> runPlay(
         await _printVersionCode(api, packageName, opt('track')!);
       case PlayCommand.upload:
       case PlayCommand.promote:
+      case PlayCommand.dataSafety:
         throw StateError('unreachable: guarded by cmd.isRead');
     }
     client.close();
@@ -1163,21 +1346,24 @@ Future<void> runPlay(
   }
 
   // Inference applies only where it makes sense. An upload publishes the
-  // listing and the data-safety declaration when the project has them; a
-  // promote touches neither, so those defaults are not offered to it.
+  // listing and checks the data-safety declaration when the project has them;
+  // a promote touches neither, so those defaults are not offered to it.
   final aabPath = opt('aab') ?? defaults.artifact;
   final buildNumber = opt('build-number') ?? defaults.buildNumber;
   final upload = cmd == PlayCommand.upload;
+  final deleteLocales = multi('delete-locale');
+
   // **Resolved for promote as well as upload**, which it was not: the gate
   // below reads `track == 'production'`, and with metadata null on every
   // promotion that branch could never be taken. A correct condition guarding
   // an unreachable path is worse than a wrong one, because it reads as
   // implemented.
   final metadataPath = opt('metadata') ?? (upload ? defaults.metadata : null);
-  final dataSafetyPath = upload
-      ? (opt('data-safety') ?? defaults.dataSafety)
-      : null;
-  final deleteLocales = multi('delete-locale');
+
+  // Checked by an upload, never sent by one — `play data-safety` is the only
+  // thing that sends it. Inferred rather than flagged, because the check costs
+  // nothing and a declaration is not something a release should have to name.
+  final dataSafetyPath = upload ? defaults.dataSafety : null;
 
   // Promotion is the deliberate opposite of a build: it publishes bits Play
   // already holds, which is the whole reason a wider track can be trusted to
@@ -1195,15 +1381,15 @@ Future<void> runPlay(
   // listing typo should not need an artifact to fix. Requiring at least one
   // stops a no-argument invocation from opening and committing an empty edit,
   // which succeeds and does nothing.
+  //
+  // The declaration is not on this list and cannot be: an upload only ever
+  // checks it, and a run whose whole content is a local check has nothing to
+  // reach Play for. Sending it is `cux_ship play data-safety`.
   if (cmd == PlayCommand.upload &&
       aabPath == null &&
       metadataPath == null &&
-      dataSafetyPath == null &&
       deleteLocales.isEmpty) {
-    _fail(
-      'nothing to do — pass --aab, --metadata, --data-safety or '
-      '--delete-locale',
-    );
+    _fail('nothing to do — pass --aab, --metadata or --delete-locale');
   }
 
   if (promoteFrom != null && promoteFrom == opt('track')) {
@@ -1265,29 +1451,25 @@ Future<void> runPlay(
     }
   }
 
-  String? dataSafetyCsv;
+  // **Checked here and sent nowhere.** An upload never publishes the
+  // declaration — that is `cux_ship play data-safety` — but it is the command
+  // that runs most often, so it is the cheapest place to find out the export
+  // is malformed. Checking it only where it is published would mean checking
+  // it for the first time on the day it goes to Play.
+  //
+  // **And it says so, because a silent check and a skipped one look
+  // identical.** The consumer who upgraded to this read their own upload
+  // output — which mentioned the declaration nowhere — and could not tell
+  // whether the CSV was still being validated or whether the check had left
+  // with the flag. Both readings fit, and one of them means quietly losing
+  // the validation. It is the same failure `verify` closed on its success
+  // path in 3.4.0: absence of output reading as coverage.
+  String? dataSafetyNote;
   if (dataSafetyPath != null) {
-    final f = File(dataSafetyPath);
-    if (!f.existsSync()) {
-      _fail('no such data safety CSV: $dataSafetyPath');
-    }
-    dataSafetyCsv = f.readAsStringSync();
-    if (dataSafetyCsv.trim().isEmpty) {
-      _fail('$dataSafetyPath is empty');
-    }
-    // **This is the one input whose failure lands after the release is
-    // public.** It is sent by a separate POST, deliberately after the commit,
-    // and `--dry-run` does not send it at all — so this is the last moment
-    // anything can refuse a broken declaration. Structure only; whether the
-    // answers are true is not a question this can ask.
-    final problems = checkDataSafety(dataSafetyCsv, where: dataSafetyPath);
-    if (problems.isNotEmpty) {
-      _fail(
-        'the data safety declaration would be sent after the release is '
-        'committed, and it is not well formed:\n'
-        '${problems.map((ReleaseProblem p) => '    $p').join('\n')}',
-      );
-    }
+    _readDataSafety(dataSafetyPath);
+    dataSafetyNote =
+        '==> data safety declaration checked; sending it is '
+        '"cux_ship play data-safety"';
   }
 
   final dryRun = flag('dry-run');
@@ -1377,9 +1559,18 @@ Future<void> runPlay(
   // listing rather than being chosen separately.
   final notesLanguage = metadata?.details['defaultLanguage'] ?? 'en-US';
 
-  // Asked after every offline check and before any credential is loaded, so a
-  // typo in the listing tree is reported without the prompt in the way, and
-  // nothing has touched the network by the time the question is put.
+  // Printed here rather than where the check ran, so it follows every local
+  // refusal instead of preceding some of them: a run that dies on
+  // `--release-notes and --changelog both supply the notes` should not have
+  // already reported on a declaration it never got to.
+  if (dataSafetyNote != null) {
+    stdout.writeln(dataSafetyNote);
+  }
+
+  // Asked after every offline check but the changelog's — `notesFor` above
+  // runs inside the edit — and before any credential is loaded, so a typo in
+  // the listing tree is reported without the prompt in the way, and nothing
+  // has touched the network by the time the question is put.
   //
   // --dry-run skips it: the edit is deleted rather than committed, so nothing
   // becomes visible and there is nothing to confirm.
@@ -1393,7 +1584,6 @@ Future<void> runPlay(
         versionCode: opt('version-code'),
         aabPath: aabPath,
         metadataPath: metadataPath,
-        dataSafetyPath: dataSafetyPath,
         changelogPath: changelogPath,
         deleteLocales: deleteLocales,
         rollout: opt('rollout'),
@@ -1599,9 +1789,6 @@ Future<void> runPlay(
       await api.edits.delete(packageName, editId);
       editId = null;
       stdout.writeln('==> dry run — edit discarded, nothing published');
-      if (dataSafetyCsv != null) {
-        stdout.writeln('==> dry run — data safety declaration not sent');
-      }
       return;
     }
 
@@ -1611,14 +1798,16 @@ Future<void> runPlay(
       '==> committed — ${released.isEmpty ? "store listing updated" : released}',
     );
 
-    // A different API from the edit, and deliberately after the commit. The
-    // declaration is not versioned with a release and applies to the app as a
-    // whole, so sending it first would change what Play shows users even if the
-    // edit then failed to commit and the release never happened.
-    if (dataSafetyCsv != null) {
-      await _publishDataSafety(client, packageName, dataSafetyCsv);
-      stdout.writeln('==> data safety declaration updated');
-    }
+    // **No data safety POST here, and that is the change.** It used to sit
+    // exactly at this line, after the commit, sending on every upload that was
+    // given a CSV — and Play files each send as a pending "App content → Data
+    // safety" change whether or not an answer moved, so the console collected
+    // one per upload forever. Nothing could tell the difference: v3 has no GET
+    // for the labels, so a run cannot compare, and the line it printed said
+    // `updated` either way.
+    //
+    // Sending it is `cux_ship play data-safety` now — its own verb, because it
+    // was never part of this transaction to begin with.
   } on _Abort catch (e) {
     stderr.writeln('cux_ship play: ${e.message}');
     exitCode = 1;
@@ -1687,7 +1876,6 @@ String _summarizePlay({
   required String? versionCode,
   required String? aabPath,
   required String? metadataPath,
-  required String? dataSafetyPath,
   required String? changelogPath,
   required List<String> deleteLocales,
   required String? rollout,
@@ -1703,7 +1891,6 @@ String _summarizePlay({
     },
     'artifact': aabPath,
     'listing': metadataPath,
-    'data safety': dataSafetyPath,
     'notes from': changelogPath,
     'removing': deleteLocales.isEmpty ? null : deleteLocales.join(', '),
     'rollout': rollout == null ? null : '$rollout of users',

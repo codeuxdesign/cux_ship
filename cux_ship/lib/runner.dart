@@ -466,6 +466,10 @@ class _PlaySubcommand extends Command<void> {
     PlayCommand.promote =>
       'Point a track at a versionCode Play already holds. Builds and uploads '
           'nothing; changes no version.',
+    PlayCommand.dataSafety =>
+      'Send the Data safety declaration. Its own command because it describes '
+          'the app rather than a release, and Play files every send as a '
+          'change awaiting review.',
     PlayCommand.tracks => 'Print what Play currently has on each track.',
     PlayCommand.listing => 'Print what Play currently holds for the listing.',
     PlayCommand.versionCode =>
