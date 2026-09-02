@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 4.0.1
 
 **An App Store upload or promote defaults to the platform's tree in a split
 `store/appstore/{ios,macos}` layout.** The publish path defaulted to
