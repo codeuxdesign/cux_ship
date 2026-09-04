@@ -517,6 +517,63 @@ than reaching them through `package:cux_ship/verify.dart`. That re-export still
 works and is kept for compatibility, but it brings the whole CLI — googleapis
 included — into the lockfile of every contributor.
 
+### Reading the stores from Dart
+
+**`package:cux_ship/read.dart` answers what the stores hold, as objects.** For a
+release script written in Dart rather than shell, which would otherwise spawn
+this command and match regular expressions against what it printed:
+
+```dart
+import 'package:cux_ship/read.dart';
+
+final play = await PlayReads.open(packageName: 'design.codeux.example');
+try {
+  final tracks = await play.tracks();
+  for (final line in tracks.lines) {
+    log.writeln(line);            // what `play tracks` prints, verbatim
+  }
+  print(tracks.newestVersionCodeOn('internal'));
+} finally {
+  play.close();
+}
+```
+
+```dart
+final apple = await AppStoreReads.open(
+  bundleId: 'design.codeux.example',
+  platform: AscPlatform.ios,
+);
+try {
+  final builds = await apple.builds();
+  print(builds.newestBuildNumber);      // the newest Apple holds
+  print(builds.newestUsable?.buildNumber);  // the newest one promotable now
+  final versions = await apple.versions();
+  print(versions.version('1.4.0')?.appStoreState);
+} finally {
+  apple.close();
+}
+```
+
+`appstore wait` is here too, as `AppStoreReads.awaitBuild`, with an `onProgress`
+callback called once per poll — including the poll that ends the wait — so a
+caller streaming a forty-five-minute wait to a log writes its own heartbeat
+instead of scraping one.
+
+**Every result carries `lines` beside its fields, and the command prints those
+same lines.** Print them and read the fields; a `status` that re-renders a
+store's own table misreports the day the store changes it, and does so silently.
+
+**Reads only, and that is the design.** Nothing here uploads, promotes or
+publishes a listing — those stay commands, because the printed command line is
+what makes a failed release step resumable by hand, and per-step `secrets exec
+--only …` is what keeps a credential out of a step that has no use for it.
+In-process reads do need the credentials in the *calling* process, so a stage
+reading both stores runs under one `secrets exec` carrying both.
+
+Every exported name is a semver promise and the list is deliberately short —
+[docs/design/read-api.md](../docs/design/read-api.md) says what is on it and why
+the store clients are not their own packages.
+
 ### Credentials
 
 **No uploader reads a secrets file or knows what a keychain is.** Every

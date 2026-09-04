@@ -44,6 +44,13 @@ environment:
 # committed pubspec_overrides.yaml does work and is rejected for a worse
 # failure mode. Verified, with what was run:
 # docs/design/publishing-from-a-workspace.md
+#
+# **"Stays" is about the key, not about every invocation.** `dart <entry>` —
+# no `run` — does not inspect the entry's enclosing package and prints
+# nothing, so a consumer that invokes the pinned copy that way sees a clean
+# log. Measured on `--help`: stdout byte-identical at 25 lines, same exit
+# code, four lines of stderr against none. `dart run` and `pub get` still
+# warn. Worth knowing before spending an afternoon on it.
 resolution: workspace
 
 dependencies:

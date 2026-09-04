@@ -4,8 +4,8 @@ Status: **decided**, 21 August 2026, after the second time somebody proposed
 dropping the key. Everything below was verified by running it against
 `cux_ship 3.4.1` and Dart 3.13.0, not read off an issue tracker.
 
-Every consumer of a package published from this repository sees this on **every
-invocation** — `pub get`, `dart run`, a build script, a CI step:
+Every consumer of a package published from this repository sees this on `pub
+get` and on **`dart run`** — so on nearly every build script and CI step:
 
 ```
 Found a pubspec.yaml at ~/.pub-cache/hosted/pub.dev/cux_ship-3.4.1.
@@ -16,6 +16,17 @@ See https://dart.dev/go/pub-workspaces for more information.
 ```
 
 It is noise, it is permanent, and **it is not a bug to fix here.**
+
+**It is, however, avoidable at the call site, which this document used to deny.**
+`dart <entry>` — no `run` — does not inspect the entry's enclosing package and
+prints nothing. Measured on `--help` by the consumer that found it, 4 September
+2026: stdout byte-identical at 25 lines, same exit code, stderr four lines
+against none, startup unchanged at 2.7–3.0 s either way. So a project pinning
+this package can have a clean log today by invoking the entry directly instead
+of through `dart run`. That does not change anything below — `pub get` still
+warns, the key still stays — but the claim that every invocation carries it was
+wrong, and a reader who takes "permanent" to mean "unavoidable" spends an
+afternoon confirming it.
 
 ## The four facts, each checked
 
