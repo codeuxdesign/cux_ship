@@ -183,6 +183,20 @@ PlayTrack playTrackFrom(Track track) => PlayTrack(
 /// **Reading tracks needs an edit even though nothing is modified**, so the
 /// edit is discarded immediately afterwards — in a `finally`, because an edit
 /// left open is a stale draft somebody finds in the console later.
+///
+/// **The discard is best-effort, and that is load-bearing.** Awaiting a
+/// throwing call inside a `finally` discards the exception already in flight,
+/// so a failed cleanup would replace the failure being reported — and the
+/// failure being reported is usually the 403 that says the service account was
+/// never granted this app, which is the only actionable message in the whole
+/// exchange. The upload path abandons its own edit the same way and for the
+/// same reason, in cli.dart.
+///
+/// This used to be safe here by accident rather than by design: the deletion
+/// sat in the same function as the `catch`, and a `catch` runs before its
+/// `finally`, so the real error had already been printed by the time a
+/// cleanup could fail. Splitting the read out for [PlayReads] moved the
+/// `catch` to the caller and took that ordering away with it.
 Future<PlayTracks> readTracks(
   AndroidPublisherApi api,
   String packageName,
@@ -202,7 +216,14 @@ Future<PlayTracks> readTracks(
     return playTracksFrom(packageName, tracks, bundles);
   } finally {
     if (editId != null) {
-      await api.edits.delete(packageName, editId);
+      try {
+        await api.edits.delete(packageName, editId);
+      } catch (_) {
+        // Losing the cleanup is not worth masking the original failure, and
+        // Play expires an abandoned edit on its own. Deliberately silent even
+        // when the read succeeded: a read that answered correctly must not
+        // fail because Play would not take its edit back.
+      }
     }
   }
 }
