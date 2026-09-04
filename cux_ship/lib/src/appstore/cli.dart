@@ -71,6 +71,7 @@ import 'app_store.dart';
 import 'apple_notes.dart';
 import 'asc_client.dart';
 import 'beta_release.dart';
+import 'reads.dart';
 import 'signing_report.dart';
 
 /// Which App Store Connect operation [runAsc] performs.
@@ -1320,13 +1321,13 @@ Future<void> runAsc(
       return;
     }
     if (cmd == AscCommand.builds) {
-      await store.listBuilds(app);
+      await printBuilds(store, app);
     }
     if (cmd == AscCommand.betaGroups) {
       await store.listBetaGroups(app);
     }
     if (cmd == AscCommand.versions) {
-      await store.listVersions(app);
+      await printVersions(store, app);
     }
     if (cmd == AscCommand.screenshotTypes) {
       await store.listScreenshotTypes(app);

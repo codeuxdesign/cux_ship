@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased
+
+**`package:cux_ship/read.dart` answers what the stores hold, as objects.** A
+Dart consumer's release train was reading four regular expressions off this
+command's stdout to answer "which build does each store hold" — an arrangement
+that breaks silently on both sides, since a listing's format is not something
+either party agreed to. Thirteen exported names: `PlayReads` and its track
+model, `AppStoreReads` and its build and version models, `AscPlatform`, the two
+exceptions a wait can end in, and the per-poll progress a wait now reports.
+Every export carries a `show` clause and a test fails if one does not, because
+an export without one hands out the whole library and reads exactly like an
+export with one. Reads only — `upload`, `promote`, `beta-release` and the
+listing publish stay commands, because the printed command line is what makes a
+failed release step resumable by hand and per-step `secrets exec --only …` is
+what keeps a credential away from a step with no use for it.
+[docs/design/read-api.md](../docs/design/read-api.md) records the decision,
+including why the store clients did not become their own packages.
+
+**Every read carries the store's own printed lines beside the parsed values,
+and the commands print those same lines.** One formatter rather than two: a
+consumer that renders store output verbatim — because a status that re-renders
+a store's table misreports the day the format changes, silently — needs the
+lines it prints to be the lines this command prints.
+
+**`appstore builds` lists newest first, by build number rather than by Apple's
+lexical sort.** Apple's `sort=-version` puts build 9 above build 10.
+`appstore build-number` has always sorted numerically before answering, so the
+two commands could name different builds from the same account; they share the
+comparator now. This changes the order of printed output.
+
+**`appstore wait` reports each poll to a callback, and the printing is one
+caller of it.** Unchanged as a command — the same two `==>` lines, and now
+suppressed on a build Apple refuses on the first poll, where "waiting for Apple
+to process" described something that was not about to happen. A library caller
+passes its own reporter and gets every poll including the one that ends the
+wait, so a log can record how a wait ended rather than only that it stopped.
+
 ## 4.0.1
 
 **An App Store upload or promote defaults to the platform's tree in a split
