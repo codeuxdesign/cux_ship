@@ -61,6 +61,24 @@ class AppStoreBuild {
   /// and can no longer be given to a group.
   final bool expired;
 
+  /// [buildNumber] read as an integer, or null when it is not one.
+  ///
+  /// **The form to compare and to order by.** A build number is a string here
+  /// because `CFBundleVersion` is one and Apple will accept `1.2.3`, but
+  /// comparing two of them as strings is wrong the moment they differ in
+  /// width: `"9"` sorts above `"10"`. That mistake has now been made twice
+  /// against this data — once inside this package, where the build listing
+  /// trusted Apple's lexical `sort=-version` while `build-number` sorted
+  /// numerically beside it, and once in a consumer comparing
+  /// [AppStoreBuilds.newestBuildNumber] against an integer out of a git tag.
+  /// Both were invisible while every build number had the same number of
+  /// digits, and both would have surfaced at 1000.
+  ///
+  /// Null rather than a fallback, so a version string that is not a single
+  /// integer is a case the caller has to answer rather than one silently
+  /// ordered as zero.
+  int? get buildNumberAsInt => int.tryParse(buildNumber);
+
   /// Whether this build could be promoted or released now.
   ///
   /// The same rule `appstore build-number` applies, in one place so the two
@@ -93,13 +111,21 @@ class AppStoreBuilds {
   /// could name different builds.
   final List<AppStoreBuild> builds;
 
-  /// The highest build number Apple holds, whatever state it is in.
+  /// The newest build Apple holds, whatever state it is in.
   ///
   /// This is the answer to "which build does the store have", and it is not
   /// the same question as [newestUsable]: a build uploaded four minutes ago is
   /// the newest and is not yet releasable.
-  String? get newestBuildNumber =>
-      builds.isEmpty ? null : builds.first.buildNumber;
+  AppStoreBuild? get newest => builds.isEmpty ? null : builds.first;
+
+  /// [newest]'s build number.
+  ///
+  /// **Do not compare this against another build number as a string** — use
+  /// [AppStoreBuild.buildNumberAsInt], via [newest], which says why. Kept as a
+  /// string because that is what the listing prints and what a caller
+  /// reporting "the store holds 2132" wants; the comparison is a different
+  /// job with a different type.
+  String? get newestBuildNumber => newest?.buildNumber;
 
   /// The newest build that could be promoted or released now, or null.
   AppStoreBuild? get newestUsable {
@@ -139,14 +165,13 @@ class AppStoreBuilds {
 /// The comparator `appstore build-number` has always used, extracted so the
 /// listing sorts the same way.
 ///
-/// `-1` for anything that is not an integer: build numbers here come from
-/// `cux_buildnumber` and are integers, and a sort that throws on a surprise is
-/// a read that fails rather than one that answers.
-int _byBuildNumberDescending(AppStoreBuild a, AppStoreBuild b) {
-  final left = int.tryParse(a.buildNumber) ?? -1;
-  final right = int.tryParse(b.buildNumber) ?? -1;
-  return right.compareTo(left);
-}
+/// Reads through [AppStoreBuild.buildNumberAsInt] rather than parsing again,
+/// so the rule this package orders by and the rule it hands a caller are the
+/// same rule. `-1` for anything that is not an integer: a sort that throws on
+/// a surprise is a read that fails rather than one that answers, and sorting
+/// such a build last is the only ordering that says nothing false about it.
+int _byBuildNumberDescending(AppStoreBuild a, AppStoreBuild b) =>
+    (b.buildNumberAsInt ?? -1).compareTo(a.buildNumberAsInt ?? -1);
 
 /// One `builds` resource, as sent.
 AppStoreBuild appStoreBuildFrom(Map<String, dynamic> resource) {

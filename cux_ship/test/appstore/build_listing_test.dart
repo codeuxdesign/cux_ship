@@ -128,6 +128,38 @@ void main() {
     });
   });
 
+  group('the number a caller compares with', () {
+    test('is an int, because comparing the strings is the same mistake one '
+        'layer up', () {
+      // Found live in the first consumer: `status` took the newest build by
+      // comparing what this package printed against an integer out of a git
+      // tag. Correct only while every build number has the same width — that
+      // account was on 148 through 153 — and wrong at 1000.
+      final listing = listingOf([_build('999'), _build('1000')]);
+
+      expect(listing.newest?.buildNumberAsInt, 1000);
+      // The mistake the accessor exists to prevent, stated so it cannot be
+      // read as a stylistic preference.
+      expect('999'.compareTo('1000'), greaterThan(0));
+    });
+
+    test('is null for a build number that is not one', () {
+      // Apple accepts `1.2.3` as a CFBundleVersion. Null rather than zero, so
+      // the caller answers the case instead of silently ordering it first.
+      final build = listingOf([_build('1.2.3')]).builds.single;
+
+      expect(build.buildNumberAsInt, isNull);
+      expect(build.buildNumber, '1.2.3');
+    });
+
+    test('and such a build sorts last rather than displacing a real one', () {
+      final listing = listingOf([_build('1.2.3'), _build('2131')]);
+
+      expect(listing.newestBuildNumber, '2131');
+      expect(listing.builds.last.buildNumber, '1.2.3');
+    });
+  });
+
   group('newest against newest usable', () {
     test('the newest build is the newest build, still processing or not', () {
       final listing = listingOf([
@@ -136,6 +168,21 @@ void main() {
       ]);
 
       expect(listing.newestBuildNumber, '2132');
+      expect(listing.newest?.processingState, 'PROCESSING');
+    });
+
+    test('and the two accessors are a pair, not the same thing twice', () {
+      // `newest` answers "which build does the store hold" and `newestUsable`
+      // answers "which could I promote now". A consumer wants the first for a
+      // status line and the second before a release.
+      final listing = listingOf([
+        _build('2132', state: 'PROCESSING'),
+        _build('2131'),
+      ]);
+
+      expect(listing.newest?.buildNumber, '2132');
+      expect(listing.newestUsable?.buildNumber, '2131');
+      expect(listing.newest?.buildNumber, listing.newestBuildNumber);
     });
 
     test('while the newest usable one is the newest Apple has processed', () {

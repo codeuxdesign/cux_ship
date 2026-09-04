@@ -30,6 +30,18 @@ lexical sort.** Apple's `sort=-version` puts build 9 above build 10.
 two commands could name different builds from the same account; they share the
 comparator now. This changes the order of printed output.
 
+**A build number is exposed as an integer as well as a string, because the
+lexical mistake reappears one layer up.** `AppStoreBuilds.newestBuildNumber` is
+a `String` — `CFBundleVersion` is one, and Apple accepts `1.2.3` — and the first
+consumer compared it against an integer out of a git tag, which is right only
+while every build number has the same width and wrong at 1000. Found in code
+that had already merged there, by a suite whose fixtures were all equal-width.
+`AppStoreBuild.buildNumberAsInt` is the form to compare and order by, null
+rather than zero for a version string that is not a single integer, and the
+listing's own comparator reads through it so there is one rule rather than two.
+`AppStoreBuilds.newest` is its companion: the build behind `newestBuildNumber`,
+and the pair to `newestUsable`.
+
 **`appstore wait` reports each poll to a callback, and the printing is one
 caller of it.** Unchanged as a command — the same two `==>` lines, and now
 suppressed on a build Apple refuses on the first poll, where "waiting for Apple

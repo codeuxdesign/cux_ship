@@ -75,10 +75,26 @@ numerically before answering, so the two commands could name different builds
 from the same account. The listing now uses that comparator too. It is a change
 to printed output, and it is the change that makes "newest first" true.
 
-`AppStoreBuilds` answers two questions that were one: `newestBuildNumber` is
-the highest build Apple holds, and `newestUsable` is the highest that is
-processed and unexpired. A build uploaded four minutes ago is the first and not
-the second, and "which build does the store hold" wants the first.
+`AppStoreBuilds` answers two questions that were one: `newest` is the highest
+build Apple holds, and `newestUsable` is the highest that is processed and
+unexpired. A build uploaded four minutes ago is the first and not the second,
+and "which build does the store hold" wants the first.
+
+**And the same lexical mistake turned out to be waiting one layer up.** A build
+number is a `String` here because `CFBundleVersion` is one and Apple accepts
+`1.2.3`. The first consumer's `status` compared what this command printed
+against an integer out of a git tag — correct only while every build number has
+the same width, which that account's did, and wrong at 1000. It was found by
+reviewing this export rather than by either suite, because both sides' fixtures
+were equal-width; the consumer had already merged it.
+
+So `AppStoreBuild.buildNumberAsInt` exists, null rather than zero for a version
+string that is not a single integer, and `_byBuildNumberDescending` reads
+through it. One parsing rule, and the rule this package orders by is the rule it
+hands a caller — which is the same argument that made the listing share
+`build-number`'s comparator, applied across the package boundary instead of
+within it. A doc comment alone would have been the weaker half: this repository
+keeps a rule in prose only while it cannot be a check.
 
 ## Not split into its own package
 
