@@ -141,4 +141,54 @@ void main() {
     expect(seen['SSH_AUTH_SOCK'], '/tmp/agent.sock');
     expect(seen, contains('PATH'));
   });
+
+  /// The sops identity, which is the one variable `--only` cannot name.
+  ///
+  /// **It is not a credential *in* the file, so no selector reaches it** — and
+  /// a child that holds it does not need a credential to have been placed,
+  /// because it can decrypt the file and take every one. That makes `--only`'s
+  /// whole promise — a credential nobody named is absent from the child — false
+  /// wherever the identity is the environment variable, which is to say in CI.
+  ///
+  /// `keychain exec` has stripped it since `3d6ee16`; that same commit wired
+  /// `--only` into both exec commands and stripped in only one, with no reason
+  /// recorded. These cases are the other half arriving.
+  ///
+  /// **Only a spawned child can show this.** The variable is removed from a map
+  /// that began as a copy of this process's environment, and a unit test on
+  /// that map is exactly the shape that passed while `--only` was filtering
+  /// placement and restoring everything through `includeParentEnvironment` —
+  /// the defect this file's header is about.
+  group('the sops identity does not reach the child', () {
+    for (final name in const ['SOPS_AGE_KEY', 'SOPS_AGE_KEY_FILE']) {
+      test('$name set by an outer wrapper is removed', () {
+        final seen = childEnvironment(
+          only: ['tokens.wanted'],
+          inherited: {...Platform.environment, name: 'the-master-key'},
+        );
+
+        expect(seen, isNot(contains(name)));
+        // Beside a credential that *was* named, so this cannot pass by the
+        // child having received nothing at all.
+        expect(seen['WANTED_TOKEN'], isNotNull);
+      });
+    }
+
+    test('and is removed with no --only at all, being selector-blind', () {
+      // The property that separates an unconditional strip from one that fires
+      // only when `--only` is given. A run with no selector places every
+      // credential, so it is tempting to say the identity adds nothing there —
+      // it adds the file, including whatever `secrets place` would have
+      // written and this run did not. Making the strip depend on a flag would
+      // also make "does my child hold the master key" a property of an
+      // unrelated argument.
+      final seen = childEnvironment(
+        only: const [],
+        inherited: {...Platform.environment, 'SOPS_AGE_KEY': 'the-master-key'},
+      );
+
+      expect(seen, isNot(contains('SOPS_AGE_KEY')));
+      expect(seen['WANTED_TOKEN'], isNotNull);
+    });
+  });
 }

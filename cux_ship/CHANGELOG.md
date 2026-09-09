@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+**`secrets exec` no longer hands the sops identity to its child.**
+`SOPS_AGE_KEY` and `SOPS_AGE_KEY_FILE` are removed unconditionally, as
+`keychain exec` has removed them since 3.0.0 — and the reason that command's
+comment gives is an argument about `--only` rather than about archives. `--only`
+promises that a credential nobody named is *absent from the child*; a child
+holding the identity does not need one to have been placed, because it can
+decrypt the file and take every one. So wherever the identity was the
+environment variable rather than a key file — which is to say in CI — `--only`
+narrowed nothing at all. Not a gap beside the promise; the promise.
+
+It was an omission rather than a decision. `3d6ee16` wired `--only` into both
+exec commands and stripped in one, and `git log -S` finds no commit in which
+`secrets.dart` ever removed either name.
+
+**Whether this breaks you is a narrow intersection, and worth checking rather
+than assuming.** It is a no-op for any consumer whose identity is the default
+`~/.config/sops/age/keys.txt`: there is no variable in the child's environment
+to remove, and sops keeps resolving that path. It bites only a consumer that
+supplies `SOPS_AGE_KEY` **and** nests a value-touching subcommand — `secrets
+place`, `pack`, `clean` or `add` — inside the wrapper, which then cannot
+decrypt. `secrets list` is unaffected: sops leaves the mapping keys in
+plaintext, which is what makes it the identity-free pre-flight. The fix for the
+one composition that pays is the one this tool already gives for the sibling
+command — run the two as siblings rather than nesting them, a wrapped read and
+an unwrapped write.
+[docs/design/only-selector.md](https://github.com/codeuxdesign/cux_ship/blob/main/docs/design/only-selector.md)
+records the measurement, including the seven scripts checked in the consumer
+that reported it and the one that nests.
+
 **`cux_ship appstore what-to-test` writes the TestFlight "What to Test" on a
 build Apple already holds.** An upload carrying an artifact is three phases —
 transfer the binary, wait five to fifteen minutes for processing, then write
