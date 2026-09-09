@@ -1183,11 +1183,27 @@ typedef PlayConfirm = void Function(String summary);
 /// [args] comes from [buildPlayParser] for the same [cmd], so an option that
 /// belongs to another subcommand is absent rather than null. Anything still
 /// missing falls back to [defaults].
+///
+/// [androidPublisher] replaces the client this would otherwise build from the
+/// service-account credential, and exists so a test can reach the decisions
+/// this function makes. **The one that most needed reaching is the
+/// already-uploaded branch**: an upload lists the edit's bundles and reuses a
+/// versionCode Play already holds rather than failing, which is what makes a
+/// re-run after a partial release safe, and until this parameter existed
+/// nothing could drive it — the client was built at the point of use from the
+/// environment, so the branch was reachable only by uploading to Play.
+///
+/// It covers the two paths that go through the generated API: the reads, and
+/// the upload/promote transaction. **`data-safety` posts through a plain
+/// authenticated client rather than the generated API, and refuses this rather
+/// than ignoring it** — see the throw at the top of that branch for why
+/// "it would fail on the missing credential anyway" is not good enough.
 Future<void> runPlay(
   PlayCommand cmd,
   ArgResults args, {
   PlayDefaults defaults = PlayDefaults.none,
   PlayConfirm? confirm,
+  AndroidPublisherApi? androidPublisher,
 }) async {
   String? opt(String name) =>
       args.options.contains(name) ? args.option(name) : null;
@@ -1238,6 +1254,33 @@ Future<void> runPlay(
   // when it differs. Running this command *is* the decision, which is the only
   // honest form the decision can take.
   if (cmd == PlayCommand.dataSafety) {
+    // **Refused rather than ignored.** This branch posts through a plain
+    // authenticated client instead of the generated API, so a supplied
+    // [androidPublisher] has nothing to replace here and would simply be
+    // dropped.
+    //
+    // The first version left it dropped, reasoning that a test doing this
+    // would fail on the missing credential and reveal itself. That is true of
+    // CI and false of the machine where somebody iterates on a test, which
+    // often has the service-account variable exported or is inside a `secrets
+    // exec` shell — and there the run authenticates for real and sends a real
+    // declaration. Play files every send as a pending "App content → Data
+    // safety" change whether or not an answer moved, which is the accumulation
+    // 4.0.0 cut this command out of the upload to stop. A guard that holds
+    // only where credentials are absent is a property of the environment, not
+    // of the command.
+    //
+    // A `StateError` and not `_fail`: nothing an operator typed can reach
+    // this, so it is a caller's bug, and `_fail` would `exit()` out of the
+    // test that needs to see it.
+    if (androidPublisher != null) {
+      throw StateError(
+        'play data-safety cannot take an androidPublisher: it posts through a '
+        'plain authenticated client rather than the generated API, so a '
+        'supplied one would be ignored and this command would reach Play for '
+        'real.',
+      );
+    }
     final csvPath = opt('csv') ?? defaults.dataSafety;
     if (csvPath == null) {
       _fail(
@@ -1288,10 +1331,7 @@ Future<void> runPlay(
   // Reading needs nothing else, so it goes before the upload path's checks and
   // builds its own client.
   if (cmd.isRead) {
-    final client = await clientViaServiceAccount(_loadCredentials(), [
-      AndroidPublisherApi.androidpublisherScope,
-    ]);
-    final api = AndroidPublisherApi(client);
+    final (api, closeClient) = await _openPlay(androidPublisher);
     switch (cmd) {
       case PlayCommand.tracks:
         await _listTracks(api, packageName);
@@ -1304,7 +1344,7 @@ Future<void> runPlay(
       case PlayCommand.dataSafety:
         throw StateError('unreachable: guarded by cmd.isRead');
     }
-    client.close();
+    closeClient();
     return;
   }
 
@@ -1557,10 +1597,7 @@ Future<void> runPlay(
   // Built only once every local check has passed, so a 4001-character
   // description or a missing screenshot fails with no credential in scope at
   // all — which is what makes `--metadata` usable as an offline lint.
-  final client = await clientViaServiceAccount(_loadCredentials(), [
-    AndroidPublisherApi.androidpublisherScope,
-  ]);
-  final api = AndroidPublisherApi(client);
+  final (api, closeClient) = await _openPlay(androidPublisher);
 
   String? editId;
 
@@ -1596,6 +1633,28 @@ Future<void> runPlay(
       // are deliberately not compared: two Gradle runs over one commit differ
       // byte for byte (zip timestamps, signature), so provenance rests on the
       // commit here as it does everywhere else in this tooling.
+      // **The fact everything above rests on, and it is not visible in the
+      // call.** `bundles.list` takes an `editId` — a fresh one, inserted
+      // twenty lines up — so the natural reading is that it answers for *this
+      // edit*, and under that reading the check could never fire: nothing has
+      // been uploaded into an edit made moments ago. The guard works because
+      // the list is **app-scoped**, returning bundles Play holds for the
+      // package whoever uploaded them and whenever, including ones committed
+      // by edits long since gone.
+      //
+      // **Observed, not inferred.** 9 September 2026, against a live account:
+      // a fresh edit `09764258442915882184` listed versionCode 152, which had
+      // been uploaded five days earlier by a different edit, committed and
+      // gone. So the reach is across edits and across sessions, which is
+      // exactly what a re-run needs and what no same-session test could tell
+      // apart from edit-scope.
+      //
+      // Written here because a reader cannot derive it from the call, and
+      // because the paragraphs above argue something else — they say why a
+      // guard is *wanted*, not why this call *detects* the condition. The fake
+      // in play_upload_reuse_test.dart carries the app-scoped behaviour
+      // deliberately: if this ever stops being true, that suite goes green
+      // about nothing, and this is the paragraph to come back to.
       final uploaded =
           (await api.edits.bundles.list(packageName, editId)).bundles ??
           <Bundle>[];
@@ -1822,8 +1881,28 @@ Future<void> runPlay(
         // Losing the cleanup is not worth masking the original failure.
       }
     }
-    client.close();
+    closeClient();
   }
+}
+
+/// The generated API to talk to Play with, and how to let go of it afterwards.
+///
+/// Two things rather than one because the close is not the API's: a real run
+/// owns an `AutoRefreshingAuthClient` it must release, and a supplied
+/// [androidPublisher] belongs to whoever supplied it. Returning a no-op close
+/// for the second case keeps the `finally` at the call site identical, which
+/// is the point — a cleanup that only runs on one of two paths is the shape
+/// that leaves edits open.
+Future<(AndroidPublisherApi, void Function())> _openPlay(
+  AndroidPublisherApi? androidPublisher,
+) async {
+  if (androidPublisher != null) {
+    return (androidPublisher, () {});
+  }
+  final client = await clientViaServiceAccount(_loadCredentials(), [
+    AndroidPublisherApi.androidpublisherScope,
+  ]);
+  return (AndroidPublisherApi(client), client.close);
 }
 
 /// What is about to happen, in the terms the caller will recognise.

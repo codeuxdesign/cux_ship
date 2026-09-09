@@ -1438,6 +1438,19 @@ class AppStore {
   /// for something testers cannot yet install. `FAILED` and `INVALID` are
   /// terminal and are raised rather than waited out.
   ///
+  /// **One measured run came in far under that**, and it is recorded because
+  /// this sentence is what everyone sizes their expectations from: a 28 MB iOS
+  /// build on 9 September 2026 was absent from `/v1/builds` for about two
+  /// minutes after the transfer finished and then appeared already `VALID`,
+  /// never once reporting `PROCESSING` at 15-second sampling. So 5–15 minutes
+  /// describes a tail rather than a median, the 45-minute default timeout is
+  /// sized for that tail, and a caller planning around "this always takes ten
+  /// minutes" is planning around the wrong number. One data point, one
+  /// platform, one artifact size — not a new range.
+  ///
+  /// It also means the `PROCESSING` state can be missed entirely, so anything
+  /// that only fires while a build is in it may never run.
+  ///
   /// [onProgress] is called once per poll, *including* the poll that ends the
   /// wait, so a caller that logs progress records how it ended and not only
   /// that it stopped. It defaults to [printProcessingProgress], which is the

@@ -360,6 +360,10 @@ class _AscSubcommand extends Command<void> {
       'Release a build TestFlight already holds to a beta group. Builds and '
           'uploads nothing; an external group is carried through beta review, '
           'reasserting the beta app description on the way.',
+    AscCommand.whatToTest =>
+      'Set the TestFlight "What to Test" on a build Apple has already '
+          'processed — the half of `upload` that has to happen after the '
+          'wait, for a caller that did the waiting itself.',
     AscCommand.builds => 'Print the builds Apple holds.',
     AscCommand.betaGroups =>
       'Print the TestFlight groups this app has, and whether each is internal '

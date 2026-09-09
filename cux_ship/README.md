@@ -34,14 +34,14 @@ note is too long.
 cux_ship appstore upload            play upload            release finish
          appstore promote           play promote           release refspecs
          appstore beta-release      play tracks            screenshots flatten
-         appstore beta-groups       play listing           verify
-         appstore builds            play version-code      secrets add
-         appstore versions          play data-safety       secrets check
-         appstore screenshot-types                         secrets list
-         appstore build-number                             secrets remove
-         appstore wait                                     secrets exec
-         appstore signing                                  secrets place
-                                                           secrets clean
+         appstore what-to-test      play listing           verify
+         appstore beta-groups       play version-code      secrets add
+         appstore builds            play data-safety       secrets check
+         appstore versions                                 secrets list
+         appstore screenshot-types                         secrets remove
+         appstore build-number                             secrets exec
+         appstore wait                                     secrets place
+         appstore signing                                  secrets clean
                                                            secrets pack
                                                            keychain exec
                                                            deps install
@@ -142,6 +142,93 @@ review, and the closing line reads back the state Apple now reports.
 `--build-number` is required rather than defaulted to the newest, for the
 same reason `appstore wait` requires it: "newest" would release somebody
 else's upload.
+
+### An upload is three phases, and each one runs on its own
+
+`appstore upload --artifact …` transfers the artifact, waits five to fifteen
+minutes for Apple to process it, then writes the TestFlight notes and any
+`--beta-group` release. Those are not the same kind of work:
+
+| Phase | Contends for | Takes |
+|---|---|---|
+| the transfer | one CFBundleVersion, which Apple accepts once | minutes |
+| the processing wait | nothing — any machine with the API key can poll | seconds to 15 minutes |
+| notes, beta group | one build's records | seconds |
+
+**Run together, the whole command inherits the exclusivity of the transfer and
+the duration of the wait.** Shipping iOS and macOS from one commit then means
+serialising two uploads end to end, with the machine idle for the whole of the
+second wait.
+
+**How much that is worth varies more than the docs suggest.** Two measured
+runs on one account, 9 September 2026: a 28 MB iOS build was usable 135
+seconds after its transfer finished, and a 67 MB macOS build 44 seconds after
+its own. Neither was ever *seen* processing — a build is absent from
+`/v1/builds` and then present and `VALID`, so `appstore wait` is polling
+through an invisible window rather than watching a reported state. At those
+numbers the split saves tens of seconds, not the ten minutes the 5–15 figure
+implies; the figure is a tail, and the 45-minute default timeout is sized for
+it. The structural reason to split stands whatever the number is — a wait that
+anything can do should not hold a slot only one thing can — but size the
+benefit from your own account rather than from this table.
+
+So each phase has a command:
+
+```bash
+cux_ship appstore upload --no-metadata --manifest dist/ios/manifest.json --skip-waiting &
+cux_ship appstore upload --no-metadata --platform macos --manifest dist/macos/manifest.json --skip-waiting &
+wait
+
+cux_ship appstore wait 52 &                       # both polls run at once
+cux_ship appstore wait --platform macos 52 &
+wait
+
+cux_ship appstore what-to-test --build-number 52 --yes
+cux_ship appstore what-to-test --platform macos --build-number 52 --yes
+```
+
+`what-to-test` writes the TestFlight "What to Test" and nothing else, taking
+the text from the same `CHANGELOG.md` section `upload` would have used.
+Splitting is a choice: a single `appstore upload` still does all three, and is
+what a release with one platform should keep doing.
+
+**None of these three touches an App Store version, so all of them work while
+one is in review.** `what-to-test` reads `/v1/apps` and `/v1/builds` and writes
+`/v1/betaBuildLocalizations`; the record review locks is `appInfos`, which only
+the listing publish reads — and an upload carrying an artifact never publishes
+the listing, whatever `--metadata` says. `--no-metadata` above is not what
+buys that: it declines the *offline* listing validation, so a tree that is
+incomplete for reasons unrelated to this build cannot refuse an upload that was
+never going to publish it. Worth passing on a TestFlight upload for that reason
+alone.
+
+**It refuses rather than waits.** A build Apple is still processing gets
+`appstore wait <build>` named at it, not a second blocking poll under another
+name — the point of the split is that a command does something or waits for
+something, never both. `--build-number` is required, for the same reason
+`wait` and `beta-release` require it.
+
+**And `--skip-waiting` no longer loses the notes quietly.** It skips the wait,
+and the notes are written after the wait, so it used to skip those too — its
+help said so, called itself a debugging flag, and a caller reaching for it to
+get concurrency had no reason to read that as being about them. It now prints
+the commands that finish the job, carrying the run's own build number, its
+platform, and whichever notes flag it was given:
+
+```
+==> not waiting for processing, as asked
+    so the TestFlight notes are NOT set. Finish elsewhere:
+      cux_ship appstore wait 52
+      cux_ship appstore what-to-test --build-number 52
+```
+
+A warning and not a refusal, deliberately. `--changelog` and `--release-notes`
+say *where the text lives*, not *write it now*: a repository that keeps its
+changelog anywhere but the root has to pass `--changelog` on every invocation,
+and `--release-notes` has no inferred default at all — so refusing them would
+sort callers by directory layout rather than by intent, and would shut the
+whole decomposition to anyone who keeps notes in a file. `--beta-group` is
+different and is still refused: it names an action the run cannot perform.
 
 ### promote is per-store; `release finish` is per-release
 
@@ -378,6 +465,18 @@ whose commit nobody can name. Written first, a failure fails an upload that had
 not happened yet. It follows that the tag records an upload **attempted**, not
 accepted: a signature refusal leaves it standing over an artifact nobody
 received. Read them as attempts.
+
+**So the tag answers "which commit", and only the store answers "what does it
+hold".** Those are two questions and the tag is authoritative on exactly one of
+them: the commit an artifact was built from is a git fact no store knows, and
+what each store is currently serving is a store fact git can only approximate —
+per store, and per Apple platform, which drift apart in the ordinary case
+rather than the exotic one. Until 4.1.0 the tag was the only machine-readable
+answer to either, so consumers used it for both and had to hedge every status
+line they printed. It is not any more: ask `play tracks`, `appstore builds`, or
+[`package:cux_ship/read.dart`](#reading-the-stores-from-dart) — one call per
+store, answered by the store. A status that reports the tag as what a store
+holds is reporting an intention as an outcome.
 
 The same name at a different commit is a hard error — one build number reaching
 two commits — and it raises `UploadCollisionException`, distinct from an

@@ -1,5 +1,95 @@
 # Changelog
 
+## Unreleased
+
+**`cux_ship appstore what-to-test` writes the TestFlight "What to Test" on a
+build Apple already holds.** An upload carrying an artifact is three phases —
+transfer the binary, wait five to fifteen minutes for processing, then write
+the notes — and they are not the same kind of work: the transfer is exclusive
+(Apple accepts one CFBundleVersion once) and bounded, the wait is shareable and
+long, the notes are exclusive and take seconds. Run as one command the whole
+thing inherits the worst of each, so a caller shipping iOS and macOS from one
+commit serialises both uploads end to end and pays both waits with the machine
+idle. `appstore wait` already moved the middle phase; this is the piece that
+made moving it useless, because `setWhatToTest` had exactly one call site and
+it was inside the branch that did the waiting. The decomposition is now whole:
+`upload --skip-waiting`, `wait`, `what-to-test`, and `beta-release` where a
+group is wanted. Shaped like `beta-release` down to the refusals — it needs a
+processed build and **refuses rather than waiting** for one, because a command
+that quietly blocked would put the two phases back together under a new name.
+It reads `/v1/apps` and `/v1/builds` and writes `/v1/betaBuildLocalizations`,
+and nothing else — so it names no App Store version and never reads the
+`appInfos` record that a version in review locks, which is what makes the split
+usable during a review rather than only between them.
+
+**`--skip-waiting` no longer drops the release notes quietly.** It skipped the
+wait, and the notes are written after the wait, so it skipped those too — its
+own help said so and called itself a debugging flag, which is not a sentence a
+caller reaching for concurrency reads as being about them. The run uploaded
+fine, exited zero, and the build reached testers with no notes at all. It now
+prints the commands that finish the job, carrying the run's build number, its
+platform and whichever notes flag it was given, so they can be pasted. The
+`--beta-group` refusal, which was already there, names `beta-release` the same
+way.
+
+**A warning and not a refusal, which is the second answer rather than the
+first.** The first version refused `--skip-waiting` alongside an explicit
+`--changelog` or `--release-notes`, by analogy with the `--beta-description`
+refusal beside it. Review found the analogy is with the wrong flag.
+`--beta-group` names an *action* the run cannot perform; `--changelog` names a
+*file*, and so does `--release-notes` — the variable holding the second is
+called `notesPath`. Refusing them sorted callers by **directory layout**: a
+repository with `CHANGELOG.md` at its root never types the flag and was warned,
+while one keeping it at `docs/CHANGELOG.md` must pass it on every invocation
+and was refused, for an otherwise identical wrapper. `--release-notes` was
+worse — it has no inferred default at all, so a caller keeping notes in a file
+rather than a changelog could never have used `--skip-waiting`.
+
+**Every suggested command line carries the platform the run was for.** iOS and
+macOS are given the same build number from one commit by design, so a remedy
+that omits `--platform macos` names the other platform's build and looks
+right. The three call sites share one function for it, `finishAfterSkippedWait`
+— the important one prints after the artifact has gone up, past every
+credential, where no test can reach it, and a suggestion nothing exercises goes
+stale silently.
+
+**Both stores' already-uploaded branch is tested, and until now neither
+was.** `play upload` reuses a versionCode Play already holds and `appstore
+upload` reuses a build Apple already holds, rather than failing — which is what
+makes re-running a partly-failed release the same command typed again. Both
+guards were correct and unexercised, because `runPlay` and `runAsc` built their
+API client at the point of use from the environment: the branches were
+reachable only by uploading to a real store. `runPlay` now takes an
+`androidPublisher` and `runAsc` an `ascClient`, each replacing the client it
+would otherwise build, and each closing only what it opened. Nine mutations
+were watched failing, including the two that matter most — a fake that ignored
+`filter[preReleaseVersion.platform]` would have made an iOS upload reuse the
+macOS binary of the same build number invisible, and one that answered
+`bundles.list` for the open edit rather than for the app would have made the
+Play branch unreachable. **That second one is now checked against Play rather
+than believed**: a fresh edit listed a versionCode uploaded five days earlier
+by a different, long-committed edit, which is the semantic the guard needs and
+the one no same-session test can tell apart from edit-scope. The call takes an
+`editId` and so reads as edit-scoped, so the reason it works is written at the
+call — it is the claim to falsify if a re-run ever stops being recognised. Neither `runPlay` nor `runAsc` is exported; this
+widens no public surface. **`play data-safety` refuses a supplied client
+rather than ignoring one**: it posts through a plain authenticated client, so
+one passed to it would be dropped — and the first version left that to reveal
+itself through the missing credential, which is true of CI and false of a
+developer machine inside a `secrets exec` shell, where the run would have sent
+a real declaration and Play would have filed it as a pending review.
+
+**The upload record is documented as commit provenance, and nothing else.**
+`uploaded/vX.Y.Z+N` says which commit an artifact was built from — a git fact
+no store knows — and has doubled as a proxy for "was this uploaded", which it
+answers badly: it is written before the store is contacted, so it over-reports,
+and one record covers every store a commit reached. Since 4.1.0 the stores
+answer that themselves, per store and per Apple platform, so the README now
+sends the question there. No behaviour changed.
+[docs/design/upload-record-scope.md](https://github.com/codeuxdesign/cux_ship/blob/main/docs/design/upload-record-scope.md)
+records why this did *not* become per-store tags, which is what that document
+was waiting to be asked.
+
 ## 4.1.0
 
 **`package:cux_ship/read.dart` answers what the stores hold, as objects.** A
