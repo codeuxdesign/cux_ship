@@ -408,9 +408,21 @@ every flag is correct.
 
 `aab` is read from `base/manifest/AndroidManifest.xml` (aapt2 protobuf), `apk`
 from `AndroidManifest.xml` (binary XML — a different encoding, so a separate
-reader), and `ipa` from `Payload/*.app/Info.plist`. **A format with no reader is trusted out loud** —
-`cross-check: no reader for pkg — build number and version name taken on
-trust` — because "not checked" must not render the same as "checked and fine".
+reader), `ipa` from `Payload/*.app/Info.plist`, and `pkg` from the
+`PackageInfo` of the component it installs, which is where the installer
+records the app's two values so it can compare them against what is on disk.
+Nothing decompresses a payload. **A format with no reader is trusted out
+loud** — `cross-check: no reader for dmg — build number and version name taken
+on trust` — because "not checked" must not render the same as "checked and
+fine".
+
+A `.pkg` describes every bundle it installs — an embedded framework and a login
+item carry their own version numbers — so the one that answers is the one the
+package says it is versioned by, and the line names it:
+
+```
+    cross-check: build number and version name agree with Runner.pkg/PackageInfo (./Runner.app)
+```
 
 ### Recording which commit an upload came from
 

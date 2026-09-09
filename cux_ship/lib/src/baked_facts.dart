@@ -25,6 +25,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:xml/xml.dart';
+
 import 'release.dart' show ReleaseException;
 
 /// The version name and build number an artifact carries internally.
@@ -493,6 +495,298 @@ BakedFacts readIpaFacts(String path) {
   }
 }
 
+/// The bundle a `.pkg` component names as the one it is versioned by, and the
+/// two values the installer recorded for it.
+class PkgRootBundle {
+  const PkgRootBundle({
+    required this.path,
+    required this.versionName,
+    required this.buildNumber,
+  });
+
+  /// Where the bundle sits in the payload, e.g. `./Runner.app`.
+  ///
+  /// Carried into [BakedFacts.source] rather than dropped, because a package
+  /// describes *every* bundle it installs and the cross-check line has to say
+  /// which one answered — see [readPackageInfoRootBundle] for what goes wrong
+  /// when it does not.
+  final String path;
+
+  /// `CFBundleShortVersionString`, as the installer recorded it.
+  final String? versionName;
+
+  /// `CFBundleVersion`, as the installer recorded it.
+  final String? buildNumber;
+}
+
+/// The root bundle a component package's `PackageInfo` designates, or null when
+/// it designates none — a component carrying only scripts, which is a real
+/// thing for a package to hold and not an error.
+///
+/// **How many bundles a component describes depends on which tool built it,
+/// and both shapes were measured on the same Flutter-shaped `.app`** — an
+/// embedded `FlutterMacOS.framework` and a login-item helper inside it.
+///
+/// `productbuild --component`, which is what `xcodebuild -exportArchive`
+/// drives and therefore what a Mac App Store upload is, describes the
+/// *installed* bundle and nothing else — one element, whatever is nested
+/// inside it. Confirmed on a real App Store artifact: `how-it-went` 1.1.6
+/// (169), 124 payload files, exactly one `<bundle>`.
+///
+/// `pkgbuild --root` describes every bundle in the payload. Same app, three
+/// elements, and the app's neither first nor last:
+///
+/// ```xml
+/// <bundle path="./Runner.app/Contents/Library/LoginItems/Helper.app"
+///         id="…helper" CFBundleShortVersionString="9.9.9" CFBundleVersion="777"/>
+/// <bundle path="./Runner.app/Contents/Frameworks/FlutterMacOS.framework"
+///         id="io.flutter.flutter.macos" CFBundleShortVersionString="3.24.0" CFBundleVersion="1"/>
+/// <bundle path="./Runner.app" id="…" CFBundleShortVersionString="1.1.0" CFBundleVersion="65"/>
+/// ```
+///
+/// There, "the first bundle with both attributes" is a framework's version
+/// reported as the build's — a plausible wrong answer that would compare
+/// unequal and refuse a correct release.
+///
+/// **`<bundle-version>` is the answer, because it is the installer's own, and
+/// because it does not depend on which of those two shapes arrives.** It names
+/// the identifier whose version the package is versioned by; the installer
+/// reads it to decide whether what is on disk is older. Selecting by it is not
+/// a heuristic over the file — it is the file's own designation, and a package
+/// that names none is one that claims no app.
+///
+/// **On the release path this is defensive rather than load-bearing, and that
+/// is worth saying** — as [unusableBuildState] says it of a state two live
+/// runs never observed. Against a one-`<bundle>` `-exportArchive` package,
+/// picking the first element would also have been right. Kept, deliberately:
+/// the multi-bundle shape is real and one `pkgbuild` away, the cost is one
+/// comparison, and the asymmetry is the usual one — the defensive version
+/// refuses a package it cannot read, and the cheap version reports a
+/// framework's version as a build number and refuses a release that was fine.
+/// An unexercised branch that reads as routine is the one somebody later
+/// deletes as dead.
+///
+/// The top-level `Distribution` of a product archive carries the same
+/// `<bundle>` elements with the same attributes, and *without* the
+/// `<bundle-version>` marker to pick between them — so it is the worse source
+/// despite being the easier one to find, and it is also absent from a flat
+/// component package. This reads `PackageInfo` for both reasons.
+///
+/// **`<pkg-info>` also carries a top-level `version`, and it is deliberately
+/// not read.** It is the *package's* version, set by `pkgbuild --version`
+/// independently of anything inside: measured at 9.9.9 on a package whose app
+/// carried 1.1.0 / 65, which is not a corruption but the argument doing what
+/// it is for. Two sources that can disagree need a rule for disagreement, and
+/// the bundle's is the one the installer compares against what is on disk —
+/// so there is one source here rather than a tie-break.
+PkgRootBundle? readPackageInfoRootBundle(String packageInfo) {
+  // The input is an artifact's own bytes, so the usual XML question applies and
+  // the answer is measured: `package:xml` expands no DTD-declared entity at
+  // all. A `<!ENTITY boom "999">` comes back as the literal text `&boom;`, a
+  // `SYSTEM "file:///etc/passwd"` is not fetched, and three levels of nesting
+  // expand to nothing — so a DOCTYPE in a hostile PackageInfo is inert rather
+  // than an information leak or an expansion bomb.
+  final root = XmlDocument.parse(packageInfo).rootElement;
+  if (root.name.local != 'pkg-info') {
+    throw FormatException(
+      'its root element is <${root.name.local}> rather than <pkg-info>',
+    );
+  }
+  final designated = root
+      .getElement('bundle-version')
+      ?.findElements('bundle')
+      .map((bundle) => bundle.getAttribute('id'))
+      .nonNulls
+      .toSet();
+  if (designated == null || designated.isEmpty) {
+    return null;
+  }
+  if (designated.length > 1) {
+    throw FormatException(
+      'it names ${designated.length} bundles as the ones it is versioned by '
+      '(${designated.join(', ')}), and choosing between them would be a guess',
+    );
+  }
+  final id = designated.single;
+  // Direct children only. The identifier appears again inside `<relocate>`,
+  // `<upgrade-bundle>` and `<strict-identifier>`, none of which carry the two
+  // attributes — a descendant search would find those empty elements and
+  // report an app that carries no version at all.
+  final described = root
+      .findElements('bundle')
+      .where((bundle) => bundle.getAttribute('id') == id)
+      .toList();
+  if (described.length != 1) {
+    throw FormatException(
+      'it is versioned by the bundle $id and then describes '
+      '${described.length} bundles with that identifier, so this is not being '
+      'read as the structure it is',
+    );
+  }
+  final bundle = described.single;
+  return PkgRootBundle(
+    path: bundle.getAttribute('path') ?? id,
+    versionName: bundle.getAttribute('CFBundleShortVersionString'),
+    buildNumber: bundle.getAttribute('CFBundleVersion'),
+  );
+}
+
+/// What a `.pkg` says about itself.
+///
+/// **Nothing here decompresses a payload, and that is what makes the reader
+/// small.** The app's `Info.plist` really is several layers down — a xar
+/// holding a gzipped cpio holding the bundle — and reaching it is the work this
+/// format was priced as and deferred for. It does not have to be reached:
+/// `pkgbuild` and `productbuild` copy `CFBundleShortVersionString` and
+/// `CFBundleVersion` out of the app and into each component's `PackageInfo`,
+/// because the installer compares them against what is already on disk before
+/// it will replace it. That file sits in the archive's table of contents,
+/// beside the payload rather than inside it.
+///
+/// Those are therefore the *installer's* record of the app's two values rather
+/// than the app's own bytes, which is a weaker reading than the `.ipa`'s and is
+/// still the right one: they are written by the packaging step, so the defect
+/// class this exists for — a build that did not honor the values it was given —
+/// is upstream of them and shows through.
+///
+/// **What it does not catch, said out loud rather than left to be noticed**: a
+/// `PackageInfo` edited after packaging, or a repackage that kept the app and
+/// rewrote the metadata around it. Both would agree with a manifest while the
+/// bundle inside disagreed. Both are also downstream of the digest, so a
+/// manifest written before them fails verification on the bytes — which is why
+/// this is a gap worth naming and not one worth reaching into the cpio for.
+///
+/// `xar` is asked rather than a xar decoder written, on [readIpaFacts]'s
+/// argument for `plutil`: a `.pkg` is only ever produced on macOS, which is the
+/// only place `/usr/bin/xar` exists and the only place one is built.
+BakedFacts readPkgFacts(String path) {
+  final name = path.split('/').last;
+  final ProcessResult listing;
+  try {
+    listing = Process.runSync('xar', ['-tf', path]);
+  } on ProcessException catch (e) {
+    throw ReleaseException(
+      'cannot cross-check $name: xar is not available (${e.message}), and '
+      'without it a package cannot be read at all. There is deliberately no '
+      'flag to proceed on trust, because a host that silently stopped checking '
+      'is the state this exists to make impossible.',
+    );
+  }
+  if (listing.exitCode != 0) {
+    throw ReleaseException(
+      'cannot cross-check $name: it could not be read as a xar archive '
+      '(xar exit ${listing.exitCode}). Either the file is not the installer '
+      'package its extension claims, or it is truncated.',
+    );
+  }
+  // `PackageInfo` at the top of a flat component package, and
+  // `<component>.pkg/PackageInfo` in a product archive, which is what an
+  // App Store upload is. Both spellings, because the component's name is the
+  // packager's choice and cannot be assumed.
+  final entries = const LineSplitter()
+      .convert(listing.stdout as String)
+      .map((line) => line.trim())
+      .where((line) => line == 'PackageInfo' || line.endsWith('/PackageInfo'))
+      .toList();
+  if (entries.isEmpty) {
+    throw ReleaseException(
+      'cannot cross-check $name: it is a xar archive and carries no '
+      'PackageInfo, so it is not an installer package whatever it is named',
+    );
+  }
+  // An entry name comes out of the file under examination and is handed back
+  // to xar and joined onto a directory, so a name that escapes that directory
+  // would be read from somewhere else — and there is deliberately no check for
+  // it here. **Both spellings of the escape are normalised away by xar itself,
+  // on create, and both were measured rather than assumed**: `..` is dropped
+  // with "Skipping .. in path", and an absolute path is stored relative (a
+  // member added as `/private/tmp/…/PackageInfo` lists as
+  // `private/tmp/…/PackageInfo`). So no fixture can be built that reaches such
+  // a check, and a guard no test can fail is one that rots into a claim nobody
+  // has verified.
+  //
+  // Only the metadata is extracted — `xar` takes exact member paths, so the
+  // payloads stay where they are. As in [readIpaFacts], the members are spilled
+  // to a temp directory and removed however this ends, because `xar` has no
+  // extract-to-stdout.
+  final temporary = Directory.systemTemp.createTempSync('cux_ship_pkg');
+  try {
+    final extraction = Process.runSync('xar', [
+      '-x',
+      '-f',
+      path,
+      '-C',
+      temporary.path,
+      ...entries,
+    ]);
+    if (extraction.exitCode != 0) {
+      throw ReleaseException(
+        'cannot cross-check $name: it lists ${entries.join(', ')} and xar '
+        'could not extract them from it (xar exit ${extraction.exitCode})',
+      );
+    }
+
+    final found = <(String entry, PkgRootBundle bundle)>[];
+    for (final entry in entries) {
+      final file = File('${temporary.path}/$entry');
+      // Reached when the archive holds a *directory* by that name, which reads
+      // back as an unhandled FileSystemException rather than as a sentence if
+      // the read is simply attempted — the shape the apk reader's RangeError
+      // catch exists for, one format over.
+      if (!file.existsSync()) {
+        throw ReleaseException(
+          'cannot cross-check $name: xar listed $entry and produced no file to '
+          'read for it — it is a directory in the archive, or the extraction '
+          'wrote nothing',
+        );
+      }
+      final PkgRootBundle? bundle;
+      try {
+        bundle = readPackageInfoRootBundle(file.readAsStringSync());
+      } on FormatException catch (e) {
+        // As in [readAabFacts]: a component this cannot walk is news, and
+        // reporting "no reader for pkg" would file it under the trusted-loudly
+        // case, which is a much quieter thing.
+        throw ReleaseException(
+          'could not read $entry out of $name: ${e.message}',
+        );
+      }
+      if (bundle != null) {
+        found.add((entry, bundle));
+      }
+    }
+
+    if (found.isEmpty) {
+      throw ReleaseException(
+        'cannot cross-check $name: none of its ${entries.length} component'
+        '${entries.length == 1 ? '' : 's'} names a bundle it is versioned by, '
+        'so nothing in it claims to be the app this manifest describes',
+      );
+    }
+    if (found.length > 1) {
+      throw ReleaseException(
+        'cannot cross-check $name: it installs '
+        '${found.map((f) => f.$2.path).join(' and ')}, and which of them the '
+        'manifest describes is not something this can decide. An App Store '
+        'package installs one app; check what built this one.',
+      );
+    }
+    final (entry, bundle) = found.single;
+    // Neither attribute present is "the installer recorded neither" — reported
+    // as taken on trust, naming this component — and not "no reader for pkg".
+    // Unlike the two Android walks there is no place to lose: the element was
+    // located by the identifier the file itself designates, so an absent
+    // attribute is absent rather than missed.
+    return BakedFacts(
+      versionName: bundle.versionName,
+      buildNumber: bundle.buildNumber,
+      source: '$entry (${bundle.path})',
+    );
+  } finally {
+    temporary.deleteSync(recursive: true);
+  }
+}
+
 /// What an `.apk` says about itself.
 BakedFacts readApkFacts(String path) {
   const entry = 'AndroidManifest.xml';
@@ -533,9 +827,9 @@ BakedFacts readApkFacts(String path) {
 /// reader.
 ///
 /// **Null means "no reader exists for this format", and nothing else.** It is a
-/// real answer the caller must report: `pkg`, `dmg`, `msix`, `snap`, `deb` and
-/// plain archives are trusted, and saying so is what keeps "not checked" from
-/// reading like "checked and fine".
+/// real answer the caller must report: `dmg`, `msix`, `snap`, `deb` and plain
+/// archives are trusted, and saying so is what keeps "not checked" from reading
+/// like "checked and fine".
 ///
 /// A reader that *exists and fails* throws instead, and that distinction is the
 /// point. Both rendered as null once — so a missing `unzip`, a truncated
@@ -548,5 +842,6 @@ BakedFacts? readBakedFacts(String artifactPath, String? format) =>
       'aab' => readAabFacts(artifactPath),
       'apk' => readApkFacts(artifactPath),
       'ipa' => readIpaFacts(artifactPath),
+      'pkg' => readPkgFacts(artifactPath),
       _ => null,
     };

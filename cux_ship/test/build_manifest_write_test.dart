@@ -16,15 +16,20 @@ late Directory _dist;
 
 /// A stand-in artifact in a format that has no baked-facts reader.
 ///
-/// **`pkg` rather than `aab`, and that is load-bearing.** These tests are about
+/// **`dmg` rather than `aab`, and that is load-bearing.** These tests are about
 /// digests, shas and where the sidecar lands, not about cross-checking — but
 /// the writer cross-checks every artifact whose format has a reader, and a text
 /// file named `.aab` is not a bundle. It used to pass anyway, because a reader
 /// that could not open its input reported "no reader for aab" and the check
 /// quietly did not happen. Naming these what they actually are keeps that
 /// crutch from coming back.
-String _artifact([String bytes = 'a signed installer, pretend']) {
-  final path = '${_dist.path}/how-it-went-1.1.0-53.pkg';
+///
+/// **It was `pkg` until pkg acquired a reader**, which is the same failure
+/// arriving by the other route: a fixture format can stop being unreadable
+/// without anybody editing the fixture. `dmg` is next in line for it, so if one
+/// is ever written these move again rather than being quietly relaxed.
+String _artifact([String bytes = 'a disk image, pretend']) {
+  final path = '${_dist.path}/how-it-went-1.1.0-53.dmg';
   File(path).writeAsStringSync(bytes);
   return path;
 }
@@ -42,7 +47,7 @@ String _write(String artifactPath, {bool dirty = false, String? flavor}) =>
       producerName: 'cux_ship',
       producerVersion: '3.4.0-dev.1',
       builtAt: '2026-08-19T14:22:00Z',
-      format: 'pkg',
+      format: 'dmg',
       flavor: flavor,
     ).path;
 
@@ -61,7 +66,7 @@ void main() {
     expect(read.buildNumber, '53');
     expect(read.gitSha, _sha);
     expect(read.platform, 'macos');
-    expect(read.format, 'pkg');
+    expect(read.format, 'dmg');
     expect(read.flavor, 'playstore');
     expect(read.producer?['name'], 'cux_ship');
     expect(read.buildNumberAssigned, isTrue);
@@ -222,14 +227,14 @@ void main() {
         'buildNumber': 53,
         'gitSha': 'd9c394b',
         'dirty': false,
-        'variant': 'pkg',
-        'artifact': 'how-it-went-1.1.0-53.pkg',
+        'variant': 'dmg',
+        'artifact': 'how-it-went-1.1.0-53.dmg',
         'sha256': sha256.convert(File(artifact).readAsBytesSync()).toString(),
       }),
     );
 
     final read = BuildManifest.read(path);
-    expect(read.format, 'pkg', reason: 'variant is schema 1\'s spelling');
+    expect(read.format, 'dmg', reason: 'variant is schema 1\'s spelling');
     expect(read.buildNumberAssigned, isTrue, reason: 'absent is not a claim');
     expect(() => read.verify(), returnsNormally);
   });
@@ -360,8 +365,8 @@ void main() {
 
   test('a format with no reader is trusted, and says so', () {
     // The other side of the same coin, and the reason the refusal above cannot
-    // simply be "always refuse": pkg has no reader and never will have one
-    // here, so it must pass — while saying out loud that nothing was checked.
+    // simply be "always refuse": dmg has no reader, so it must pass — while
+    // saying out loud that nothing was checked.
     final written = writeBuildManifest(
       artifactPath: _artifact(),
       versionName: '1.1.0',
@@ -372,10 +377,10 @@ void main() {
       producerName: 'cux_ship',
       producerVersion: '3.4.0-dev.1',
       builtAt: '2026-08-19T14:22:00Z',
-      format: 'pkg',
+      format: 'dmg',
     );
 
-    expect(written.crossCheck, contains('no reader for pkg'));
+    expect(written.crossCheck, contains('no reader for dmg'));
     expect(written.crossCheck, contains('taken on trust'));
   });
 

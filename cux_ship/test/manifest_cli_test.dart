@@ -26,14 +26,18 @@ const _sha = 'd9c394bd9c394bd9c394bd9c394bd9c394bd9c39';
 
 /// A stand-in artifact in a format with no baked-facts reader.
 ///
-/// `pkg`, not `aab`: the writer cross-checks any format it has a reader for,
+/// `dmg`, not `aab`: the writer cross-checks any format it has a reader for,
 /// and a text file named `.aab` is refused as the not-an-archive it is. These
 /// cases are about the CLI's arguments rather than about cross-checking, and
 /// they passed as `.aab` only while a reader that could not open its input
 /// reported "no reader for aab" — the defect, not a fixture convenience.
+///
+/// It was `pkg` until pkg acquired a reader, which is the same trap by the
+/// other door: the format a fixture leans on can stop being unreadable without
+/// the fixture changing.
 String _artifact() {
-  final path = '${_dist.path}/how-it-went-1.1.0-53.pkg';
-  File(path).writeAsStringSync('a signed installer, pretend');
+  final path = '${_dist.path}/how-it-went-1.1.0-53.dmg';
+  File(path).writeAsStringSync('a disk image, pretend');
   return path;
 }
 
@@ -50,7 +54,7 @@ List<String> _args(String artifact) => [
   '--platform',
   'macos',
   '--format',
-  'pkg',
+  'dmg',
   '--version-name',
   '1.1.0',
   '--build-number',
@@ -79,14 +83,14 @@ void main() {
     // answer "which commit, which bytes" from a build log alone.
     final output = '${result.stdout}';
     expect(output, contains('1.1.0 (53)'));
-    expect(output, contains('macos/pkg'));
+    expect(output, contains('macos/dmg'));
     expect(output, contains(_sha.substring(0, 7)));
     expect(output, contains('sha256:'));
     // The cross-check sentence is part of "effective, not intended": a format
     // with no reader has to say that it was trusted, in the same breath and on
     // every write, or trusted and checked read the same in a build log.
     expect(output, contains('cross-check:'));
-    expect(output, contains('no reader for pkg'));
+    expect(output, contains('no reader for dmg'));
   });
 
   test('what it writes is what this package reads back', () {

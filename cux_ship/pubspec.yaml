@@ -102,6 +102,16 @@ dependencies:
   # fields rather than as a pattern that happens to exclude them.
   pub_semver: ^2.1.4
 
+  # The `PackageInfo` inside a macOS `.pkg`, which is where the cross-check
+  # reads that artifact's two baked values. **It costs a consumer's lockfile
+  # nothing**: `image` already depends on it, so this only stops the reader
+  # relying on a package it does not name. The two Android readers are
+  # hand-rolled because no local tool can answer at all — `aapt2` refuses an
+  # `.aab` outright — and that argument does not reach XML, where hand-rolling
+  # an attribute scanner would be inventing the entity, comment and quoting
+  # rules this already has.
+  xml: ^7.0.0
+
   # For .cux-ship.yaml and for the decrypted secrets file. A hand-written parser
   # would do for one flat key, but both are read before a command does anything
   # and both report their own syntax errors with a line number, which is the
