@@ -17,6 +17,10 @@ it was inside the branch that did the waiting. The decomposition is now whole:
 group is wanted. Shaped like `beta-release` down to the refusals — it needs a
 processed build and **refuses rather than waiting** for one, because a command
 that quietly blocked would put the two phases back together under a new name.
+It reads `/v1/apps` and `/v1/builds` and writes `/v1/betaBuildLocalizations`,
+and nothing else — so it names no App Store version and never reads the
+`appInfos` record that a version in review locks, which is what makes the split
+usable during a review rather than only between them.
 
 **`--skip-waiting` no longer drops the release notes quietly.** It skipped the
 wait, and the notes are written after the wait, so it skipped those too — its

@@ -161,8 +161,8 @@ serialising two uploads end to end, with the machine idle for most of it. So
 each phase has a command:
 
 ```bash
-cux_ship appstore upload --manifest dist/ios/manifest.json --skip-waiting &
-cux_ship appstore upload --platform macos --manifest dist/macos/manifest.json --skip-waiting &
+cux_ship appstore upload --no-metadata --manifest dist/ios/manifest.json --skip-waiting &
+cux_ship appstore upload --no-metadata --platform macos --manifest dist/macos/manifest.json --skip-waiting &
 wait
 
 cux_ship appstore wait 52 &                       # both polls run at once
@@ -177,6 +177,16 @@ cux_ship appstore what-to-test --platform macos --build-number 52 --yes
 the text from the same `CHANGELOG.md` section `upload` would have used.
 Splitting is a choice: a single `appstore upload` still does all three, and is
 what a release with one platform should keep doing.
+
+**None of these three touches an App Store version, so all of them work while
+one is in review.** `what-to-test` reads `/v1/apps` and `/v1/builds` and writes
+`/v1/betaBuildLocalizations`; the record review locks is `appInfos`, which only
+the listing publish reads — and an upload carrying an artifact never publishes
+the listing, whatever `--metadata` says. `--no-metadata` above is not what
+buys that: it declines the *offline* listing validation, so a tree that is
+incomplete for reasons unrelated to this build cannot refuse an upload that was
+never going to publish it. Worth passing on a TestFlight upload for that reason
+alone.
 
 **It refuses rather than waits.** A build Apple is still processing gets
 `appstore wait <build>` named at it, not a second blocking poll under another
