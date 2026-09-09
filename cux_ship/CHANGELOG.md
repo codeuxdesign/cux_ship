@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 4.2.0
 
 **`secrets exec` no longer hands the sops identity to its child.**
 `SOPS_AGE_KEY` and `SOPS_AGE_KEY_FILE` are removed unconditionally, as
