@@ -2,13 +2,12 @@
 //
 // An upload's three phases, and the seam between them.
 //
-// `appstore upload --artifact` transfers a binary, waits five to fifteen
-// minutes for Apple to process it, and then writes the TestFlight notes.
-// `appstore wait` has always been able to take the middle phase somewhere
-// else; `appstore what-to-test` is the last phase given the same treatment,
-// and until it existed moving the wait cost the notes, because
-// `setWhatToTest` had exactly one call site and it sat inside the branch that
-// did the waiting.
+// `appstore upload --artifact` transfers a binary, waits for Apple to process
+// it, and then writes the TestFlight notes. `appstore wait` has always been
+// able to take the middle phase somewhere else; `appstore what-to-test` is the
+// last phase given the same treatment, and until it existed moving the wait
+// cost the notes, because `setWhatToTest` had exactly one call site and it sat
+// inside the branch that did the waiting.
 //
 // **What is guarded here is the seam, not the notes.** Writing a
 // `betaBuildLocalizations` record is `app_store.dart`'s job and is exercised
@@ -17,16 +16,26 @@
 // suggested command line, which is to say the part of the split that is only
 // ever text.
 //
-// **And text is exactly what rots.** `finishAfterSkippedWait` exists as a
-// function rather than three interpolations because its most important caller
-// prints *after* the artifact has gone up, past the credential and past
-// Apple, where nothing offline can reach it. The unit cases below are the only
-// thing that will ever run that string.
+// **And text is exactly what rots.** Each of the three functions below exists
+// as a function rather than as interpolations at its call sites, and each is
+// unit-tested here, because the branches that print them cannot be driven:
+// they end in `fail`, which `exit`s rather than throwing, so no in-process
+// test survives one and no subprocess test gets past the missing credential.
+//
+// Two live TestFlight runs sharpened that. `unusableBuildState`'s
+// still-processing branch may never fire at all — a build appears already
+// `VALID` — and `noSuchBuild` turned out to be the message operators actually
+// meet. A string nothing runs and nobody reads until the worst moment is the
+// definition of the thing this file is for.
+//
+// The exception is `finishAfterSkippedWait`'s warning, which prints rather
+// than failing and is driven end to end in upload_reuse_test.dart through the
+// client seam. It was unreachable when written; it is not now.
 import 'dart:io';
 
 import 'package:cux_ship/src/appstore/app_store.dart' show AscPlatform;
 import 'package:cux_ship/src/appstore/cli.dart'
-    show finishAfterSkippedWait, noSuchBuild;
+    show finishAfterSkippedWait, noSuchBuild, unusableBuildState;
 import 'package:test/test.dart';
 
 import '../cli_snapshot.dart';
@@ -137,6 +146,81 @@ void main() {
       expect(
         finishAfterSkippedWait(platform: AscPlatform.ios, buildNumber: null),
         ['cux_ship appstore wait <build-number>'],
+      );
+    });
+  });
+
+  group('unusableBuildState', () {
+    // **Tested precisely because it may never fire.** Two live runs, on both
+    // Apple platforms, at 15- and 4-second sampling, never once saw
+    // `/v1/builds` list a build in any state but `VALID` — it goes from absent
+    // to processed with no observable window. So the branch an operator meets
+    // is `noSuchBuild` below, and this one is defensive.
+    //
+    // Which is exactly the shape `docs/CONTRIBUTING.md` says rots: a failure
+    // path no happy-path test can reach, and now one no *real run* reaches
+    // either. If it is kept it has to be exercised, or it is a comment that
+    // compiles.
+
+    String? refusal(String state, {AscPlatform platform = AscPlatform.ios}) =>
+        unusableBuildState(
+          state: state,
+          buildNumber: '169',
+          platform: platform,
+          waitingFor: 'its notes cannot be written',
+        );
+
+    test('VALID is the one state that is not a refusal', () {
+      expect(refusal('VALID'), isNull);
+    });
+
+    test('a terminal state says upload a new build, not wait', () {
+      // The fork exists because `appstore wait` *raises* on these — sending
+      // somebody to it would be sending them to a command that can only
+      // restate the problem.
+      for (final state in ['FAILED', 'INVALID']) {
+        final message = refusal(state)!;
+        expect(message, contains('will never be releasable'));
+        expect(message, contains('upload a new build'));
+        expect(message, isNot(contains('appstore wait')));
+      }
+    });
+
+    test('any other state sends the reader to wait', () {
+      final message = refusal('PROCESSING')!;
+      expect(message, contains('is PROCESSING'));
+      expect(message, contains('cux_ship appstore wait 169'));
+    });
+
+    test('an unreported state is refused rather than assumed usable', () {
+      // `(unknown)` is what the caller substitutes when Apple sends no
+      // `processingState` at all. Treating an absent state as VALID would
+      // write to a build on the strength of a field that was not there.
+      expect(refusal('(unknown)'), isNotNull);
+    });
+
+    test('the wait it suggests carries the platform', () {
+      // The reason this became one function. Both copies said
+      // `appstore wait 169`, and iOS and macOS hold different builds at that
+      // number — so the recovery command named the wrong one, in the message
+      // whose whole job is recovery.
+      expect(
+        refusal('PROCESSING', platform: AscPlatform.macos),
+        contains('cux_ship appstore wait --platform macos 169'),
+      );
+    });
+
+    test('it says what this caller was going to do', () {
+      // Two callers, one function, and a generic refusal would tell a
+      // `beta-release` operator about notes.
+      expect(
+        unusableBuildState(
+          state: 'PROCESSING',
+          buildNumber: '169',
+          platform: AscPlatform.ios,
+          waitingFor: 'a build cannot reach a group',
+        ),
+        contains('a build cannot reach a group'),
       );
     });
   });

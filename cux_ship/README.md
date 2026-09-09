@@ -152,13 +152,27 @@ minutes for Apple to process it, then writes the TestFlight notes and any
 | Phase | Contends for | Takes |
 |---|---|---|
 | the transfer | one CFBundleVersion, which Apple accepts once | minutes |
-| the processing wait | nothing — any machine with the API key can poll | 5–15 minutes |
+| the processing wait | nothing — any machine with the API key can poll | seconds to 15 minutes |
 | notes, beta group | one build's records | seconds |
 
 **Run together, the whole command inherits the exclusivity of the transfer and
 the duration of the wait.** Shipping iOS and macOS from one commit then means
-serialising two uploads end to end, with the machine idle for most of it. So
-each phase has a command:
+serialising two uploads end to end, with the machine idle for the whole of the
+second wait.
+
+**How much that is worth varies more than the docs suggest.** Two measured
+runs on one account, 9 September 2026: a 28 MB iOS build was usable 135
+seconds after its transfer finished, and a 67 MB macOS build 44 seconds after
+its own. Neither was ever *seen* processing — a build is absent from
+`/v1/builds` and then present and `VALID`, so `appstore wait` is polling
+through an invisible window rather than watching a reported state. At those
+numbers the split saves tens of seconds, not the ten minutes the 5–15 figure
+implies; the figure is a tail, and the 45-minute default timeout is sized for
+it. The structural reason to split stands whatever the number is — a wait that
+anything can do should not hold a slot only one thing can — but size the
+benefit from your own account rather than from this table.
+
+So each phase has a command:
 
 ```bash
 cux_ship appstore upload --no-metadata --manifest dist/ios/manifest.json --skip-waiting &

@@ -421,6 +421,53 @@ String noSuchBuild({
       '  to a different app and reports nothing uploaded.';
 }
 
+/// Why a build in [state] cannot be used yet, or null when it can be.
+///
+/// [waitingFor] names what this particular command was going to do, because
+/// the refusal reads better as "its notes cannot be written" than as a generic
+/// one — and the two callers are doing different things to the same build.
+///
+/// **Two copies of this forked advice existed, and both suggested an
+/// `appstore wait` carrying no `--platform`** — which on a macOS run names the
+/// iOS build of the same number: the exact defect the platform filter on the
+/// build query exists to stop, reintroduced in the message that tells you how
+/// to recover. One function now.
+///
+/// **The `PROCESSING` branch may be unreachable in practice, and that is why
+/// it is tested rather than trusted.** Two live runs — 28 MB iOS and 67 MB
+/// macOS, sampled at 15 and 4 seconds — never once saw `/v1/builds` list a
+/// build in any state but `VALID`: it goes from absent to processed with no
+/// observable window between. So the state an operator actually meets is
+/// *no build at all* ([noSuchBuild]), and this is the defensive branch.
+///
+/// Kept, deliberately. A state nobody has observed is not a state Apple
+/// promises never to report, the check is one string comparison, and the cost
+/// of being wrong is asymmetric: an unnecessary refusal costs one more
+/// command, while dropping the check costs a write that silently does not
+/// land on a build that could not take it.
+String? unusableBuildState({
+  required String state,
+  required String buildNumber,
+  required AscPlatform platform,
+  required String waitingFor,
+}) {
+  if (state == 'VALID') {
+    return null;
+  }
+  // FAILED and INVALID are terminal, and `appstore wait` *raises* on them — so
+  // the advice forks, or the slow-case advice sends somebody to a command that
+  // can only restate the problem.
+  if (state == 'FAILED' || state == 'INVALID') {
+    return 'build $buildNumber came back $state from Apple\'s processing and '
+        'will never be releasable. The reason is only in the e-mail Apple '
+        'sends and in the Activity tab; upload a new build.';
+  }
+  final on = platform == AscPlatform.ios ? '' : ' --platform ${platform.name}';
+  return 'build $buildNumber is $state, and $waitingFor until Apple finishes '
+      'processing it — `cux_ship appstore wait$on $buildNumber` blocks until '
+      'it does.';
+}
+
 /// The commands that finish an `upload --skip-waiting`, one per line.
 ///
 /// **Split out because its two callers are unalike and both are easy to get
@@ -1580,22 +1627,14 @@ Future<void> runAsc(
       }
       final attributes = build['attributes'] as Map<String, dynamic>?;
       final state = attributes?['processingState'] as String? ?? '(unknown)';
-      if (state != 'VALID') {
-        // FAILED and INVALID are terminal, and `appstore wait` *raises* on
-        // them — so the advice forks, or the slow-case advice sends somebody
-        // to a command that can only restate the problem.
-        if (state == 'FAILED' || state == 'INVALID') {
-          fail(
-            'build $buildNumber came back $state from Apple\'s processing and '
-            'will never be releasable. The reason is only in the e-mail Apple '
-            'sends and in the Activity tab; upload a new build.',
-          );
-        }
-        fail(
-          'build $buildNumber is $state, and a build cannot reach a group '
-          'until Apple finishes processing it — `appstore wait $buildNumber` '
-          'blocks until it does.',
-        );
+      final unusable = unusableBuildState(
+        state: state,
+        buildNumber: buildNumber,
+        platform: platform,
+        waitingFor: 'a build cannot reach a group',
+      );
+      if (unusable != null) {
+        fail(unusable);
       }
       if (attributes?['expired'] == true) {
         fail(
@@ -1661,19 +1700,14 @@ Future<void> runAsc(
       }
       final attributes = build['attributes'] as Map<String, dynamic>?;
       final state = attributes?['processingState'] as String? ?? '(unknown)';
-      if (state != 'VALID') {
-        if (state == 'FAILED' || state == 'INVALID') {
-          fail(
-            'build $buildNumber came back $state from Apple\'s processing and '
-            'will never be releasable. The reason is only in the e-mail Apple '
-            'sends and in the Activity tab; upload a new build.',
-          );
-        }
-        fail(
-          'build $buildNumber is $state, and its notes cannot be written '
-          'until Apple finishes processing it — `appstore wait $buildNumber` '
-          'blocks until it does.',
-        );
+      final unusable = unusableBuildState(
+        state: state,
+        buildNumber: buildNumber,
+        platform: platform,
+        waitingFor: 'its notes cannot be written',
+      );
+      if (unusable != null) {
+        fail(unusable);
       }
 
       stdout.writeln('==> TestFlight notes for build $buildNumber');
