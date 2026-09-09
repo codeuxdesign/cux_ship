@@ -199,10 +199,13 @@ void main() {
   });
 
   test('a build held on the other platform is not this build', () async {
-    // iOS and macOS take the same build number from one commit by design, so
-    // this is not a hypothetical: without the platform filter a macOS upload
-    // would find the iOS binary, report it as already held, and skip — the
-    // release then ships one platform and reports two.
+    // **Not a rare interleaving — it would fire on every release a consumer
+    // does.** A build number is allocated once per commit, so a repository
+    // shipping both Apple platforms from one commit uploads them as build N of
+    // the same version minutes apart, distinguished by `--platform` and
+    // nothing else. Without the filter the macOS upload finds the iOS binary,
+    // reports it as already held, and skips: the release ships one platform
+    // and reports two, with the reassuring line in the log either way.
     final client = _FakeClient([_build('52')]);
 
     final output = await upload(client, platform: 'macos');
