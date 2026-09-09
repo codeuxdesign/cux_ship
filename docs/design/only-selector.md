@@ -257,7 +257,14 @@ child's environment — which on an Apple build is written wholesale into the lo
 by an Xcode script phase. It is not a credential *in* the file, so it is not a
 family, so no selector can name it and no default touches it.
 
-**It is stripped from the child, unconditionally, with no way to readmit it.**
+**It is stripped from `keychain exec`'s child, unconditionally, with no way to
+readmit it.**
+
+That sentence used to say "from the child", and the omission of which command
+misled two readers in one afternoon — including the author of this correction,
+who quoted it to a consumer as a property of the package and had it written into
+that consumer's documentation before anyone checked. `secrets exec` does not
+strip it and never has. See the section after this one, which is about that.
 
 The obvious objection is that one project's release nests `secrets exec`
 *inside* the `keychain exec` child, so that child decrypts again and needs the
@@ -310,6 +317,91 @@ masking, which works because it is the one registered Actions secret. That is
 worth stating out loud: the Play service account leaked precisely because
 sops-decrypted material is invisible to that masker, and `SOPS_AGE_KEY` is
 covered only because it never passes through sops.
+
+## `secrets exec` does not strip it, and `--only` is defeated where it matters
+
+Status: **open**, 9 September 2026. Found by a consumer's review, verified here.
+
+### The finding
+
+`grep -rn SOPS_AGE_KEY lib/` returns one removal, `keychain.dart:1654`.
+`secrets exec` builds its child environment at `secrets.dart:1027` as a full
+copy of the parent's and thereafter removes **only** variables belonging to
+credentials the selector excluded. The identity is not a credential in the file,
+so it is not a family, so no selector names it, and nothing removes it.
+
+**The consequence is not a gap beside the guarantee; it is the guarantee.**
+`--only` promises that a credential nobody named is *absent from the child*. A
+child holding the identity does not need a credential to have been placed — it
+can decrypt the file and take all of them. So wherever the identity is the
+environment variable rather than `~/.config/sops/age/keys.txt`, which is to say
+in CI, **`secrets exec --only` narrows nothing.**
+
+The sentence three paragraphs up makes this argument already and applies it to
+one command: *a key to the file that holds `apple.api_keys` can mint the very
+credential the archive is meant not to hold*. Substitute the sibling command and
+nothing in it stops being true — the archive is the instance, not the argument.
+
+### It is an omission rather than a decision, and that is checkable
+
+`git log -S "SOPS_AGE_KEY" -- lib/src/secrets.dart` returns nothing but the
+initial import of the whole tree: that file has never stripped it, in any
+commit. And the commit that added the strip to `keychain.dart` is `3d6ee16`,
+*"wire `--only` into both exec commands; keychain exec places nothing by
+default"* — one change, thinking about both commands, that gave both the
+selector and one the strip. No reason for the asymmetry was ever written down,
+because there was never a decision to write down.
+
+### What the strip would cost, measured in one consumer rather than guessed
+
+`3d6ee16` took the same cost for `keychain exec` only after checking the single
+nesting it knew about and finding the split mechanical. The same check, run
+across one consumer's `tool/`:
+
+| | composition | cost |
+|---|---|---|
+| `build.sh` | declares it knows nothing about sops; nothing under it decrypts | free |
+| `dashboard.sh` | re-enters `secrets exec` once, does not decrypt inside | free |
+| `rotate_token.sh` | **nests `cux_ship secrets add --replace`**, which re-encrypts | **pays** |
+
+The third is the one that decides this. It is not a read that might happen to
+want the identity — a write back into the encrypted file cannot work without
+one. It refuses to run outside the wrapper by design, and it survives today only
+because that machine's identity is the default key file rather than the
+variable, which is a fact about a desk and not about the script.
+
+**The breakage is narrower than all six subcommands.** `secrets list` needs no
+identity — sops leaves the mapping keys in plaintext, which is what makes `list`
+the credential-free pre-flight. `place`, `pack`, `clean` and `add` touch values
+and would not survive.
+
+### The three shapes, and what would settle it
+
+1. **Strip unconditionally, as `keychain exec` does.** Principled, symmetric,
+   and it breaks `rotate_token.sh` — for which the answer is the one this
+   document already gives: *the nesting is itself the thing to remove*, run the
+   two as siblings. **Whether that split is mechanical for a rotation script is
+   the open question**, and it is a fairer test than the build-then-upload split
+   §"`SOPS_AGE_KEY`…" checked, because that one was two lines and this is a
+   program whose shape is read, work, write back.
+2. **Strip only when `--only` is given**, on the grounds that the promise exists
+   only then. Smaller, breaks nothing known — and rejected on the argument this
+   section is under: whether a child holds the master key would become a
+   property of an unrelated flag, and this document's whole position is that the
+   identity is *not* selector-governed. A protection that appears and disappears
+   with a flag is the shape that gets reasoned about wrongly.
+3. **Do not strip; document that `--only` does not narrow against a child that
+   holds the identity.** Cheapest, honest, and leaves a published promise that
+   is false in the environment it was written for.
+
+The recommendation is (1), conditional on the split being workable for a
+rotation script. That condition is the thing to settle before any code moves,
+and it is a question for the consumer that has one — not one this repository can
+answer about the world.
+
+**Whichever way it goes, the scope correction above stands on its own.** The
+misleading sentence was live long enough to be quoted into another repository's
+documentation, and it costs nothing to be right about which command does what.
 
 ## What this deliberately does not do
 
