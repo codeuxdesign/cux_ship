@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 4.1.0
 
 **`package:cux_ship/read.dart` answers what the stores hold, as objects.** A
 Dart consumer's release train was reading four regular expressions off this
