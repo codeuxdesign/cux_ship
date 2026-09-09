@@ -318,9 +318,10 @@ worth stating out loud: the Play service account leaked precisely because
 sops-decrypted material is invisible to that masker, and `SOPS_AGE_KEY` is
 covered only because it never passes through sops.
 
-## `secrets exec` does not strip it, and `--only` is defeated where it matters
+## `secrets exec` strips it too, since 4.2.0
 
-Status: **open**, 9 September 2026. Found by a consumer's review, verified here.
+Status: **decided and built**, 9 September 2026. Found by a consumer's review,
+verified here, and shipped once the cost had been measured rather than guessed.
 
 ### The finding
 
@@ -375,7 +376,7 @@ identity — sops leaves the mapping keys in plaintext, which is what makes `lis
 the credential-free pre-flight. `place`, `pack`, `clean` and `add` touch values
 and would not survive.
 
-### The three shapes, and what would settle it
+### The three shapes, and the one that was taken
 
 1. **Strip unconditionally, as `keychain exec` does.** Principled, symmetric,
    and it breaks `rotate_token.sh` — for which the answer is the one this
@@ -394,14 +395,49 @@ and would not survive.
    holds the identity.** Cheapest, honest, and leaves a published promise that
    is false in the environment it was written for.
 
-The recommendation is (1), conditional on the split being workable for a
-rotation script. That condition is the thing to settle before any code moves,
-and it is a question for the consumer that has one — not one this repository can
-answer about the world.
+### What was built, and what it actually cost
 
-**Whichever way it goes, the scope correction above stands on its own.** The
-misleading sentence was live long enough to be quoted into another repository's
-documentation, and it costs nothing to be right about which command does what.
+**(1), unconditionally.** The condition above — is the sibling split workable
+for a rotation script — was put to the consumer that has one and came back
+better than expected, in two parts.
+
+**The strip is a no-op for that repository, by construction rather than by
+luck.** `_decrypt` builds its `sopsEnvironment` as a local map and passes it
+only to the `sops` subprocess; it never touches `Platform.environment`, which
+is what `_materialize` copies. So the identity cux_ship computes for itself has
+never been able to reach an exec'd child. A child sees the variable only when
+the *operator* set it — and that consumer sets it nowhere: no workflow supplies
+it, nothing in the repository sets it, no machine that runs the script has it,
+and sops resolves `~/.config/sops/age/keys.txt`. The strip removes something
+that is absent and sops keeps resolving the same path.
+
+**And the split, if it is ever needed, is small.** `rotate_token.sh` needs the
+wrapper only for the token it *reads*, which arrives as an ordinary environment
+variable; it is the `secrets add … --replace` that needs an identity. So it
+becomes a wrapped read and an unwrapped write — two steps, not a restructuring.
+Worth recording as the worked example, because this is the composition the
+constraint actually bites.
+
+**Name the intersection, not the risk.** It would overstate this to say it
+breaks consumers. It is a no-op for every consumer whose identity is the default
+key file, and a live migration only for one that supplies `SOPS_AGE_KEY` *and*
+nests a value-touching subcommand — `place`, `pack`, `clean` or `add` — inside
+the wrapper. `secrets list` is unaffected either way. That intersection is
+narrow, and it is one repository away from being real: the consumer above has
+not wired its CI up yet, which is exactly why the strip lands now. Wiring first
+and stripping later would make the split a migration performed under a red
+credential rotation, which is the worst version of a small change.
+
+Seven scripts in that repository run under `secrets exec`. Exactly one nests a
+`secrets` subcommand, and it is `rotate_token.sh`. Checked including
+`.github/workflows/`, the cross-calls between those scripts and their shared
+`_common.sh`; the two earlier passes over the same question each missed
+something, which is why the count is stated rather than the conclusion.
+
+**The scope correction above stood on its own regardless.** The misleading
+sentence was live long enough to be quoted into another repository's
+documentation, and being right about which command does what cost nothing and
+did not wait for any of this.
 
 ## What this deliberately does not do
 

@@ -1289,6 +1289,49 @@ LoadedSecrets _materialize(
     }
   }
 
+  // **The sops identity goes, exactly as it does from `keychain exec`'s
+  // child**, and for the argument that command's own comment makes: a key to
+  // the file that holds `apple.api_keys` can mint the very credential a
+  // guarantee says the child cannot have.
+  //
+  // Here the guarantee is `--only`'s. It promises that a credential nobody
+  // named is *absent from the child* — and a child holding the identity does
+  // not need one to have been placed, because it can decrypt the file and take
+  // all of them. So wherever the identity is the environment variable rather
+  // than a key file, `--only` narrowed nothing at all. Not a gap beside the
+  // promise; the promise.
+  //
+  // **This was an omission rather than a decision.** `3d6ee16` wired `--only`
+  // into both exec commands and added the strip to one, and nothing anywhere
+  // recorded why the other was different. `git log -S` finds no commit in
+  // which this file ever removed it.
+  //
+  // **Removed unconditionally, and not selector-governed**, because the
+  // identity is not a credential in the file: no `--only` string can name it,
+  // so making the strip depend on whether `--only` was passed would make "does
+  // my child hold the master key" a property of an unrelated flag.
+  //
+  // What this costs, measured rather than guessed — see
+  // docs/design/only-selector.md for the whole of it: a consumer whose identity
+  // is the default `~/.config/sops/age/keys.txt` pays nothing, because there is
+  // no variable here to remove and sops keeps resolving that path. It bites
+  // only a consumer that supplies `SOPS_AGE_KEY` *and* nests a value-touching
+  // subcommand — `place`, `pack`, `clean` or `add` — inside the wrapper.
+  // `secrets list` is unaffected either way: sops leaves the mapping keys in
+  // plaintext, which is what makes it the identity-free pre-flight.
+  final withheldIdentity = <String>[];
+  for (final name in const ['SOPS_AGE_KEY', 'SOPS_AGE_KEY_FILE']) {
+    if (environment.remove(name) != null) {
+      withheldIdentity.add(name);
+    }
+  }
+  if (withheldIdentity.isNotEmpty) {
+    withheldIdentity.sort();
+    stderr.writeln(
+      '==> not passed to the child: ${withheldIdentity.join(', ')}',
+    );
+  }
+
   // Named, not written. `secrets place` writes these; exec promises that
   // plaintext does not outlive the run, and these outlive it by design.
   final placed = [for (final file in under('placed')) file.path];
