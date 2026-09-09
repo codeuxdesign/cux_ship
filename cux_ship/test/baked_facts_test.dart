@@ -1125,9 +1125,7 @@ void main() {
           expect(created.exitCode, 0, reason: '${created.stderr}');
 
           final listed = const LineSplitter()
-              .convert(
-                Process.runSync('xar', ['-tf', out]).stdout as String,
-              )
+              .convert(Process.runSync('xar', ['-tf', out]).stdout as String)
               .map((line) => line.trim())
               .where((line) => line.isNotEmpty)
               .toList();
@@ -1142,12 +1140,7 @@ void main() {
           );
           expect(
             listed,
-            everyElement(
-              allOf(
-                isNot(startsWith('/')),
-                isNot(contains('..')),
-              ),
-            ),
+            everyElement(allOf(isNot(startsWith('/')), isNot(contains('..')))),
             reason:
                 'xar stored $spelling verbatim, so the absent traversal guard '
                 'is no longer covered by the reasoning that removed it',
