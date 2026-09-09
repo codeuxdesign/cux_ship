@@ -1195,9 +1195,9 @@ typedef PlayConfirm = void Function(String summary);
 ///
 /// It covers the two paths that go through the generated API: the reads, and
 /// the upload/promote transaction. **`data-safety` posts through a plain
-/// authenticated client rather than the generated API and is not covered** —
-/// passing this and running that command still loads a real credential, which
-/// fails loudly rather than quietly reaching Play.
+/// authenticated client rather than the generated API, and refuses this rather
+/// than ignoring it** — see the throw at the top of that branch for why
+/// "it would fail on the missing credential anyway" is not good enough.
 Future<void> runPlay(
   PlayCommand cmd,
   ArgResults args, {
@@ -1254,6 +1254,33 @@ Future<void> runPlay(
   // when it differs. Running this command *is* the decision, which is the only
   // honest form the decision can take.
   if (cmd == PlayCommand.dataSafety) {
+    // **Refused rather than ignored.** This branch posts through a plain
+    // authenticated client instead of the generated API, so a supplied
+    // [androidPublisher] has nothing to replace here and would simply be
+    // dropped.
+    //
+    // The first version left it dropped, reasoning that a test doing this
+    // would fail on the missing credential and reveal itself. That is true of
+    // CI and false of the machine where somebody iterates on a test, which
+    // often has the service-account variable exported or is inside a `secrets
+    // exec` shell — and there the run authenticates for real and sends a real
+    // declaration. Play files every send as a pending "App content → Data
+    // safety" change whether or not an answer moved, which is the accumulation
+    // 4.0.0 cut this command out of the upload to stop. A guard that holds
+    // only where credentials are absent is a property of the environment, not
+    // of the command.
+    //
+    // A `StateError` and not `_fail`: nothing an operator typed can reach
+    // this, so it is a caller's bug, and `_fail` would `exit()` out of the
+    // test that needs to see it.
+    if (androidPublisher != null) {
+      throw StateError(
+        'play data-safety cannot take an androidPublisher: it posts through a '
+        'plain authenticated client rather than the generated API, so a '
+        'supplied one would be ignored and this command would reach Play for '
+        'real.',
+      );
+    }
     final csvPath = opt('csv') ?? defaults.dataSafety;
     if (csvPath == null) {
       _fail(

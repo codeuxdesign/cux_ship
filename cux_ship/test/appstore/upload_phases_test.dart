@@ -141,7 +141,17 @@ void main() {
   });
 
   group('upload --skip-waiting no longer drops the notes silently', () {
-    test('an explicit --changelog is refused, before any credential', () {
+    // **These were refusals in the first version, and review was right that
+    // they should not have been.** `--changelog` and `--release-notes` name
+    // *where the text lives*, not *write it now*: a repository keeping its
+    // changelog anywhere but the root must pass `--changelog` on every
+    // invocation, and `--release-notes` has no inferred default at all, so
+    // refusing them sorted callers by directory layout and shut a whole class
+    // out of the decomposition. The loudness is a warning, and the cases that
+    // cover it are in upload_reuse_test.dart, which can reach the point after
+    // the upload where it prints. What remains here is the one refusal that
+    // *is* earned, and it is earned because `--beta-group` names an action.
+    test('an explicit --changelog is not a refusal', () {
       final repo = _repo(changelog: '# Changelog\n\n## 1.0.0\n\n- a change\n');
       File('${repo.path}/app.ipa').writeAsStringSync('not really an ipa');
       final result = _run(repo, [
@@ -155,24 +165,24 @@ void main() {
         '52',
         '--version-name',
         '1.0.0',
+        '--yes',
         '--skip-waiting',
         '--changelog',
         'CHANGELOG.md',
       ]);
       final output = _output(result);
-      expect(output, contains('incompatible'));
-      expect(
-        output,
-        contains('cux_ship appstore what-to-test --build-number 52'),
-      );
-      // Refused with no credential in scope at all — the proof this ran in
-      // the offline block rather than after the binary went up, which is the
-      // only placement that makes the refusal safe to add.
-      expect(output, isNot(contains('credentials')));
-      expect(result.exitCode, isNot(0));
+      expect(output, isNot(contains('incompatible')));
+      // It gets all the way to the one thing this cannot supply, which is
+      // where a run that was going to work stops. Asserting the absence of
+      // the refusal alone would pass on a run refused for any other reason.
+      expect(output, contains('App Store Connect credentials'));
     });
 
-    test('--release-notes is refused the same way, naming itself', () {
+    test('--release-notes is not a refusal either', () {
+      // The case that decided it. This flag has no default anywhere, so a
+      // caller who keeps notes in a file rather than a changelog must always
+      // pass it — and under the old rule could therefore never use
+      // `--skip-waiting` at all.
       final repo = _repo();
       File('${repo.path}/app.ipa').writeAsStringSync('not really an ipa');
       File('${repo.path}/notes.txt').writeAsStringSync('a change');
@@ -187,41 +197,14 @@ void main() {
         '52',
         '--version-name',
         '1.0.0',
+        '--yes',
         '--skip-waiting',
         '--release-notes',
         'notes.txt',
       ]);
       final output = _output(result);
-      expect(output, contains('--release-notes'));
-      expect(output, contains('--release-notes notes.txt'));
-      expect(result.exitCode, isNot(0));
-    });
-
-    test('the suggested commands carry the platform the run was for', () {
-      final repo = _repo(changelog: '# Changelog\n\n## 1.0.0\n\n- a change\n');
-      File('${repo.path}/app.pkg').writeAsStringSync('not really a pkg');
-      final result = _run(repo, [
-        'appstore',
-        'upload',
-        '--platform',
-        'macos',
-        '--bundle-id',
-        'design.codeux.consumer',
-        '--artifact',
-        'app.pkg',
-        '--build-number',
-        '52',
-        '--version-name',
-        '1.0.0',
-        '--skip-waiting',
-        '--changelog',
-        'CHANGELOG.md',
-      ]);
-      expect(
-        _output(result),
-        contains('cux_ship appstore what-to-test --platform macos'),
-      );
-      expect(result.exitCode, isNot(0));
+      expect(output, isNot(contains('incompatible')));
+      expect(output, contains('App Store Connect credentials'));
     });
 
     test('--beta-group is still refused, and now says how to finish', () {

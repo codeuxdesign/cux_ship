@@ -197,12 +197,24 @@ something, never both. `--build-number` is required, for the same reason
 **And `--skip-waiting` no longer loses the notes quietly.** It skips the wait,
 and the notes are written after the wait, so it used to skip those too — its
 help said so, called itself a debugging flag, and a caller reaching for it to
-get concurrency had no reason to read that as being about them. Now `upload`
-prints the two commands that finish the job, with the run's own build number
-in them; and `--skip-waiting` alongside an explicit `--changelog` or
-`--release-notes` is **refused** before anything is uploaded, because naming
-the notes and declining to write them is a contradiction rather than an
-inference.
+get concurrency had no reason to read that as being about them. It now prints
+the commands that finish the job, carrying the run's own build number, its
+platform, and whichever notes flag it was given:
+
+```
+==> not waiting for processing, as asked
+    so the TestFlight notes are NOT set. Finish elsewhere:
+      cux_ship appstore wait 52
+      cux_ship appstore what-to-test --build-number 52
+```
+
+A warning and not a refusal, deliberately. `--changelog` and `--release-notes`
+say *where the text lives*, not *write it now*: a repository that keeps its
+changelog anywhere but the root has to pass `--changelog` on every invocation,
+and `--release-notes` has no inferred default at all — so refusing them would
+sort callers by directory layout rather than by intent, and would shut the
+whole decomposition to anyone who keeps notes in a file. `--beta-group` is
+different and is still refused: it names an action the run cannot perform.
 
 ### promote is per-store; `release finish` is per-release
 

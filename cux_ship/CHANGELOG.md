@@ -26,14 +26,24 @@ usable during a review rather than only between them.
 wait, and the notes are written after the wait, so it skipped those too — its
 own help said so and called itself a debugging flag, which is not a sentence a
 caller reaching for concurrency reads as being about them. The run uploaded
-fine, exited zero, and the build reached testers with no notes at all. Now
-`--skip-waiting` alongside an explicit `--changelog` or `--release-notes` is
-**refused**, offline, before anything is transferred; a `CHANGELOG.md` that was
-merely inferred still runs, and the upload prints the commands that finish the
-job. That split is `BetaDescription.explicit`'s — an explicit flag naming
-something the run cannot do is a contradiction, while standing state that
-happens not to apply stays harmless. The `--beta-group` refusal, which was
-already there, now names `beta-release` the same way.
+fine, exited zero, and the build reached testers with no notes at all. It now
+prints the commands that finish the job, carrying the run's build number, its
+platform and whichever notes flag it was given, so they can be pasted. The
+`--beta-group` refusal, which was already there, names `beta-release` the same
+way.
+
+**A warning and not a refusal, which is the second answer rather than the
+first.** The first version refused `--skip-waiting` alongside an explicit
+`--changelog` or `--release-notes`, by analogy with the `--beta-description`
+refusal beside it. Review found the analogy is with the wrong flag.
+`--beta-group` names an *action* the run cannot perform; `--changelog` names a
+*file*, and so does `--release-notes` — the variable holding the second is
+called `notesPath`. Refusing them sorted callers by **directory layout**: a
+repository with `CHANGELOG.md` at its root never types the flag and was warned,
+while one keeping it at `docs/CHANGELOG.md` must pass it on every invocation
+and was refused, for an otherwise identical wrapper. `--release-notes` was
+worse — it has no inferred default at all, so a caller keeping notes in a file
+rather than a changelog could never have used `--skip-waiting`.
 
 **Every suggested command line carries the platform the run was for.** iOS and
 macOS are given the same build number from one commit by design, so a remedy
@@ -57,7 +67,12 @@ were watched failing, including the two that matter most — a fake that ignored
 macOS binary of the same build number invisible, and one that answered
 `bundles.list` for the open edit rather than for the app would have made the
 Play branch unreachable. Neither `runPlay` nor `runAsc` is exported; this
-widens no public surface.
+widens no public surface. **`play data-safety` refuses a supplied client
+rather than ignoring one**: it posts through a plain authenticated client, so
+one passed to it would be dropped — and the first version left that to reveal
+itself through the missing credential, which is true of CI and false of a
+developer machine inside a `secrets exec` shell, where the run would have sent
+a real declaration and Play would have filed it as a pending review.
 
 **The upload record is documented as commit provenance, and nothing else.**
 `uploaded/vX.Y.Z+N` says which commit an artifact was built from — a git fact

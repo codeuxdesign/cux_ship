@@ -151,7 +151,11 @@ void main() {
   });
 
   /// One `appstore upload --artifact --dry-run`, against [client].
-  Future<String> upload(_FakeClient client, {String platform = 'ios'}) {
+  Future<String> upload(
+    _FakeClient client, {
+    String platform = 'ios',
+    List<String> extra = const [],
+  }) {
     final args = buildAscParser(AscCommand.upload).parse([
       '--platform',
       platform,
@@ -165,6 +169,7 @@ void main() {
       '1.0.0',
       '--no-metadata',
       '--dry-run',
+      ...extra,
     ]);
     return _printed(() => runAsc(AscCommand.upload, args, ascClient: client));
   }
@@ -230,6 +235,85 @@ void main() {
     await upload(client);
 
     expect(client.reads, ['/v1/apps', '/v1/builds', '/v1/builds']);
+  });
+
+  group('--skip-waiting says what it did not do', () {
+    // **Reachable only through this seam.** The warning prints after the
+    // artifact has gone up, past every credential, so no offline test can get
+    // to it — `finishAfterSkippedWait`'s doc said as much when it was written,
+    // and the client seam added for the reuse cases above is what made that
+    // false. It is also why those command lines were unit-tested in isolation
+    // first: they were the only part reachable at all.
+
+    late File notes;
+
+    setUp(() {
+      notes = File('${artifact.parent.path}/notes.txt')
+        ..writeAsStringSync('what changed');
+    });
+
+    test('it names the two commands that finish the job', () async {
+      final client = _FakeClient([_build('52')]);
+
+      final output = await upload(
+        client,
+        extra: ['--skip-waiting', '--release-notes', notes.path],
+      );
+
+      expect(output, contains('==> not waiting for processing, as asked'));
+      expect(output, contains('the TestFlight notes are NOT set'));
+      expect(output, contains('cux_ship appstore wait 52'));
+    });
+
+    test('the remedy carries the notes flag this run was given', () async {
+      // Without this the suggestion silently reverts to the inferred
+      // CHANGELOG.md — which for the caller most likely to be reading it, one
+      // that passed a flag *because* inference is wrong for their layout,
+      // names the wrong file or none at all.
+      final client = _FakeClient([_build('52')]);
+
+      final output = await upload(
+        client,
+        extra: ['--skip-waiting', '--release-notes', notes.path],
+      );
+
+      expect(
+        output,
+        contains(
+          'cux_ship appstore what-to-test --build-number 52 '
+          '--release-notes ${notes.path}',
+        ),
+      );
+    });
+
+    test('and the platform, on a macOS run', () async {
+      final client = _FakeClient([_build('52', platform: 'MAC_OS')]);
+
+      final output = await upload(
+        client,
+        platform: 'macos',
+        extra: ['--skip-waiting', '--release-notes', notes.path],
+      );
+
+      expect(output, contains('cux_ship appstore wait --platform macos 52'));
+      expect(
+        output,
+        contains('cux_ship appstore what-to-test --platform macos'),
+      );
+    });
+
+    test('a run with no notes anywhere says nothing about them', () async {
+      // The warning is about notes that were going to be published and now
+      // will not be. A run that had none to begin with has lost nothing, and
+      // a remedy printed there would be advice to publish a file that does
+      // not exist.
+      final client = _FakeClient([_build('52')]);
+
+      final output = await upload(client, extra: ['--skip-waiting']);
+
+      expect(output, contains('==> not waiting for processing, as asked'));
+      expect(output, isNot(contains('TestFlight notes are NOT set')));
+    });
   });
 
   test(

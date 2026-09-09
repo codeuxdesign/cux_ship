@@ -279,6 +279,37 @@ void main() {
     expect(output, isNot(contains('already holds versionCode')));
   });
 
+  test('data-safety refuses a supplied client rather than ignoring it', () {
+    // **The seam does not reach this command**, because it posts through a
+    // plain authenticated client instead of the generated API — so a fake
+    // passed here would be dropped and the run would authenticate for real.
+    //
+    // The first version left that to reveal itself: with no credentials the
+    // run fails, loudly. That reasoning describes CI, not the machine where
+    // somebody iterates on a test, which often has the service-account
+    // variable exported or is inside a `secrets exec` shell. There the run
+    // would send a real declaration, and Play files every send as a pending
+    // "App content → Data safety" change whether or not an answer moved —
+    // the accumulation 4.0.0 cut this command out of the upload to stop.
+    //
+    // Synchronous on purpose: it must throw before anything is awaited, so
+    // there is no window in which a credential could be loaded.
+    final args = buildPlayParser(
+      PlayCommand.dataSafety,
+    ).parse(['--package', 'design.codeux.example', '--csv', 'nonexistent.csv']);
+
+    expect(
+      () => runPlay(PlayCommand.dataSafety, args, androidPublisher: _FakeApi()),
+      throwsA(
+        isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          contains('cannot take an androidPublisher'),
+        ),
+      ),
+    );
+  });
+
   test('an app with no bundles at all is uploaded', () async {
     // The listing comes back with the field *absent*, which is what
     // `?? <Bundle>[]` stands between and a null dereference. The run it would

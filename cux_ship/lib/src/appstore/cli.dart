@@ -385,14 +385,17 @@ ArgParser buildAscParser(AscCommand cmd) {
 
 /// The commands that finish an `upload --skip-waiting`, one per line.
 ///
-/// **Split out because the site that matters most cannot otherwise be
-/// reached.** Two of the three callers are offline refusals; the third prints
-/// after the artifact has gone up — past the credential and past Apple — so no
-/// test in this package runs it, and a suggestion nothing exercises goes stale
-/// without anyone noticing. What it has to get right is the arguments it
-/// carries: iOS and macOS are given the *same* build number from one commit by
-/// design, so a macOS run whose remedy omits `--platform macos` names the
-/// other platform's build, and the reader has no way to tell.
+/// **Split out because its two callers are unalike and both are easy to get
+/// wrong.** One is an offline refusal — `--skip-waiting` with `--beta-group`.
+/// The other prints after the artifact has gone up, past the credential and
+/// past Apple, and was unreachable from any test when this was written; the
+/// `ascClient` seam added later reaches it, which is why the warning is now
+/// covered rather than merely argued for.
+///
+/// What it has to get right is the arguments it carries: iOS and macOS are
+/// given the *same* build number from one commit by design, so a macOS run
+/// whose remedy omits `--platform macos` names the other platform's build, and
+/// the reader has no way to tell.
 ///
 /// The wait comes first because everything after it needs a processed build.
 /// [notes] and [betaGroup] are the two phases that sit behind the wait, and
@@ -1153,39 +1156,33 @@ Future<void> runAsc(
       '${finish.map((line) => '    $line').join('\n')}',
     );
   }
-  // **The same shape, for the notes — and this one is the trap that shipped.**
-  // `--skip-waiting` declines the wait, and the notes are written after it, so
-  // the flag silently declined them too. Its own help said so and called
-  // itself a debugging flag, which is exactly the sentence a caller reaching
-  // for it to get concurrency does not read as being about them: the run
-  // uploads fine, exits zero, and the build reaches testers with no "What to
-  // Test" at all.
+  // **`--skip-waiting` and the notes are NOT the same shape, and a first
+  // version of this got that wrong.** It refused the flag alongside an
+  // explicit `--changelog` or `--release-notes`, reasoning by analogy with
+  // `--beta-description` above: a flag naming something the run cannot do is
+  // a contradiction. Review found the analogy is with the wrong flag.
   //
-  // Refused where the notes were *asked for* by name, warned where they were
-  // merely inferred. That split is `BetaDescription.explicit`'s, learned in
-  // beta_release.dart: an explicit flag naming something the run cannot do is
-  // a contradiction and is refused, while standing state that happens not to
-  // apply — a CHANGELOG.md sitting where it always sits — stays harmless. The
-  // warning is below, at the point the wait is skipped, so it names the build
-  // number the run actually used.
-  if (cmd == AscCommand.upload &&
-      flag('skip-waiting') &&
-      (opt('changelog') != null || notesPath != null)) {
-    final asked = opt('changelog') != null ? '--changelog' : '--release-notes';
-    final finish = finishAfterSkippedWait(
-      platform: platform,
-      buildNumber: buildNumber,
-      notes: true,
-      notesArgument: '$asked ${opt('changelog') ?? notesPath}',
-    );
-    fail(
-      '--skip-waiting and $asked ask for incompatible things: TestFlight '
-      'notes are written to a build Apple has finished processing, which is '
-      'the wait --skip-waiting declines.\n'
-      '  Set them separately, after the wait:\n'
-      '${finish.map((line) => '    $line').join('\n')}',
-    );
-  }
+  // `--beta-group` names an *action* — release to this group — and is a thing
+  // the run genuinely cannot do. `--changelog` names a *file*; the variable
+  // for its sibling on the next line is called `notesPath`, which is the code
+  // saying so. Both are answers to "where does the text live", and the refusal
+  // therefore sorted callers by **directory layout** rather than by intent:
+  //
+  //   - a repository with CHANGELOG.md at its root never types the flag,
+  //     because `defaults.changelog` infers it, and was warned;
+  //   - one that keeps it at `docs/CHANGELOG.md` must pass `--changelog` on
+  //     every invocation, because that is the only way to say where it is, and
+  //     was refused — for a wrapper identical in every other respect.
+  //
+  // `--release-notes` made it worse: it has no default at all, so a caller
+  // keeping notes in a file rather than a changelog must always pass it, and
+  // could therefore *never* use `--skip-waiting`. A whole class of caller shut
+  // out of the decomposition by a flag that says where bytes are.
+  //
+  // So it warns in every case, below, at the point the wait is skipped — where
+  // it can name the build number the run actually used. A refusal here would
+  // have to be earned by a flag that can only mean "write the notes now", and
+  // neither of these is one.
   BetaDescription? betaDescription;
   if (betaGroup != null) {
     try {
@@ -1317,6 +1314,14 @@ Future<void> runAsc(
   /// already done. [fail] now reports what was left behind, which makes that
   /// survivable rather than silent; moving the changelog read into the offline
   /// phase would make it not happen at all, and is the better fix.
+  ///
+  /// **`what-to-test` has taken that fix and the other two callers have not.**
+  /// It calls this from the offline block, before a credential is loaded,
+  /// because it is new and could start there without changing anything's
+  /// behaviour. So one command finds a missing changelog section with nothing
+  /// written and two find it with writes already made. Said here rather than
+  /// only there, so somebody reading the old path learns the better shape
+  /// exists instead of finding it by grep.
   String? notesFor(String forVersion) {
     if (changelogPath == null) {
       return literalNotes;
@@ -1639,6 +1644,12 @@ Future<void> runAsc(
           '    (Play publishes them verbatim)',
         );
       }
+      // **Called unconditionally, including under `--dry-run`, and that is
+      // not the bug it looks like.** `Writer(client, dryRun: dryRun)` is what
+      // makes the run honest: the POST and the PATCH inside are suppressed
+      // there and it prints its own `would update: what to test (<locale>)`
+      // instead. Written down because a reader meeting "call the writer, then
+      // print nothing was written" re-checks it — one already has.
       await store.setWhatToTest(build, locale, text);
       stdout.writeln(dryRun ? '==> dry run — nothing was written' : '==> done');
       return;
@@ -1684,16 +1695,27 @@ Future<void> runAsc(
         // **Named, because skipping the wait skips the notes with it**, and
         // that used to be visible only in the flag's own help — where a
         // caller reaching for concurrency has no reason to look, since the
-        // sentence there described a debugging flag. An explicit --changelog
-        // or --release-notes is refused outright, offline; a CHANGELOG.md
-        // that was merely inferred is standing state rather than an
-        // instruction, so it warns here and names the two commands that
-        // finish the job, with this run's own build number in them.
+        // sentence there described a debugging flag. This is the whole of the
+        // loudness now; see the note beside the beta-group refusal for why
+        // there is no refusal here to go with it.
+        //
+        // **The suggested line carries whichever notes flag this run was
+        // given**, so it is paste-able rather than merely indicative. Without
+        // it the remedy silently reverts to the inferred CHANGELOG.md, which
+        // for the caller most likely to be reading — one that passed a flag
+        // *because* inference is wrong for their layout — names the wrong
+        // file, or none.
         if (changelogPath != null || literalNotes != null) {
+          final asked = opt('changelog') != null
+              ? '--changelog ${opt('changelog')}'
+              : notesPath != null
+              ? '--release-notes $notesPath'
+              : null;
           final finish = finishAfterSkippedWait(
             platform: platform,
             buildNumber: buildNumber,
             notes: true,
+            notesArgument: asked,
           );
           stdout.writeln(
             '    so the TestFlight notes are NOT set. Finish elsewhere:\n'
