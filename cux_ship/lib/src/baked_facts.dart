@@ -523,11 +523,18 @@ class PkgRootBundle {
 /// it designates none — a component carrying only scripts, which is a real
 /// thing for a package to hold and not an error.
 ///
-/// **A package describes every bundle it installs, and only one of them is the
-/// app.** Measured on a package built from a Flutter-shaped `.app` — an
-/// embedded `FlutterMacOS.framework` and a login-item helper — `pkgbuild`
-/// wrote three `<bundle>` elements, and the app's was neither the first nor the
-/// last:
+/// **How many bundles a component describes depends on which tool built it,
+/// and both shapes were measured on the same Flutter-shaped `.app`** — an
+/// embedded `FlutterMacOS.framework` and a login-item helper inside it.
+///
+/// `productbuild --component`, which is what `xcodebuild -exportArchive`
+/// drives and therefore what a Mac App Store upload is, describes the
+/// *installed* bundle and nothing else — one element, whatever is nested
+/// inside it. Confirmed on a real App Store artifact: `how-it-went` 1.1.6
+/// (169), 124 payload files, exactly one `<bundle>`.
+///
+/// `pkgbuild --root` describes every bundle in the payload. Same app, three
+/// elements, and the app's neither first nor last:
 ///
 /// ```xml
 /// <bundle path="./Runner.app/Contents/Library/LoginItems/Helper.app"
@@ -537,22 +544,41 @@ class PkgRootBundle {
 /// <bundle path="./Runner.app" id="…" CFBundleShortVersionString="1.1.0" CFBundleVersion="65"/>
 /// ```
 ///
-/// So "the first bundle with both attributes" is a framework's version number
-/// reported as the build's — a plausible wrong answer of exactly the kind this
-/// file exists to prevent, and one that would have compared unequal and refused
-/// a correct release.
+/// There, "the first bundle with both attributes" is a framework's version
+/// reported as the build's — a plausible wrong answer that would compare
+/// unequal and refuse a correct release.
 ///
-/// **`<bundle-version>` is the answer, because it is the installer's own.** It
-/// names the identifier whose version the package is versioned by; the
-/// installer reads it to decide whether what is on disk is older. Selecting by
-/// it is therefore not a heuristic over the file — it is the file's own
-/// designation, and a package that names none is one that claims no app.
+/// **`<bundle-version>` is the answer, because it is the installer's own, and
+/// because it does not depend on which of those two shapes arrives.** It names
+/// the identifier whose version the package is versioned by; the installer
+/// reads it to decide whether what is on disk is older. Selecting by it is not
+/// a heuristic over the file — it is the file's own designation, and a package
+/// that names none is one that claims no app.
 ///
-/// The top-level `Distribution` of a product archive carries the same three
+/// **On the release path this is defensive rather than load-bearing, and that
+/// is worth saying** — as [unusableBuildState] says it of a state two live
+/// runs never observed. Against a one-`<bundle>` `-exportArchive` package,
+/// picking the first element would also have been right. Kept, deliberately:
+/// the multi-bundle shape is real and one `pkgbuild` away, the cost is one
+/// comparison, and the asymmetry is the usual one — the defensive version
+/// refuses a package it cannot read, and the cheap version reports a
+/// framework's version as a build number and refuses a release that was fine.
+/// An unexercised branch that reads as routine is the one somebody later
+/// deletes as dead.
+///
+/// The top-level `Distribution` of a product archive carries the same
 /// `<bundle>` elements with the same attributes, and *without* the
 /// `<bundle-version>` marker to pick between them — so it is the worse source
 /// despite being the easier one to find, and it is also absent from a flat
 /// component package. This reads `PackageInfo` for both reasons.
+///
+/// **`<pkg-info>` also carries a top-level `version`, and it is deliberately
+/// not read.** It is the *package's* version, set by `pkgbuild --version`
+/// independently of anything inside: measured at 9.9.9 on a package whose app
+/// carried 1.1.0 / 65, which is not a corruption but the argument doing what
+/// it is for. Two sources that can disagree need a rule for disagreement, and
+/// the bundle's is the one the installer compares against what is on disk —
+/// so there is one source here rather than a tie-break.
 PkgRootBundle? readPackageInfoRootBundle(String packageInfo) {
   // The input is an artifact's own bytes, so the usual XML question applies and
   // the answer is measured: `package:xml` expands no DTD-declared entity at

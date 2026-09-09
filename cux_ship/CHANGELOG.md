@@ -105,13 +105,16 @@ each component's `PackageInfo`, since the installer compares them against what
 is on disk before it will replace it — and that file is a member of the
 archive's table of contents. No payload is decompressed.
 
-**A package describes every bundle it installs, and only one of them is the
-app.** An embedded framework and a login item are listed alongside it with
-their own version numbers, so the bundle that answers is the one the component
-says it is versioned by, and the cross-check line names it —
-`agree with Runner.pkg/PackageInfo (./Runner.app)`. A package that names no
-such bundle, names several, or installs two apps is refused rather than guessed
-at.
+**How many bundles a component describes depends on which tool built it.** An
+App Store package describes the installed app and nothing else; a
+`pkgbuild --root` one lists every bundle in the payload, so an embedded
+framework and a login item appear beside the app carrying their own version
+numbers. The bundle that answers is therefore the one the component says it is
+versioned by — the installer's own designation, right for either shape — and
+the cross-check line names it: `agree with
+design.codeux.howitwent.pkg/PackageInfo (./How It Went.app)`. A package that
+names no such bundle, names several, or installs two apps is refused rather
+than guessed at.
 [docs/design/build-lifecycle.md](https://github.com/codeuxdesign/cux_ship/blob/main/docs/design/build-lifecycle.md)
 §8 records the measurement, including what the naive reading would have
 returned.

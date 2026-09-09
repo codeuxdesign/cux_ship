@@ -239,10 +239,17 @@ shows through.
 
 ### The trap, which is the whole reason this section is long
 
-**A package describes every bundle it installs, and only one of them is the
-app.** Against a package built from a Flutter-shaped `.app` — an embedded
-`FlutterMacOS.framework` and a login-item helper — `pkgbuild` wrote three
-`<bundle>` elements, and the app's was neither first nor last:
+**How many bundles a component describes depends on which tool built it**, and
+the difference decides how much of this section is load-bearing. Both shapes
+below are measured, on the same Flutter-shaped `.app` — an embedded
+`FlutterMacOS.framework` and a login-item helper inside it.
+
+`productbuild --component` — what `xcodebuild -exportArchive` drives, and
+therefore what a Mac App Store upload is — describes the *installed* bundle and
+nothing else. One element, whatever is nested inside it.
+
+`pkgbuild --root` describes every bundle in the payload. Three elements, and
+the app's neither first nor last:
 
 ```xml
 <bundle path="./Runner.app/Contents/Library/LoginItems/Helper.app"
@@ -252,9 +259,20 @@ app.** Against a package built from a Flutter-shaped `.app` — an embedded
 <bundle path="./Runner.app" id="…" CFBundleShortVersionString="1.1.0" CFBundleVersion="65"/>
 ```
 
-So "the first bundle carrying both attributes" answers with a login item's 777,
-which compares unequal and **refuses a correct release** — the plausible wrong
-answer this whole file exists to prevent, arriving in a new format.
+There, "the first bundle carrying both attributes" answers with a login item's
+777, which compares unequal and **refuses a correct release** — the plausible
+wrong answer this whole file exists to prevent, arriving in a new format.
+
+**On the release path, though, this is defensive rather than load-bearing, and
+the honest version says so.** Against a one-`<bundle>` `-exportArchive`
+package, picking the first element would also have been right. The selector is
+kept for the reason `unusableBuildState` keeps a branch two live runs never
+reached: the other shape is real and one `pkgbuild` away, the check is one
+comparison, and the asymmetry runs the wrong way — dropping it costs a
+framework's version reported as a build number and a correct release refused.
+An unexercised branch that reads as routine is the one somebody later deletes
+as dead. Said here because the three-bundle example above would otherwise be
+taken as the shape releases have, and it is not.
 
 The selector is `<bundle-version>`, which names the identifier the component is
 versioned by. That is the installer's own designation rather than a heuristic
@@ -286,24 +304,70 @@ anyway, so that a reader which started to prefer it would be caught.
 
 ### The gate, in §5's shape
 
-Four packages built locally and read: `productbuild --component` with and
-without nested bundles, `pkgbuild --root` (flat component, `PackageInfo` at the
-top), and `productbuild --package` over that (product archive). All four
-reported `1.1.0` / `65`.
+Four packages built locally and read, all reporting `1.1.0` / `65`:
+
+| Built by | `<bundle>` elements | Shape |
+|---|---|---|
+| `productbuild --component`, plain app | 1 | product archive |
+| `productbuild --component`, app with a framework and a login item inside | **1** | product archive |
+| `pkgbuild --root`, the same app | **3** | flat component, `PackageInfo` at the top |
+| `productbuild --package` over that component | 3 | product archive |
+
+The two bold rows are the same `.app` and disagree, which is the whole of the
+section above — and the first of them is the row that already said an
+`-exportArchive` package would describe one bundle, four hours before anybody
+opened one.
 
 Confirmed independently by `pkgutil --expand-full` and `plutil -extract` against
 the app's own `Info.plist` **inside the payload** — the file the reader
 deliberately does not open — which agreed, and against the helper's, which is
 the 777 the reader must not return.
 
-**One assumption is untested and should be said**, as §5's is. These packages
-were built by `pkgbuild`/`productbuild` directly rather than by `xcodebuild
--exportArchive`, which is what a real Mac App Store upload comes from. Xcode
-drives the same two tools, so the metadata is expected to be identical; that is
-an argument rather than a measurement. The failure mode is a loud refusal — a
-package whose components name no root bundle is refused, not trusted — which is
-the right way round, and the first real macOS release through this will settle
-it.
+One more thing was measured and then declined: `<pkg-info>` carries a top-level
+`version`, and it is the *package's*, set by `pkgbuild --version` independently
+of the payload. A package built `--version 9.9.9` around an app carrying 1.1.0
+/ 65 records exactly that disagreement. Two sources that can differ need a rule
+for differing; the bundle's is the one the installer compares against what is
+on disk, so the reader has one source rather than a tie-break.
+
+### The assumption, and its retirement four hours later
+
+This section shipped saying, as §5's does: *these packages were built by
+`pkgbuild`/`productbuild` directly rather than by `xcodebuild -exportArchive`,
+which is what a real Mac App Store upload comes from. Xcode drives the same two
+tools, so the metadata is expected to be identical; that is an argument rather
+than a measurement.*
+
+**It is now a measurement.** Against `how-it-went` 1.1.6 (169) — the
+`-exportArchive` package from the 9 September TestFlight upload that prompted
+all of this:
+
+```xml
+<pkg-info … identifier="design.codeux.howitwent" version="1.1.6"
+          generator-version="InstallCmds-864.12 (25F84)" install-location="/Applications">
+    <payload numberOfFiles="124" installKBytes="64812"/>
+    <bundle path="./How It Went.app" id="design.codeux.howitwent"
+            CFBundleShortVersionString="1.1.6" CFBundleVersion="169"/>
+    <bundle-version>
+        <bundle id="design.codeux.howitwent"/>
+    </bundle-version>
+```
+
+Every structural claim above holds: the metadata is in the table of contents
+with `Payload` beside it untouched, `<bundle-version>` names exactly one
+identifier, and the `<bundle>` carrying it has both attributes and the right
+values.
+
+**And it carried a negative result, which is why the section above was
+rewritten.** One `<bundle>` element against 124 payload files. The three-bundle
+hazard is real and is a `pkgbuild --root` shape, not the shape an App Store
+upload has — so the doc had been presenting the wrong example as typical. The
+evidence for that was already in this repository's own gate run, in the
+`productbuild --component` package that also described one bundle while
+containing three; it was recorded and not drawn on.
+
+`generator-version` identifies the Xcode toolchain. Nothing reads it; noted in
+case provenance ever matters.
 
 ### Two consequences worth stating
 

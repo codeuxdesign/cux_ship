@@ -928,6 +928,40 @@ void main() {
         expect(facts.source, 'Component.pkg/PackageInfo (./Runner.app)');
       });
 
+      test('the shape an App Store upload actually has reads', () {
+        // **The three-bundle fixtures above are a `pkgbuild --root` shape.**
+        // `xcodebuild -exportArchive` drives `productbuild --component`, which
+        // describes the *installed* bundle and nothing else — one element, from
+        // a payload of 124 files. Taken from the real `how-it-went` 1.1.6 (169)
+        // package that produced the "no reader for pkg" line this exists for,
+        // so the values and the path are that file's rather than invented.
+        //
+        // The path carries spaces, which no other fixture here does.
+        const Described shipped = (
+          id: 'design.codeux.howitwent',
+          path: './How It Went.app',
+          short: '1.1.6',
+          version: '169',
+        );
+        final path = pkg('how-it-went-1.1.6-169.pkg', {
+          'design.codeux.howitwent.pkg/PackageInfo': packageInfo(
+            bundles: const [shipped],
+            versionedBy: [shipped.id],
+          ),
+          'design.codeux.howitwent.pkg/Payload': 'a gzipped cpio, pretend',
+          'Distribution': distribution(const [shipped]),
+        });
+
+        final facts = readPkgFacts(path);
+
+        expect(facts.buildNumber, '169');
+        expect(facts.versionName, '1.1.6');
+        expect(
+          facts.source,
+          'design.codeux.howitwent.pkg/PackageInfo (./How It Went.app)',
+        );
+      });
+
       test('a flat component package reads, with PackageInfo at the top', () {
         // `pkgbuild` alone produces one of these, and it carries no
         // Distribution at all — which is the second reason the reader does not
