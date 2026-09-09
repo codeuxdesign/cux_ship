@@ -838,11 +838,27 @@ Future<void> _publishAscListing(
   }
 }
 
+/// Runs [cmd] against App Store Connect.
+///
+/// [ascClient] replaces the client this would otherwise build from the
+/// environment, and exists so a test can reach the decisions this function
+/// makes rather than only the ones `AppStore` makes. **The one that most
+/// needed reaching is the already-uploaded branch**: an upload asks Apple for
+/// the build number first and reuses a build Apple already holds rather than
+/// letting altool refuse it, which is what makes a re-run after a partial
+/// release safe, and until this parameter existed nothing could drive it —
+/// the client was built at the point of use, so the branch was reachable only
+/// by uploading to Apple.
+///
+/// A supplied client is also where `uploadPackage`'s credentials come from, so
+/// the key altool is handed and the key the REST calls are signed with cannot
+/// come apart.
 Future<void> runAsc(
   AscCommand cmd,
   ArgResults args, {
   AscDefaults defaults = AscDefaults.none,
   AscConfirm? confirm,
+  AscClient? ascClient,
 }) async {
   // Set once there is a store, so a [fail] that happens after a write can
   // still name what the run left behind. Null before then, which is exactly
@@ -1391,28 +1407,36 @@ Future<void> runAsc(
   }
 
   // Built only once every local check has passed.
-  final AscCredentials credentials;
-  try {
-    final loaded = AscCredentials.fromEnvironment();
-    if (loaded == null) {
-      // The same route the Play message names. This used to send people to a
-      // `tool/with-secrets.sh` and a `docs/RELEASING-APPLE.md` that exist in
-      // no consumer — the names of one repository's wrapper from before
-      // `secrets exec` replaced it, surviving in the one message an operator
-      // meets on their first run without credentials.
-      fail(
-        'no App Store Connect credentials.\n'
-        '  APPLE_API_KEY_ID, APPLE_API_ISSUER_ID and APPLE_API_PRIVATE_KEY_PATH\n'
-        '  are not set. Run this through `cux_ship secrets exec`, which writes\n'
-        '  the key file and sets all three, or export them yourself.',
-      );
+  //
+  // A supplied [ascClient] carries its own credentials, so the load is skipped
+  // rather than done and discarded — which also means a test never needs the
+  // environment `secrets exec` sets up.
+  final AscClient client;
+  if (ascClient != null) {
+    client = ascClient;
+  } else {
+    final AscCredentials credentials;
+    try {
+      final loaded = AscCredentials.fromEnvironment();
+      if (loaded == null) {
+        // The same route the Play message names. This used to send people to a
+        // `tool/with-secrets.sh` and a `docs/RELEASING-APPLE.md` that exist in
+        // no consumer — the names of one repository's wrapper from before
+        // `secrets exec` replaced it, surviving in the one message an operator
+        // meets on their first run without credentials.
+        fail(
+          'no App Store Connect credentials.\n'
+          '  APPLE_API_KEY_ID, APPLE_API_ISSUER_ID and APPLE_API_PRIVATE_KEY_PATH\n'
+          '  are not set. Run this through `cux_ship secrets exec`, which writes\n'
+          '  the key file and sets all three, or export them yourself.',
+        );
+      }
+      credentials = loaded;
+    } on StateError catch (e) {
+      fail(e.message);
     }
-    credentials = loaded;
-  } on StateError catch (e) {
-    fail(e.message);
+    client = AscClient(credentials);
   }
-
-  final client = AscClient(credentials);
 
   // Account wide, so it returns before resolveApp: the audit is about the
   // team's certificates and identifiers, and asking Apple to resolve an app
@@ -1645,7 +1669,10 @@ Future<void> runAsc(
           platform: platform,
           versionName: versionName!,
           buildNumber: buildNumber,
-          credentials: credentials,
+          // From the client rather than a variable of its own: the two must
+          // name the same key, and a supplied client is the only source of
+          // truth about which one that is.
+          credentials: client.credentials,
           dryRun: dryRun,
         );
       }
@@ -1962,7 +1989,13 @@ Future<void> runAsc(
     _reportStateLeftBehind(store);
     rethrow;
   } finally {
-    client.close();
+    // Only the one this function opened. A supplied [ascClient] belongs to
+    // whoever supplied it, and may outlive this call — the same rule
+    // `_openPlay` follows for the Play side, and the reason both are stated
+    // rather than left to whoever reads the `finally` next.
+    if (ascClient == null) {
+      client.close();
+    }
   }
 }
 

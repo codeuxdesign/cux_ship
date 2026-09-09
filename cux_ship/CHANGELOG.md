@@ -43,6 +43,22 @@ right. The three call sites share one function for it, `finishAfterSkippedWait`
 credential, where no test can reach it, and a suggestion nothing exercises goes
 stale silently.
 
+**Both stores' already-uploaded branch is tested, and until now neither
+was.** `play upload` reuses a versionCode Play already holds and `appstore
+upload` reuses a build Apple already holds, rather than failing — which is what
+makes re-running a partly-failed release the same command typed again. Both
+guards were correct and unexercised, because `runPlay` and `runAsc` built their
+API client at the point of use from the environment: the branches were
+reachable only by uploading to a real store. `runPlay` now takes an
+`androidPublisher` and `runAsc` an `ascClient`, each replacing the client it
+would otherwise build, and each closing only what it opened. Nine mutations
+were watched failing, including the two that matter most — a fake that ignored
+`filter[preReleaseVersion.platform]` would have made an iOS upload reuse the
+macOS binary of the same build number invisible, and one that answered
+`bundles.list` for the open edit rather than for the app would have made the
+Play branch unreachable. Neither `runPlay` nor `runAsc` is exported; this
+widens no public surface.
+
 **The upload record is documented as commit provenance, and nothing else.**
 `uploaded/vX.Y.Z+N` says which commit an artifact was built from — a git fact
 no store knows — and has doubled as a proxy for "was this uploaded", which it

@@ -1183,11 +1183,27 @@ typedef PlayConfirm = void Function(String summary);
 /// [args] comes from [buildPlayParser] for the same [cmd], so an option that
 /// belongs to another subcommand is absent rather than null. Anything still
 /// missing falls back to [defaults].
+///
+/// [androidPublisher] replaces the client this would otherwise build from the
+/// service-account credential, and exists so a test can reach the decisions
+/// this function makes. **The one that most needed reaching is the
+/// already-uploaded branch**: an upload lists the edit's bundles and reuses a
+/// versionCode Play already holds rather than failing, which is what makes a
+/// re-run after a partial release safe, and until this parameter existed
+/// nothing could drive it — the client was built at the point of use from the
+/// environment, so the branch was reachable only by uploading to Play.
+///
+/// It covers the two paths that go through the generated API: the reads, and
+/// the upload/promote transaction. **`data-safety` posts through a plain
+/// authenticated client rather than the generated API and is not covered** —
+/// passing this and running that command still loads a real credential, which
+/// fails loudly rather than quietly reaching Play.
 Future<void> runPlay(
   PlayCommand cmd,
   ArgResults args, {
   PlayDefaults defaults = PlayDefaults.none,
   PlayConfirm? confirm,
+  AndroidPublisherApi? androidPublisher,
 }) async {
   String? opt(String name) =>
       args.options.contains(name) ? args.option(name) : null;
@@ -1288,10 +1304,7 @@ Future<void> runPlay(
   // Reading needs nothing else, so it goes before the upload path's checks and
   // builds its own client.
   if (cmd.isRead) {
-    final client = await clientViaServiceAccount(_loadCredentials(), [
-      AndroidPublisherApi.androidpublisherScope,
-    ]);
-    final api = AndroidPublisherApi(client);
+    final (api, closeClient) = await _openPlay(androidPublisher);
     switch (cmd) {
       case PlayCommand.tracks:
         await _listTracks(api, packageName);
@@ -1304,7 +1317,7 @@ Future<void> runPlay(
       case PlayCommand.dataSafety:
         throw StateError('unreachable: guarded by cmd.isRead');
     }
-    client.close();
+    closeClient();
     return;
   }
 
@@ -1557,10 +1570,7 @@ Future<void> runPlay(
   // Built only once every local check has passed, so a 4001-character
   // description or a missing screenshot fails with no credential in scope at
   // all — which is what makes `--metadata` usable as an offline lint.
-  final client = await clientViaServiceAccount(_loadCredentials(), [
-    AndroidPublisherApi.androidpublisherScope,
-  ]);
-  final api = AndroidPublisherApi(client);
+  final (api, closeClient) = await _openPlay(androidPublisher);
 
   String? editId;
 
@@ -1822,8 +1832,28 @@ Future<void> runPlay(
         // Losing the cleanup is not worth masking the original failure.
       }
     }
-    client.close();
+    closeClient();
   }
+}
+
+/// The generated API to talk to Play with, and how to let go of it afterwards.
+///
+/// Two things rather than one because the close is not the API's: a real run
+/// owns an `AutoRefreshingAuthClient` it must release, and a supplied
+/// [androidPublisher] belongs to whoever supplied it. Returning a no-op close
+/// for the second case keeps the `finally` at the call site identical, which
+/// is the point — a cleanup that only runs on one of two paths is the shape
+/// that leaves edits open.
+Future<(AndroidPublisherApi, void Function())> _openPlay(
+  AndroidPublisherApi? androidPublisher,
+) async {
+  if (androidPublisher != null) {
+    return (androidPublisher, () {});
+  }
+  final client = await clientViaServiceAccount(_loadCredentials(), [
+    AndroidPublisherApi.androidpublisherScope,
+  ]);
+  return (AndroidPublisherApi(client), client.close);
 }
 
 /// What is about to happen, in the terms the caller will recognise.
