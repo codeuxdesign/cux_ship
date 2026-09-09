@@ -55,6 +55,15 @@ builds is a dry-run writer. On the Play side, reading tracks opens an *edit* —
 Play offers no other way to list them — and the edit is deleted in a `finally`
 rather than committed. Nothing exported calls `commit`.
 
+That deletion is best-effort, inside its own `try`, and the reason is not
+tidiness: awaiting a throwing call in a `finally` discards the exception already
+in flight, so a cleanup that failed would replace the failure being reported —
+which is usually the 403 saying the service account was never granted this app,
+the only actionable message in the exchange. It was safe by accident before this
+change, because the deletion sat in the same function as the `catch` and a
+`catch` runs first; splitting the read out for `PlayReads` moved the `catch` to
+the caller and took that ordering with it.
+
 ## Both the values and the store's own lines
 
 Every result carries `lines` beside its fields, and the CLI prints those same

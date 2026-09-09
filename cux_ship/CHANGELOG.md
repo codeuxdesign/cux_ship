@@ -15,7 +15,8 @@ export with one. Reads only — `upload`, `promote`, `beta-release` and the
 listing publish stay commands, because the printed command line is what makes a
 failed release step resumable by hand and per-step `secrets exec --only …` is
 what keeps a credential away from a step with no use for it.
-[docs/design/read-api.md](../docs/design/read-api.md) records the decision,
+[docs/design/read-api.md](https://github.com/codeuxdesign/cux_ship/blob/main/docs/design/read-api.md)
+records the decision,
 including why the store clients did not become their own packages.
 
 **Every read carries the store's own printed lines beside the parsed values,

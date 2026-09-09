@@ -571,7 +571,8 @@ In-process reads do need the credentials in the *calling* process, so a stage
 reading both stores runs under one `secrets exec` carrying both.
 
 Every exported name is a semver promise and the list is deliberately short —
-[docs/design/read-api.md](../docs/design/read-api.md) says what is on it and why
+[docs/design/read-api.md](https://github.com/codeuxdesign/cux_ship/blob/main/docs/design/read-api.md)
+says what is on it and why
 the store clients are not their own packages.
 
 ### Credentials
