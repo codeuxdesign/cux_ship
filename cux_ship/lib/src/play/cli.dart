@@ -1332,19 +1332,29 @@ Future<void> runPlay(
   // builds its own client.
   if (cmd.isRead) {
     final (api, closeClient) = await _openPlay(androidPublisher);
-    switch (cmd) {
-      case PlayCommand.tracks:
-        await _listTracks(api, packageName);
-      case PlayCommand.listing:
-        await _listListing(api, packageName);
-      case PlayCommand.versionCode:
-        await _printVersionCode(api, packageName, opt('track')!);
-      case PlayCommand.upload:
-      case PlayCommand.promote:
-      case PlayCommand.dataSafety:
-        throw StateError('unreachable: guarded by cmd.isRead');
+    // **In a `finally`, because a read that throws is the ordinary case here.**
+    // Every one of these opens a Play edit and puts it back, and the failure
+    // they meet most is a 403 for an app the service account was never granted
+    // — so the path where the client is not released was the likely one, not
+    // the exotic one. It ran after the switch until now, which is precisely
+    // the shape `_openPlay`'s own doc calls out three lines above: a cleanup
+    // that only runs on one of two paths.
+    try {
+      switch (cmd) {
+        case PlayCommand.tracks:
+          await _listTracks(api, packageName);
+        case PlayCommand.listing:
+          await _listListing(api, packageName);
+        case PlayCommand.versionCode:
+          await _printVersionCode(api, packageName, opt('track')!);
+        case PlayCommand.upload:
+        case PlayCommand.promote:
+        case PlayCommand.dataSafety:
+          throw StateError('unreachable: guarded by cmd.isRead');
+      }
+    } finally {
+      closeClient();
     }
-    closeClient();
     return;
   }
 

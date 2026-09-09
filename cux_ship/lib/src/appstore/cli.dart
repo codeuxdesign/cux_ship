@@ -1528,11 +1528,36 @@ Future<void> runAsc(
     client = AscClient(credentials);
   }
 
+  /// Releases the client, if this function is the one that opened it.
+  ///
+  /// A closure rather than the condition written twice, because there are two
+  /// exits: `signing` returns before the `try` below is entered, so the
+  /// `finally` there covers every path except that one. Two copies of an
+  /// ownership rule is how they stop agreeing.
+  void releaseClient() {
+    if (ascClient == null) {
+      client.close();
+    }
+  }
+
   // Account wide, so it returns before resolveApp: the audit is about the
   // team's certificates and identifiers, and asking Apple to resolve an app
   // would fail for a project that has no App Store record yet.
+  //
+  // **And returning before `resolveApp` means returning before the `try` at the
+  // bottom**, so this path has never been covered by that `finally` and has to
+  // release the client itself. Harmless while `runAsc` only ever ran in a
+  // process about to exit; not harmless now that it can be called in-process,
+  // where a client nobody closed simply stays open.
   if (cmd == AscCommand.signing) {
-    final ok = await reportSigning(client, bundleId: bundleId);
+    final bool ok;
+    try {
+      ok = await reportSigning(client, bundleId: bundleId);
+    } finally {
+      releaseClient();
+    }
+    // After the release rather than inside the `try`: `exit` terminates without
+    // unwinding, so a `finally` below it would not run.
     if (!ok) {
       exit(1);
     }
@@ -2093,9 +2118,7 @@ Future<void> runAsc(
     // whoever supplied it, and may outlive this call — the same rule
     // `_openPlay` follows for the Play side, and the reason both are stated
     // rather than left to whoever reads the `finally` next.
-    if (ascClient == null) {
-      client.close();
-    }
+    releaseClient();
   }
 }
 

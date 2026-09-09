@@ -110,6 +110,16 @@ class _FakeClient implements AscClient {
         },
       ];
     }
+    // The three the signing audit reads. Empty is a legitimate account state
+    // and is all the ownership case below needs — it exercises which client
+    // gets closed, not what the report says.
+    if (const {
+      '/v1/certificates',
+      '/v1/bundleIds',
+      '/v1/profiles',
+    }.contains(path)) {
+      return const [];
+    }
     expect(path, '/v1/builds');
     final version = query?['filter[version]'];
     final platform = query?['filter[preReleaseVersion.platform]'];
@@ -340,6 +350,29 @@ void main() {
       expect(output, contains('==> not waiting for processing, as asked'));
       expect(output, isNot(contains('TestFlight notes are NOT set')));
     });
+  });
+
+  test('signing leaves a supplied client open too', () async {
+    // **`signing` returns before the `try` at the bottom of `runAsc`**, so it
+    // is the one path that `finally` never covered, and it now releases the
+    // client itself. Which means it is also the one path that could get the
+    // ownership rule wrong independently of every other — a bare
+    // `client.close()` there would close a client it did not open, and no
+    // other case here would notice.
+    //
+    // What this does *not* test is the other half: that a client `runAsc`
+    // opened itself is closed. That is unobservable through this seam by
+    // construction — an observable close means a supplied client, and a
+    // supplied client is precisely the one that must not be closed. Saying so
+    // rather than letting the pair look complete.
+    final client = _FakeClient(const []);
+    final args = buildAscParser(
+      AscCommand.signing,
+    ).parse(['--bundle-id', 'design.codeux.example']);
+
+    await _printed(() => runAsc(AscCommand.signing, args, ascClient: client));
+
+    expect(client.closed, isFalse);
   });
 
   test(
