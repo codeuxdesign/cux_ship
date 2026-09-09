@@ -163,6 +163,100 @@ Uint8List axmlFixture(
   ]);
 }
 
+/// One `<bundle>` element of a `PackageInfo`, as the packager writes it.
+typedef Described = ({String id, String path, String? short, String? version});
+
+/// The three bundles a Flutter-shaped `.app` produces, in the order `pkgbuild`
+/// emitted them — the app neither first nor last, and two decoys carrying
+/// version numbers that are not the build's.
+const _helper = (
+  id: 'design.codeux.howitwent.helper',
+  path: './Runner.app/Contents/Library/LoginItems/Helper.app',
+  short: '9.9.9',
+  version: '777',
+);
+const _framework = (
+  id: 'io.flutter.flutter.macos',
+  path: './Runner.app/Contents/Frameworks/FlutterMacOS.framework',
+  short: '3.24.0',
+  version: '1',
+);
+const _app = (
+  id: 'design.codeux.howitwent',
+  path: './Runner.app',
+  short: '1.1.0',
+  version: '65',
+);
+
+String _describe(Described b) =>
+    '    <bundle path="${b.path}" id="${b.id}"'
+    '${b.short == null ? '' : ' CFBundleShortVersionString="${b.short}"'}'
+    '${b.version == null ? '' : ' CFBundleVersion="${b.version}"'}/>';
+
+/// A component package's `PackageInfo`.
+///
+/// **Kept at the shape `pkgbuild` writes rather than reduced to what the reader
+/// looks at.** The elements below that carry no versions — `<upgrade-bundle>`,
+/// `<strict-identifier>`, `<relocate>` — repeat the same identifiers on empty
+/// `<bundle>` elements, and they are the reason the reader searches direct
+/// children instead of descendants: a descendant search matches those too. A
+/// fixture that dropped them would make that rule unreachable from every case,
+/// and the reader would pass while returning an app with no version at all.
+///
+/// Measured on `pkgbuild --root … --identifier design.codeux.howitwent
+/// --version 1.1.0` over an app carrying an embedded framework and a login-item
+/// helper, 9 September 2026.
+String packageInfo({
+  required List<Described> bundles,
+  required List<String> versionedBy,
+}) {
+  String ids(List<String> of) =>
+      of.map((id) => '        <bundle id="$id"/>').join('\n');
+  return '''
+<?xml version="1.0" encoding="utf-8"?>
+<pkg-info overwrite-permissions="true" relocatable="false" identifier="design.codeux.howitwent" postinstall-action="none" version="1.1.0" format-version="2" install-location="/Applications" auth="root">
+    <payload numberOfFiles="35" installKBytes="9"/>
+${bundles.map(_describe).join('\n')}
+    <bundle-version>
+${ids(versionedBy)}
+    </bundle-version>
+    <upgrade-bundle>
+${ids(versionedBy)}
+    </upgrade-bundle>
+    <update-bundle/>
+    <atomic-update-bundle/>
+    <strict-identifier>
+${ids(bundles.map((b) => b.id).toList())}
+    </strict-identifier>
+    <relocate>
+${ids(versionedBy)}
+    </relocate>
+</pkg-info>
+''';
+}
+
+/// The `Distribution` a product archive carries beside its components.
+///
+/// **A fixture goes to the trouble of carrying this because it is the trap.**
+/// It lists the same three bundles with the same two attributes, in the same
+/// order, and *without* the `<bundle-version>` marker that says which of them
+/// the package is versioned by — so a reader that took the easier top-level
+/// file would answer with the login item's 777. Nothing in production reads it;
+/// it is here so that a reader which started to would be caught.
+String distribution(List<Described> bundles) =>
+    '''
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="1">
+    <pkg-ref id="design.codeux.howitwent">
+        <bundle-version>
+${bundles.map((b) => '            <bundle CFBundleShortVersionString="${b.short}" CFBundleVersion="${b.version}" id="${b.id}" path="${b.path.substring(2)}"/>').join('\n')}
+        </bundle-version>
+    </pkg-ref>
+    <options customize="never" require-scripts="false" hostArchitectures="x86_64,arm64"/>
+    <pkg-ref id="design.codeux.howitwent" version="1.1.0" onConclusion="none">#Component.pkg</pkg-ref>
+</installer-gui-script>
+''';
+
 /// CRC-32, because a real `unzip` checks it and refuses an entry that fails.
 int _crc32(List<int> bytes) {
   var crc = 0xFFFFFFFF;
@@ -383,6 +477,138 @@ void main() {
     });
   });
 
+  group('the PackageInfo walk', () {
+    // A macOS installer package answers out of its own metadata rather than out
+    // of the app: `pkgbuild` copies the two values into every component's
+    // `PackageInfo`, because the installer compares them against what is on
+    // disk. That file sits in the archive's table of contents, so nothing has
+    // to decompress a payload — which is what made this format cheap enough to
+    // read after all, having been priced as expensive and deferred.
+
+    test('the app is read, and not the framework or helper beside it', () {
+      // The defect this reader could most easily have shipped. A package
+      // describes every bundle it installs, and taking the first one carrying
+      // both attributes reports the login item's 777 as the build number —
+      // which compares unequal and refuses a correct release, loudly and
+      // wrongly.
+      final bundle = readPackageInfoRootBundle(
+        packageInfo(
+          bundles: [_helper, _framework, _app],
+          versionedBy: [_app.id],
+        ),
+      )!;
+
+      expect(bundle.buildNumber, '65');
+      expect(bundle.versionName, '1.1.0');
+      expect(
+        bundle.path,
+        './Runner.app',
+        reason: 'the path is what lets a build log say which bundle answered',
+      );
+    });
+
+    test('the designation decides, not the order or the shallowest path', () {
+      // The same file with the app described first and the helper designated.
+      // Nothing real is shaped this way; the point is to separate two rules
+      // that agree on every real package — "the bundle the file says it is
+      // versioned by" and "whichever bundle happens to sit outermost". Only
+      // the first is the installer's own answer, and only this case can tell
+      // a reader implementing it from one implementing the other.
+      final bundle = readPackageInfoRootBundle(
+        packageInfo(
+          bundles: [_app, _framework, _helper],
+          versionedBy: [_helper.id],
+        ),
+      )!;
+
+      expect(bundle.buildNumber, '777');
+      expect(bundle.path, _helper.path);
+    });
+
+    test('a component that is versioned by nothing is not an app', () {
+      // A scripts-only component is a real thing for a package to hold, and it
+      // is not a reader failure — it contributes nothing and the app's own
+      // component answers.
+      expect(
+        readPackageInfoRootBundle(
+          packageInfo(bundles: const [], versionedBy: const []),
+        ),
+        isNull,
+      );
+    });
+
+    test('a designated bundle that is not described is a refusal', () {
+      // Not "this package carries no version". The file named an identifier and
+      // then did not describe it, which means this is not being read as the
+      // structure it is — and answering "taken on trust" there is the collapse
+      // the whole cross-check exists to prevent.
+      expect(
+        () => readPackageInfoRootBundle(
+          packageInfo(
+            bundles: [_helper, _framework, _app],
+            versionedBy: const ['design.codeux.absent'],
+          ),
+        ),
+        throwsA(isA<FormatException>()),
+      );
+    });
+
+    test('two designated bundles are refused rather than picked between', () {
+      expect(
+        () => readPackageInfoRootBundle(
+          packageInfo(
+            bundles: [_helper, _app],
+            versionedBy: [_app.id, _helper.id],
+          ),
+        ),
+        throwsA(
+          isA<FormatException>().having(
+            (e) => e.message,
+            'message',
+            contains('guess'),
+          ),
+        ),
+      );
+    });
+
+    test('a Distribution handed to this is refused, not half-read', () {
+      // It is XML, it holds `<bundle>` elements with both attributes, and it is
+      // the wrong file — so a reader pointed at it must say so rather than
+      // return whichever bundle it met first.
+      expect(
+        () => readPackageInfoRootBundle(distribution([_helper, _app])),
+        throwsA(
+          isA<FormatException>().having(
+            (e) => e.message,
+            'message',
+            contains('pkg-info'),
+          ),
+        ),
+      );
+    });
+
+    test('bytes that are not XML are a FormatException', () {
+      expect(
+        () => readPackageInfoRootBundle('a signed installer, pretend'),
+        throwsA(isA<FormatException>()),
+      );
+    });
+
+    test('a version the installer did not record comes back absent', () {
+      // Absent is not empty and not zero: an empty string would compare unequal
+      // and read as a mismatch rather than as a value nobody wrote down.
+      final bundle = readPackageInfoRootBundle(
+        packageInfo(
+          bundles: [(id: _app.id, path: _app.path, short: null, version: null)],
+          versionedBy: [_app.id],
+        ),
+      )!;
+
+      expect(bundle.versionName, isNull);
+      expect(bundle.buildNumber, isNull);
+    });
+  });
+
   group('the comparison', () {
     test('agreement names what it compared and where it read it', () {
       expect(
@@ -436,16 +662,20 @@ void main() {
     });
 
     test('a format with no reader is trusted out loud', () {
-      // The whole point of returning a sentence. A pkg that printed nothing
+      // The whole point of returning a sentence. A dmg that printed nothing
       // would render identically to one that had been verified.
+      //
+      // `dmg` rather than `pkg`, which used to stand here: pkg has a reader
+      // now, and a case whose format quietly acquires one is a case that stops
+      // testing what it is named for.
       expect(
         describeCrossCheck(
           versionName: '1.1.0',
           buildNumber: '65',
-          format: 'pkg',
+          format: 'dmg',
           baked: null,
         ),
-        allOf(contains('no reader for pkg'), contains('taken on trust')),
+        allOf(contains('no reader for dmg'), contains('taken on trust')),
       );
     });
 
@@ -513,20 +743,25 @@ void main() {
       }
     });
 
-    test('a plist carrying neither value is still only trusted', () {
-      // The counterpart, and why the refusal above is keyed to the format: an
-      // Info.plist with neither key is unusual but not evidence of a broken
-      // reader, because `plutil` either extracts a key or reports it missing —
-      // there is no walk to desync.
-      expect(
-        describeCrossCheck(
-          versionName: '1.1.0',
-          buildNumber: '65',
-          format: 'ipa',
-          baked: _baked(),
-        ),
-        contains('carried neither value'),
-      );
+    test('an Apple artifact carrying neither value is still only trusted', () {
+      // The counterpart, and why the refusal above is keyed to the format.
+      // Neither Apple reader has a walk to desync: `plutil` either extracts a
+      // key or reports it missing, and the pkg reader locates its element by
+      // the identifier the file itself designates — so an attribute that is not
+      // there was not written, rather than missed. Adding either format to the
+      // refusal above would turn that into a failed release.
+      for (final format in ['ipa', 'pkg']) {
+        expect(
+          describeCrossCheck(
+            versionName: '1.1.0',
+            buildNumber: '65',
+            format: format,
+            baked: _baked(),
+          ),
+          contains('carried neither value'),
+          reason: format,
+        );
+      }
     });
   });
 
@@ -614,4 +849,244 @@ void main() {
       );
     });
   });
+
+  group(
+    'through a real xar',
+    () {
+      // **The cases above hand a string to the selector.** These go in through
+      // `readPkgFacts`, so a real `xar` lists a real archive and extracts out
+      // of it — the seam where this file's last defect lived, one format over.
+      late Directory dir;
+      setUp(() => dir = Directory.systemTemp.createTempSync('cux_ship_xar'));
+      tearDown(() => dir.deleteSync(recursive: true));
+
+      /// A xar archive of [members], each keyed by its path inside it.
+      String pkg(String name, Map<String, String> members) {
+        final staging = Directory('${dir.path}/staging')..createSync();
+        for (final MapEntry(key: path, value: content) in members.entries) {
+          File('${staging.path}/$path')
+            ..parent.createSync(recursive: true)
+            ..writeAsStringSync(content);
+        }
+        final out = '${dir.path}/$name';
+        final result = Process.runSync('xar', [
+          '-cf',
+          out,
+          // Top-level names only: xar takes the tree under each.
+          ...members.keys.map((path) => path.split('/').first).toSet(),
+        ], workingDirectory: staging.path);
+        expect(result.exitCode, 0, reason: '${result.stderr}');
+        staging.deleteSync(recursive: true);
+        return out;
+      }
+
+      test('a product archive reads, through xar and all', () {
+        // The shape an App Store upload has: one component, and a Distribution
+        // listing every bundle with no marker for which is the app. The source
+        // names both the component and the bundle, because a package describes
+        // several and a log that says only "PackageInfo" cannot be checked by
+        // the person reading it.
+        final path = pkg('how-it-went-1.1.0-65.pkg', {
+          'Component.pkg/PackageInfo': packageInfo(
+            bundles: [_helper, _framework, _app],
+            versionedBy: [_app.id],
+          ),
+          'Component.pkg/Payload': 'a gzipped cpio, pretend',
+          'Component.pkg/Bom': 'a bill of materials, pretend',
+          'Distribution': distribution([_helper, _framework, _app]),
+        });
+
+        final facts = readPkgFacts(path);
+
+        expect(facts.buildNumber, '65');
+        expect(facts.versionName, '1.1.0');
+        expect(facts.source, 'Component.pkg/PackageInfo (./Runner.app)');
+      });
+
+      test('a flat component package reads, with PackageInfo at the top', () {
+        // `pkgbuild` alone produces one of these, and it carries no
+        // Distribution at all — which is the second reason the reader does not
+        // read one.
+        final path = pkg('component.pkg', {
+          'PackageInfo': packageInfo(bundles: [_app], versionedBy: [_app.id]),
+          'Payload': 'a gzipped cpio, pretend',
+        });
+
+        expect(readPkgFacts(path).source, 'PackageInfo (./Runner.app)');
+        expect(readPkgFacts(path).buildNumber, '65');
+      });
+
+      test('a scripts-only component beside the app is stepped over', () {
+        final path = pkg('with-scripts.pkg', {
+          'Scripts.pkg/PackageInfo': packageInfo(
+            bundles: const [],
+            versionedBy: const [],
+          ),
+          'App.pkg/PackageInfo': packageInfo(
+            bundles: [_app],
+            versionedBy: [_app.id],
+          ),
+        });
+
+        expect(readPkgFacts(path).source, 'App.pkg/PackageInfo (./Runner.app)');
+      });
+
+      test('a package that is only scripts is refused, not trusted', () {
+        // The failure path the case above cannot reach: there, a second
+        // component answered. Here nothing in the archive claims to be an app,
+        // and reporting that as trust would put a macOS release back exactly
+        // where it started while printing a sentence that reads like success.
+        final path = pkg('scripts.pkg', {
+          'Scripts.pkg/PackageInfo': packageInfo(
+            bundles: const [],
+            versionedBy: const [],
+          ),
+        });
+
+        expect(
+          () => readPkgFacts(path),
+          throwsA(
+            isA<ReleaseException>().having(
+              (e) => e.toString(),
+              'message',
+              contains('names a bundle it is versioned by'),
+            ),
+          ),
+        );
+      });
+
+      test('the dispatch routes pkg here, so macOS is checked at all', () {
+        // Everything else in this group calls the reader directly, and the
+        // reader is reached only through the format switch. A missing arm
+        // there is the whole defect coming back: every value trusted, one
+        // sentence saying so, and no test noticing.
+        final path = pkg('how-it-went-1.1.0-65.pkg', {
+          'Component.pkg/PackageInfo': packageInfo(
+            bundles: [_helper, _framework, _app],
+            versionedBy: [_app.id],
+          ),
+        });
+
+        expect(readBakedFacts(path, 'pkg')?.buildNumber, '65');
+      });
+
+      test('a package that disagrees with its manifest is refused', () {
+        // What the reader is for, end to end: a macOS manifest claiming 99
+        // against a package carrying 65 used to be a line saying nothing had
+        // been checked.
+        final path = pkg('how-it-went-1.1.0-99.pkg', {
+          'Component.pkg/PackageInfo': packageInfo(
+            bundles: [_helper, _framework, _app],
+            versionedBy: [_app.id],
+          ),
+        });
+
+        expect(
+          () => describeCrossCheck(
+            versionName: '1.1.0',
+            buildNumber: '99',
+            format: 'pkg',
+            baked: readBakedFacts(path, 'pkg'),
+          ),
+          throwsA(
+            isA<ReleaseException>().having(
+              (e) => e.message,
+              'message',
+              contains('manifest 99, artifact 65'),
+            ),
+          ),
+        );
+      });
+
+      test('two components that each name an app are refused, not picked', () {
+        final path = pkg('two.pkg', {
+          'One.pkg/PackageInfo': packageInfo(
+            bundles: [_app],
+            versionedBy: [_app.id],
+          ),
+          'Two.pkg/PackageInfo': packageInfo(
+            bundles: [_helper],
+            versionedBy: [_helper.id],
+          ),
+        });
+
+        expect(
+          () => readPkgFacts(path),
+          throwsA(
+            isA<ReleaseException>().having(
+              (e) => e.toString(),
+              'message',
+              contains('installs'),
+            ),
+          ),
+        );
+      });
+
+      test('a file that is not a xar is refused, not trusted', () {
+        // The distinction the null return exists for: "no reader for pkg" is a
+        // claim about the format, and this is a claim about the file.
+        final path = '${dir.path}/how-it-went-1.1.0-65.pkg';
+        File(path).writeAsStringSync('a signed installer, pretend');
+
+        expect(
+          () => readPkgFacts(path),
+          throwsA(
+            isA<ReleaseException>().having(
+              (e) => e.toString(),
+              'message',
+              allOf(contains('cannot cross-check'), contains('truncated')),
+            ),
+          ),
+        );
+      });
+
+      test('a PackageInfo that is a directory is a sentence, not a crash', () {
+        // The listing says the member is there and the extraction succeeds, so
+        // both exit codes are 0 and the reader is one `readAsStringSync` away
+        // from an unhandled FileSystemException — forty frames out of a binary
+        // whose exit codes are a documented interface, which is the failure the
+        // apk reader's RangeError catch was added for.
+        final path = pkg('dir.pkg', {
+          'PackageInfo/inner': 'a directory wearing the name of a file',
+        });
+
+        expect(
+          () => readPkgFacts(path),
+          throwsA(
+            isA<ReleaseException>().having(
+              (e) => e.toString(),
+              'message',
+              contains('produced no file to read'),
+            ),
+          ),
+        );
+      });
+
+      test('an archive carrying no PackageInfo is refused', () {
+        final path = pkg('empty.pkg', {
+          'Distribution': distribution([_app]),
+        });
+
+        expect(
+          () => readPkgFacts(path),
+          throwsA(
+            isA<ReleaseException>().having(
+              (e) => e.toString(),
+              'message',
+              contains('carries no PackageInfo'),
+            ),
+          ),
+        );
+      });
+    },
+    // A `.pkg` is only ever produced on macOS, which is the only place
+    // `/usr/bin/xar` ships — so this is the condition production runs under
+    // rather than a convenience. Gated on the platform and not on whether the
+    // tool happens to be installed, because a gate on the tool lets a machine
+    // skip silently, which is what `storedZip` above exists to avoid.
+    skip: Platform.isMacOS
+        ? null
+        : 'xar builds and reads these fixtures, and both it and the format are '
+              'macOS-only',
+  );
 }

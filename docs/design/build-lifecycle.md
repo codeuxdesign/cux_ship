@@ -18,6 +18,11 @@ in 0.77 s including VM startup, where the same check previously cost a transfer
 to Play. No new commands, no schema change, no state between commands, as
 designed.
 
+**The `pkg` row followed on 9 September 2026, and §2's reason for deferring it
+was wrong rather than merely conservative** — §8 records that, and it is the
+second estimate in this file to have been priced against the wrong file. Every
+format a repository shipping both Apple platforms produces is now read.
+
 This extends [build-manifest.md](build-manifest.md), which specifies the file.
 This specifies *what is checked against the artifact*, and the answer is: more
 than the digest, in the same two places the digest is checked now.
@@ -55,21 +60,30 @@ of the bytes and refuse a manifest that disagrees with its artifact.**
 | `ipa` | `Payload/*.app/Info.plist` → `CFBundleVersion`, `CFBundleShortVersionString` | zip entry + `plutil` (Apple artifacts are only produced on macOS) | trivial |
 | `aab` | `base/manifest/AndroidManifest.xml` → `versionCode`, `versionName` | zip entry + a minimal aapt2-proto walker, **§5** | to be priced |
 | `apk` | `AndroidManifest.xml` → `versionCode`, `versionName` | zip entry + a binary-XML (axml) reader — **built**, ahead of the producer that needed it | ~170 lines: a string pool and one element's attributes |
-| `pkg`, `dmg`, `msix`, `snap`, `deb`, archives | — | none | **trusted, and said out loud** — see below |
+| `pkg` | `<component>.pkg/PackageInfo` → the `<bundle>` the component says it is versioned by | `xar` for two metadata members + an XML read — **built**, §8 | ~110 lines, and no payload is decompressed |
+| `dmg`, `msix`, `snap`, `deb`, archives | — | none | **trusted, and said out loud** — see below |
 
 **A format without a reader is trusted loudly, never silently.** The check
 prints its effective coverage — `cross-check: versionCode ok, versionName ok`
-or `cross-check: none for format pkg — buildNumber taken on trust` — so absence
+or `cross-check: none for format dmg — buildNumber taken on trust` — so absence
 of verification is a visible state, not the same line as success. This is the
 consuming project's own rule (print effective configuration, never intended)
 applied here.
 
-The macOS `.pkg` is the notable trusted case, and it is acceptable: the
-producer's own read-back from the xcarchive (`build.sh` 617–622) covers the
-defect class at build time, and a pkg is a xar of a signed app whose plist is
-several layers deep — a reader there is real work for a platform whose check
-already exists upstream of it. If that producer-side check ever proves
-insufficient, this table is where the reader goes.
+The macOS `.pkg` *was* the notable trusted case, on this reasoning:
+
+> the producer's own read-back from the xcarchive (`build.sh` 617–622) covers
+> the defect class at build time, and a pkg is a xar of a signed app whose
+> plist is several layers deep — a reader there is real work for a platform
+> whose check already exists upstream of it.
+
+Both halves were wrong in the same way, and §8 records how. The plist is
+several layers deep and **is not where the answer is** — the installer copies
+the two values into its own metadata, one member of the archive's table of
+contents. And a check in one producer's `build.sh` is a check the *next*
+repository does not have; the line that prompted this was printed by a
+repository shipping iOS and macOS from one commit, where half of every release
+had artifact-level confirmation and half did not.
 
 ## 3. Where it runs: both existing chokepoints
 
@@ -202,3 +216,95 @@ first real release through `manifest write`:
    string. Pick one — the writer emitting an integer matches the spec and what
    schema-1 heredocs wrote — and pin it with a test on the raw JSON, before
    AuthPass writes anything against the prose.
+
+## 8. The `.pkg` reader, 9 September 2026 — the deferral was priced against the wrong file
+
+§2 deferred this format because the app's `Info.plist` is inside a gzipped cpio
+inside a xar. That is true, and it is not where the answer is.
+
+**`pkgbuild` and `productbuild` copy the two values out of the app and into
+each component's `PackageInfo`**, because the installer compares them against
+what is already on disk before it will replace it. `PackageInfo` is a member of
+the xar's table of contents, beside the payload rather than inside it — so the
+read is two `xar` invocations and an XML parse, and no payload is
+decompressed. The estimate was wrong by a whole layer, in the same direction
+§5's `aab` estimate was.
+
+That does make this a weaker reading than the `.ipa`'s: it is the *installer's*
+record of the app's two values, not the app's own bytes. It is still the right
+one for the defect class, because those values are written by the packaging
+step and every failure this exists for — an export that rewrote
+`CFBundleVersion`, a variable that evaluated empty — happens upstream of it and
+shows through.
+
+### The trap, which is the whole reason this section is long
+
+**A package describes every bundle it installs, and only one of them is the
+app.** Against a package built from a Flutter-shaped `.app` — an embedded
+`FlutterMacOS.framework` and a login-item helper — `pkgbuild` wrote three
+`<bundle>` elements, and the app's was neither first nor last:
+
+```xml
+<bundle path="./Runner.app/Contents/Library/LoginItems/Helper.app"
+        id="…helper" CFBundleShortVersionString="9.9.9" CFBundleVersion="777"/>
+<bundle path="./Runner.app/Contents/Frameworks/FlutterMacOS.framework"
+        id="io.flutter.flutter.macos" CFBundleShortVersionString="3.24.0" CFBundleVersion="1"/>
+<bundle path="./Runner.app" id="…" CFBundleShortVersionString="1.1.0" CFBundleVersion="65"/>
+```
+
+So "the first bundle carrying both attributes" answers with a login item's 777,
+which compares unequal and **refuses a correct release** — the plausible wrong
+answer this whole file exists to prevent, arriving in a new format.
+
+The selector is `<bundle-version>`, which names the identifier the component is
+versioned by. That is the installer's own designation rather than a heuristic
+over the file: it is what the installer reads to decide whether what is on disk
+is older. A component naming none is a scripts-only component and contributes
+nothing; one naming several, or naming an identifier it does not then describe,
+is refused rather than guessed at.
+
+**The top-level `Distribution` is not read, and it is the easier file to
+find.** It carries the same three bundles with the same two attributes, in the
+same order, and *without* the `<bundle-version>` marker to pick between them —
+so it offers the trap and not the way out. It is also absent from a flat
+component package, which `pkgbuild` alone produces. The test fixtures build one
+anyway, so that a reader which started to prefer it would be caught.
+
+### The gate, in §5's shape
+
+Four packages built locally and read: `productbuild --component` with and
+without nested bundles, `pkgbuild --root` (flat component, `PackageInfo` at the
+top), and `productbuild --package` over that (product archive). All four
+reported `1.1.0` / `65`.
+
+Confirmed independently by `pkgutil --expand-full` and `plutil -extract` against
+the app's own `Info.plist` **inside the payload** — the file the reader
+deliberately does not open — which agreed, and against the helper's, which is
+the 777 the reader must not return.
+
+**One assumption is untested and should be said**, as §5's is. These packages
+were built by `pkgbuild`/`productbuild` directly rather than by `xcodebuild
+-exportArchive`, which is what a real Mac App Store upload comes from. Xcode
+drives the same two tools, so the metadata is expected to be identical; that is
+an argument rather than a measurement. The failure mode is a loud refusal — a
+package whose components name no root bundle is refused, not trusted — which is
+the right way round, and the first real macOS release through this will settle
+it.
+
+### Two consequences worth stating
+
+**A test fixture's format can stop being unreadable without the fixture
+changing.** `build_manifest_write_test.dart` and `manifest_cli_test.dart` both
+used a text file named `.pkg` as their stand-in artifact, chosen precisely
+because pkg had no reader — a comment in each said so. Both moved to `dmg`.
+That is the second time this has happened: they were `.aab` before, and passed
+only because a reader that could not open its input reported "no reader for
+aab". If a `dmg` reader is ever written they move again.
+
+**`pkg` is not added to the "found neither is a refusal" list.** That refusal
+is keyed to `apk` and `aab` because those readers walk a binary layout and can
+desync, so "found neither" means a lost parser. This one locates its element by
+the identifier the file itself designates, so an attribute that is not there
+was not written — the `ipa` case, and reported as taken on trust naming the
+component. Adding pkg to that list would turn an unusual package into a failed
+release.

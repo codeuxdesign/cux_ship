@@ -90,6 +90,32 @@ sends the question there. No behaviour changed.
 records why this did *not* become per-store tags, which is what that document
 was waiting to be asked.
 
+**A macOS `.pkg` is cross-checked like every other format.** A live upload
+printed `cross-check: no reader for pkg — build number and version name taken
+on trust` beside the iOS path's `agree with Payload/Runner.app/Info.plist`, so
+a repository shipping both Apple platforms from one commit had artifact-level
+confirmation for half of every release — and the macOS half is where a mismatch
+is least likely to be noticed, because the build number is shared with iOS and
+looks right everywhere else.
+
+The design had priced this as expensive, because the app's `Info.plist` sits
+inside a gzipped cpio inside a xar. It is not where the answer is: `pkgbuild`
+and `productbuild` copy `CFBundleShortVersionString` and `CFBundleVersion` into
+each component's `PackageInfo`, since the installer compares them against what
+is on disk before it will replace it — and that file is a member of the
+archive's table of contents. No payload is decompressed.
+
+**A package describes every bundle it installs, and only one of them is the
+app.** An embedded framework and a login item are listed alongside it with
+their own version numbers, so the bundle that answers is the one the component
+says it is versioned by, and the cross-check line names it —
+`agree with Runner.pkg/PackageInfo (./Runner.app)`. A package that names no
+such bundle, names several, or installs two apps is refused rather than guessed
+at.
+[docs/design/build-lifecycle.md](https://github.com/codeuxdesign/cux_ship/blob/main/docs/design/build-lifecycle.md)
+§8 records the measurement, including what the naive reading would have
+returned.
+
 ## 4.1.0
 
 **`package:cux_ship/read.dart` answers what the stores hold, as objects.** A
