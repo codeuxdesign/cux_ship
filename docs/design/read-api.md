@@ -154,3 +154,92 @@ two lines to this process's stdout, which is unusable in-process. It now calls
 records *how* it ended and not merely that it stopped — and the printing is one
 caller of that callback. Existing behaviour is unchanged because
 `printProcessingProgress` is the default.
+
+## Was a library the right answer, or would `--json` have been?
+
+Status: **open**, 9 September 2026. Raised by the consumer this API was built
+for, after living with it. Recorded rather than acted on, because acting on it
+is a bigger decision than the one that created the surface.
+
+### The gap in the decision above
+
+Read §"Why now, and why not earlier". It compares the library against exactly
+one alternative: **matching regular expressions against printed prose**. The
+whole argument is that the old arrangement "breaks silently when a listing's
+format shifts" and that "the export makes the promise explicit and small
+instead of implicit and total".
+
+Every word of that is equally an argument for a JSON schema. A schema is also
+explicit, also small, also versioned, and also stops a format shift breaking a
+consumer silently. **This document never distinguishes the two, because it
+never had the second one in front of it.** So the decision was not "library
+over JSON"; it was "library over the status quo", and `--json` was not on the
+table.
+
+### And the precondition it states is false for the consumer it was written for
+
+§"Credentials move into the calling process" is honest about the trade — "a
+real widening of what each call can reach, and it is the trade a consumer
+accepts **when it stops spawning**".
+
+That consumer never stopped spawning. Its release train spawns Gradle and
+Xcode, so putting credentials in the reading process would hand them to every
+build by inheritance — the regression 3.0.0 was cut to prevent. It therefore
+had to split the read into a second entrypoint that spawns nothing, wrapped in
+`secrets exec`, which exists solely to work around the interface and which
+introduced a defect of its own: an exception from one store's read discarded
+every line collected before it, so a run that read Play and then met a 401 from
+Apple printed nothing at all. Spawn-and-parse has no such shape.
+
+A `--json` consumer pays none of that: the child holds the credentials, the
+orchestrator holds none, and there is no second program.
+
+### What a library still buys, and it is thinner than it looks
+
+The first draft of this section kept `awaitBuild` as the surviving
+justification — a forty-five-minute poll reporting each attempt to a callback
+is not a document, and line-delimited events were "possible and worse".
+
+**That does not survive contact with the consumer's code.** Its runner already
+spawns a child and calls back per line, heartbeating on the most recent one; it
+is what drives two concurrent `appstore wait` calls today. So a per-poll
+callback is not something a library provides and a command cannot — it is
+something that consumer already does against a command, and prose versus JSON
+is the only variable. NDJSON out of a long-running command is the ordinary
+pattern rather than an exotic one.
+
+What is genuinely left is typed progress and typed terminal exceptions against
+a decoded map and an exit code — which is the same "rules not data" argument,
+and that one is not durable either: `newestVersionCode` and `newestBuildNumber`
+can be *emitted* as computed fields rather than exposed as accessors, and a
+schema that carries them protects a shell caller too, which a Dart library
+structurally cannot.
+
+### So the question is bigger than the one first asked
+
+Not "`--json` for the reads, keep the library for the wait". It is **`--json`
+for everything, and does `read.dart` still earn its semver weight at all**.
+
+Two constraints on answering it, neither of which is about which interface is
+better:
+
+- **`read.dart` is published, and removing an export is a major version.** The
+  live question is whether the surface should have existed, not whether to
+  break the consumer using it.
+- **Sequencing.** `--json` does not exist. A consumer reverting to
+  spawn-and-parse today gets prose-parsing, which is the defect this API was
+  built to fix. So `--json` lands first, and reverting onto it is a second
+  decision.
+
+### Why this is recorded now rather than when somebody wants it
+
+**Every consumer `read.dart` gains makes the surface harder to narrow**, and
+the argument is cheapest to write while the evidence is fresh. Today there is
+exactly one Dart consumer and it is the one that asked the question. That is
+the widest the door will ever be.
+
+The condition that would settle it in favour of `--json` is a consumer that
+cannot call a Dart library at all — a shell `status`, `jq` at a terminal, a CI
+step reading one number. Those are the majority shape for release tooling and
+none of them exists yet *here*, which is the honest reason this is open rather
+than decided.
