@@ -383,6 +383,44 @@ ArgParser buildAscParser(AscCommand cmd) {
   return parser;
 }
 
+/// What to say when Apple reports no build [buildNumber] on [platform].
+///
+/// **An empty answer has two causes and the API cannot tell them apart**, so
+/// the message names both instead of picking the likelier one. A build that has
+/// just been transferred is not in `/v1/builds` immediately — measured at about
+/// two minutes for a 28 MB iOS build — and during that window the build exists,
+/// the number is right, and Apple says nothing.
+///
+/// **This used to send the reader to `appstore builds`, which is empty for the
+/// same reason.** So the advice was wrong in exactly the window the split
+/// creates: `upload --skip-waiting` prints `appstore wait N` as the next step,
+/// an operator who instead ran `what-to-test` straight away got told to run a
+/// listing that would also show nothing, and the honest conclusion from that is
+/// "my build number is wrong". Found in a real TestFlight run, not reasoned
+/// about.
+///
+/// One function because [AscCommand.betaRelease] and [AscCommand.whatToTest]
+/// both need it and are reached by the same route — a build somebody else's
+/// job uploaded. Two copies would be two chances for the next fix to land on
+/// one of them.
+String noSuchBuild({
+  required AscPlatform platform,
+  required String buildNumber,
+  required String bundleId,
+}) {
+  final on = platform == AscPlatform.ios ? '' : ' --platform ${platform.name}';
+  return 'Apple holds no ${platform.name} build $buildNumber for $bundleId.\n'
+      '  A build that was just uploaded is not listed straight away, so if the '
+      'upload\n'
+      '  has only just finished this is too early rather than wrong:\n'
+      '    cux_ship appstore wait$on $buildNumber\n'
+      '  blocks until it appears. If it never does, `appstore builds` prints '
+      'what\n'
+      '  Apple holds — and check the bundle id first, because a wrong one '
+      'resolves\n'
+      '  to a different app and reports nothing uploaded.';
+}
+
 /// The commands that finish an `upload --skip-waiting`, one per line.
 ///
 /// **Split out because its two callers are unalike and both are easy to get
@@ -1533,8 +1571,11 @@ Future<void> runAsc(
       final build = await store.findBuild(app, buildNumber!);
       if (build == null) {
         fail(
-          'Apple holds no ${platform.name} build $buildNumber for $bundleId. '
-          '`appstore builds` prints what it does hold.',
+          noSuchBuild(
+            platform: platform,
+            buildNumber: buildNumber,
+            bundleId: bundleId,
+          ),
         );
       }
       final attributes = build['attributes'] as Map<String, dynamic>?;
@@ -1611,8 +1652,11 @@ Future<void> runAsc(
       final build = await store.findBuild(app, buildNumber!);
       if (build == null) {
         fail(
-          'Apple holds no ${platform.name} build $buildNumber for $bundleId. '
-          '`appstore builds` prints what it does hold.',
+          noSuchBuild(
+            platform: platform,
+            buildNumber: buildNumber,
+            bundleId: bundleId,
+          ),
         );
       }
       final attributes = build['attributes'] as Map<String, dynamic>?;
@@ -2228,9 +2272,15 @@ String _summarizeAsc({
     AscCommand.betaRelease =>
       'About to release a build TestFlight already holds to a beta group. '
           'An external group goes on to Apple for beta review.',
+    // **Says what it will attempt, not what it has established.** This read
+    // "on a build Apple has already processed", which is a claim about the
+    // store — and the prompt is printed before any credential is loaded, so
+    // nothing had checked it. In a real run the next line after the prompt
+    // was "Apple holds no ios build 169".
     AscCommand.whatToTest =>
-      'About to set the TestFlight "What to Test" on a build Apple has '
-          'already processed. Nothing is uploaded and no audience widens.',
+      'About to set the TestFlight "What to Test" on this build, if Apple '
+          'has finished processing it. Nothing is uploaded and no audience '
+          'widens.',
     AscCommand.upload when ipaPath != null =>
       'About to upload a build to TestFlight'
           '${metadataPath == null ? '' : ' and publish the listing'}.',

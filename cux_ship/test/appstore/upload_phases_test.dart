@@ -25,7 +25,8 @@
 import 'dart:io';
 
 import 'package:cux_ship/src/appstore/app_store.dart' show AscPlatform;
-import 'package:cux_ship/src/appstore/cli.dart' show finishAfterSkippedWait;
+import 'package:cux_ship/src/appstore/cli.dart'
+    show finishAfterSkippedWait, noSuchBuild;
 import 'package:test/test.dart';
 
 import '../cli_snapshot.dart';
@@ -136,6 +137,64 @@ void main() {
       expect(
         finishAfterSkippedWait(platform: AscPlatform.ios, buildNumber: null),
         ['cux_ship appstore wait <build-number>'],
+      );
+    });
+  });
+
+  group('noSuchBuild', () {
+    // **Unit-tested for the same reason `finishAfterSkippedWait` is**: the
+    // branch that prints it calls `fail`, which `exit`s rather than throwing,
+    // so no in-process test can reach it and the subprocess tests below
+    // cannot get past the missing credential. The string is the only part
+    // reachable at all.
+    //
+    // What it has to get right is *which command it names first*. There is a
+    // window — about two minutes for a 28 MB iOS build, measured on a live
+    // run — where the transfer has finished, the build number is correct, and
+    // `/v1/builds` still answers with nothing.
+
+    test('names wait before builds, because builds is empty too', () {
+      final message = noSuchBuild(
+        platform: AscPlatform.ios,
+        buildNumber: '169',
+        bundleId: 'design.codeux.example',
+      );
+
+      expect(message, contains('cux_ship appstore wait 169'));
+      // The old message sent the reader straight to `appstore builds`, which
+      // is empty in exactly that window — so the advice contradicted the
+      // suggestion block `upload --skip-waiting` had just printed, and an
+      // operator following it concludes their build number is wrong when it
+      // is right. Order is the whole assertion.
+      expect(
+        message.indexOf('appstore builds'),
+        greaterThan(message.indexOf('cux_ship appstore wait 169')),
+      );
+    });
+
+    test('still names the bundle id, which is the other cause', () {
+      // Two causes, one empty answer, and the API cannot separate them. The
+      // wrong bundle id resolves to a different app and reports nothing
+      // uploaded — `appstore wait`'s own help says so, and dropping it here
+      // would trade one half-right message for another.
+      final message = noSuchBuild(
+        platform: AscPlatform.ios,
+        buildNumber: '169',
+        bundleId: 'design.codeux.example',
+      );
+
+      expect(message, contains('design.codeux.example'));
+      expect(message, contains('bundle id'));
+    });
+
+    test('the wait it suggests carries the platform', () {
+      expect(
+        noSuchBuild(
+          platform: AscPlatform.macos,
+          buildNumber: '169',
+          bundleId: 'design.codeux.example',
+        ),
+        contains('cux_ship appstore wait --platform macos 169'),
       );
     });
   });

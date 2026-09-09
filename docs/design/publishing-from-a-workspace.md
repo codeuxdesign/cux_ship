@@ -28,6 +28,26 @@ warns, the key still stays — but the claim that every invocation carries it wa
 wrong, and a reader who takes "permanent" to mean "unavoidable" spends an
 afternoon confirming it.
 
+**And the advice above has a trap in it, found 9 September 2026 by a consumer
+pinning a branch of this repository as a git dependency.** `dart <entry>` needs
+a package config, and the obvious guess for where one is — beside the package,
+at `cux_ship/.dart_tool/package_config.json` — is wrong here for the same
+reason this whole document exists: `resolution: workspace` means `pub get`
+writes one config at the **workspace root**, one level up, and none beside the
+member. Passing the member path fails as a wall of `Couldn't resolve the
+package` lines, which reads like a broken checkout rather than a wrong flag,
+and the reader then goes looking at their pin rather than at their path.
+
+```bash
+dart --packages=<checkout>/.dart_tool/package_config.json \
+     <checkout>/cux_ship/bin/cux_ship.dart …
+```
+
+This is the condition the closing section names — it *fails* a resolution
+rather than printing beside one — so it is written here rather than treated as
+noise. It does not reopen the decision below: nothing about the key is wrong,
+and the fix is a path, not a pubspec.
+
 ## The four facts, each checked
 
 **1. Dropping the key is a hard error, not a trade-off.** `resolution: workspace`
