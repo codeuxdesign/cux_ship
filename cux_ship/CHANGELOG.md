@@ -119,6 +119,18 @@ than guessed at.
 §8 records the measurement, including what the naive reading would have
 returned.
 
+**Two paths that returned before their `finally` now release the HTTP client
+they opened.** `appstore signing` is account-wide, so it returns before the app
+is resolved — and therefore before the block whose `finally` closes the client,
+which it has never been covered by. `play tracks`, `listing` and `version-code`
+released after their switch rather than in a `finally`, so a throw out of it
+skipped the release; that is narrower than it sounds, since each of those
+catches the API's own errors itself, and what escapes is a dropped socket or a
+response shaped wrongly. Both were harmless while these functions only ever ran
+in a process about to exit. They are not, now that a client can be supplied and
+the call made in-process — which is also why the release is conditional on
+whose client it is: one that was handed in belongs to whoever handed it in.
+
 ## 4.1.0
 
 **`package:cux_ship/read.dart` answers what the stores hold, as objects.** A
