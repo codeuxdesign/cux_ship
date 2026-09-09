@@ -72,13 +72,24 @@ class _FakeClient implements AscClient {
   @override
   void close() => closed = true;
 
+  /// Enough for `uploadPackage` to build an `xcrun altool` command line, which
+  /// is all any path here needs — nothing in them calls [AscClient.bearerToken],
+  /// so nothing signs.
+  ///
+  /// **The PEM says that, because "nothing calls it" is a true-now.** A later
+  /// path that does would fail deep inside the JWT signer, and the symptom
+  /// would be a signing error in a suite about re-uploading, which sends the
+  /// reader somewhere unrelated. The key body is the explanation, so it
+  /// arrives in the stack trace instead.
   @override
   AscCredentials get credentials => AscCredentials(
     keyId: 'FAKEKEYID',
     issuerId: 'fake-issuer',
     privateKeyPem:
-        '-- not a key, and never signed: nothing here calls '
-        'bearerToken --',
+        'NOT A KEY — this fake never signs, because no path in '
+        'upload_reuse_test.dart reaches AscClient.bearerToken. If you are '
+        'reading this in a signing error, one now does: give the fake a real '
+        'test key or stub bearerToken.',
   );
 
   @override
@@ -199,6 +210,20 @@ void main() {
 
     final output = await upload(client);
 
+    // **The call log first, because it survives an edit to the message** —
+    // and second because the two assertions cover different mutations, which
+    // is worth stating exactly rather than claiming the log is simply
+    // stronger.
+    //
+    // It cannot see the upload at all: `uploadPackage` shells out to `xcrun
+    // altool` and never touches the client. What it sees is where the run
+    // *stopped* — two reads and no third means it did not go on to the
+    // processing wait, which under `--dry-run` is reached only when
+    // `findBuild` returned something. So the log catches a **wrong lookup**
+    // (the platform filter dropped, the version filter ignored: measured, it
+    // fails on exactly those) and not a wrong branch taken on a correct
+    // lookup. The printed line catches the second. Neither alone is enough.
+    expect(client.reads, ['/v1/apps', '/v1/builds']);
     expect(output, contains('would upload'));
     expect(output, isNot(contains('already holds build')));
   });
@@ -215,6 +240,7 @@ void main() {
 
     final output = await upload(client, platform: 'macos');
 
+    expect(client.reads, ['/v1/apps', '/v1/builds']);
     expect(output, contains('would upload'));
     expect(output, isNot(contains('already holds build')));
   });

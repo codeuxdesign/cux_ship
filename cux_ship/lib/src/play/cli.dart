@@ -1633,6 +1633,22 @@ Future<void> runPlay(
       // are deliberately not compared: two Gradle runs over one commit differ
       // byte for byte (zip timestamps, signature), so provenance rests on the
       // commit here as it does everywhere else in this tooling.
+      // **The assumption everything above rests on, and it is not visible in
+      // the call.** `bundles.list` takes an `editId` — a fresh one, inserted
+      // twenty lines up — so the natural reading is that it answers for *this
+      // edit*, and under that reading the check can never fire: nothing has
+      // been uploaded into an edit made moments ago. The guard works only if
+      // the list is **app-scoped**, returning every bundle Play holds for the
+      // package including ones committed by earlier edits, days or weeks
+      // before.
+      //
+      // That is the claim to falsify if this ever stops working, and it is
+      // recorded here because a reader cannot derive it from the call and
+      // because the paragraphs above argue something else — they say why a
+      // guard is *wanted*, not why this call *detects* the condition. Review
+      // caught the gap; the fake in play_upload_reuse_test.dart carries the
+      // app-scoped behaviour deliberately, so if the assumption is wrong the
+      // suite is green about nothing.
       final uploaded =
           (await api.edits.bundles.list(packageName, editId)).bundles ??
           <Bundle>[];
