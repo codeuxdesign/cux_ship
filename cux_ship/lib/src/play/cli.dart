@@ -75,8 +75,8 @@ import 'package:googleapis_auth/auth_io.dart';
 
 import '../listing_requirements.dart';
 import '../notes_source.dart';
-
-const _serviceAccountVar = 'GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_PATH';
+import 'credentials.dart';
+import 'reads.dart';
 
 Never _fail(String message) {
   stderr.writeln('cux_ship play: $message');
@@ -95,32 +95,16 @@ class _Abort implements Exception {
   final String message;
 }
 
-/// Passed as a *path* to the service account JSON, never as the JSON itself.
+/// [loadPlayServiceAccount], with its refusal turned back into an exit.
 ///
-/// The value used to travel in the environment, which is how a Google private
-/// key ended up in public CI logs: anything that echoes its environment — an
-/// xcode script build phase, for one — prints whatever a variable holds. A
-/// filename in a temp directory that has already been removed is not worth
-/// printing.
+/// The loading itself is in credentials.dart so a library caller can have it
+/// too; the difference between the two is only how "no credentials" is
+/// reported — a command exits, an in-process read throws.
 ServiceAccountCredentials _loadCredentials() {
-  final path = Platform.environment[_serviceAccountVar];
-  if (path == null || path.trim().isEmpty) {
-    _fail(
-      '$_serviceAccountVar is not set.\n'
-      '  It holds the path to the Google Play service account JSON. Run this\n'
-      '  through `cux_ship secrets exec`, which writes the file and sets it.',
-    );
-  }
-  final file = File(path);
-  if (!file.existsSync()) {
-    _fail('$_serviceAccountVar points at $path, which does not exist.');
-  }
   try {
-    return ServiceAccountCredentials.fromJson(
-      jsonDecode(file.readAsStringSync()) as Map<String, dynamic>,
-    );
-  } on FormatException catch (e) {
-    _fail('the file at $path is not valid JSON: ${e.message}');
+    return loadPlayServiceAccount();
+  } on StateError catch (e) {
+    _fail(e.message);
   }
 }
 
@@ -258,42 +242,21 @@ Future<void> _listListing(AndroidPublisherApi api, String packageName) async {
   }
 }
 
-/// Reads back what Play actually has, rather than what a previous run reported
-/// having sent. Reading tracks needs an edit even though nothing is modified,
-/// so the edit is discarded immediately afterwards.
+/// `cux_ship play tracks` — [readTracks] rendered.
+///
+/// The reading, the edit it needs and the model it produces are in reads.dart,
+/// so a library caller gets the same answer this prints rather than a second
+/// implementation of it.
 Future<void> _listTracks(AndroidPublisherApi api, String packageName) async {
-  String? editId;
   try {
-    editId = (await api.edits.insert(AppEdit(), packageName)).id;
-    if (editId == null) {
-      _fail('Play did not return an edit id');
+    for (final line in (await readTracks(api, packageName)).lines) {
+      stdout.writeln(line);
     }
-    for (final t
-        in (await api.edits.tracks.list(packageName, editId)).tracks ??
-            <Track>[]) {
-      final releases = t.releases ?? <TrackRelease>[];
-      if (releases.isEmpty) {
-        stdout.writeln('  ${t.track}: (empty)');
-      }
-      for (final r in releases) {
-        stdout.writeln(
-          '  ${t.track}: "${r.name}" codes=${r.versionCodes} ${r.status}',
-        );
-      }
-    }
-    final bundles =
-        (await api.edits.bundles.list(packageName, editId)).bundles ??
-        <Bundle>[];
-    stdout.writeln(
-      '  uploaded bundles: ${bundles.map((b) => b.versionCode).toList()}',
-    );
+  } on StateError catch (e) {
+    _fail(e.message);
   } on DetailedApiRequestError catch (e) {
     stderr.writeln('cux_ship play: Play API error ${e.status}: ${e.message}');
     exitCode = 1;
-  } finally {
-    if (editId != null) {
-      await api.edits.delete(packageName, editId);
-    }
   }
 }
 

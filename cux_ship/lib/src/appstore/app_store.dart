@@ -1184,6 +1184,70 @@ class ReviewContact {
 ///
 /// Separate from [AscApiException] because nothing went wrong with the API: the
 /// waiting is this tool's, and every poll was answered.
+/// One poll of Apple's processing state, while waiting for a build.
+///
+/// Exists so a caller can report the wait its own way. `appstore wait` polls
+/// for up to forty-five minutes, and a consumer streaming that to a log wants
+/// a heartbeat with its own timestamps and its own destination — which it
+/// cannot have if the only report is a line on this process's stdout.
+class BuildProcessingProgress {
+  const BuildProcessingProgress({
+    required this.buildNumber,
+    required this.state,
+    required this.waited,
+    required this.timeout,
+  });
+
+  final String buildNumber;
+
+  /// Apple's `processingState`, or null while the build is not visible at all.
+  ///
+  /// **Null is not "not started yet".** A build that never becomes visible has
+  /// usually been refused during processing, and Apple reports that only by
+  /// e-mail — so a run that stays null to the deadline ends in
+  /// [ProcessingTimeout], which says where the answer is.
+  final String? state;
+
+  /// How long the wait has been going when this poll answered.
+  final Duration waited;
+
+  /// The deadline the wait was given, so a report can say "6 of 45 minutes".
+  final Duration timeout;
+
+  /// Whether App Store Connect has the build at all yet.
+  bool get visible => state != null;
+
+  /// Whether this poll ended the wait, one way or the other.
+  bool get terminal =>
+      state == 'VALID' || state == 'FAILED' || state == 'INVALID';
+}
+
+/// The reporting `appstore wait` has always done: one line when the wait
+/// starts, one when it ends successfully, nothing in between.
+///
+/// A fresh closure per wait, because "have I announced yet" is per-wait state.
+void Function(BuildProcessingProgress) printProcessingProgress() {
+  var announced = false;
+  return (progress) {
+    if (progress.state == 'VALID') {
+      stdout.writeln(
+        '==> build ${progress.buildNumber} has finished processing',
+      );
+      return;
+    }
+    // Not on a terminal failure: that path throws with Apple's own words, and
+    // "waiting for Apple to process" printed immediately above it describes
+    // something that is not about to happen.
+    if (!announced && !progress.terminal) {
+      stdout.writeln(
+        '==> waiting for Apple to process build ${progress.buildNumber} '
+        '(usually 5–15 minutes)',
+      );
+      announced = true;
+    }
+  };
+}
+
 class ProcessingTimeout implements Exception {
   ProcessingTimeout({
     required this.buildNumber,
@@ -1373,22 +1437,39 @@ class AppStore {
   /// until it finishes, so a tool that uploaded and exited would report success
   /// for something testers cannot yet install. `FAILED` and `INVALID` are
   /// terminal and are raised rather than waited out.
+  ///
+  /// [onProgress] is called once per poll, *including* the poll that ends the
+  /// wait, so a caller that logs progress records how it ended and not only
+  /// that it stopped. It defaults to [printProcessingProgress], which is the
+  /// `==>` reporting this has always done — a library caller that wants the
+  /// events and not the printing passes its own, and one that wants silence
+  /// passes an empty closure.
   Future<Map<String, dynamic>> awaitProcessing(
     App app,
     String buildNumber, {
     Duration timeout = const Duration(minutes: 45),
     Duration poll = const Duration(seconds: 30),
+    void Function(BuildProcessingProgress progress)? onProgress,
   }) async {
-    final deadline = DateTime.now().add(timeout);
-    var announced = false;
+    final report = onProgress ?? printProcessingProgress();
+    final startedAt = DateTime.now();
+    final deadline = startedAt.add(timeout);
     while (true) {
       final build = await findBuild(app, buildNumber);
       final state = build == null
           ? null
           : _attributes(build)['processingState'] as String?;
 
+      report(
+        BuildProcessingProgress(
+          buildNumber: buildNumber,
+          state: state,
+          waited: DateTime.now().difference(startedAt),
+          timeout: timeout,
+        ),
+      );
+
       if (state == 'VALID') {
-        stdout.writeln('==> build $buildNumber has finished processing');
         return build!;
       }
       if (state == 'FAILED' || state == 'INVALID') {
@@ -1415,13 +1496,6 @@ class AppStore {
           waited: timeout,
           lastState: state,
         );
-      }
-      if (!announced) {
-        stdout.writeln(
-          '==> waiting for Apple to process build $buildNumber '
-          '(usually 5–15 minutes)',
-        );
-        announced = true;
       }
       await Future<void>.delayed(poll);
     }
@@ -2607,49 +2681,20 @@ class AppStore {
 
   // ------------------------------------------------------------------- reads
 
-  /// What App Store Connect actually holds, as opposed to what a previous run
-  /// reported having sent.
+  /// Every App Store version record for [app] on this platform.
   ///
-  /// Worth having for the same reason `play_upload --list-tracks` is: a push
+  /// What App Store Connect actually holds, as opposed to what a previous run
+  /// reported having sent — the same reason `play tracks` exists: a push
   /// reports what it sent, which is not evidence of what arrived.
-  Future<void> listBuilds(App app) async {
-    final all = await builds(app);
-    if (all.isEmpty) {
-      stdout.writeln('  no builds at all — nothing has ever been uploaded');
-      return;
-    }
-    for (final build in all.take(20)) {
-      final attributes = _attributes(build);
-      stdout.writeln(
-        '  build ${attributes['version']}  '
-        '${attributes['processingState']}  '
-        'uploaded ${attributes['uploadedDate']}'
-        '${attributes['expired'] == true ? '  (expired)' : ''}',
-      );
-    }
-  }
-
-  Future<void> listVersions(App app) async {
-    final versions = await client.getAll(
-      '/v1/apps/${app.id}/appStoreVersions',
-      query: {'filter[platform]': platform.api},
-    );
-    if (versions.isEmpty) {
-      stdout.writeln('  no App Store versions for ${platform.api}');
-      return;
-    }
-    for (final version in versions) {
-      final attributes = _attributes(version);
-      stdout.writeln(
-        '  ${attributes['versionString']}  ${attributes['appStoreState']}  '
-        '${attributes['releaseType']}',
-      );
-      // Printed because it is required before review and null by default, and
-      // because a run that reports having written it is not evidence Apple
-      // kept it.
-      stdout.writeln('    copyright: ${attributes['copyright'] ?? "(unset)"}');
-    }
-  }
+  ///
+  /// The printed form is `printVersions` in reads.dart, which renders the
+  /// model this feeds. Reading and rendering are separated because a consumer
+  /// wants both and a second formatter beside the first is a second thing to
+  /// drift.
+  Future<List<Map<String, dynamic>>> appStoreVersions(App app) => client.getAll(
+    '/v1/apps/${app.id}/appStoreVersions',
+    query: {'filter[platform]': platform.api},
+  );
 
   /// The display types this app's current localizations already carry.
   ///
