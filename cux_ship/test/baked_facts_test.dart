@@ -587,6 +587,31 @@ void main() {
       );
     });
 
+    test('a DOCTYPE entity is not expanded, so a DOCTYPE is inert', () {
+      // **Pinning a dependency's behaviour, because a comment rests on it.**
+      // The input is an artifact's own bytes, and the reader's answer to the
+      // usual XML question is that `package:xml` expands no DTD-declared
+      // entity — which makes a hostile `PackageInfo` unable to leak a file or
+      // detonate an expansion bomb. That is measured rather than argued, and
+      // if a future `xml` starts expanding, this goes red and the comment
+      // stops being true at the same moment.
+      final bundle = readPackageInfoRootBundle('''
+<?xml version="1.0"?>
+<!DOCTYPE pkg-info [
+<!ENTITY leak SYSTEM "file:///etc/passwd">
+<!ENTITY a "aaaaaaaaaa">
+<!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">
+]>
+<pkg-info>
+    <bundle path="./Runner.app" id="x" CFBundleShortVersionString="&leak;" CFBundleVersion="&b;"/>
+    <bundle-version><bundle id="x"/></bundle-version>
+</pkg-info>
+''')!;
+
+      expect(bundle.versionName, '&leak;', reason: 'not fetched');
+      expect(bundle.buildNumber, '&b;', reason: 'not expanded');
+    });
+
     test('bytes that are not XML are a FormatException', () {
       expect(
         () => readPackageInfoRootBundle('a signed installer, pretend'),
@@ -1038,6 +1063,62 @@ void main() {
             ),
           ),
         );
+      });
+
+      test('xar normalises an entry name that would escape', () {
+        // **The reader has no traversal guard, and this is why.** An entry name
+        // comes out of the archive and is joined onto the temp directory, so a
+        // name that climbed out of it would be read from somewhere else — but
+        // xar strips both spellings on create, so no fixture can reach such a
+        // check and a guard no test can fail would rot.
+        //
+        // That argument is only as good as xar's behaviour, so the behaviour is
+        // pinned here rather than asserted in a comment. Both spellings: `..`,
+        // and the absolute path that normalises to the same escape.
+        final staging = Directory('${dir.path}/escape')..createSync();
+        File('${staging.path}/PackageInfo').writeAsStringSync('<pkg-info/>');
+        final out = '${dir.path}/escape.pkg';
+
+        for (final spelling in [
+          '${staging.path}/PackageInfo', // absolute
+          '../escape/PackageInfo', // parent-relative
+        ]) {
+          final created = Process.runSync('xar', [
+            '-cf',
+            out,
+            spelling,
+          ], workingDirectory: staging.path);
+          expect(created.exitCode, 0, reason: '${created.stderr}');
+
+          final listed = const LineSplitter()
+              .convert(
+                Process.runSync('xar', ['-tf', out]).stdout as String,
+              )
+              .map((line) => line.trim())
+              .where((line) => line.isNotEmpty)
+              .toList();
+
+          // Before the claim: `everyElement` is vacuously true on an empty
+          // listing, so without this a xar that stored nothing would prove the
+          // escape is normalised.
+          expect(
+            listed,
+            isNotEmpty,
+            reason: 'the member has to be in the archive for this to mean any',
+          );
+          expect(
+            listed,
+            everyElement(
+              allOf(
+                isNot(startsWith('/')),
+                isNot(contains('..')),
+              ),
+            ),
+            reason:
+                'xar stored $spelling verbatim, so the absent traversal guard '
+                'is no longer covered by the reasoning that removed it',
+          );
+        }
       });
 
       test('a PackageInfo that is a directory is a sentence, not a crash', () {

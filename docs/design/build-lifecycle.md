@@ -259,9 +259,23 @@ answer this whole file exists to prevent, arriving in a new format.
 The selector is `<bundle-version>`, which names the identifier the component is
 versioned by. That is the installer's own designation rather than a heuristic
 over the file: it is what the installer reads to decide whether what is on disk
-is older. A component naming none is a scripts-only component and contributes
-nothing; one naming several, or naming an identifier it does not then describe,
-is refused rather than guessed at.
+is older.
+
+**The property that makes it safe is not "`<bundle-version>` always names the
+app" — it is that every way it can fail to is a refusal or a wrong answer in
+the safe direction.** That is the claim to hold this to, because it survives a
+package neither the author nor the reviewer has seen, and the stricter one does
+not. Enumerated:
+
+| The file says | This does |
+|---|---|
+| a component that is a framework or plugin, not an app | reports *that* bundle's version, which compares unequal — refused, in the safe direction |
+| several designated bundles | refuses; choosing would be a guess |
+| several components each designating one | refuses, naming both paths |
+| a component designating nothing (scripts only) | contributes nothing, and does not mask a component that does |
+| a designated identifier it does not then describe | refuses; the file is not being read as the structure it is |
+
+None of those is silent, and none of them is trust.
 
 **The top-level `Distribution` is not read, and it is the easier file to
 find.** It carries the same three bundles with the same two attributes, in the

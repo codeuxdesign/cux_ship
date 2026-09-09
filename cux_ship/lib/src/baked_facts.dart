@@ -554,6 +554,12 @@ class PkgRootBundle {
 /// despite being the easier one to find, and it is also absent from a flat
 /// component package. This reads `PackageInfo` for both reasons.
 PkgRootBundle? readPackageInfoRootBundle(String packageInfo) {
+  // The input is an artifact's own bytes, so the usual XML question applies and
+  // the answer is measured: `package:xml` expands no DTD-declared entity at
+  // all. A `<!ENTITY boom "999">` comes back as the literal text `&boom;`, a
+  // `SYSTEM "file:///etc/passwd"` is not fetched, and three levels of nesting
+  // expand to nothing — so a DOCTYPE in a hostile PackageInfo is inert rather
+  // than an information leak or an expansion bomb.
   final root = XmlDocument.parse(packageInfo).rootElement;
   if (root.name.local != 'pkg-info') {
     throw FormatException(
@@ -617,6 +623,13 @@ PkgRootBundle? readPackageInfoRootBundle(String packageInfo) {
 /// class this exists for — a build that did not honor the values it was given —
 /// is upstream of them and shows through.
 ///
+/// **What it does not catch, said out loud rather than left to be noticed**: a
+/// `PackageInfo` edited after packaging, or a repackage that kept the app and
+/// rewrote the metadata around it. Both would agree with a manifest while the
+/// bundle inside disagreed. Both are also downstream of the digest, so a
+/// manifest written before them fails verification on the bytes — which is why
+/// this is a gap worth naming and not one worth reaching into the cpio for.
+///
 /// `xar` is asked rather than a xar decoder written, on [readIpaFacts]'s
 /// argument for `plutil`: a `.pkg` is only ever produced on macOS, which is the
 /// only place `/usr/bin/xar` exists and the only place one is built.
@@ -656,11 +669,15 @@ BakedFacts readPkgFacts(String path) {
     );
   }
   // An entry name comes out of the file under examination and is handed back
-  // to xar and joined onto a directory, so a `..` in one would read outside the
-  // temporary directory — and there is deliberately no check for it here. xar
-  // strips `..` from a path rather than storing it ("Skipping .. in path", on
-  // create), so no fixture can be built that reaches such a check, and a guard
-  // no test can fail is one that rots into a claim nobody has verified.
+  // to xar and joined onto a directory, so a name that escapes that directory
+  // would be read from somewhere else — and there is deliberately no check for
+  // it here. **Both spellings of the escape are normalised away by xar itself,
+  // on create, and both were measured rather than assumed**: `..` is dropped
+  // with "Skipping .. in path", and an absolute path is stored relative (a
+  // member added as `/private/tmp/…/PackageInfo` lists as
+  // `private/tmp/…/PackageInfo`). So no fixture can be built that reaches such
+  // a check, and a guard no test can fail is one that rots into a claim nobody
+  // has verified.
   //
   // Only the metadata is extracted — `xar` takes exact member paths, so the
   // payloads stay where they are. As in [readIpaFacts], the members are spilled
