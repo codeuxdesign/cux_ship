@@ -48,6 +48,18 @@
 // rebuild of the same commit. It takes no --artifact, which is the whole point, and
 // the CLI now enforces that by construction rather than by a validation error.
 //
+// **An `upload` carrying an artifact is three phases, and each one can be run
+// on its own.** The transfer is exclusive and bounded — Apple accepts one
+// CFBundleVersion once — the processing wait is shareable and takes five to
+// fifteen minutes, and the writes that follow are exclusive again and take
+// seconds. Welded together, the whole command inherits the worst of each: a
+// caller shipping iOS and macOS from one commit serialises everything for the
+// sake of the transfers and pays both waits end to end. So `upload
+// --skip-waiting` does the transfer, `appstore wait` does the poll from
+// anywhere with the API key, and `appstore what-to-test` and `appstore
+// beta-release` do the writes. Running them apart is a choice; nothing is
+// missing from the single command.
+//
 // `appstore builds` and `appstore versions` are the read side, and the only way
 // to confirm a publish independently of the run that claims to have done it.
 //
@@ -86,6 +98,7 @@ enum AscCommand {
   upload('upload'),
   promote('promote'),
   betaRelease('beta-release'),
+  whatToTest('what-to-test'),
   builds('builds'),
   betaGroups('beta-groups'),
   versions('versions'),
@@ -294,9 +307,10 @@ ArgParser buildAscParser(AscCommand cmd) {
           'skip-waiting',
           negatable: false,
           help:
-              'Do not wait for Apple to finish processing the build. Leaves '
-              'the release notes unset, so it is for debugging rather than '
-              'releases.',
+              'Upload the artifact and stop, leaving the processing wait and '
+              'the TestFlight notes to `appstore wait` and `appstore '
+              'what-to-test`. For a caller waiting on several platforms at '
+              'once; the notes are not set by this run and it says so.',
         );
     case AscCommand.promote:
       parser
@@ -343,6 +357,18 @@ ArgParser buildAscParser(AscCommand cmd) {
               'leaves whatever App Store Connect holds — a new version is '
               'created MANUAL, an existing one is not touched.',
         );
+    case AscCommand.whatToTest:
+      // Only the build. The notes themselves come from the shared options
+      // above, because "which text" is the same question here as on an
+      // upload and answering it twice is how the two answers drift.
+      parser.addOption(
+        'build-number',
+        help:
+            'The build TestFlight already holds. Required, and deliberately '
+            'not defaulted to the newest: notes belong to a *specific* '
+            'build, and "newest" would write them onto somebody else\'s '
+            'upload.',
+      );
     case AscCommand.betaRelease:
     case AscCommand.builds:
     case AscCommand.betaGroups:
@@ -355,6 +381,43 @@ ArgParser buildAscParser(AscCommand cmd) {
   }
 
   return parser;
+}
+
+/// The commands that finish an `upload --skip-waiting`, one per line.
+///
+/// **Split out because the site that matters most cannot otherwise be
+/// reached.** Two of the three callers are offline refusals; the third prints
+/// after the artifact has gone up — past the credential and past Apple — so no
+/// test in this package runs it, and a suggestion nothing exercises goes stale
+/// without anyone noticing. What it has to get right is the arguments it
+/// carries: iOS and macOS are given the *same* build number from one commit by
+/// design, so a macOS run whose remedy omits `--platform macos` names the
+/// other platform's build, and the reader has no way to tell.
+///
+/// The wait comes first because everything after it needs a processed build.
+/// [notes] and [betaGroup] are the two phases that sit behind the wait, and
+/// each contributes a line only when this run had asked for it.
+List<String> finishAfterSkippedWait({
+  required AscPlatform platform,
+  required String? buildNumber,
+  bool notes = false,
+  String? notesArgument,
+  String? betaGroup,
+}) {
+  final on = platform == AscPlatform.ios ? '' : ' --platform ${platform.name}';
+  // A refusal can fire before a build number is known — `--artifact` is what
+  // requires one, and `--skip-waiting --changelog` is refused whether or not
+  // one was passed. A placeholder is honest there; inventing a number is not.
+  final build = buildNumber ?? '<build-number>';
+  return [
+    'cux_ship appstore wait$on $build',
+    if (notes)
+      'cux_ship appstore what-to-test$on --build-number $build'
+          '${notesArgument == null ? '' : ' $notesArgument'}',
+    if (betaGroup != null)
+      'cux_ship appstore beta-release$on --build-number $build '
+          '--beta-group "$betaGroup"',
+  ];
 }
 
 /// Values a caller worked out from the project, used where a flag was omitted.
@@ -953,6 +1016,30 @@ Future<void> runAsc(
     }
   }
 
+  if (cmd == AscCommand.whatToTest) {
+    final number = opt('build-number') ?? defaults.buildNumber;
+    if (number == null) {
+      fail(
+        'which build? --build-number is required, and deliberately not '
+        'defaulted to the newest Apple holds: notes belong to a *specific* '
+        'build, and "newest" would write them onto somebody else\'s upload.',
+      );
+    }
+    if (int.tryParse(number) == null) {
+      fail('--build-number must be an integer, got "$number"');
+    }
+    // The same reason beta-release refuses one: this command's build number
+    // is an option, so a stray positional is most likely a build number the
+    // run would then silently not use. `wait 2132` is the only positional
+    // spelling here, and it is that command's alone.
+    if (args.rest.isNotEmpty) {
+      fail(
+        'unexpected argument "${args.rest.first}" — what-to-test takes '
+        '--build-number as an option',
+      );
+    }
+  }
+
   if (cmd == AscCommand.upload && ipaPath == null && metadataPath == null) {
     fail('nothing to do — pass --artifact, --metadata, or both');
   }
@@ -979,6 +1066,16 @@ Future<void> runAsc(
     fail(
       'no version name — none could be read from pubspec.yaml, so pass '
       '--version-name to say which version to submit',
+    );
+  }
+  // Which version's notes, not which version to submit — this command creates
+  // no App Store version. It is still required, because the changelog section
+  // is chosen by version and picking one by inference from an empty pubspec is
+  // how a build gets last release's notes.
+  if (cmd == AscCommand.whatToTest && versionName == null) {
+    fail(
+      'no version name — none could be read from pubspec.yaml, so pass '
+      "--version-name to say which version's notes to publish",
     );
   }
 
@@ -1028,9 +1125,49 @@ Future<void> runAsc(
   // old behaviour was worse than either — the group was silently skipped and
   // the run still printed done.
   if (betaGroup != null && cmd == AscCommand.upload && flag('skip-waiting')) {
+    final finish = finishAfterSkippedWait(
+      platform: platform,
+      buildNumber: buildNumber,
+      betaGroup: betaGroup,
+    );
     fail(
       '--skip-waiting and --beta-group ask for incompatible things: a build '
-      'cannot reach a group until Apple finishes processing it',
+      'cannot reach a group until Apple finishes processing it.\n'
+      '  Wait elsewhere and release the group separately:\n'
+      '${finish.map((line) => '    $line').join('\n')}',
+    );
+  }
+  // **The same shape, for the notes — and this one is the trap that shipped.**
+  // `--skip-waiting` declines the wait, and the notes are written after it, so
+  // the flag silently declined them too. Its own help said so and called
+  // itself a debugging flag, which is exactly the sentence a caller reaching
+  // for it to get concurrency does not read as being about them: the run
+  // uploads fine, exits zero, and the build reaches testers with no "What to
+  // Test" at all.
+  //
+  // Refused where the notes were *asked for* by name, warned where they were
+  // merely inferred. That split is `BetaDescription.explicit`'s, learned in
+  // beta_release.dart: an explicit flag naming something the run cannot do is
+  // a contradiction and is refused, while standing state that happens not to
+  // apply — a CHANGELOG.md sitting where it always sits — stays harmless. The
+  // warning is below, at the point the wait is skipped, so it names the build
+  // number the run actually used.
+  if (cmd == AscCommand.upload &&
+      flag('skip-waiting') &&
+      (opt('changelog') != null || notesPath != null)) {
+    final asked = opt('changelog') != null ? '--changelog' : '--release-notes';
+    final finish = finishAfterSkippedWait(
+      platform: platform,
+      buildNumber: buildNumber,
+      notes: true,
+      notesArgument: '$asked ${opt('changelog') ?? notesPath}',
+    );
+    fail(
+      '--skip-waiting and $asked ask for incompatible things: TestFlight '
+      'notes are written to a build Apple has finished processing, which is '
+      'the wait --skip-waiting declines.\n'
+      '  Set them separately, after the wait:\n'
+      '${finish.map((line) => '    $line').join('\n')}',
     );
   }
   BetaDescription? betaDescription;
@@ -1205,6 +1342,26 @@ Future<void> runAsc(
           );
         }
         return text;
+    }
+  }
+
+  // **Resolved here rather than late, which is what the closure above says it
+  // should have been all along.** Its own doc calls moving the changelog read
+  // into the offline phase "the better fix" and does not do it, because the
+  // paths that came first would change behaviour. This one is new, so it can
+  // start where the rest of the offline work is: an absent CHANGELOG.md
+  // section is the ordinary mistake, and finding it before a credential is
+  // loaded costs nothing and leaves nothing behind.
+  String? whatToTestNotes;
+  if (cmd == AscCommand.whatToTest) {
+    whatToTestNotes = notesFor(versionName!);
+    if (whatToTestNotes == null) {
+      fail(
+        'no notes to publish — no CHANGELOG.md was found and neither '
+        '--changelog nor --release-notes named one. Writing the TestFlight '
+        '"What to Test" is all this command does, so there is nothing left '
+        'for it to do.',
+      );
     }
   }
 
@@ -1398,6 +1555,71 @@ Future<void> runAsc(
       return;
     }
 
+    // --------------------------------------------------------- what-to-test
+
+    // The notes half of an upload, for a caller that did the waiting itself.
+    //
+    // **A command does something or waits for something, never both.** An
+    // upload transfers an artifact (minutes, and exclusive — Apple takes one
+    // CFBundleVersion once), then waits for processing (five to fifteen
+    // minutes, and shareable — any machine with the API key can poll), then
+    // writes the notes (seconds, exclusive again). A caller shipping iOS and
+    // macOS from one commit has to serialise the whole command for the sake
+    // of the two exclusive phases, and so pays both long polls end to end
+    // with nothing else running.
+    //
+    // `appstore wait` already let the poll move; this is the piece that made
+    // moving it useless, because `setWhatToTest` had exactly one call site
+    // and it was inside the branch that did the waiting. The decomposition is
+    // now whole: `upload --skip-waiting`, then `wait`, then this, then
+    // `beta-release` where a group is wanted.
+    //
+    // Shaped like beta-release deliberately, down to the refusals: it needs a
+    // processed build, and it **refuses rather than waiting** for one. A
+    // command that quietly blocked here would put the two phases back
+    // together under a new name.
+    if (cmd == AscCommand.whatToTest) {
+      final build = await store.findBuild(app, buildNumber!);
+      if (build == null) {
+        fail(
+          'Apple holds no ${platform.name} build $buildNumber for $bundleId. '
+          '`appstore builds` prints what it does hold.',
+        );
+      }
+      final attributes = build['attributes'] as Map<String, dynamic>?;
+      final state = attributes?['processingState'] as String? ?? '(unknown)';
+      if (state != 'VALID') {
+        if (state == 'FAILED' || state == 'INVALID') {
+          fail(
+            'build $buildNumber came back $state from Apple\'s processing and '
+            'will never be releasable. The reason is only in the e-mail Apple '
+            'sends and in the Activity tab; upload a new build.',
+          );
+        }
+        fail(
+          'build $buildNumber is $state, and its notes cannot be written '
+          'until Apple finishes processing it — `appstore wait $buildNumber` '
+          'blocks until it does.',
+        );
+      }
+
+      stdout.writeln('==> TestFlight notes for build $buildNumber');
+      // The same announcement the upload path makes, for the same reason: what
+      // testers read then differs from what Play users read, and that is said
+      // out loud rather than done quietly.
+      var text = whatToTestNotes!;
+      if (needsStrippingForApple(text)) {
+        text = stripForApple(text);
+        stdout.writeln(
+          '    TestFlight rejects emoji, so they are stripped from the notes\n'
+          '    (Play publishes them verbatim)',
+        );
+      }
+      await store.setWhatToTest(build, locale, text);
+      stdout.writeln(dryRun ? '==> dry run — nothing was written' : '==> done');
+      return;
+    }
+
     // ------------------------------------------------------------- the build
 
     Map<String, dynamic>? build;
@@ -1432,6 +1654,25 @@ Future<void> runAsc(
         stdout.writeln('    would then wait for processing and set the notes');
       } else if (flag('skip-waiting')) {
         stdout.writeln('==> not waiting for processing, as asked');
+        // **Named, because skipping the wait skips the notes with it**, and
+        // that used to be visible only in the flag's own help — where a
+        // caller reaching for concurrency has no reason to look, since the
+        // sentence there described a debugging flag. An explicit --changelog
+        // or --release-notes is refused outright, offline; a CHANGELOG.md
+        // that was merely inferred is standing state rather than an
+        // instruction, so it warns here and names the two commands that
+        // finish the job, with this run's own build number in them.
+        if (changelogPath != null || literalNotes != null) {
+          final finish = finishAfterSkippedWait(
+            platform: platform,
+            buildNumber: buildNumber,
+            notes: true,
+          );
+          stdout.writeln(
+            '    so the TestFlight notes are NOT set. Finish elsewhere:\n'
+            '${finish.map((line) => '      $line').join('\n')}',
+          );
+        }
       } else {
         build = await store.awaitProcessing(app, buildNumber);
 
@@ -1907,6 +2148,7 @@ String _summarizeAsc({
     'app': '$bundleId ($platform)',
     // beta-release names no version: it releases a build, and the inferred
     // pubspec version would only claim a fact the command never uses.
+    // what-to-test does use one — it is which changelog section to read.
     'version': cmd == AscCommand.betaRelease ? null : versionName,
     'build': switch (cmd) {
       AscCommand.promote => buildNumber ?? 'newest processed build Apple holds',
@@ -1931,6 +2173,9 @@ String _summarizeAsc({
     AscCommand.betaRelease =>
       'About to release a build TestFlight already holds to a beta group. '
           'An external group goes on to Apple for beta review.',
+    AscCommand.whatToTest =>
+      'About to set the TestFlight "What to Test" on a build Apple has '
+          'already processed. Nothing is uploaded and no audience widens.',
     AscCommand.upload when ipaPath != null =>
       'About to upload a build to TestFlight'
           '${metadataPath == null ? '' : ' and publish the listing'}.',

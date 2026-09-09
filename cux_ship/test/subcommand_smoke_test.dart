@@ -122,6 +122,7 @@ void main() {
     ['appstore', 'upload'],
     ['appstore', 'promote'],
     ['appstore', 'beta-release'],
+    ['appstore', 'what-to-test'],
     ['appstore', 'wait'],
     ['play', 'upload'],
     ['play', 'promote'],

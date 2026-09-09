@@ -1,5 +1,55 @@
 # Changelog
 
+## Unreleased
+
+**`cux_ship appstore what-to-test` writes the TestFlight "What to Test" on a
+build Apple already holds.** An upload carrying an artifact is three phases —
+transfer the binary, wait five to fifteen minutes for processing, then write
+the notes — and they are not the same kind of work: the transfer is exclusive
+(Apple accepts one CFBundleVersion once) and bounded, the wait is shareable and
+long, the notes are exclusive and take seconds. Run as one command the whole
+thing inherits the worst of each, so a caller shipping iOS and macOS from one
+commit serialises both uploads end to end and pays both waits with the machine
+idle. `appstore wait` already moved the middle phase; this is the piece that
+made moving it useless, because `setWhatToTest` had exactly one call site and
+it was inside the branch that did the waiting. The decomposition is now whole:
+`upload --skip-waiting`, `wait`, `what-to-test`, and `beta-release` where a
+group is wanted. Shaped like `beta-release` down to the refusals — it needs a
+processed build and **refuses rather than waiting** for one, because a command
+that quietly blocked would put the two phases back together under a new name.
+
+**`--skip-waiting` no longer drops the release notes quietly.** It skipped the
+wait, and the notes are written after the wait, so it skipped those too — its
+own help said so and called itself a debugging flag, which is not a sentence a
+caller reaching for concurrency reads as being about them. The run uploaded
+fine, exited zero, and the build reached testers with no notes at all. Now
+`--skip-waiting` alongside an explicit `--changelog` or `--release-notes` is
+**refused**, offline, before anything is transferred; a `CHANGELOG.md` that was
+merely inferred still runs, and the upload prints the commands that finish the
+job. That split is `BetaDescription.explicit`'s — an explicit flag naming
+something the run cannot do is a contradiction, while standing state that
+happens not to apply stays harmless. The `--beta-group` refusal, which was
+already there, now names `beta-release` the same way.
+
+**Every suggested command line carries the platform the run was for.** iOS and
+macOS are given the same build number from one commit by design, so a remedy
+that omits `--platform macos` names the other platform's build and looks
+right. The three call sites share one function for it, `finishAfterSkippedWait`
+— the important one prints after the artifact has gone up, past every
+credential, where no test can reach it, and a suggestion nothing exercises goes
+stale silently.
+
+**The upload record is documented as commit provenance, and nothing else.**
+`uploaded/vX.Y.Z+N` says which commit an artifact was built from — a git fact
+no store knows — and has doubled as a proxy for "was this uploaded", which it
+answers badly: it is written before the store is contacted, so it over-reports,
+and one record covers every store a commit reached. Since 4.1.0 the stores
+answer that themselves, per store and per Apple platform, so the README now
+sends the question there. No behaviour changed.
+[docs/design/upload-record-scope.md](https://github.com/codeuxdesign/cux_ship/blob/main/docs/design/upload-record-scope.md)
+records why this did *not* become per-store tags, which is what that document
+was waiting to be asked.
+
 ## 4.1.0
 
 **`package:cux_ship/read.dart` answers what the stores hold, as objects.** A

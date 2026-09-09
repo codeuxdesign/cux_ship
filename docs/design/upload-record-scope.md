@@ -69,3 +69,40 @@ fewer.
 
 **If you are here because you wanted the store back**, that is the signal this
 document is waiting for — say what needed it, and take the per-store names.
+
+## The question arrived, and the answer turned out not to be tags
+
+Recorded 9 September 2026. A consumer's release train wanted exactly the
+promotion script §"Why this is filed rather than built" names: *does the App
+Store already hold this build?* Its `status` stage could only read the tag and
+print a hedge — "a tag says a build was sent, not that a store took it" — and
+the hedge was earning its keep, because the record said 168 while the App
+Store's iOS platform held 166 and Play and macOS held 168.
+
+**That is the reopening condition, and it still does not want per-store tags.**
+The question is not *which store did this commit go to* — a fact about the
+past, which a tag records. It is *what is each store serving now* — a fact
+about the present, which a tag cannot record at any granularity, because it is
+written before the store is contacted and never revised. Per-store names would
+have turned one over-reporting record into four.
+
+`read.dart` (4.1.0) answers it directly, per store and per Apple platform, from
+the only authority there is. So the tag goes back to being one thing: **the
+commit an artifact was built from**, which is a git fact no store knows and the
+reason the record exists. `release-check.md` §1 had already written the
+distinction down — *"git records what we sent; a store records what users can
+get"* — and named the git-versus-store diff as the thing that catches the gap,
+out of scope there and still not built. Half of it is now cheap: the store side
+is a library call rather than four regular expressions over stdout.
+
+**The consumer's hedge is the consumer's to remove**, and it is not a
+workaround for a missing capability — it is a correct sentence about the wrong
+oracle. Nothing in this package should print what a store holds without asking
+one. `cux_ship/README.md`'s upload-record section now says so where the tag is
+introduced, because that is where somebody decides what to read it as; a
+consumer that finds this document has already gone further than most.
+
+The door §"The shape that would work" holds open stays open on its original
+condition — an *audit* asking which stores carried a version, which is a
+question about the past and the one thing a store cannot answer about a build
+it has since replaced. This was not that.

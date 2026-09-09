@@ -115,6 +115,13 @@ Refusals a release runner will actually hit, each meaning what it says:
 - **`--skip-waiting` with `--beta-group` is refused.** A build cannot reach a
   group until Apple finishes processing it, which is exactly the wait being
   skipped.
+- **`--skip-waiting` with `--changelog` or `--release-notes` is refused too**,
+  for the same reason: the TestFlight notes are written after the wait. Both
+  refusals print the commands that finish the job — `appstore wait`, then
+  `appstore what-to-test` and `appstore beta-release` — which is how an
+  App Store upload is run as three separate steps when several platforms
+  should wait at the same time. With no notes named, `--skip-waiting` warns
+  rather than refusing, and the warning carries the same command lines.
 - **"No description anywhere"** — external group, nothing in the repository,
   no locale in App Store Connect holding one. It refuses *before* anything is
   written; either create the tree file above or fill in TestFlight > Test
