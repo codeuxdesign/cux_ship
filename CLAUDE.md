@@ -23,11 +23,19 @@ on a `release/x.y.z` branch. A feature branch that bumps them is claiming a
 number it cannot know it will get — and with several branches open at once, each
 claims the same one and they collide.
 
-Per package, from its own directory:
+**`tool/check.sh` runs what CI runs.** Every workspace member, or name one:
 
 ```bash
-dart pub get && dart analyze --fatal-infos && dart test
+tool/check.sh              # all of them
+tool/check.sh cux_ship     # just this one
 ```
 
+This used to be three commands written out here — `pub get`, `analyze
+--fatal-infos`, `test` — and CI runs **five**. The two it omitted were
+`dart format --output=none --set-exit-if-changed` and `dart pub publish
+--dry-run`, so the loop this file told you to run could not go red on the two
+steps that bracket it. A script rather than a longer line because the list was
+being maintained in two places, which is how it came to be three of five.
+
 `version_test.dart` asserts `cuxShipVersion` and `pubspec.yaml` agree, so run
-the suite *after* the last edit rather than before it.
+this *after* the last edit rather than before it.
