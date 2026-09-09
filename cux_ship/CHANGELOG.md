@@ -66,7 +66,12 @@ were watched failing, including the two that matter most — a fake that ignored
 `filter[preReleaseVersion.platform]` would have made an iOS upload reuse the
 macOS binary of the same build number invisible, and one that answered
 `bundles.list` for the open edit rather than for the app would have made the
-Play branch unreachable. Neither `runPlay` nor `runAsc` is exported; this
+Play branch unreachable. **That second one is now checked against Play rather
+than believed**: a fresh edit listed a versionCode uploaded five days earlier
+by a different, long-committed edit, which is the semantic the guard needs and
+the one no same-session test can tell apart from edit-scope. The call takes an
+`editId` and so reads as edit-scoped, so the reason it works is written at the
+call — it is the claim to falsify if a re-run ever stops being recognised. Neither `runPlay` nor `runAsc` is exported; this
 widens no public surface. **`play data-safety` refuses a supplied client
 rather than ignoring one**: it posts through a plain authenticated client, so
 one passed to it would be dropped — and the first version left that to reveal

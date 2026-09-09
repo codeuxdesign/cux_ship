@@ -36,20 +36,20 @@ import 'package:test/test.dart';
 /// Canned `androidpublisher`, narrowed to the five calls an upload makes.
 ///
 /// **`bundles.list` answers for the app rather than for this edit, because
-/// that is what the tested branch depends on.** The endpoint is understood to
-/// list every bundle the app has, including ones committed by earlier edits —
-/// which is the only reason the check works across runs at all. A fake that
-/// returned only what *this* edit had received would report every re-run as a
-/// fresh upload, so the reuse branch would be unreachable and the cases below
-/// could not fail.
+/// that is what the tested branch depends on.** It lists bundles Play holds
+/// for the package whoever uploaded them and whenever, including ones
+/// committed by edits long since gone — which is the only reason the check
+/// works across runs at all. A fake that returned only what *this* edit had
+/// received would report every re-run as a fresh upload, so the reuse branch
+/// would be unreachable and the cases below could not fail.
 ///
-/// **That is the assumption the whole suite rests on, and it is carried here
-/// on purpose rather than assumed away.** See the comment at the call site in
-/// `play/cli.dart`: the call takes an `editId`, so the natural reading is the
-/// opposite one, and if the natural reading turns out to be right then this
-/// fake is generous, the guard never fires across runs, and every case here is
-/// green about nothing. A real account can settle it — upload a versionCode
-/// Play already holds from a *previous* edit and see whether the run reuses it.
+/// **Verified against a live account rather than assumed**, 9 September 2026:
+/// a fresh edit listed a versionCode uploaded five days earlier by a
+/// different, long-committed edit. The call site in `play/cli.dart` carries
+/// the edit id and the reasoning. It needed checking because the call takes an
+/// `editId` and therefore reads as edit-scoped, and under that reading this
+/// fake would have been generous, the guard would never fire across runs, and
+/// every case here would be green about nothing.
 ///
 /// It records `bundles.upload` rather than refusing it, so "did not upload"
 /// is observed rather than inferred from the absence of a crash.
@@ -136,9 +136,10 @@ class _FakeBundles implements EditsBundlesResource {
     // unreachable and the "no bundles at all" case below would prove only
     // that an empty list works, which was never in doubt. But nobody here has
     // seen Play answer for an app with no bundles, because doing so needs a
-    // fresh app record. A first release would settle it. Until then this is a
-    // fixture encoding a guess, said out loud so it does not read as a fact
-    // about the API.
+    // fresh app record — the live run that settled the app-scope question
+    // above could not settle this one, since that account has bundles. A
+    // first release would. Until then this is a fixture encoding a guess,
+    // said out loud so it does not read as a fact about the API.
     return BundlesListResponse(
       bundles: api.bundles.isEmpty ? null : api.bundles,
     );

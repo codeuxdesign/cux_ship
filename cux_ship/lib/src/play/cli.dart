@@ -1633,22 +1633,28 @@ Future<void> runPlay(
       // are deliberately not compared: two Gradle runs over one commit differ
       // byte for byte (zip timestamps, signature), so provenance rests on the
       // commit here as it does everywhere else in this tooling.
-      // **The assumption everything above rests on, and it is not visible in
-      // the call.** `bundles.list` takes an `editId` — a fresh one, inserted
+      // **The fact everything above rests on, and it is not visible in the
+      // call.** `bundles.list` takes an `editId` — a fresh one, inserted
       // twenty lines up — so the natural reading is that it answers for *this
-      // edit*, and under that reading the check can never fire: nothing has
-      // been uploaded into an edit made moments ago. The guard works only if
-      // the list is **app-scoped**, returning every bundle Play holds for the
-      // package including ones committed by earlier edits, days or weeks
-      // before.
+      // edit*, and under that reading the check could never fire: nothing has
+      // been uploaded into an edit made moments ago. The guard works because
+      // the list is **app-scoped**, returning bundles Play holds for the
+      // package whoever uploaded them and whenever, including ones committed
+      // by edits long since gone.
       //
-      // That is the claim to falsify if this ever stops working, and it is
-      // recorded here because a reader cannot derive it from the call and
+      // **Observed, not inferred.** 9 September 2026, against a live account:
+      // a fresh edit `09764258442915882184` listed versionCode 152, which had
+      // been uploaded five days earlier by a different edit, committed and
+      // gone. So the reach is across edits and across sessions, which is
+      // exactly what a re-run needs and what no same-session test could tell
+      // apart from edit-scope.
+      //
+      // Written here because a reader cannot derive it from the call, and
       // because the paragraphs above argue something else — they say why a
-      // guard is *wanted*, not why this call *detects* the condition. Review
-      // caught the gap; the fake in play_upload_reuse_test.dart carries the
-      // app-scoped behaviour deliberately, so if the assumption is wrong the
-      // suite is green about nothing.
+      // guard is *wanted*, not why this call *detects* the condition. The fake
+      // in play_upload_reuse_test.dart carries the app-scoped behaviour
+      // deliberately: if this ever stops being true, that suite goes green
+      // about nothing, and this is the paragraph to come back to.
       final uploaded =
           (await api.edits.bundles.list(packageName, editId)).bundles ??
           <Bundle>[];
