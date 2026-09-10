@@ -807,11 +807,22 @@ void main() {
         ]),
       );
 
-      expect(said, contains('Apple still reports 00:00:05:01'));
-      expect(said, contains('Re-running'));
+      // What was observed and what to do, with no cause offered: a wrong
+      // hypothesis forecloses the search, and "still reports" asserts a
+      // continuation of a state nobody has established.
+      expect(said, contains('and Apple reports 00:00:05:01'));
+      expect(said, isNot(contains('still reports')));
+      expect(said, isNot(contains('may still be being cut')));
+      // The second sentence is the useful half — the cheap next action, and
+      // the reassurance that a re-run costs no upload.
+      expect(said, contains('Re-running publishes nothing'));
+      // **`moved from` is the discriminator**, not the timecode: both branches
+      // now name the frame that was asked for, and only the success branch
+      // claims Apple took it. Asserting on the timecode matched the request
+      // this line legitimately quotes.
       expect(
         said,
-        isNot(contains('poster frame 00:00:02:06,')),
+        isNot(contains('moved from')),
         reason: 'a write that did not land is not a poster frame that moved',
       );
     });
