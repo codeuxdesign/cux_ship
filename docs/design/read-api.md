@@ -298,6 +298,13 @@ the specification), and the consumer ported: its `status` reads through the
 command, its second entrypoint is deleted, and the output is byte-identical to
 what the library produced.
 
+**The port was not clean, which is the point of having run it before 4.3.0.**
+It found two gaps in the document classes — no accessor for the newest build
+*entry*, and one of the two derived rules reachable while the other was private
+to the encoder, so its fixtures had to restate a rule this package owns. Both
+were additions rather than renames, and both landed. A pre-release was
+published so the shape could still move, and the shape moved twice.
+
 So §Sequencing's constraint is discharged **for the three reads**. That
 qualifier is the whole of what this section is for.
 
