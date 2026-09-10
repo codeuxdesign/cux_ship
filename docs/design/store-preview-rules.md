@@ -214,6 +214,15 @@ does not hang" and neither half of that is measured. The number to want is the
 distribution of real ingestion times, and the way to get it is to ship this and
 record what the first few releases actually took.
 
+**There is a specific measurement pending rather than a general hope.** The
+first consumer has undertaken to time its first upload in two parts — video to
+`COMPLETE`, and then the poster frame after it — and to write both into its own
+`docs/PROMO-VIDEO.md` §1. Two parts because [AppStore.awaitPreviewProcessing]
+waits on both and assumes the frame lands second, which is Apple's documented
+order and not something observed here; a measurement that reported one number
+would leave that assumption exactly as unverified as it is now. Replace the
+default with whatever those two numbers say, and this section with them.
+
 Two things make the wrong value cheap rather than expensive, which is why this
 did not block the work: the timeout is a parameter, and reaching it is
 recoverable by re-running — the unchanged-asset skip means a second run uploads
