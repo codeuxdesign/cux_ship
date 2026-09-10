@@ -19,6 +19,7 @@ import 'package:cux_ship/src/appstore/app_store.dart';
 import 'package:cux_ship/src/appstore/asc_client.dart';
 import 'package:cux_ship/src/appstore/cli.dart';
 import 'package:cux_ship/src/appstore/reads.dart';
+import 'package:cux_ship/src/documents.dart';
 import 'package:cux_ship/src/json_output.dart';
 import 'package:cux_ship/src/play/cli.dart';
 import 'package:cux_ship/src/play/reads.dart';
@@ -501,6 +502,22 @@ void main() {
       expect(servingFor('statusUnspecified'), isNull);
       expect(servingFor('somethingGoogleAdded'), isNull);
       expect(servingFor(null), isNull);
+
+      // **And the encoder answers what the published rule answers.** The rows
+      // above are the rule; this is the guarantee that the field a consumer
+      // decodes and the static a consumer can call cannot drift apart. The
+      // consumer's fixtures are built from the static, so if these two ever
+      // disagreed their whole suite would be asserting against documents this
+      // command never emits.
+      for (final status in PlayReleaseStatus.values) {
+        expect(
+          servingFor(status.playValue),
+          PlayReleaseStatus.serving(status.playValue == null ? null : status),
+          reason:
+              'encoder and PlayReleaseStatus.serving disagree on '
+              '${status.name}',
+        );
+      }
     });
 
     test('and `needsNewUpload` reads correctly in every state, alone', () {
