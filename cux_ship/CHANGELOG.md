@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+**Source-breaking for a Dart caller, in a minor version — read this first if
+you import `documents.dart` or `read.dart`.** The number does not carry the
+signal, so it is here instead. **Decoding is unaffected**: the JSON documents
+are additive, both still declare `schema: 1`, and a caller that only reads
+`--json` output can upgrade without changing a line.
+
+What breaks is *constructing* these types, which in practice means a
+hand-written test fixture:
+
+| Type | Change |
+|---|---|
+| `AppStoreState` | four new members — an exhaustive `switch` over it stops compiling |
+| `AppStoreVersionEntry` | `required buildNumber`, `required buildNumberAsInt` |
+| `PlayReleaseEntry` | `required userFraction`, `required audienceFraction` |
+| `AppStoreVersion` | `required buildNumber` |
+| `PlayTrackRelease` | `required userFraction` |
+
+`required` rather than a defaulted parameter is deliberate and was the one
+consumer's stated preference: a fixture that keeps compiling is a fixture
+quietly asserting against a document this package no longer emits. The fix is
+to name the new fields — `null` is the right value for a version Apple has not
+attached a build to, and for a rollout Play sent no fraction for.
+
 **`appstore versions` says which build each version is.**
 `AppStoreVersionEntry` gains `buildNumber` and `buildNumberAsInt`, and the
 printed line grows ` build 169` where Apple named one:
