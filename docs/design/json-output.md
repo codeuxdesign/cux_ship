@@ -124,6 +124,16 @@ everything Apple returned, and `PlayTracks.lines` appends a trailing `uploaded
 bundles:` line that belongs to no track. Two renderings of one model, and
 deriving either from the other is wrong in both directions.
 
+**A document's `display` is never empty, and that is the half worth a test.**
+An empty listing renders a sentence — `no builds at all — nothing has ever been
+uploaded`, `no App Store versions for IOS` — because a caller iterating an
+empty list prints nothing, and a store the output said nothing about reads as a
+store with nothing wrong. The concatenation shortcut is correct for every
+non-empty document and returns `[]` exactly when that array is the only thing
+carrying meaning, so the simplification that breaks this cannot be caught by a
+test written over a populated fixture. It is caught by one written over an
+empty one, which is why there is one.
+
 This is the field the whole decision turned on. Without it a consumer must
 re-render from the fields, and two renderings of one model drift: a build shown
 as `169` where this command shows `169  VALID  uploaded …  (expired)`. With it,
