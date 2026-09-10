@@ -788,7 +788,8 @@ class PlayReleaseEntry {
   /// strings.
   ///
   /// **"Still being handed out" and not "in front of anybody", and the
-  /// difference is [halted].** This field said the second thing until
+  /// difference is [PlayReleaseStatus.halted].** This field said the second
+  /// thing until
   /// [userFraction] arrived beside it and made the two visibly disagree:
   /// Google's own wording for a halted release is *"Users who already have
   /// these APKs are unaffected"*, so a halted rollout **is** in front of the
