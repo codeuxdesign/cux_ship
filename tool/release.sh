@@ -85,7 +85,21 @@ git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null &&
 # with no output, which reads like nothing ran rather than like a broken
 # guard, and it sits above the publish where a silent death is safe but
 # indistinguishable from the tool not existing.
-SET_BY=$(git log -1 --format=%H -S"version: $VERSION" -- "$PACKAGE/pubspec.yaml")
+# **Anchored, because a release version is a prefix of its own pre-releases.**
+# `-S` counts occurrences of a *substring*, so `-S"version: 4.3.0"` already
+# matches the line `version: 4.3.0-dev.2`. Going from the last pre-release to
+# the release therefore changes that count from one to one — no change, no
+# match — and the pickaxe walks back to the commit that first introduced the
+# prefix, which is the pre-release. It then refuses the release naming a commit
+# eleven back, in a message that reads exactly like the stale-version-line
+# defect this check exists to catch.
+#
+# It cost a real 4.3.0 cut, and it would have cost every pre-release-to-release
+# transition after it. `--pickaxe-regex` with `^…$` counts whole lines instead:
+# `version: 4.3.0-dev.2` no longer matches `^version: 4\.3\.0$`, so the count
+# goes zero to one and the release commit is the match.
+SET_BY=$(git log -1 --format=%H --pickaxe-regex \
+  -S"^version: ${VERSION//./\\.}\$" -- "$PACKAGE/pubspec.yaml")
 HEAD_SHA=$(git rev-parse HEAD)
 if [ "$SET_BY" != "$HEAD_SHA" ]; then
   BEHIND=$(git rev-list --count "$SET_BY..$HEAD_SHA" 2>/dev/null || echo '?')
