@@ -196,6 +196,20 @@ ArgParser buildAscParser(AscCommand cmd) {
   }
 
   if (cmd.isRead) {
+    // Only the two listings. `build-number` already prints one value a caller
+    // can use unquoted, `wait` reports progress nobody decodes, and
+    // `beta-groups` / `screenshot-types` have asked no one for a document —
+    // and a flag on a command with no consumer is a promise made to nobody.
+    if (cmd == AscCommand.builds || cmd == AscCommand.versions) {
+      parser.addFlag(
+        'json',
+        negatable: false,
+        help:
+            'Print the listing as a JSON document instead of prose. stdout '
+            'carries the document and nothing else; every other line goes to '
+            'stderr. See docs/design/json-output.md.',
+      );
+    }
     return parser;
   }
 
@@ -974,6 +988,7 @@ Future<void> runAsc(
   bool flag(String name) => args.options.contains(name) && args.flag(name);
 
   final platform = AscPlatform.byName(opt('platform')!);
+  final jsonOutput = flag('json');
   final bundleId = opt('bundle-id') ?? defaults.bundleId;
   if (bundleId == null) {
     fail(
@@ -1579,7 +1594,20 @@ Future<void> runAsc(
   try {
     final app = await store.resolveApp(bundleId);
     if (cmd != AscCommand.buildNumber) {
-      stdout.writeln('==> ${app.name} ($bundleId) is app ${app.id}');
+      // **Under `--json`, stdout carries the document and nothing else.** This
+      // is the only line that reaches stdout before a listing does, and it is
+      // the whole of what stdout purity costs on this path — `resolveApp`
+      // prints nothing, and the listings are the last thing to run.
+      //
+      // Written out as a branch rather than as `jsonOutput ? stderr : stdout`
+      // because `close_sinks` reads a local holding either one as a sink this
+      // function forgot to close, and it is not wrong to ask.
+      final banner = '==> ${app.name} ($bundleId) is app ${app.id}';
+      if (jsonOutput) {
+        stderr.writeln(banner);
+      } else {
+        stdout.writeln(banner);
+      }
     }
 
     if (cmd == AscCommand.buildNumber) {
@@ -1617,13 +1645,13 @@ Future<void> runAsc(
       return;
     }
     if (cmd == AscCommand.builds) {
-      await printBuilds(store, app);
+      await printBuilds(store, app, json: jsonOutput);
     }
     if (cmd == AscCommand.betaGroups) {
       await store.listBetaGroups(app);
     }
     if (cmd == AscCommand.versions) {
-      await printVersions(store, app);
+      await printVersions(store, app, json: jsonOutput);
     }
     if (cmd == AscCommand.screenshotTypes) {
       await store.listScreenshotTypes(app);

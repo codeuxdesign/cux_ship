@@ -1,5 +1,59 @@
 # Changelog
 
+## Unreleased
+
+**`appstore builds`, `appstore versions` and `play tracks` take `--json`.** The
+listings become documents a caller decodes instead of prose a caller greps —
+for a shell `status`, `jq` at a terminal, or a CI step reading one number, none
+of which can call a Dart library.
+
+The document is the build manifest's envelope, unchanged: an integer `schema` a
+reader refuses when it is not one it knows, optional fields that do not bump
+it, and repo-local keys under `x`. It adds `kind` — `appstore.builds`,
+`appstore.versions`, `play.tracks` — because the counters are *per kind*, so a
+reader has to know which one applies before it can validate the number. An
+unrecognized `kind` is refused on the same terms.
+
+**stdout carries the document and nothing else.** Every other line moves to
+stderr for that invocation, the document is built whole and written once at the
+end rather than streamed as it is assembled, and a failure leaves stdout empty
+and reports on stderr. Check the exit code first; there is no error document to
+branch on, deliberately, because the failure that matters most here is Play's
+403 saying the service account was never granted this app, and that is prose a
+human acts on.
+
+**`display` carries the same lines the command prints, and its text is not
+promised.** It is always an array of strings — at the document level and on
+every item — and *that* is promised: an item's rendering stays addressable
+apart from its document's. The two are not the same rendering, so do not derive
+one from the other: a builds document renders twenty at most while `builds`
+carries everything Apple returned, a version item spends two lines, and a
+tracks document ends with an uploaded-bundles line that belongs to no track.
+
+**Build numbers stay strings and the integers travel beside them.**
+`buildNumber` is a `String` because `CFBundleVersion` may be dotted;
+`buildNumberAsInt` and the new `newestBuildNumberAsInt` are `null` rather than
+zero for anything that is not a single integer. Emitting only the string would
+have handed a shell caller exactly the comparison `newestBuildNumber`'s own
+documentation forbids — its remedy is *via* the newest build object, which is a
+route no shell caller has. Note that a build manifest's `buildNumber` is a JSON
+integer and refuses anything else: both are right for their own document, and a
+consumer reading both has two types under one key.
+
+**Not `appstore wait`, and not on a guess.** The consumer this was built for
+spawns it, logs its stdout for a human, and consumes only the exit code —
+nothing decodes a line, so line-delimited progress events would have been built
+for nobody.
+
+The contract, and why JSON rather than YAML, is `docs/design/json-output.md`.
+The short version: measured against this repository's own `yaml: ^3.1.0`, an
+unquoted `versionName: 1.10` parses as the double `1.1`.
+
+**And the "store's own printed lines" overstatement is corrected** in
+`read.dart`, both `reads.dart` headers, two `lines` doc comments and the
+README. They are composed from parsed fields, so what they buy is one formatter
+and not fidelity to a store's format.
+
 ## 4.2.0
 
 **`secrets exec` no longer hands the sops identity to its child.**

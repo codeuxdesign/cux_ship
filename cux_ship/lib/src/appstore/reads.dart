@@ -18,6 +18,7 @@
 // so the write path is refused at the one place every write goes through.
 import 'dart:io';
 
+import '../json_output.dart';
 import 'app_store.dart';
 import 'asc_client.dart';
 
@@ -287,19 +288,29 @@ AppStoreVersions appStoreVersionsFrom(
 /// A free function rather than a method on [AppStore], and deliberately: the
 /// arrow points one way, from what the API can be asked to do towards how a
 /// listing is rendered, and [AppStore] therefore does not import this file.
-Future<void> printBuilds(AppStore store, App app) async {
+Future<void> printBuilds(AppStore store, App app, {bool json = false}) async {
   final listing = appStoreBuildsFrom(await store.builds(app), store.platform);
+  if (json) {
+    writeJsonDocument(appStoreBuildsDocument(listing, bundleId: app.bundleId));
+    return;
+  }
   for (final line in listing.lines) {
     stdout.writeln(line);
   }
 }
 
 /// `cux_ship appstore versions`.
-Future<void> printVersions(AppStore store, App app) async {
+Future<void> printVersions(AppStore store, App app, {bool json = false}) async {
   final listing = appStoreVersionsFrom(
     await store.appStoreVersions(app),
     store.platform,
   );
+  if (json) {
+    writeJsonDocument(
+      appStoreVersionsDocument(listing, bundleId: app.bundleId),
+    );
+    return;
+  }
   for (final line in listing.lines) {
     stdout.writeln(line);
   }

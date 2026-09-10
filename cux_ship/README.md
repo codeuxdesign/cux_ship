@@ -628,6 +628,37 @@ than reaching them through `package:cux_ship/verify.dart`. That re-export still
 works and is kept for compatibility, but it brings the whole CLI — googleapis
 included — into the lockfile of every contributor.
 
+### Reading the stores as JSON
+
+**`appstore builds`, `appstore versions` and `play tracks` take `--json`.** For
+a caller that is not a Dart program — a shell `status`, `jq` at a terminal, a
+CI step reading one number:
+
+```bash
+cux_ship appstore builds --platform ios --json | jq -r '.newestBuildNumberAsInt'
+```
+
+Three things worth knowing before you parse one:
+
+- **stdout carries the document and nothing else.** Every other line goes to
+  stderr, the document is written whole and once at the end, and a failure
+  leaves stdout empty and says why on stderr. Check the exit code first.
+- **`schema` is an integer and is counted per `kind`.** Refuse a `schema` you
+  do not recognize rather than reading optimistically; read `kind` first,
+  because it is what says which counter applies.
+- **`display` is for showing a human, and its text is not promised.** It is
+  always an array of strings, at the document level and on each item, and that
+  nesting *is* promised. Print those lines rather than rendering the fields
+  yourself — a caller that renders the same model its own way reports something
+  different from what this command reports, silently.
+
+Build numbers are strings, because `CFBundleVersion` may be dotted;
+`buildNumberAsInt` and `newestBuildNumberAsInt` are the integers to compare
+with, `null` rather than zero when the version is not a single integer.
+
+The whole contract, and why it is JSON rather than YAML, is
+[docs/design/json-output.md](https://github.com/codeuxdesign/cux_ship/blob/main/docs/design/json-output.md).
+
 ### Reading the stores from Dart
 
 **`package:cux_ship/read.dart` answers what the stores hold, as objects.** For a
