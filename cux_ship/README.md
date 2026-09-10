@@ -643,10 +643,24 @@ means two things:
 | **3** | upload collision | Apple or Play already holds this build number |
 | **4** | previews still ingesting | `appstore wait-previews` reached its deadline |
 | **5** | no such version | Apple holds no version by the name that was asked for |
-| **64** | usage | the arguments were wrong; nothing ran |
+| **64** | the parser refused | an unknown option, a missing value, an unknown command |
 | **255** | a crash | an exception nothing named — the stack trace is the report |
 
-**Two exceptions to the table, and both matter more than the rows.**
+**64 is the argument *parser*, and not every wrong argument reaches it.** A
+flag the parser accepts and the command then refuses — `--json` without
+`--dry-run`, `--metadata` with `--no-metadata`, a missing `--version-name` —
+exits **1**, because it is refused after parsing by the command itself. The two
+are worth telling apart when writing a caller: 64 means the command line did
+not parse, 1 means it parsed and the command declined it.
+
+Whether those semantic refusals *should* be 64 is a fair question and the
+answer here is "not yet": `fail()` is one function used for genuine failures as
+well — an unreadable tree, an uncommitted changelog — and moving all of it
+would change the status of things that are not usage errors at all. Splitting
+it is a change with consumer impact rather than a tidy-up. Recorded because a
+caller enumerating codes needs the present truth, not the intended one.
+
+**Two more exceptions to the table, and both matter more than the rows.**
 
 **255 is a crash, not a code.** `main` catches three types and rethrows the
 rest, deliberately: a `SocketException` mid-promote or a response shaped

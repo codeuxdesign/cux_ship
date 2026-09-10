@@ -219,6 +219,74 @@ void main() {
     );
   });
 
+  test('a missing --version-name is refused before credentials are', () {
+    // **The order is the finding.** These refusals used to sit inside their
+    // command branches, which run after the account is resolved — so a run
+    // with neither the argument nor the environment answered "no App Store
+    // Connect credentials", naming the environment for a mistake in the
+    // arguments and sending somebody to fix a thing that was not broken.
+    //
+    // It also made them untestable: `fail` calls `exit`, and a subprocess
+    // could not reach them without a real account. Moving them offline is what
+    // gives them a test at all, which is the second reason it was worth doing.
+    for (final command in const ['previews', 'wait-previews']) {
+      final result = Process.runSync(
+        Platform.resolvedExecutable,
+        [
+          '--enable-asserts',
+          cliSnapshot,
+          'appstore',
+          command,
+          '--bundle-id',
+          'design.codeux.consumer',
+        ],
+        workingDirectory: repo.path,
+        environment: {'APPLE_API_KEY_ID': '', 'APPLE_API_PRIVATE_KEY_PATH': ''},
+      );
+      final said = '${result.stdout}${result.stderr}';
+
+      expect(result.exitCode, isNot(0), reason: said);
+      expect(said, contains('which version?'), reason: command);
+      expect(
+        said,
+        isNot(contains('no App Store Connect credentials')),
+        reason: 'the arguments are wrong, and that is what must be said',
+      );
+    }
+  });
+
+  test('an empty --version-name is refused too, not treated as given', () {
+    // **`--version-name ""` parses, and an `== null` check waves it through**
+    // — the option is present, so the parser is satisfied and only the
+    // emptiness test catches it. A run that got past here would ask Apple for
+    // a version named nothing, and the 404 would name the argument as `` in a
+    // sentence about App Store Connect rather than about the command line.
+    //
+    // Easy to write a guard for and easy to write only half of, which is why
+    // it is a case rather than a line in the one above: a mutation dropping
+    // `wanted.isEmpty` leaves that test green.
+    final result = Process.runSync(
+      Platform.resolvedExecutable,
+      [
+        '--enable-asserts',
+        cliSnapshot,
+        'appstore',
+        'previews',
+        '--bundle-id',
+        'design.codeux.consumer',
+        '--version-name',
+        '',
+      ],
+      workingDirectory: repo.path,
+      environment: {'APPLE_API_KEY_ID': '', 'APPLE_API_PRIVATE_KEY_PATH': ''},
+    );
+    final said = '${result.stdout}${result.stderr}';
+
+    expect(result.exitCode, isNot(0), reason: said);
+    expect(said, contains('which version?'));
+    expect(said, isNot(contains('no App Store Connect credentials')));
+  });
+
   test('upload --json without --dry-run is refused, not ignored', () {
     // **Refused rather than inert, which is the decision this pins.** A flag
     // accepted and doing nothing is a promise the caller cannot check, and the

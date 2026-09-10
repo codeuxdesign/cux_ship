@@ -1410,6 +1410,36 @@ Future<void> runAsc(
   // This repository already answers it the same way: `--data-safety` is gone
   // from `play upload` and gone *loudly*, still declared and hidden so that
   // passing it names the command that took over.
+  // **A missing required argument is refused here, before credentials.**
+  //
+  // These two used to be checked inside their command branches, which run
+  // *after* the account is resolved — so `appstore previews` with no
+  // `--version-name` answered "no App Store Connect credentials", naming the
+  // environment for a mistake in the arguments. That is worst for exactly the
+  // person it reaches first: somebody who has not set the environment up yet
+  // is sent to fix something that is not broken, and the thing that is wrong
+  // goes unmentioned.
+  //
+  // It is the same instinct as the refusals below — an argument error is a
+  // refusal rather than a failure — applied one phase earlier. Reported by the
+  // consumer, who met it with the credentials genuinely absent.
+  if (const {AscCommand.previews, AscCommand.awaitPreviews}.contains(cmd)) {
+    final wanted = opt('version-name');
+    if (wanted == null || wanted.isEmpty) {
+      fail(
+        cmd == AscCommand.previews
+            ? 'which version? Pass `appstore previews --version-name 1.2.0`. '
+                  'Previews are version-scoped, so "the previews" has no '
+                  'single answer.'
+            : 'which version? Pass `appstore wait-previews --version-name '
+                  '1.2.0`. Deliberately not defaulted to the newest, for the '
+                  'reason `wait` gives about build numbers: waiting from '
+                  'another machine is waiting for a *specific* version, and '
+                  '"newest" would succeed on somebody else\'s.',
+      );
+    }
+  }
+
   if (cmd == AscCommand.upload && flag('json') && !flag('dry-run')) {
     fail(
       '--json needs --dry-run. Every other --json here is a read, and this '
@@ -2103,14 +2133,8 @@ Future<void> runAsc(
       return;
     }
     if (cmd == AscCommand.previews) {
-      final wanted = args.option('version-name');
-      if (wanted == null || wanted.isEmpty) {
-        fail(
-          'which version? Pass `appstore previews --version-name 1.2.0`. '
-          'Previews are version-scoped, so "the previews" has no single '
-          'answer.',
-        );
-      }
+      // Refused offline, before any credential — see `requiredVersionName`.
+      final wanted = args.option('version-name')!;
       // **`readVersion`, not `ensureVersion`, and this is a read command.**
       // `ensureVersion` refuses anything outside `editableVersionStates`,
       // which is right for a write and absurd here: it answered `appstore
@@ -2165,16 +2189,8 @@ Future<void> runAsc(
     }
 
     if (cmd == AscCommand.awaitPreviews) {
-      final wanted = args.option('version-name');
-      if (wanted == null || wanted.isEmpty) {
-        fail(
-          'which version? Pass `appstore wait-previews --version-name 1.2.0`. '
-          'Deliberately not defaulted to the newest, for the reason `wait` '
-          'gives about build numbers: waiting from another machine is waiting '
-          'for a *specific* version, and "newest" would succeed on somebody '
-          "else's.",
-        );
-      }
+      // Refused offline, before any credential — see `requiredVersionName`.
+      final wanted = args.option('version-name')!;
       // **A read, like `previews` — see the note there.** Waiting on a version
       // Apple has already taken is legitimate and common: the assets finish
       // ingesting on Apple's schedule, not on the submission's.
