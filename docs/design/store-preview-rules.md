@@ -243,9 +243,11 @@ is the only instrument anybody has on this queue. And **the hypothesis that
 Apple might never report `previewFrameImage` did not fire on this file**, which
 is one file; the grace period stays.
 
-### Open: the wait is welded to the upload
+### Proposed: the wait is welded to the upload
 
-Status: **open**.
+Status: **proposed**, and argued at length in
+[preview-wait-split.md](preview-wait-split.md), which is where the interface
+lives. This section is the summary and the reason it is not built yet.
 
 Raised by the first consumer's owner, in the form *"maybe there should be
 another status/wait command — how is this handled for builds?"* The answer is
