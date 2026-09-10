@@ -8,10 +8,10 @@
 // [AppStoreVersions.lines]; there is one
 // description of what a build listing looks like and both the CLI and a
 // library caller get it. That matters more than it sounds: a consumer that
-// prints a store's own output verbatim — because a `status` that re-renders
-// the table misreports the day the format changes, silently — needs those
-// lines to be the same lines, and a second formatter beside the first is a
-// second thing to drift.
+// prints this command's output verbatim — because a `status` that renders the
+// same model its own way reports something different from what this command
+// reports, silently — needs those lines to be the same lines, and a second
+// formatter beside the first is a second thing to drift.
 //
 // Reads only. Nothing here can write, and that is structural rather than a
 // promise: the [Writer] an [AppStoreReads] session builds is a dry-run writer,
@@ -148,7 +148,7 @@ class AppStoreBuilds {
   }
 
   /// Exactly what `cux_ship appstore builds` prints, for a caller that shows
-  /// the store's own output rather than re-rendering it.
+  /// this command's output rather than rendering the model itself.
   ///
   /// Twenty at most, which is the listing's limit and not [builds]': the
   /// printed form is for reading and the list is for answering questions.

@@ -6,10 +6,11 @@
 // **The printed lines are derived from these objects, not the other way
 // round.** `play tracks` renders [PlayTracks.lines]; there is one description
 // of what a track listing looks like and both the CLI and a library caller get
-// it. That matters more than it sounds: a consumer that prints a store's own
-// output verbatim — because a `status` that re-renders the table misreports the
-// day the format changes, silently — needs those lines to be the same lines,
-// and a second formatter beside the first is a second thing to drift.
+// it. That matters more than it sounds: a consumer that prints this command's
+// output verbatim — because a `status` that renders the same model its own way
+// reports something different from what this command reports, silently — needs
+// those lines to be the same lines, and a second formatter beside the first is
+// a second thing to drift.
 //
 // Reads only, and on the Play side that is worth spelling out: reading tracks
 // opens an *edit*, because Play has no way to list them otherwise. The edit is
@@ -136,8 +137,11 @@ class PlayTracks {
   /// "which build does Play actually hold".
   int? newestVersionCodeOn(String name) => track(name)?.newestVersionCode;
 
-  /// Exactly what `cux_ship play tracks` prints, for a caller that shows the
-  /// store's own output rather than re-rendering it.
+  /// Exactly what `cux_ship play tracks` prints, for a caller that shows this
+  /// command's output rather than rendering the model itself.
+  ///
+  /// Not the concatenation of the tracks' [PlayTrack.lines]: a trailing line
+  /// reports the uploaded bundles, which belong to no track.
   List<String> get lines => <String>[
     for (final track in tracks) ...track.lines,
     '  uploaded bundles: $uploadedVersionCodes',

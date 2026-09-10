@@ -671,8 +671,11 @@ caller streaming a forty-five-minute wait to a log writes its own heartbeat
 instead of scraping one.
 
 **Every result carries `lines` beside its fields, and the command prints those
-same lines.** Print them and read the fields; a `status` that re-renders a
-store's own table misreports the day the store changes it, and does so silently.
+same lines.** Print them and read the fields; a `status` that renders the same
+model its own way reports something different from what this command reports,
+and does so silently. They are this package's sentences, composed from the
+parsed fields — what they buy is one formatter, not fidelity to a store's own
+format.
 
 **Reads only, and that is the design.** Nothing here uploads, promotes or
 publishes a listing — those stay commands, because the printed command line is

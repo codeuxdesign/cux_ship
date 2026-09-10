@@ -80,11 +80,48 @@ counter applies. `kind` is load-bearing for the three that exist today, which
 is why it is here; that it also costs a fourth nothing is a consequence and not
 the reason.
 
-## `display` carries the rendering, and promises nothing about it
+**`kind` therefore sits above the schema promise, and is the one field that can
+never change meaning.** A reader has to know the kind before it can decide
+whether the `schema` number is one it understands, because the counters are per
+kind — so `kind` is read first and is not versioned by the thing it gates. An
+unrecognized `kind` is refused, on the same argument that refuses an
+unrecognized `schema`: every value a release step is named by comes out of
+here.
 
-Every result carries the rendered lines beside the fields, under `display` —
-a string on an item, an array on a document — mirroring `line` and `lines` on
-the models.
+Its only consumer today **asserts** it rather than dispatching on it — a caller
+always knows which subcommand it ran, and compares `kind` as a guard against
+wiring the wrong parser to the wrong command. That is a weaker requirement than
+dispatch: exact-match comparable, not an open enum with stable dispatch
+semantics. Nothing here promises more than that, because nothing consumes more.
+
+## `display` carries the rendering, and promises its shape but not its text
+
+Every result carries the rendered lines beside the fields, under `display`.
+**Always an array of strings, at both levels** — including where the model
+renders one line. `AppStoreBuild.line` is a single string and its `display` is
+a one-element array anyway.
+
+That uniformity is not tidiness, and the shape it rejects was this document's
+first draft: a string on an item, an array on a document. Two of the three
+kinds do not render one line per item. `AppStoreVersion.lines` is **two**
+lines, the second being `copyright:`. `PlayTrack.lines` is one line *per
+release*, so a halted rollout beside its replacement is two. An item-level
+string would have to join them with a newline, and a consumer wanting the items
+back would have to split on it — which is parsing `display`, forbidden three
+paragraphs below in this same document.
+
+It is also a bug the consumer has already had. Its `status` shows the newest
+three App Store versions and printed two and a half: the cap was
+`versions.lines.take(3)`, a version spends two lines, and the third landed
+mid-item. The fix was to cap the *items* and ask each for its own rendering —
+`versions.versions.take(3)`. Collapse an item's rendering to a string and that
+fix is not expressible against a document.
+
+**And a document's `display` is not the concatenation of its items'.**
+`AppStoreBuilds.lines` renders `builds.take(20)` while `builds` carries
+everything Apple returned, and `PlayTracks.lines` appends a trailing `uploaded
+bundles:` line that belongs to no track. Two renderings of one model, and
+deriving either from the other is wrong in both directions.
 
 This is the field the whole decision turned on. Without it a consumer must
 re-render from the fields, and two renderings of one model drift: a build shown
@@ -97,10 +134,20 @@ is a real one.** A schema exists to promise structure; `display` exists
 precisely to promise nothing. Both are true, and the resolution is to say so in
 the name and then say it again here:
 
-> `display` is for showing a human. It is **outside the schema promise**. Its
-> content may change in any release without a `schema` bump, and a consumer
-> that parses it has taken a dependency this document explicitly refuses to
-> carry. Print it; read the fields.
+> `display` is for showing a human. Its **text is outside the schema
+> promise** — content may change in any release without a `schema` bump, and a
+> consumer that parses a line has taken a dependency this document explicitly
+> refuses to carry. Its **shape is inside it**: `display` is an array of
+> strings, an item's rendering is addressable separately from its document's,
+> and changing that is a `schema` bump like any other. Print the lines; read
+> the fields.
+
+**The two halves have to be said separately, because a consumer depends on one
+and not the other.** An earlier draft put them under one "may change in any
+release", which reads as covering the nesting too — and the consumer that would
+port onto this said, correctly, that if it does cover the nesting it cannot
+port. Unpromised text is what makes `display` safe to carry. Unpromised
+*structure* would make it unusable.
 
 That is not a weaker promise than the library makes — it is the identical one,
 in a different envelope. `AppStoreBuilds.lines` is already a `List<String>` a
@@ -122,9 +169,21 @@ fidelity to a store's format, and the overstated version is what made carrying
 for anything that is not a single integer. A consumer comparing against a git
 tag reads the second; a consumer displaying or matching reads the first.
 Computed fields are emitted rather than left to the caller — `usable`,
-`newestBuildNumber`, `newestVersionCode` — because the rule this package orders
-by should be the rule it hands a caller, and a schema that carries them
-protects a shell caller, which a Dart library structurally cannot.
+`newestBuildNumber`, `newestBuildNumberAsInt`, `newestVersionCode` — because
+the rule this package orders by should be the rule it hands a caller, and a
+schema that carries them protects a shell caller, which a Dart library
+structurally cannot.
+
+**`newestBuildNumberAsInt` does not exist on the model yet, and its absence is
+the argument for it.** `AppStoreBuilds.newestBuildNumber` is a `String?` whose
+own doc comment says: *"do not compare this against another build number as a
+string — use `AppStoreBuild.buildNumberAsInt`, via `newest`"*. **Via `newest`
+is a remedy only a library caller has.** A document carrying the string alone
+would hand a shell caller precisely the comparison that comment forbids, and
+the way back would be to find the newest item and re-implement the ordering
+rule — which the paragraph above says should be handed over rather than
+reimplemented. So the document emits it, `null` on the same terms, and the
+model grows the getter to feed it.
 
 **And it collides with the manifest, deliberately and only in name.**
 `build_manifest.dart` refuses a `buildNumber` that is not an integer, on the
@@ -169,6 +228,7 @@ it is the one that gets a test observed failing with it removed.
   "platform": "IOS",
   "bundleId": "design.codeux.example",
   "newestBuildNumber": "169",
+  "newestBuildNumberAsInt": 169,
   "builds": [
     {
       "buildNumber": "169",
@@ -177,12 +237,43 @@ it is the one that gets a test observed failing with it removed.
       "uploadedDate": "2026-09-09T14:02:11-07:00",
       "expired": false,
       "usable": true,
-      "display": "  build 169  VALID  uploaded 2026-09-09T14:02:11-07:00"
+      "display": ["  build 169  VALID  uploaded 2026-09-09T14:02:11-07:00"]
     }
   ],
   "display": ["  build 169  VALID  uploaded 2026-09-09T14:02:11-07:00"]
 }
 ```
+
+One build is the smallest example and the most misleading one: the two
+`display` arrays come out identical here and are not the same rendering. Past
+twenty builds the document's is truncated and the items' are not, an
+`appstore.versions` item carries two entries rather than one, and a
+`play.tracks` document ends with a line no track owns.
+
+## What spawning again costs, since this is a return to spawning
+
+A stage reading Play and both Apple platforms makes five reads. Under `--json`
+those are five processes rather than five calls — five `secrets exec` setups
+and five auth handshakes. That is fine for a `status` nobody runs in a loop,
+and it would matter for anything hotter. Nothing hotter exists.
+
+The composition is arguably better than it costs. A store that fails is
+isolated by *process*, so a run that read Play and then met a 401 from Apple
+still holds Play's document and Play's exit code. The library gives that only
+through a caller's own `try`/`catch` discipline — and the first version of that
+discipline got it wrong, which is recorded in [read-api.md](read-api.md).
+
+**One regression is real and specific.** `AppStoreReads.open` is a single
+session shared by `appStoreBuilds` and `appStoreVersions`, and `open` is what
+fails on absent credentials or an unknown bundle id. The consumer wraps both
+calls in one `catch` for exactly that reason — catching per call would print
+the same refusal twice under one platform. Two invocations are two sessions, so
+a missing Apple credential yields the identical refusal twice per platform,
+twice over for two platforms. The consumer can dedupe and says it will. Making
+`appstore builds` and `appstore versions` one invocation emitting one document
+would fix it at the source, and is not done here because it invents a fourth
+kind to solve a problem its only consumer has already agreed to absorb.
+Recorded so the next reader meets the reason rather than the symptom.
 
 ## Scope: the three reads, and not the waits
 
