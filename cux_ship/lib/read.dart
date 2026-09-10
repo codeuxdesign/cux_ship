@@ -25,10 +25,13 @@
 // keeps a credential out of a step that has no use for it. An in-process write
 // gives up both.
 //
-// Each session carries the store's own printed lines beside the parsed values
+// Each session carries this package's rendered lines beside the parsed values
 // — [PlayTracks.lines], [AppStoreBuilds.lines], [AppStoreVersions.lines] —
-// because a caller that re-renders a store's table misreports the day the
-// store changes it, and does so silently. Print the lines; read the fields.
+// because a caller that renders the same model its own way reports something
+// different from what `cux_ship` reports, and does so silently. They are
+// composed from the parsed fields rather than passed through from a store, so
+// what they buy is one formatter and not fidelity to a store's format. Print
+// the lines; read the fields.
 //
 // Both sessions take their credentials from the environment `cux_ship secrets
 // exec` sets up, which is the one thing a caller moving off a spawned

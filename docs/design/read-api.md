@@ -64,17 +64,27 @@ change, because the deletion sat in the same function as the `catch` and a
 `catch` runs first; splitting the read out for `PlayReads` moved the `catch` to
 the caller and took that ordering with it.
 
-## Both the values and the store's own lines
+## Both the values and the rendered lines
 
 Every result carries `lines` beside its fields, and the CLI prints those same
 lines: `printBuilds` and `printVersions` render `AppStoreBuilds.lines` and
 `AppStoreVersions.lines`, and `play tracks` renders `PlayTracks.lines`.
 
-This is not a convenience. The consumer renders store output verbatim and
-extracts only the build numbers, deliberately, because a `status` that
-re-renders a store's table misreports the day the store changes the format and
+This is not a convenience. The consumer prints them verbatim and extracts only
+the build numbers, deliberately, because a `status` that renders the same model
+its own way reports something different from what this command reports, and
 does it silently. That only works if the lines it prints are the lines this
 command prints — so there is one formatter, and the model is what feeds it.
+
+**They are this package's sentences, not the store's.** This section used to
+say "the store's own lines", and the overstatement mattered later.
+`AppStoreBuild.line` is `'  build $buildNumber  $processingState  uploaded
+$uploadedDate'` — composed from parsed fields, exactly as
+`lib/src/play/reads.dart` says at the top: "The printed lines are derived from
+these objects, not the other way round." What `lines` buys is one formatter,
+not fidelity to a store's format. Read the wrong way, it made carrying the
+rendering inside a JSON document look like a contradiction rather than a
+labelling problem — see [json-output.md](json-output.md).
 
 ## What the export fixed on the way
 
@@ -157,9 +167,12 @@ caller of that callback. Existing behaviour is unchanged because
 
 ## Was a library the right answer, or would `--json` have been?
 
-Status: **open**, 9 September 2026. Raised by the consumer this API was built
-for, after living with it. Recorded rather than acted on, because acting on it
-is a bigger decision than the one that created the surface.
+Status: **answered in part**, 10 September 2026. Raised by the consumer this
+API was built for, after living with it, and recorded a day before it was acted
+on. The transport half is decided and specified in
+[json-output.md](json-output.md) — `--json`, carrying the rendered lines. What
+stays open is whether `read.dart` should have existed at all, and the sections
+below are unchanged because nothing about that was settled.
 
 ### The gap in the decision above
 
@@ -243,3 +256,30 @@ cannot call a Dart library at all — a shell `status`, `jq` at a terminal, a CI
 step reading one number. Those are the majority shape for release tooling and
 none of them exists yet *here*, which is the honest reason this is open rather
 than decided.
+
+### What the consumer answered, and it was not that condition
+
+Asked directly, the day after this was written. Recorded because the answers
+narrowed the work more than the argument above did, and because one of them
+falsifies the paragraph it follows.
+
+**There is still no shell consumer, and `--json` was decided anyway.** Nothing
+greps a number out of this command for a shell comparison; that path is gone.
+The single consumer is one Dart program making at most five reads, and it wants
+each result *twice* — as a number compared against a git tag, and as lines
+printed verbatim. So the settling condition was not the one predicted above. It
+was whether a JSON document carries the rendered lines, because without them
+that consumer would have to re-render and would not port at all.
+
+**`appstore wait` needs no event schema, measured at the call site.** It is
+spawned, its stdout goes to a log a human reads after a failure, and the only
+thing consumed is the exit code. Not one field is decoded. That kills the
+line-delimited progress shape the first draft of this section treated as the
+library's surviving justification — and it kills it on evidence rather than on
+the argument, which had reached the same place by reasoning.
+
+**No field is missing.** Four already-shipped fields go unread by that consumer
+— `processingState`, `uploadedDate`, `expired` and `PlayTrackRelease.status` —
+which is a gap on its side and not a request on this one. Worth recording
+because "what does a consumer need" and "what does a consumer use" came back as
+different lists, and only the first one would have been guessed.
