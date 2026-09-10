@@ -589,6 +589,124 @@ Neither is large and neither is free, and the second is an N+1 over an unbounded
 listing, which is the shape `listScreenshotTypes` already caps at three for the
 same reason.
 
+#### The first bullet's cost is one line in one test file, and "measured" above was not
+
+Written when this section was, and wrong — it says *"a change to the one client
+every read in this package goes through"*, which sounds like 23 call sites and
+ten fakes and is none of them. Corrected by running it rather than by re-reading
+it:
+
+- **The 23 existing `getAll` call sites are untouched**, because the shape that
+  carries `included` is a *new method* rather than a changed return type.
+  `getAll` returns `List<Map<String, dynamic>>` and every caller wants exactly
+  that; a caller that also wants `included` is a different caller.
+- **Seven of the eight fakes are untouched too**, because they declare
+  `noSuchMethod` and Dart therefore permits a member they do not implement.
+- **The eighth is `beta_release_test.dart`'s, which does not**, and fails with
+  `Missing concrete implementation`. One line.
+
+**And the prediction that produced that list was also wrong, which is the part
+worth keeping.** The guess going in was *zero* — `noSuchMethod` everywhere, no
+fake affected. Probing it found the one that has no escape hatch. So the
+sentence above is not "cheaper than recorded" reasoning replacing "more
+expensive than recorded" reasoning; it is the third estimate, and the only one
+that came from running the compiler.
+
+**What is left is not cost.** The real work is a fake that carries `include`
+semantics *across pages*, which `docs/CONTRIBUTING.md` §"A fake must carry the
+semantics the tested branch selects on" requires and which a single-page fake
+cannot express. That is real and it is ordinary.
+
+#### Decided: the build ships, the phased release does not
+
+Status: **decided**, 10 September 2026 — and the two halves went different ways
+for the reason this section was written to force, which is that they were
+priced together and only one of them has a caller.
+
+**The build number ships.** `AppStoreVersionEntry` carries `buildNumber` and
+`buildNumberAsInt`, `appstore versions` asks for `include=build`, and the
+rendered line gains ` build 169` where Apple named one. The consumer's summary
+grid is the call site: it printed a bare `LIVE` because the versions listing
+carried no build, and said so in its own source — *"the released build is a fact
+only Apple holds"* — which was true and is now recoverable.
+
+**The phased release does not.** Same request could carry it, at
+`include=build,appStoreVersionPhasedRelease` and a second resolver. Nobody
+passes `--phased` and the consumer confirmed it has no plan to, so it stays
+what read-api.md §"No field is missing" calls unproven — and *cheap* is not an
+argument for adding a field to a published document.
+
+**What the measurement changed, and it is not the cost.** Asked to run one
+request against a live account, the consumer answered the three questions below
+and a fourth nobody had asked: **the included `builds` resource carries the
+build number itself**, in its `version` attribute, rather than only an id. So
+this was never one request plus an N+1 — it is one request, and the "expensive"
+half of the pricing above never existed. `expired`, `expirationDate` and
+`processingState` ride along in the same payload; none is carried, because
+`AppStoreBuildEntry` already answers for those from the builds listing and two
+sources for one fact is the collision this format avoids on purpose.
+
+**And one question came back unanswerable, which constrains the design rather
+than delaying it.** Every version on that account is `READY_FOR_SALE` with a
+build attached, so nothing exhibits a version Apple names *no* build for. The
+un-included shape is measured — `relationships.build` with `links` and no
+`data` key — but whether a genuinely buildless version says `"data": null` or
+also omits the key is not. So `buildNumber` reports a null rather than
+diagnosing one: an earlier draft would have printed *"this package asked
+wrongly"* on stderr when the key was absent, and that would fire on an
+unsubmitted version — a false alarm in the state an operator is most likely to
+be looking at. It becomes answerable for free at this repository's next
+release, the moment a `PREPARE_FOR_SUBMISSION` version exists.
+
+**A `containsKey` branch to tell those two apart was written and deleted**, and
+by the rule rather than by taste: the mutation that removed it passed every
+test, because both arms produced null. Expressive code that guards nothing is
+not a guard, and the distinction is now a comment in `reads.dart` beside the
+line that does not act on it.
+
+#### What blocked this until it was measured, and it was one sentence about Apple
+
+`include=` demonstrably works in this package's hands — `appInfos` uses it for
+categories and the age-rating declaration — and the `build` relationship
+demonstrably exists, because `app_store.dart` `PATCH`es it on submit. What
+nobody here can check is whether `build` is an *includable* relationship on the
+`appStoreVersions` listing specifically. There is no live account behind this
+repository and no recorded payload to read it out of.
+
+**That matters more than it sounds, because of how it would fail.** A version
+with no build attached and a query Apple silently ignored both produce
+`buildNumber: null` — so a dead field would look exactly like a working field
+answering honestly, in a document a consumer decodes. *"A store the output said
+nothing about reads as a store with nothing wrong"*, one resource over.
+
+**There is a way to tell them apart, and it is already measured here.**
+`app_store.dart` records, against a live account, that a bare read returns **no
+`data` key for a relationship at all**, and that adding `?include=` is what puts
+one there. So an un-included read is *detectable*: `relationships.build` without
+a `data` key is this package having asked wrongly, and `"data": null` is Apple
+saying there is no build. Given that, `appstore versions` can say so on stderr
+rather than emit a null — which converts the dangerous silent failure into a
+loud one and makes the field safe to build.
+
+**Whether that idiom generalises from `appInfos` to `appStoreVersions` was the
+question**, and it took one request against a real account:
+
+```
+GET /v1/apps/{appId}/appStoreVersions?filter[platform]=IOS&include=build&limit=5
+```
+
+Run by the consumer, read-only. It does not 400; `included` comes back carrying
+`builds`; and the two shapes are exactly the ones `appInfos` showed —
+`relationships.build` with `links` and **no `data` key** without the include,
+and `"data": {"type": "builds", "id": …}` with it. The idiom generalises.
+
+**Recorded because the shape of the answer matters more than the answer.** The
+blocker was never the cost, which this section had overstated twice; it was a
+sentence about a third party that nobody here could check, in a package with no
+live account behind it. That is a class of blocker this repository will meet
+again, and the way through it was not more reasoning — it was asking somebody
+who could run the request.
+
 **And that cost is shared, which is the finding that should move this section
 when somebody picks it up.** A second ask arrived while this was being written:
 the consumer wants a summary grid where an App Store cell reads `LIVE (169)`

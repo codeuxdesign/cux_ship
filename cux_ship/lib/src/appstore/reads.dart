@@ -204,10 +204,34 @@ class AppStoreVersion {
     required this.appStoreState,
     required this.releaseType,
     required this.copyright,
+    required this.buildNumber,
   });
 
   /// The marketing version — `1.4.0`, not a build number.
   final String versionString;
+
+  /// The `CFBundleVersion` of the build attached to this version, or null when
+  /// Apple named none.
+  ///
+  /// **This answers "is what is live the thing I think is live"**, which
+  /// [versionString] cannot: two builds of `1.4.0` are the same version and
+  /// different binaries.
+  ///
+  /// A string for the reason [AppStoreBuild.buildNumber] is one — Apple accepts
+  /// a dotted `CFBundleVersion` — and [buildNumberAsInt] is the form to compare.
+  ///
+  /// **Null is one answer covering two causes, and this package cannot tell
+  /// them apart.** Apple names no build for a version in
+  /// `PREPARE_FOR_SUBMISSION`, which is honest; and a request that failed to
+  /// carry `include=build` would also produce null here, which is not. The
+  /// second was measured *not* to happen against a live account — without the
+  /// include, `relationships.build` has no `data` key at all — but the first
+  /// has never been observed, because the account it was measured against held
+  /// six versions and every one was `READY_FOR_SALE`. So a null is reported as
+  /// a null rather than as a diagnosis, and docs/design/rollout-state.md
+  /// records what would settle it: one `PREPARE_FOR_SUBMISSION` version, at
+  /// this repository's next release.
+  final String? buildNumber;
 
   /// `PREPARE_FOR_SUBMISSION`, `WAITING_FOR_REVIEW`, `READY_FOR_SALE` and the
   /// rest, or null when the response did not carry it.
@@ -219,14 +243,29 @@ class AppStoreVersion {
   /// Required before review and null by default.
   final String? copyright;
 
+  /// [buildNumber] read as an integer, or null when it is absent or not one.
+  ///
+  /// The form to compare, for the reason [AppStoreBuild.buildNumberAsInt] gives
+  /// at length: `"9"` sorts above `"10"`, and that mistake has been made twice
+  /// against this data already.
+  int? get buildNumberAsInt {
+    final number = buildNumber;
+    return number == null ? null : int.tryParse(number);
+  }
+
   /// Whether a push against this version would be accepted, by the rule
   /// [editableVersionStates] states.
   bool get editable =>
       appStoreState != null && editableVersionStates.contains(appStoreState);
 
   /// The two lines `cux_ship appstore versions` prints for this version.
+  ///
+  /// **The build is appended only when Apple named one**, so a version with
+  /// none reads exactly as it did before this field existed rather than
+  /// carrying `build null`.
   List<String> get lines => <String>[
-    '  $versionString  $appStoreState  $releaseType',
+    '  $versionString  $appStoreState  $releaseType'
+        '${buildNumber == null ? '' : '  build $buildNumber'}',
     // Printed because it is required before review and null by default, and
     // because a run that reports having written it is not evidence Apple
     // kept it.
@@ -263,24 +302,82 @@ class AppStoreVersions {
   }
 }
 
-/// One `appStoreVersions` resource, as sent.
-AppStoreVersion appStoreVersionFrom(Map<String, dynamic> resource) {
+/// The `CFBundleVersion` of the build [resource] names, resolved through
+/// [included].
+///
+/// **Two hops, and both can legitimately come up empty.** A version names its
+/// build under `relationships.build.data`, and the build's own `version`
+/// attribute is the number — Apple calls it `version` on a build and means the
+/// build number, which is the single easiest thing to get wrong here.
+///
+/// Null when the relationship has no `data` (no `include=build` was sent, or
+/// Apple named no build), when `included` does not carry the resource it names,
+/// or when that resource has no `version`. Three ways of not knowing, one
+/// answer, because none of them is a fact about the build.
+String? _buildNumberOf(
+  Map<String, dynamic> resource,
+  Map<String, Map<String, dynamic>> included,
+) {
+  final relationships = resource['relationships'];
+  if (relationships is! Map<String, dynamic>) {
+    return null;
+  }
+  final build = relationships['build'];
+  if (build is! Map<String, dynamic>) {
+    return null;
+  }
+  // **The wire distinguishes two cases here and this code does not, on
+  // purpose.** Measured against a live account: without `include=build` the
+  // relationship carries `links` and no `data` key at all, and with it `data`
+  // names the build. So an absent key is this package not having asked, which
+  // is a different fact from Apple having no build to name.
+  //
+  // A `containsKey` branch to tell them apart was written and removed: both
+  // arms produced null, so the mutation that deleted it passed every test.
+  // Acting on the difference needs a caller that wants a diagnosis rather than
+  // an answer, and `AppStoreVersion.buildNumber` says in as many words that it
+  // does not offer one. The distinction is recorded here rather than
+  // half-implemented above.
+  final data = build['data'];
+  if (data is! Map<String, dynamic>) {
+    return null;
+  }
+  final id = data['id'];
+  if (id is! String) {
+    return null;
+  }
+  final version = _attributes(included['builds:$id'] ?? const {})['version'];
+  return version == null ? null : '$version';
+}
+
+/// One `appStoreVersions` resource, as sent, with the builds that came beside
+/// it.
+AppStoreVersion appStoreVersionFrom(
+  Map<String, dynamic> resource, [
+  Map<String, Map<String, dynamic>> included = const {},
+]) {
   final attributes = _attributes(resource);
   return AppStoreVersion(
     versionString: '${attributes['versionString']}',
     appStoreState: attributes['appStoreState'] as String?,
     releaseType: attributes['releaseType'] as String?,
     copyright: attributes['copyright'] as String?,
+    buildNumber: _buildNumberOf(resource, included),
   );
 }
 
-/// An `appStoreVersions` payload.
+/// An `appStoreVersions` payload, and the `included` resources beside it.
 AppStoreVersions appStoreVersionsFrom(
   List<Map<String, dynamic>> payload,
-  AscPlatform platform,
-) => AppStoreVersions(
+  AscPlatform platform, {
+  Map<String, Map<String, dynamic>> included = const {},
+}) => AppStoreVersions(
   platform: platform,
-  versions: payload.map(appStoreVersionFrom).toList(),
+  versions: <AppStoreVersion>[
+    for (final resource in payload) ...[
+      appStoreVersionFrom(resource, included),
+    ],
+  ],
 );
 
 /// `cux_ship appstore builds`.
@@ -301,9 +398,11 @@ Future<void> printBuilds(AppStore store, App app, {bool json = false}) async {
 
 /// `cux_ship appstore versions`.
 Future<void> printVersions(AppStore store, App app, {bool json = false}) async {
+  final payload = await store.appStoreVersions(app);
   final listing = appStoreVersionsFrom(
-    await store.appStoreVersions(app),
+    payload.data,
     store.platform,
+    included: payload.included,
   );
   if (json) {
     writeJsonDocument(
@@ -401,8 +500,14 @@ class AppStoreReads {
       appStoreBuildsFrom(await _store.builds(_app), platform);
 
   /// What `cux_ship appstore versions` reads.
-  Future<AppStoreVersions> versions() async =>
-      appStoreVersionsFrom(await _store.appStoreVersions(_app), platform);
+  Future<AppStoreVersions> versions() async {
+    final payload = await _store.appStoreVersions(_app);
+    return appStoreVersionsFrom(
+      payload.data,
+      platform,
+      included: payload.included,
+    );
+  }
 
   /// Waits until Apple has finished processing [buildNumber].
   ///

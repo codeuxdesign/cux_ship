@@ -646,6 +646,8 @@ class AppStoreVersionEntry {
     required this.releaseTypeRaw,
     required this.copyright,
     required this.editable,
+    required this.buildNumber,
+    required this.buildNumberAsInt,
     required this.display,
   });
 
@@ -692,6 +694,38 @@ class AppStoreVersionEntry {
   /// coarsening of what it already prints rather than an answer it lacks.
   /// docs/design/rollout-state.md records the drafts and the evidence.
   final bool editable;
+
+  /// The `CFBundleVersion` of the build attached to this version, or null when
+  /// Apple named none.
+  ///
+  /// **The question [versionString] cannot answer**: two builds of `1.4.0` are
+  /// the same version and different binaries, so *"is what is live the thing I
+  /// think is live"* needs this one. It arrives in the same request — Apple's
+  /// version record carries the build as a relationship rather than an
+  /// attribute, and this package asks for it to be included.
+  ///
+  /// A `String` on the same terms as [AppStoreBuildEntry.buildNumber], because
+  /// Apple accepts a dotted `CFBundleVersion`; [buildNumberAsInt] is the form
+  /// to compare.
+  ///
+  /// **Null is one answer over two causes and does not diagnose which.** Apple
+  /// names no build for a version in `PREPARE_FOR_SUBMISSION`; a request that
+  /// did not carry the include would answer null here too. The second was
+  /// measured not to happen — without it the relationship has no `data` key at
+  /// all — and the first has never been observed, because the account this was
+  /// measured against held six versions and all of them were `READY_FOR_SALE`.
+  /// So this reports a null rather than an explanation.
+  final String? buildNumber;
+
+  /// [buildNumber] as an integer, null on the same terms as
+  /// [AppStoreBuildEntry.buildNumberAsInt] — and null again whenever
+  /// [buildNumber] is.
+  ///
+  /// **This is the field to compare against a build number out of a git tag**,
+  /// and the reason it is emitted rather than left to the caller is the one
+  /// [AppStoreBuildsDocument.newestBuildNumberAsInt] gives: `"9"` sorts above
+  /// `"10"`, and a shell caller has no second hop to reach the parsed form.
+  final int? buildNumberAsInt;
 
   /// The two lines `cux_ship appstore versions` prints for this version: the
   /// state line and the copyright line. Display text, unpromised content.
