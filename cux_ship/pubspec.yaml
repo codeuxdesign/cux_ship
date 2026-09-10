@@ -82,7 +82,7 @@ dependencies:
   # release commit. It is written here because red-on-purpose and red-by-
   # accident look identical to whoever sees the board next, and this is the
   # line they will be sent to.
-  cux_ship_verify: ^1.11.0-dev.1
+  cux_ship_verify: ^1.11.0-dev.2
   # ES256 over the .p8 private key. App Store Connect accepts nothing else, and
   # package:crypto has no ECDSA, so this or pointycastle-by-hand were the
   # options.
