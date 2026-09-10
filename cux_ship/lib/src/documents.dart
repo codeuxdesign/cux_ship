@@ -70,6 +70,7 @@ part 'documents.g.dart';
 enum DocumentKind {
   appStoreBuilds('appstore.builds'),
   appStoreVersions('appstore.versions'),
+  appStorePreviews('appstore.previews'),
   playTracks('play.tracks');
 
   const DocumentKind(this.wire);
@@ -767,6 +768,128 @@ class AppStoreVersionsDocument {
   final List<String> display;
 
   Map<String, dynamic> toJson() => _$AppStoreVersionsDocumentToJson(this);
+}
+
+/// One preview video Apple holds on a version.
+///
+/// **Apple's field names, deliberately.** The consumer asked for this and it
+/// is right: `videoDeliveryState`, `previewFrameImage` and
+/// `previewFrameTimeCode` are what Apple's own documentation calls these, so a
+/// reader can put this document beside the App Store Connect API reference
+/// without a translation table. Where this package has an opinion it says so
+/// in a separate field rather than renaming Apple's.
+///
+/// **Two states, not one, because Apple ingests two assets.** The video is
+/// processed and the poster frame is cut out of it afterwards; a preview is
+/// finished only when both say `COMPLETE`, and a caller that watched one would
+/// call a half-finished preview ready. Both are Apple's strings rather than a
+/// closed vocabulary of ours: nothing here has seen enough of them to name a
+/// stable set, and inventing one would be this package claiming knowledge it
+/// does not have.
+@JsonSerializable(explicitToJson: true)
+class AppStorePreviewEntry {
+  const AppStorePreviewEntry({
+    required this.id,
+    required this.locale,
+    required this.previewType,
+    required this.fileName,
+    required this.videoDeliveryState,
+    required this.previewFrameImageState,
+    required this.previewFrameTimeCode,
+    required this.done,
+  });
+
+  factory AppStorePreviewEntry.fromJson(Map<String, dynamic> json) =>
+      _$AppStorePreviewEntryFromJson(json);
+
+  /// Apple's `appPreviews` id, which is the only thing that addresses it.
+  final String? id;
+
+  /// The `appStoreVersionLocalizations` locale this preview hangs off, such as
+  /// `en-US`. Two collections up from the preview itself, and the half of what
+  /// names it to a person.
+  final String? locale;
+
+  /// Apple's `PreviewType` — `IPHONE_67` and so on.
+  ///
+  /// **Not a `ScreenshotDisplayType`.** Apple keeps two enumerations and the
+  /// preview one has no prefix; a reader comparing this against a screenshot
+  /// document is comparing different vocabularies.
+  final String? previewType;
+
+  final String? fileName;
+
+  /// Apple's `videoDeliveryState.state`, verbatim, or null when it reported
+  /// none.
+  ///
+  /// Null is a fact about the response rather than a stage. Apple deprecated
+  /// `assetDeliveryState` on this resource; a reader consulting that instead
+  /// gets null for every preview.
+  final String? videoDeliveryState;
+
+  /// Apple's `previewFrameImage.state.state`, verbatim, or null.
+  ///
+  /// Null is ordinary early on — Apple cuts the frame after ingesting the
+  /// video — and on at least one real upload stayed null for minutes while the
+  /// video was already `COMPLETE`.
+  final String? previewFrameImageState;
+
+  /// The frame the product page poses on, as `HH:MM:SS:FF`, or null.
+  ///
+  /// **The one input nobody can correct after approval**, and the reason this
+  /// document exists at all for the consumer that asked: it is invisible in
+  /// every other output, and a preview posed at Apple's default looks exactly
+  /// like one posed deliberately.
+  final String? previewFrameTimeCode;
+
+  /// Whether Apple has finished with *both* assets.
+  ///
+  /// This package's reading rather than Apple's word, kept beside the two raw
+  /// states rather than instead of them — the same split the build documents
+  /// make between `processingState` and `processingStateRaw`.
+  final bool done;
+
+  Map<String, dynamic> toJson() => _$AppStorePreviewEntryToJson(this);
+}
+
+/// What `appstore previews --json` prints.
+@JsonSerializable(explicitToJson: true)
+class AppStorePreviewsDocument {
+  const AppStorePreviewsDocument({
+    required this.schema,
+    required this.kind,
+    required this.platform,
+    required this.bundleId,
+    required this.versionName,
+    required this.previews,
+    required this.display,
+  });
+
+  factory AppStorePreviewsDocument.fromJson(Map<String, dynamic> json) =>
+      _$AppStorePreviewsDocumentFromJson(json);
+
+  /// This kind's schema number. Refuse one you do not recognize.
+  final int schema;
+
+  final DocumentKind kind;
+
+  @JsonKey(toJson: _platformToJson, fromJson: _platformFromJson)
+  final AscPlatform platform;
+
+  final String bundleId;
+
+  /// The version these previews hang off. Previews are version-scoped, so a
+  /// document without it names assets nobody can locate.
+  final String versionName;
+
+  /// Every preview on the version, across locales and preview types. Empty is
+  /// a real answer: a version may carry none.
+  final List<AppStorePreviewEntry> previews;
+
+  /// What `cux_ship appstore previews` prints. Display text.
+  final List<String> display;
+
+  Map<String, dynamic> toJson() => _$AppStorePreviewsDocumentToJson(this);
 }
 
 /// One release Play holds on a track.

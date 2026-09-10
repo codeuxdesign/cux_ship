@@ -9,6 +9,7 @@
 // status of theirs escaped from four regular expressions matched against
 // stdout. So "still ingesting" has to be distinguishable from "done" and from
 // "broken" without reading a word — three states, three codes.
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:cux_ship/src/appstore/app_store.dart';
@@ -111,7 +112,12 @@ class _FakeClient implements AscClient {
       ];
     }
     if (path.endsWith('/appPreviews')) {
-      return [previews.first];
+      // **The collection reflects where the polling has got to**, because
+      // Apple's does: the document `--json` prints is built from a re-read
+      // *after* the wait, and a fake that always answered with the first
+      // scripted state would report a preview as PROCESSING in the document
+      // of a run that had just watched it finish.
+      return [previews[_poll == 0 ? 0 : previews.length - 1]];
     }
     return const [];
   }
@@ -248,6 +254,61 @@ void main() {
 
     expect(exitCode, 0);
     expect(said, contains('carries no previews'));
+  });
+
+  test('--json puts the document on stdout and progress on stderr', () async {
+    // **A wait is progress and *then* an answer**, so one document at the end
+    // cannot be rendered as progress. Splitting by stream rather than by flag
+    // gives a person the live report and a program a clean document without
+    // either having to choose — and it keeps the invariant every other
+    // `--json` command in this file states: stdout carries the document and
+    // nothing else.
+    final client = _FakeClient(
+      versions: [_version('1.1.6')],
+      previews: [
+        _preview(videoState: 'PROCESSING'),
+        _preview(
+          videoState: 'COMPLETE',
+          frameState: 'COMPLETE',
+          frameTimeCode: '00:00:02:06',
+        ),
+      ],
+    );
+
+    final out = _MemoryStdout();
+    final err = _MemoryStdout();
+    final args = buildAscParser(AscCommand.awaitPreviews).parse([
+      '--bundle-id',
+      'design.codeux.example',
+      '--version-name',
+      '1.1.6',
+      '--poll',
+      '0s',
+      '--json',
+    ]);
+    await IOOverrides.runZoned(
+      () => runAsc(AscCommand.awaitPreviews, args, ascClient: client),
+      stdout: () => out,
+      stderr: () => err,
+    );
+
+    // stdout is exactly one document and nothing else.
+    final document = jsonDecode(out.buffer.toString()) as Map<String, dynamic>;
+    expect(document['kind'], 'appstore.previews');
+    expect(document['schema'], 1);
+    expect(document['versionName'], '1.1.6');
+
+    // Apple's own field names, so a reader can hold this beside Apple's docs.
+    final entry = (document['previews'] as List).single as Map<String, dynamic>;
+    expect(entry['videoDeliveryState'], 'COMPLETE');
+    expect(entry['previewFrameImageState'], 'COMPLETE');
+    expect(entry['previewFrameTimeCode'], '00:00:02:06');
+    expect(entry['locale'], 'en-US');
+    expect(entry['previewType'], 'IPHONE_67');
+    expect(entry['done'], isTrue);
+
+    // And the progress went somewhere a person can read without spoiling it.
+    expect(err.buffer.toString(), contains('video PROCESSING'));
   });
 
   test('the report names the locale and type, not just an id', () async {

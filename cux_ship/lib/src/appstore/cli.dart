@@ -75,6 +75,7 @@ import 'package:cux_ship_verify/metadata.dart';
 import 'package:cux_ship_verify/release_notes.dart';
 
 import '../asc_platforms.dart';
+import '../json_output.dart';
 import '../listing_requirements.dart';
 import '../notes_source.dart';
 import '../reachable.dart';
@@ -106,6 +107,7 @@ enum AscCommand {
   buildNumber('build-number'),
   awaitBuild('wait'),
   awaitPreviews('wait-previews'),
+  previews('previews'),
   signing('signing');
 
   const AscCommand(this.name);
@@ -129,6 +131,7 @@ enum AscCommand {
     // argument checks, and neither is wanted for a command that mostly waits;
     // the write it can make is one the tree already asked for.
     AscCommand.awaitPreviews,
+    AscCommand.previews,
     AscCommand.signing,
   }.contains(this);
 }
@@ -233,7 +236,17 @@ ArgParser buildAscParser(AscCommand cmd) {
             'preview ingestion as taking up to 24 hours — so the exit code '
             'for it is distinct from both success and error.',
       )
-      ..addOption('poll', defaultsTo: '30s', help: 'How often to ask.');
+      ..addOption('poll', defaultsTo: '30s', help: 'How often to ask.')
+      ..addFlag(
+        'json',
+        negatable: false,
+        help:
+            'Print the result as a JSON document on stdout. Progress goes to '
+            'stderr either way, so a caller gets a live report and a clean '
+            'document without choosing between them — which is what a wait '
+            'needs and a read does not, because a wait has progress and then '
+            'an answer. See docs/design/json-output.md.',
+      );
     return parser;
   }
 
@@ -242,6 +255,26 @@ ArgParser buildAscParser(AscCommand cmd) {
     // can use unquoted, `wait` reports progress nobody decodes, and
     // `beta-groups` / `screenshot-types` have asked no one for a document —
     // and a flag on a command with no consumer is a promise made to nobody.
+    if (cmd == AscCommand.previews) {
+      parser
+        ..addOption(
+          'version-name',
+          help:
+              'The App Store version whose previews to print. Required: '
+              'previews are version-scoped, so "the previews" is not a '
+              'question with one answer.',
+        )
+        ..addFlag(
+          'json',
+          negatable: false,
+          help:
+              'Print the listing as a JSON document instead of prose. stdout '
+              'carries the document and nothing else; every other line goes '
+              'to stderr. See docs/design/json-output.md.',
+        );
+      return parser;
+    }
+
     if (cmd == AscCommand.builds || cmd == AscCommand.versions) {
       parser.addFlag(
         'json',
@@ -433,6 +466,7 @@ ArgParser buildAscParser(AscCommand cmd) {
     case AscCommand.buildNumber:
     case AscCommand.awaitBuild:
     case AscCommand.awaitPreviews:
+    case AscCommand.previews:
     case AscCommand.signing:
       throw StateError('unreachable: handled by cmd.isRead or above');
   }
@@ -1862,6 +1896,51 @@ Future<void> runAsc(
       await store.printBuildNumber(app);
       return;
     }
+    if (cmd == AscCommand.previews) {
+      final wanted = args.option('version-name');
+      if (wanted == null || wanted.isEmpty) {
+        fail(
+          'which version? Pass `appstore previews --version-name 1.2.0`. '
+          'Previews are version-scoped, so "the previews" has no single '
+          'answer.',
+        );
+      }
+      final version = await store.ensureVersion(app, wanted, create: false);
+      final on = version == null
+          ? const <PreviewOnVersion>[]
+          : await store.previewsOn(version);
+      final lines = <String>[
+        if (version == null)
+          'no ${platform.name} version $wanted'
+        else if (on.isEmpty)
+          '$wanted carries no previews'
+        else
+          for (final entry in on) ...[
+            '${entry.locale ?? '?'}  ${entry.previewType ?? '?'}  '
+                '${entry.preview.fileName ?? entry.preview.id}  '
+                'video ${entry.preview.videoState ?? '-'}  '
+                'frame ${entry.preview.frameState ?? '-'}  '
+                'poster ${entry.preview.frameTimeCode?.isNotEmpty ?? false ? entry.preview.frameTimeCode : '(not set)'}',
+          ],
+      ];
+      if (args.flag('json')) {
+        writeJsonDocument(
+          appStorePreviewsDocument(
+            on,
+            platform: platform,
+            bundleId: bundleId,
+            versionName: wanted,
+            display: lines,
+          ),
+        );
+        return;
+      }
+      for (final line in lines) {
+        stdout.writeln(line);
+      }
+      return;
+    }
+
     if (cmd == AscCommand.awaitPreviews) {
       final wanted = args.option('version-name');
       if (wanted == null || wanted.isEmpty) {
@@ -1886,17 +1965,37 @@ Future<void> runAsc(
         return;
       }
       for (final entry in on) {
-        stdout.writeln(
-          '==> ${entry.locale ?? '?'} ${entry.previewType ?? '?'}: '
-          '${entry.preview.fileName ?? entry.preview.id}',
-        );
+        // stderr under `--json`, because stdout carries the document and
+        // nothing else — the invariant this file states for every other
+        // `--json` command, and the one an unconditional writeln breaks.
+        final line =
+            '==> ${entry.locale ?? '?'} ${entry.previewType ?? '?'}: '
+            '${entry.preview.fileName ?? entry.preview.id}';
+        if (args.flag('json')) {
+          stderr.writeln(line);
+        } else {
+          stdout.writeln(line);
+        }
       }
+      // **Progress on stderr, always.** A wait is progress and *then* an
+      // answer, so one document at the end cannot be rendered as progress —
+      // splitting by stream rather than by flag gives a person the live report
+      // and a program the clean document, without either having to choose. It
+      // also sidesteps NDJSON: streaming progress as data later becomes a
+      // compatible addition rather than a redesign.
       await store.awaitPreviewProcessing(
         [
           for (final entry in on) ...{?entry.preview.id},
         ],
         timeout: awaitTimeout ?? const Duration(minutes: 30),
         poll: awaitPoll ?? const Duration(seconds: 30),
+        onProgress: (progress) => stderr.writeln(
+          '      ${progress.fileName ?? progress.previewId} at '
+          '${progress.waited.inSeconds}s: '
+          'video ${progress.videoState ?? 'not reported'}, '
+          'poster frame ${progress.frameState ?? 'not reported'}'
+          '${progress.frameStateAbandoned ? ' (taking the video as final)' : ''}',
+        ),
       );
       // **With a tree, the wait finishes the job rather than only reporting
       // it.** Apple discards `previewFrameTimeCode` sent at reservation, so
@@ -1925,6 +2024,26 @@ Future<void> runAsc(
             );
           }
         }
+      }
+      if (args.flag('json')) {
+        // Re-read, because this document is about what Apple holds now and
+        // the wait's own polls are progress rather than a settled answer.
+        final settled = await store.previewsOn(version);
+        writeJsonDocument(
+          appStorePreviewsDocument(
+            settled,
+            platform: platform,
+            bundleId: bundleId,
+            versionName: wanted,
+            display: <String>[
+              for (final entry in settled) ...[
+                '${entry.locale ?? '?'}  ${entry.previewType ?? '?'}  '
+                    '${entry.preview.fileName ?? entry.preview.id}  ready',
+              ],
+            ],
+          ),
+        );
+        return;
       }
       stdout.writeln('==> previews are ready');
       return;
