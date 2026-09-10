@@ -642,22 +642,36 @@ means two things:
 | **2** | there is work to do | `screenshots flatten --check` found unflattened screenshots |
 | **3** | upload collision | Apple or Play already holds this build number |
 | **4** | previews still ingesting | `appstore wait-previews` reached its deadline |
+| **5** | no such version | Apple holds no version by the name that was asked for |
 | **64** | usage | the arguments were wrong; nothing ran |
 
-**2, 3 and 4 are the re-runnable ones**, in the sense that the run did what it
-could and the state is recoverable — but *that property is not what the number
-means*, and a caller must not treat "non-1 and non-0" as a category. Each code
-names **one condition**, deliberately: a wrapper branching on 2 must not have to
-know which subcommand produced it, which is why `uploadCollisionExit` took 3
-rather than reusing "there is work to do", and why the preview deadline took 4
-rather than reusing either.
+**2, 3, 4 and 5 are not failures**, in the sense that the command did what it
+could and the answer is the exit status — but *that property is not what any of
+the numbers means*, and a caller must not treat "non-1 and non-0" as a category.
+Each code names **one condition**, deliberately: a wrapper branching on 2 must
+not have to know which subcommand produced it, which is why
+`uploadCollisionExit` took 3 rather than reusing "there is work to do", the
+preview deadline took 4 rather than reusing either, and "Apple holds no such
+version" took 5.
+
+**5 is the one most worth knowing about**, because without it that condition
+was exit 1 — the same code as wrong credentials, an unreachable network and a
+metadata tree that will not load. A readiness check asking *"is the store
+showing 1.1.8's listing?"* before anybody has created a 1.1.8 is not broken; it
+has its answer, and every run before the version exists looks like that. Exit 1
+left a caller matching prose to tell the commonest path from the failures.
 
 **The rule for anything added later, so a caller can size its risk:** an
 existing code never changes meaning, and a new condition takes a new number
-rather than joining an old one. So a future waiting command would exit 5, not 4
+rather than joining an old one. So a future waiting command would exit 6, not 4
 — even though "a wait did not finish" describes both. Conflating two conditions
 under one number is the thing this vocabulary exists to prevent, and it applies
 to the future as much as to the past.
+
+5 is that rule being spent rather than merely stated: it was added *after* this
+table was written, by a consumer pointing out that "Apple holds no such version"
+met the test — a distinct condition, branched on rather than read — and asking
+for it in those words.
 
 The consequence for a caller is worth stating plainly: **enumerate the codes you
 accept, per command.** A general "this one is re-runnable" predicate written

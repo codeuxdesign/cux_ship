@@ -2685,6 +2685,21 @@ Future<void> runAsc(
     } else {
       stdout.writeln('==> done');
     }
+  } on NoSuchVersion catch (e) {
+    // **Before [AscApiException], which this subclasses** — Dart takes the
+    // first matching clause, so the order is the behaviour and not a
+    // formatting choice. Below it, every instance of this would be answered
+    // by the general clause and exit 1.
+    //
+    // Its own code because it is an ordinary state rather than a fault: every
+    // run before the version exists looks like this, and a readiness check
+    // asking about 1.1.8 before anybody has made a 1.1.8 has its answer. Exit
+    // 1 put it beside wrong credentials and a network that went away, which
+    // left a consumer matching prose to tell the commonest path from the
+    // broken ones.
+    stderr.writeln('asc_upload: $e');
+    _reportStateLeftBehind(store);
+    exitCode = noSuchVersionExit;
   } on AscApiException catch (e) {
     stderr.writeln('asc_upload: $e');
     _reportStateLeftBehind(store);
