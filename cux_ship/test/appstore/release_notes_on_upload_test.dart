@@ -84,11 +84,26 @@ class _FakeClient implements AscClient {
     Map<String, String>? query,
   }) async => const {};
 
+  /// Whether Apple refuses the `whatsNew` write for this version's state.
+  ///
+  /// **The shape nobody has confirmed.** `Attribute 'whatsNew' cannot be
+  /// edited at this time` is known to fire for a first version and for one
+  /// locked by review; whether it also fires for a version with no build
+  /// attached is unverified, and that state is reachable only from this
+  /// caller. A fake that always accepted the write could not tell a run that
+  /// reports the refusal from one that dies with Apple's own opaque line.
+  bool refusesWhatsNew = false;
+
   @override
   Future<Map<String, dynamic>> post(
     String path,
     Map<String, dynamic> body,
   ) async {
+    if (refusesWhatsNew && _carriesWhatsNew(body)) {
+      throw AscApiException(409, [
+        "Attribute 'whatsNew' cannot be edited at this time",
+      ], request: 'POST $path');
+    }
     posted.add((path: path, body: body));
     return {
       'data': {
@@ -104,8 +119,20 @@ class _FakeClient implements AscClient {
     String path,
     Map<String, dynamic> body,
   ) async {
+    if (refusesWhatsNew && _carriesWhatsNew(body)) {
+      throw AscApiException(409, [
+        "Attribute 'whatsNew' cannot be edited at this time",
+      ], request: 'PATCH $path');
+    }
     patched.add((path: path, body: body));
     return {'data': <String, dynamic>{}};
+  }
+
+  static bool _carriesWhatsNew(Map<String, dynamic> body) {
+    final data = body['data'];
+    final attributes = data is Map<String, dynamic> ? data['attributes'] : null;
+    return attributes is Map<String, dynamic> &&
+        attributes.containsKey('whatsNew');
   }
 
   @override
@@ -173,12 +200,19 @@ Future<String> _upload(_FakeClient client, {List<String> extra = const []}) {
     '${_root.path}/CHANGELOG.md',
     ...extra,
   ]);
+  // **Both streams**, because `runAsc` catches an App Store refusal and
+  // reports it on stderr rather than letting it out — so a test that watched
+  // stdout alone would see a run that looked like it finished.
   final captured = _MemoryStdout();
-  return IOOverrides.runZoned(() async {
-    await runAsc(AscCommand.upload, args, ascClient: client);
-    await captured.close();
-    return captured.buffer.toString();
-  }, stdout: () => captured);
+  return IOOverrides.runZoned(
+    () async {
+      await runAsc(AscCommand.upload, args, ascClient: client);
+      await captured.close();
+      return captured.buffer.toString();
+    },
+    stdout: () => captured,
+    stderr: () => captured,
+  );
 }
 
 Map<String, dynamic> _version(String id, String name) => {
@@ -265,6 +299,34 @@ void main() {
 
     expect(_whatsNewSent(client), isEmpty);
   });
+
+  test(
+    'a refused "What\'s New" names the causes, and says the listing landed',
+    () async {
+      // **Unverified, and handled anyway.** Apple's refusal is a *state*
+      // refusal; it is known to fire for a first version (removed by
+      // `isFirstVersion`) and for one locked by review, and it may fire for a
+      // version with no build — a state only this caller can reach, because the
+      // promote path always has a build by the time it writes.
+      //
+      // Rethrown rather than swallowed: a consumer whose acceptance criterion is
+      // "the changelog lands" has to be told when it did not, and the listing
+      // itself is already published so a repeat costs a re-run rather than a
+      // half-written page.
+      final client = _FakeClient(versions: [_version('old', '1.1.5')])
+        ..refusesWhatsNew = true;
+
+      final said = await _upload(client);
+
+      expect(said, contains('cannot be edited at this time'));
+      expect(said, contains('locked by review'));
+      expect(said, contains('The listing itself published'));
+      expect(said, contains('promote --changelog'));
+      // The half that matters: Apple's own line alone would say nothing about
+      // which of its causes applied, or that the rest of the publish landed.
+      expect(_whatsNewSent(client), isEmpty);
+    },
+  );
 
   test('a dry run writes nothing at all', () async {
     final client = _FakeClient(versions: [_version('old', '1.1.5')]);

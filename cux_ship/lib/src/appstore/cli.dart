@@ -699,9 +699,39 @@ Future<void> publishReleaseNotes(
   // come from CHANGELOG.md, so "unchanged since last time" is not a state a
   // release is expected to be in. The read is still passed in, so this write
   // decides POST or PATCH from a reading rather than making its own.
-  await store.writeVersionLocalization(version, locale, {
-    'whatsNew': releaseNotes,
-  }, existing: await store.versionLocalizations(version));
+  try {
+    await store.writeVersionLocalization(version, locale, {
+      'whatsNew': releaseNotes,
+    }, existing: await store.versionLocalizations(version));
+  } on AscApiException catch (e) {
+    // **`Attribute 'whatsNew' cannot be edited at this time` has more than one
+    // cause, and this path can meet a new one.**
+    //
+    // [AppStore.isFirstVersion] already removes the cause this package knew
+    // about. The refusal is a *state* refusal, so it also fires for a version
+    // locked by review — and, unverified at the time of writing, possibly for
+    // a version with no build attached, which is a state only this caller can
+    // reach: the promote path always has a build by the time it writes.
+    //
+    // Rethrown rather than swallowed, and with the causes named. The listing
+    // itself is already published and re-running is safe, so failing here
+    // costs a repeat rather than a half-written listing — and the alternative,
+    // continuing quietly, is the exact silence this whole change exists to
+    // remove. A consumer whose acceptance criterion is "the changelog lands"
+    // has to be told when it did not.
+    if (!e.details.join(' ').contains('cannot be edited at this time')) {
+      rethrow;
+    }
+    throw AscApiException(e.status, [
+      ...e.details,
+      'Apple refused the "What\'s New" write for this version\'s state.',
+      'Known causes: the version is locked by review, or Apple is not '
+          'accepting release notes for it yet.',
+      'The listing itself published. Re-running once the version is editable '
+          'writes the notes; `appstore promote --changelog` writes them at '
+          'submission time in any case.',
+    ], request: e.request);
+  }
 }
 
 /// Publishes the App Store listing from a metadata tree.
