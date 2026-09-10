@@ -112,14 +112,25 @@ AppStoreBuildEntry _build(AppStoreBuild build) => AppStoreBuildEntry(
   display: <String>[build.line],
 );
 
+/// **Switched on the enum, not on Apple's strings.** A `switch` case pattern
+/// has to be a compile-time constant and `ProcessingState.processing.wire` is
+/// not one, so this branched on string literals until somebody noticed that
+/// `'PROCESSING'` was written in the enum and again here. Reading to a member
+/// first buys two things: one copy of each spelling, and exhaustiveness — a
+/// member added to [ProcessingState] now breaks this switch rather than
+/// falling silently into a default that answers `null`.
 bool? _mayBecomeUsable(AppStoreBuild build) {
   if (build.expired) {
     return false;
   }
-  return switch (build.processingState) {
-    'PROCESSING' => true,
-    'VALID' || 'FAILED' || 'INVALID' => false,
-    _ => null,
+  return switch (ProcessingState.read(build.processingState)) {
+    ProcessingState.processing => true,
+    ProcessingState.valid ||
+    ProcessingState.failed ||
+    ProcessingState.invalid => false,
+    // The store sent nothing, or sent something nobody here names. Whether
+    // waiting helps is the question neither can answer.
+    ProcessingState.unknown || null => null,
   };
 }
 
@@ -213,10 +224,14 @@ PlayReleaseEntry _release(PlayTrackRelease release, String track) =>
       display: <String>[release.lineOn(track)],
     );
 
-bool? _serving(String? status) => switch (status) {
-  'completed' || 'inProgress' => true,
-  'halted' || 'draft' => false,
-  // `statusUnspecified`, a value nobody here names, and an absent field all
-  // land together: three ways of not being told.
-  _ => null,
+/// Switched on the enum rather than on Play's strings, for the reason
+/// [_mayBecomeUsable] gives.
+bool? _serving(String? status) => switch (PlayReleaseStatus.read(status)) {
+  PlayReleaseStatus.completed || PlayReleaseStatus.inProgress => true,
+  PlayReleaseStatus.halted || PlayReleaseStatus.draft => false,
+  // Three ways of not being told, and they are the same answer: Play declining
+  // to say, Play saying something nobody here names, and Play saying nothing.
+  PlayReleaseStatus.statusUnspecified ||
+  PlayReleaseStatus.unknown ||
+  null => null,
 };

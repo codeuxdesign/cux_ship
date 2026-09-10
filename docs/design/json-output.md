@@ -394,9 +394,57 @@ nothing; `unknown` is a store that sent something this version does not name.
 gave it the empty string, which is a lie in the single case where the truth
 matters: a caller reaching for the raw value of a state nobody named would have
 been handed a plausible-looking `''` instead of being sent to the sibling field
-that has it. Nothing serializes these enums either — the document carries the
-store's string and the enum is the typed *reading* of it — so there is no
-`@JsonEnum` on them, only on `DocumentKind`, which is the one that travels.
+that has it.
+
+### The store's fields are `String`, and that is what makes this a passthrough
+
+**Typing them as enums would make the wire format ours rather than Apple's.**
+It is the obvious simplification — `json_serializable` decodes enums natively,
+`@JsonEnum(valueField: 'wire')` with `unknownEnumValue` is one annotation, and
+it would delete the hand-written lookup. It was tried, and measured with
+`releaseType` as an enum field:
+
+```
+decoded   : ReleaseType.unknown
+re-encoded: null
+```
+
+A `releaseType` Apple ships after a version of this package goes out would
+arrive, decode to `unknown`, and **go back out as `null`** — the raw value
+destroyed by a round trip, in precisely the case a reader needs it. The
+generated encoder writes `_$ReleaseTypeEnumMap[value]`, and for `unknown` that
+is null by construction.
+
+So the field carries what the store sent, unchanged, and the enum is the typed
+*reading* of it. `documents_test.dart`'s round-trip test is what holds that:
+it decodes a document with a state nobody names and asserts the re-encoded
+document equals the one that came in.
+
+There is therefore no `@JsonEnum` on the store enums, only on `DocumentKind` —
+which is this package's own vocabulary and the one that genuinely travels.
+
+### One place for each spelling
+
+The lookup is `ProcessingState.read` and its three siblings, and the reason it
+exists rather than a `switch` on the string is small and worth writing down: a
+`switch` case pattern must be a compile-time constant, and `processing.wire` is
+not one. Branching on the string therefore meant writing `'PROCESSING'` in the
+enum and again in every branch that cared — which is what the first version of
+`_mayBecomeUsable` and `_serving` did, with four Play spellings duplicated
+between the enum and the encoder.
+
+Reading to a member first makes those enum switches, which buys two things: one
+copy of each spelling, and exhaustiveness. A member added to `ProcessingState`
+now breaks the branches that have not considered it, instead of falling into a
+default that quietly answers `null`.
+
+**The same duplication is still spread through the App Store client** —
+`'VALID'`, `'FAILED'` and `'INVALID'` are compared in about eleven places in
+`app_store.dart` and `cli.dart`, including the terminal-versus-transient rule
+`mayBecomeUsable` now exposes, which already existed there three times and had
+never reached the model or the document. That is pre-existing rather than
+introduced here, and unifying it means moving the vocabularies to the store
+clients and re-exporting them — its own change, with its own argument.
 
 ### The question, not the vocabulary
 

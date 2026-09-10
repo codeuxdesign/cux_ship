@@ -27,6 +27,21 @@
 // Absent and unknown stay different facts: a null field is a store that sent
 // nothing, and [unknown] is a store that sent something this version does not
 // name.
+//
+// **The store's fields are typed `String`, and that is what keeps this
+// document a passthrough rather than a re-encoding.** Typing them as enums and
+// letting `json_serializable` decode them would make the wire format *ours*
+// instead of Apple's: identical for every value we name, and lossy for the one
+// case that matters. Measured, with `releaseType` as an enum field and
+// `unknownEnumValue`:
+//
+//     decoded   : ReleaseType.unknown
+//     re-encoded: null
+//
+// A `releaseType` Apple ships after this version would arrive, decode to
+// `unknown`, and go back out as `null` — the raw value destroyed by a round
+// trip, in exactly the situation a reader needs it. So the field carries what
+// the store sent and the enum is the typed *reading* of it.
 import 'package:json_annotation/json_annotation.dart';
 
 import 'appstore/app_store.dart' show AscPlatform, editableVersionStates;
@@ -91,6 +106,20 @@ enum ProcessingState {
   /// nobody named would have been handed a plausible-looking empty string
   /// instead of being sent to the field that has it.
   final String? wire;
+
+  /// [wire] read as a member: [unknown] for a value this version does not
+  /// name, and null when the store sent nothing.
+  ///
+  /// **This is the only place Apple's spellings are compared to anything.**
+  /// A `switch` case pattern must be a compile-time constant and
+  /// `processing.wire` is not one, so code branching on the state used to
+  /// switch on string literals — putting `'PROCESSING'` in the enum and again
+  /// in every branch that cared. Reading to a member first makes the switch an
+  /// enum switch, which is one copy of each spelling *and* exhaustive, so
+  /// adding a member breaks the branches that have not considered it.
+  static ProcessingState? read(String? wire) => wire == null
+      ? null
+      : values.firstWhere((s) => s.wire == wire, orElse: () => unknown);
 }
 
 /// Apple's `appStoreState` for a version record.
@@ -121,6 +150,11 @@ enum AppStoreState {
 
   /// Apple's spelling, or null for [unknown]. See [ProcessingState.wire].
   final String? wire;
+
+  /// [wire] read as a member. See [ProcessingState.read].
+  static AppStoreState? read(String? wire) => wire == null
+      ? null
+      : values.firstWhere((s) => s.wire == wire, orElse: () => unknown);
 }
 
 /// How an approved version reaches the store.
@@ -139,6 +173,11 @@ enum ReleaseType {
 
   /// Apple's spelling, or null for [unknown]. See [ProcessingState.wire].
   final String? wire;
+
+  /// [wire] read as a member. See [ProcessingState.read].
+  static ReleaseType? read(String? wire) => wire == null
+      ? null
+      : values.firstWhere((t) => t.wire == wire, orElse: () => unknown);
 }
 
 /// Play's `status` for one release on a track.
@@ -177,6 +216,11 @@ enum PlayReleaseStatus {
 
   /// Play's spelling, or null for [unknown]. See [ProcessingState.wire].
   final String? wire;
+
+  /// [wire] read as a member. See [ProcessingState.read].
+  static PlayReleaseStatus? read(String? wire) => wire == null
+      ? null
+      : values.firstWhere((s) => s.wire == wire, orElse: () => unknown);
 }
 
 String _platformToJson(AscPlatform platform) => platform.api;
@@ -284,12 +328,8 @@ class AppStoreBuildEntry {
   ///
   /// [ProcessingState.unknown] when Apple sent a state this version does not
   /// name — which is not the same as null.
-  ProcessingState? get processingStateKnown => processingState == null
-      ? null
-      : ProcessingState.values.firstWhere(
-          (s) => s.wire == processingState,
-          orElse: () => ProcessingState.unknown,
-        );
+  ProcessingState? get processingStateKnown =>
+      ProcessingState.read(processingState);
 
   Map<String, dynamic> toJson() => _$AppStoreBuildEntryToJson(this);
 }
@@ -390,20 +430,10 @@ class AppStoreVersionEntry {
 
   /// [appStoreState] typed, [AppStoreState.unknown] for a state this version
   /// does not name, null when Apple sent none.
-  AppStoreState? get appStoreStateKnown => appStoreState == null
-      ? null
-      : AppStoreState.values.firstWhere(
-          (s) => s.wire == appStoreState,
-          orElse: () => AppStoreState.unknown,
-        );
+  AppStoreState? get appStoreStateKnown => AppStoreState.read(appStoreState);
 
   /// [releaseType] typed, on the same terms as [appStoreStateKnown].
-  ReleaseType? get releaseTypeKnown => releaseType == null
-      ? null
-      : ReleaseType.values.firstWhere(
-          (t) => t.wire == releaseType,
-          orElse: () => ReleaseType.unknown,
-        );
+  ReleaseType? get releaseTypeKnown => ReleaseType.read(releaseType);
 
   Map<String, dynamic> toJson() => _$AppStoreVersionEntryToJson(this);
 }
@@ -512,12 +542,7 @@ class PlayReleaseEntry {
 
   /// [status] typed, [PlayReleaseStatus.unknown] for a value this version does
   /// not name, null when Play sent none.
-  PlayReleaseStatus? get statusKnown => status == null
-      ? null
-      : PlayReleaseStatus.values.firstWhere(
-          (s) => s.wire == status,
-          orElse: () => PlayReleaseStatus.unknown,
-        );
+  PlayReleaseStatus? get statusKnown => PlayReleaseStatus.read(status);
 
   Map<String, dynamic> toJson() => _$PlayReleaseEntryToJson(this);
 }
