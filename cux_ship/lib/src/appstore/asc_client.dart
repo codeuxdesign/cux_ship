@@ -115,8 +115,9 @@ class AscApiException implements Exception {
     //
     // **Here rather than appended to `details` by the caller**, which is where
     // it started: `details` is documented above as one entry per Apple
-    // `errors[]` element, it is publicly exported through `read.dart`, and a
-    // consumer reading it would have been told Apple said three sentences
+    // `errors[]` element, it reaches a consumer through the formatted message
+    // this exception prints, and a reader would have been told Apple said three
+    // sentences
     // Apple did not say. This is the seam for "an error whose own text does
     // not say what to do", and using it keeps Apple's words Apple's.
     if (text.contains("attribute 'whatsnew' cannot be edited")) {

@@ -17,9 +17,6 @@
 // deleted rather than committed, so nothing it saw becomes anything. Nothing
 // here calls `commit`.
 import 'package:googleapis/androidpublisher/v3.dart';
-import 'package:googleapis_auth/auth_io.dart';
-
-import 'credentials.dart';
 
 /// One release Play holds on a track.
 class PlayTrackRelease {
@@ -278,53 +275,4 @@ Future<PlayTracks> readTracks(
       }
     }
   }
-}
-
-/// A read-only Google Play session for one package.
-///
-///     final reads = await PlayReads.open(
-///       packageName: 'design.codeux.example',
-///     );
-///     try {
-///       final tracks = await reads.tracks();
-///       for (final line in tracks.lines) {
-///         log.writeln(line);
-///       }
-///       print(tracks.newestVersionCodeOn('internal'));
-///     } finally {
-///       reads.close();
-///     }
-///
-/// Credentials come from the environment `cux_ship secrets exec` sets up —
-/// [playServiceAccountVar]. In-process reads therefore need that variable in
-/// the *calling* process, which is the one thing a caller switching from a
-/// spawned `cux_ship` to this has to arrange.
-class PlayReads {
-  PlayReads._(this._client, this._api, this.packageName);
-
-  /// Authenticates and holds the session open.
-  ///
-  /// Throws [StateError] when no service account is configured.
-  static Future<PlayReads> open({required String packageName}) async {
-    final client = await clientViaServiceAccount(loadPlayServiceAccount(), [
-      AndroidPublisherApi.androidpublisherScope,
-    ]);
-    return PlayReads._(client, AndroidPublisherApi(client), packageName);
-  }
-
-  final AutoRefreshingAuthClient _client;
-  final AndroidPublisherApi _api;
-
-  /// The Android package this session was opened for.
-  final String packageName;
-
-  /// What `cux_ship play tracks` reads.
-  ///
-  /// Throws [DetailedApiRequestError] when Play refuses — most often because
-  /// the service account has not been granted access to this app.
-  Future<PlayTracks> tracks() => readTracks(_api, packageName);
-
-  /// Releases the HTTP client. A session that is not closed keeps a connection
-  /// pool alive, which is what stops a long-running process from exiting.
-  void close() => _client.close();
 }

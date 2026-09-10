@@ -485,9 +485,9 @@ what each store is currently serving is a store fact git can only approximate �
 per store, and per Apple platform, which drift apart in the ordinary case
 rather than the exotic one. Until 4.1.0 the tag was the only machine-readable
 answer to either, so consumers used it for both and had to hedge every status
-line they printed. It is not any more: ask `play tracks`, `appstore builds`, or
-[`package:cux_ship/read.dart`](#reading-the-stores-from-dart) — one call per
-store, answered by the store. A status that reports the tag as what a store
+line they printed. It is not any more: ask `play tracks` or `appstore builds`,
+with `--json` if a program is reading — one call per store, answered by the
+store. A status that reports the tag as what a store
 holds is reporting an intention as an outcome.
 
 The same name at a different commit is a hard error — one build number reaching
@@ -827,70 +827,7 @@ rather than degraded. A null field means the store sent nothing, which is not
 the same as `unknown`.
 
 This adds nothing to what the command does: these are value types over what it
-printed. Reads that happen *in your process* — giving up the printed command
-line and per-step `--only` — are
-[`package:cux_ship/read.dart`](#reading-the-stores-from-dart) instead.
-
-### Reading the stores from Dart
-
-**`package:cux_ship/read.dart` answers what the stores hold, as objects.** For a
-release script written in Dart rather than shell, which would otherwise spawn
-this command and match regular expressions against what it printed:
-
-```dart
-import 'package:cux_ship/read.dart';
-
-final play = await PlayReads.open(packageName: 'design.codeux.example');
-try {
-  final tracks = await play.tracks();
-  for (final line in tracks.lines) {
-    log.writeln(line);            // what `play tracks` prints, verbatim
-  }
-  print(tracks.newestVersionCodeOn('internal'));
-} finally {
-  play.close();
-}
-```
-
-```dart
-final apple = await AppStoreReads.open(
-  bundleId: 'design.codeux.example',
-  platform: AscPlatform.ios,
-);
-try {
-  final builds = await apple.builds();
-  print(builds.newestBuildNumber);      // the newest Apple holds
-  print(builds.newestUsable?.buildNumber);  // the newest one promotable now
-  final versions = await apple.versions();
-  print(versions.version('1.4.0')?.appStoreState);
-} finally {
-  apple.close();
-}
-```
-
-`appstore wait` is here too, as `AppStoreReads.awaitBuild`, with an `onProgress`
-callback called once per poll — including the poll that ends the wait — so a
-caller streaming a forty-five-minute wait to a log writes its own heartbeat
-instead of scraping one.
-
-**Every result carries `lines` beside its fields, and the command prints those
-same lines.** Print them and read the fields; a `status` that renders the same
-model its own way reports something different from what this command reports,
-and does so silently. They are this package's sentences, composed from the
-parsed fields — what they buy is one formatter, not fidelity to a store's own
-format.
-
-**Reads only, and that is the design.** Nothing here uploads, promotes or
-publishes a listing — those stay commands, because the printed command line is
-what makes a failed release step resumable by hand, and per-step `secrets exec
---only …` is what keeps a credential out of a step that has no use for it.
-In-process reads do need the credentials in the *calling* process, so a stage
-reading both stores runs under one `secrets exec` carrying both.
-
-Every exported name is a semver promise and the list is deliberately short —
-[docs/design/read-api.md](https://github.com/codeuxdesign/cux_ship/blob/main/docs/design/read-api.md)
-says what is on it and why
-the store clients are not their own packages.
+printed.
 
 ### Credentials
 

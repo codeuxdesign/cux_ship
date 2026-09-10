@@ -776,17 +776,15 @@ const noSuchVersionExit = 5;
 /// **Telling it apart is available inside this package, and outside it only as
 /// [noSuchVersionExit].** This sentence used to say *"one that wants to tell
 /// this apart can"*, full stop, which is false from outside: the type is not
-/// exported, and it deliberately is not. `read.dart` — the only library that
-/// publishes catchable exceptions — sets the bar at *something outside this
-/// repository cannot be written without it*, and nothing that library exposes
-/// can raise this: its surface is `builds()`, `versions()` and `awaitBuild()`,
-/// none of which resolves a named version. [ProcessingTimeout] is exported
-/// because `awaitBuild` documents throwing it; this has no such caller.
+/// exported, and no public library publishes catchable exceptions any more:
+/// `read.dart` did, and it was removed once `--json` answered the question it
+/// existed for.
 ///
-/// So the route for a consumer is the exit code, which is what it was minted
+/// So the route for a consumer is the exit code, which is what this was minted
 /// for and what `package:cux_ship/exit_codes.dart` exports. Adding the type to
-/// a public library to make this comment true would be API surface nobody
-/// could reach.
+/// a public library to make this comment true would be API surface reachable
+/// only by somebody who had already spawned the binary and could read its
+/// status instead.
 class NoSuchVersion extends AscApiException {
   NoSuchVersion(this.versionString, this.platform)
     : super(404, [

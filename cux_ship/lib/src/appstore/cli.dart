@@ -839,8 +839,8 @@ Future<void> publishReleaseNotes(
   // take notes is `Attribute 'whatsNew' cannot be edited at this time`, which
   // names the attribute and not the condition — so it needs an explanation,
   // and this used to append one to `e.details`. That list is documented as one
-  // entry per Apple `errors[]` element and is publicly exported through
-  // `read.dart`, so appending told a consumer Apple had said three sentences
+  // entry per Apple `errors[]` element and reaches a reader through the
+  // formatted message, so appending told them Apple had said three sentences
   // it had not. The guidance seam exists for precisely this kind of error and
   // keeps Apple's words Apple's.
   //

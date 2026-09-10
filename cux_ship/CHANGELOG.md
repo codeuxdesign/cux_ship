@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Breaking
+
+**`package:cux_ship/read.dart` is removed**, with `AppStoreReads` and
+`PlayReads`. `--json` and `package:cux_ship/documents.dart` answer the question
+it was built for, and the consumer it was built for ported onto them — `status`
+reads through the command, its second entrypoint deleted, output byte-identical
+— which left the library with no known caller in this repository or out of it.
+
+`read-api.md` had carried the open question since the day `--json` shipped:
+that document argued the library against exactly one alternative, matching
+regular expressions against printed prose, and every word of that argument
+applies equally to a JSON schema. The decision was *library over the status
+quo*, not *library over JSON*, because `--json` was not on the table yet.
+
+**Nothing `--json` needs went with it.** The value types those sessions
+returned — `AppStoreBuilds`, `AppStoreVersions`, `PlayTracks` and their entries
+— stay, because the documents are built from them; they were never the read
+API, only also exported through it. What went is the in-process *session*:
+opening a client and holding credentials in the calling process. A spawned
+`--json` read keeps the per-step `secrets exec --only` narrowing that an
+in-process read gives up by construction, which is the trade `read-api.md`
+states and the one that settled it.
+
+The design document is kept rather than deleted. It was right about the problem
+and wrong about the answer for a reason nobody could see at the time, and the
+next person who wants an in-process API should be able to read why this one did
+not survive.
+
+
 **A listing-only upload publishes the release notes.** `upload --metadata
 --changelog CHANGELOG.md` accepted the flag and wrote no "What's New in This
 Version" — the write existed and lived inside the promote block, so `promote

@@ -7,7 +7,6 @@
 // that is a warning.
 import 'dart:io';
 
-import 'package:cux_ship/read.dart';
 import 'package:cux_ship/src/appstore/app_store.dart';
 import 'package:cux_ship/src/appstore/asc_client.dart';
 import 'package:cux_ship/src/appstore/reads.dart';
