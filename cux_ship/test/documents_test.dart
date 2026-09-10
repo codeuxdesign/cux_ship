@@ -73,6 +73,10 @@ Map<String, dynamic> _buildsJson({
   'display': ['  build 169  VALID  uploaded 2026-09-09T14:02:11-07:00'],
 };
 
+/// **`serving` is derived here rather than written down**, which is the whole
+/// point of `PlayReleaseStatus.serving` being reachable. A fixture that states
+/// it can state one the encoder would never emit — `halted` and `serving: true`
+/// — and a test asserting against that is testing a document that cannot exist.
 Map<String, dynamic> _tracksJson({
   String? status = 'completed',
   String? statusRaw = 'completed',
@@ -91,7 +95,11 @@ Map<String, dynamic> _tracksJson({
           'statusRaw': statusRaw,
           'versionCodes': [152],
           'newestVersionCode': 152,
-          'serving': true,
+          'serving': PlayReleaseStatus.serving(
+            status == null
+                ? null
+                : PlayReleaseStatus.values.firstWhere((s) => s.wire == status),
+          ),
           'display': ['  internal: "1.4.0" codes=[152] $status'],
         },
       ],
@@ -286,6 +294,98 @@ void main() {
             "a renamed key makes documents.dart's dartdoc a description of "
             'something other than the JSON, and a reader cannot tell',
       );
+    });
+  });
+
+  group('a caller reaches the newest build, not just its number', () {
+    // Both of these come from the port. The consumer wrote a loop matching on
+    // `newestBuildNumber` rather than take `builds.first`, because re-deriving
+    // "which one is newest" is the ordering this package has been wrong about
+    // twice and they would not assume it.
+    test('newest is the entry, so every other field of it is reachable', () {
+      final document = AppStoreBuildsDocument.fromJson(_buildsJson());
+
+      expect(document.newest, isNotNull);
+      expect(document.newest!.buildNumber, document.newestBuildNumber);
+      // The point of the accessor: the fields a caveat is built from.
+      expect(document.newest!.needsNewUpload, isFalse);
+      expect(document.newest!.expired, isFalse);
+      expect(document.newest!.processingStateRaw, 'VALID');
+    });
+
+    test('and it agrees with newestBuildNumber by construction', () {
+      // Not a coincidence to be re-checked at each call site: `builds` is
+      // ordered newest-first and `newestBuildNumber` is that element's. The
+      // accessor exists so a caller relies on this once, here, rather than on
+      // array position wherever they happen to need it.
+      final json = _buildsJson();
+      (json['builds'] as List).add({
+        'buildNumber': '9',
+        'buildNumberAsInt': 9,
+        'processingState': 'valid',
+        'processingStateRaw': 'VALID',
+        'uploadedDate': '2026-09-01T09:00:00-07:00',
+        'expired': true,
+        'usable': false,
+        'needsNewUpload': true,
+        'display': ['  build 9  VALID  uploaded 2026-09-01T09:00:00-07:00'],
+      });
+
+      final document = AppStoreBuildsDocument.fromJson(json);
+
+      expect(document.builds, hasLength(2));
+      expect(document.newest!.buildNumber, '169');
+      expect(document.newest!.buildNumber, document.newestBuildNumber);
+    });
+
+    test('and it is null for an account with no builds', () {
+      final json = _buildsJson()
+        ..['builds'] = <dynamic>[]
+        ..['newestBuildNumber'] = null
+        ..['newestBuildNumberAsInt'] = null;
+
+      expect(AppStoreBuildsDocument.fromJson(json).newest, isNull);
+    });
+  });
+
+  group('both derived rules are reachable, not just one', () {
+    // **The asymmetry the port paid for.** `needsNewUpload` was a public
+    // static and `serving` was a private function in the encoder, so the
+    // consumer's fixtures could call one rule and had to restate the other —
+    // a second copy of a rule this package owns, in a tree it cannot see,
+    // which is the drift the derived field exists to prevent.
+    test('serving is on the vocabulary that defines it', () {
+      expect(PlayReleaseStatus.serving(PlayReleaseStatus.completed), isTrue);
+      expect(PlayReleaseStatus.serving(PlayReleaseStatus.inProgress), isTrue);
+      expect(PlayReleaseStatus.serving(PlayReleaseStatus.halted), isFalse);
+      expect(PlayReleaseStatus.serving(PlayReleaseStatus.draft), isFalse);
+      expect(
+        PlayReleaseStatus.serving(PlayReleaseStatus.statusUnspecified),
+        isNull,
+      );
+      expect(PlayReleaseStatus.serving(PlayReleaseStatus.unknown), isNull);
+      expect(PlayReleaseStatus.serving(null), isNull);
+    });
+
+    test('so a fixture cannot state a serving the encoder would not emit', () {
+      // `_tracksJson` derives the field rather than writing it down, which is
+      // only possible because the rule is reachable — and it is what stops a
+      // hand-built document saying `halted` and `serving: true`, a state no
+      // run can produce and a test can happily assert against.
+      //
+      // **This was written the wrong way round first**, asserting the fixture
+      // against the static while the fixture hardcoded `serving: true`. It
+      // failed, which was the fixture's flaw arriving on schedule.
+      //
+      // Whether the *encoder* agrees with this static is a cross-file claim
+      // and lives in `json_output_test.dart`, which drives the encoder.
+      for (final status in PlayReleaseStatus.values) {
+        final serving = PlayTracksDocument.fromJson(
+          _tracksJson(status: status.wire, statusRaw: status.playValue),
+        ).tracks.single.releases.single.serving;
+
+        expect(serving, PlayReleaseStatus.serving(status));
+      }
     });
   });
 

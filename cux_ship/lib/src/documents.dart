@@ -308,6 +308,26 @@ enum PlayReleaseStatus {
           (s) => s.playValue == playValue,
           orElse: () => unknown,
         );
+
+  /// Whether a release in [status] is in front of any of the track's audience.
+  ///
+  /// **The definition of [PlayReleaseEntry.serving], reachable.** It was a
+  /// private function in the encoder while its twin,
+  /// [ProcessingState.needsNewUpload], was a public static — an asymmetry with
+  /// no argument behind it, and the consumer paid for it immediately: its test
+  /// fixtures could call one rule and had to *restate* the other, which is a
+  /// second copy of a rule this package owns, in a tree this package cannot
+  /// see. That is the drift the derived field exists to prevent, reappearing
+  /// one level up.
+  ///
+  /// True for [completed] and [inProgress]. False for [halted] and [draft].
+  /// Null for [statusUnspecified], for [unknown], and for an absent status —
+  /// three ways of not being told, and one answer.
+  static bool? serving(PlayReleaseStatus? status) => switch (status) {
+    completed || inProgress => true,
+    halted || draft => false,
+    statusUnspecified || unknown || null => null,
+  };
 }
 
 String _platformToJson(AscPlatform platform) => platform.api;
@@ -490,6 +510,22 @@ class AppStoreBuildsDocument {
   /// Newest first, by [AppStoreBuildEntry.buildNumberAsInt].
   final List<AppStoreBuildEntry> builds;
 
+  /// The newest build Apple holds, whatever state it is in, or null when it
+  /// holds none.
+  ///
+  /// **[newestBuildNumber] answers "which number"; this answers "which
+  /// build".** A caller wanting any other field of it — [needsNewUpload],
+  /// [expired], [processingStateRaw] — had to find the entry itself, and the
+  /// consumer that asked for this wrote a loop matching on the build number
+  /// rather than take `builds.first`, which is the ordering assumption this
+  /// package has been wrong about twice.
+  ///
+  /// `builds.first` is in fact correct: the order above is promised and
+  /// [newestBuildNumber] is derived from the same element. But a promise a
+  /// reader has to go and find is not the same as an accessor a test can hold,
+  /// and re-deriving "which one is newest" is precisely what the model's own
+  /// `newest` exists to stop a caller doing.
+
   /// What `cux_ship appstore builds` prints.
   ///
   /// **Not the concatenation of the builds' `display`, in either direction.**
@@ -498,6 +534,11 @@ class AppStoreBuildsDocument {
   /// saying so, because a caller iterating nothing prints nothing and a store
   /// the output said nothing about reads as a store with nothing wrong.
   final List<String> display;
+
+  /// See the note on [builds]. A getter rather than a field, deliberately:
+  /// emitting the entry would put one build in the document twice, under two
+  /// keys, free to disagree — and a shell caller already has the ordering.
+  AppStoreBuildEntry? get newest => builds.isEmpty ? null : builds.first;
 
   Map<String, dynamic> toJson() => _$AppStoreBuildsDocumentToJson(this);
 }

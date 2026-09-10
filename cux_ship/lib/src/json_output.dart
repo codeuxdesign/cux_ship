@@ -183,48 +183,42 @@ PlayTrackEntry _track(PlayTrack track) => PlayTrackEntry(
   display: track.lines,
 );
 
-PlayReleaseEntry _release(PlayTrackRelease release, String track) =>
-    PlayReleaseEntry(
-      name: release.name,
-      status: PlayReleaseStatus.read(release.status),
-      statusRaw: release.status,
-      versionCodes: release.versionCodes,
-      newestVersionCode: release.newestVersionCode,
-      // **Computed here rather than left to the caller**, for the reason the
-      // App Store side's `usable` and `editable` already are: the question a
-      // caller has is "is this in front of anyone", and answering it by
-      // comparing Play's status strings is the deferral to Google's
-      // documentation this document exists to end. A shell caller gets it too,
-      // which a Dart getter could not give them.
-      //
-      // **Three-valued, because the vocabulary it reads is open.** A `bool`
-      // would have to answer a status nobody here names, and both answers are
-      // wrong: `false` reports a possibly-healthy rollout as reaching nobody,
-      // `true` calls an unrecognized state healthy. Null is the same honesty
-      // the enum's `unknown` carries, and a derived field that threw it away
-      // would be a worse answer than the field it is derived from.
-      //
-      // `statusUnspecified` is null too. Play saying "unspecified" and Play
-      // saying nothing are the same amount of information.
-      //
-      // **Deliberately not a fraction.** `inProgress` means some of the
-      // audience has it; how much is not in this document, and belongs to the
-      // release-and-rollout task rather than here.
-      serving: _serving(release.status),
-      // The track name is not a field of a release — Play nests releases under
-      // tracks and the rendering says which track it is on, so the line needs
-      // an argument the object does not carry.
-      display: <String>[release.lineOn(track)],
-    );
+PlayReleaseEntry _release(PlayTrackRelease release, String track) {
+  // Read once, for the field and for the derivation — the same reason [_build]
+  // does it, and the same reason: two reads invite a reader to wonder whether
+  // they could disagree.
+  final status = PlayReleaseStatus.read(release.status);
 
-/// Switched on the enum rather than on Play's strings, for the reason
-/// [_mayBecomeUsable] gives.
-bool? _serving(String? status) => switch (PlayReleaseStatus.read(status)) {
-  PlayReleaseStatus.completed || PlayReleaseStatus.inProgress => true,
-  PlayReleaseStatus.halted || PlayReleaseStatus.draft => false,
-  // Three ways of not being told, and they are the same answer: Play declining
-  // to say, Play saying something nobody here names, and Play saying nothing.
-  PlayReleaseStatus.statusUnspecified ||
-  PlayReleaseStatus.unknown ||
-  null => null,
-};
+  return PlayReleaseEntry(
+    name: release.name,
+    status: status,
+    statusRaw: release.status,
+    versionCodes: release.versionCodes,
+    newestVersionCode: release.newestVersionCode,
+    // **Computed here rather than left to the caller**, for the reason the
+    // App Store side's `usable` and `editable` already are: the question a
+    // caller has is "is this in front of anyone", and answering it by
+    // comparing Play's status strings is the deferral to Google's
+    // documentation this document exists to end. A shell caller gets it too,
+    // which a Dart getter could not give them.
+    //
+    // **Three-valued, because the vocabulary it reads is open.** A `bool`
+    // would have to answer a status nobody here names, and both answers are
+    // wrong: `false` reports a possibly-healthy rollout as reaching nobody,
+    // `true` calls an unrecognized state healthy. Null is the same honesty
+    // the enum's `unknown` carries, and a derived field that threw it away
+    // would be a worse answer than the field it is derived from.
+    //
+    // `statusUnspecified` is null too. Play saying "unspecified" and Play
+    // saying nothing are the same amount of information.
+    //
+    // **Deliberately not a fraction.** `inProgress` means some of the
+    // audience has it; how much is not in this document, and belongs to the
+    // release-and-rollout task rather than here.
+    serving: PlayReleaseStatus.serving(status),
+    // The track name is not a field of a release — Play nests releases under
+    // tracks and the rendering says which track it is on, so the line needs
+    // an argument the object does not carry.
+    display: <String>[release.lineOn(track)],
+  );
+}
