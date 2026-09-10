@@ -215,13 +215,21 @@ distribution of real ingestion times, and the way to get it is to ship this and
 record what the first few releases actually took.
 
 **There is a specific measurement pending rather than a general hope.** The
-first consumer has undertaken to time its first upload in two parts — video to
-`COMPLETE`, and then the poster frame after it — and to write both into its own
-`docs/PROMO-VIDEO.md` §1. Two parts because [AppStore.awaitPreviewProcessing]
-waits on both and assumes the frame lands second, which is Apple's documented
-order and not something observed here; a measurement that reported one number
-would leave that assumption exactly as unverified as it is now. Replace the
-default with whatever those two numbers say, and this section with them.
+first consumer has undertaken to time its first upload and write the result into
+its own `docs/PROMO-VIDEO.md` §1: when the video reached `COMPLETE`, when the
+poster frame did, **and which of the two happened first.**
+
+Three findings rather than two durations, and the third is the one worth having.
+[AppStore.awaitPreviewProcessing] waits on both states and assumes the frame
+lands second — Apple's documented order, observed by nothing here. A measurement
+taken as "video, then the frame after it" would replace the thirty-minute
+default and leave that assumption exactly as unverified as it is today, because
+the instruction would have been written in the terms of the thing it was meant
+to test. The interesting case is the frame already reporting `COMPLETE` on the
+first poll after the video: that would mean the second wait is dead weight and
+this can be one state, not two.
+
+Replace the default with what those numbers say, and this section with them.
 
 Two things make the wrong value cheap rather than expensive, which is why this
 did not block the work: the timeout is a parameter, and reaching it is
