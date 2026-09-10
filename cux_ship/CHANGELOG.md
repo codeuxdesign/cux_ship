@@ -2,6 +2,53 @@
 
 ## 4.5.0-dev.2
 
+### Found by the first real upload, not by the review
+
+**Apple accepts `previewFrameTimeCode` at reservation and ignores it.** The
+create carried `00:00:02:06`, Apple accepted the request, and the poster came
+back cut at Apple's own `00:00:05:01`. So a single `upload --metadata` run left
+every preview at the default *and printed success*; the value only arrived on a
+second run, through `PreviewPlan.retime`, which needs a published preview to
+compare against. "Run it twice" was the correct procedure and nothing said so.
+
+The timecode is now asserted after ingestion, in the same run, where the asset
+exists and Apple's answer is real. The create still sends it — harmless, and it
+may be honoured for other asset types — but it is no longer trusted.
+
+**Apple answers the commit with `previewFrameTimeCode: ""`, not null**, having
+not cut the poster yet. The empty string walked through a `??` and through a
+null check, so the line that exists to name the effective poster frame printed
+`poster frame ` with nothing after it — and it was hiding the discrepancy
+above, at the one moment it was visible, on the one input that cannot be
+changed after approval. The commit line now reports what was *asked for*, and
+the effective frame is printed after ingestion.
+
+**A silent cut is refused offline.** Apple rejected one with
+`MOV_RESAVE_STEREO` — a channel-layout code, for a file with no audio stream at
+all — after the upload and a round trip through the ingestion queue.
+`cux_ship_verify` was already four boxes away from the answer.
+
+**The wait prints one line per state change.** It polled two states and printed
+nothing until it finished, so a run that waited seven minutes and one that
+waited seven hours produced identical output, and which asset Apple finishes
+first was unanswerable from outside.
+
+**A duplicated error code and description are reported once.** Apple sets both
+to the same string, so a real rejection read `MOV_RESAVE_STEREO -
+MOV_RESAVE_STEREO`.
+
+**`describePreviewFrame` no longer quotes an exact default.** Apple documents
+five seconds and was observed cutting at `00:00:05:01`, so naming a frame
+stated a number Apple did not choose.
+
+### Measured, at last
+
+One real ingestion: **7m29s** from upload to both `videoDeliveryState` and
+`previewFrameImage.state` reaching `COMPLETE`, on an 886x1920, 29.57 s, 20.4 MB
+stereo H.264 preview. So the 30-minute default was never approached, and the
+hypothesis that Apple might never report `previewFrameImage` did not fire on
+this file. One sample, one app — the grace period added in dev.2 stays.
+
 **Needs `cux_ship_verify` 1.11.0-dev.2.** Five defects in 4.5.0-dev.1, found by
 a code review of the change that introduced it. Two of them could have bitten
 the first real upload.

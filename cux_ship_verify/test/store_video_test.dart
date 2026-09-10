@@ -26,6 +26,7 @@ VideoInfo _sized(int bytes) => VideoInfo(
   codec: 'avc1',
   container: VideoContainer.mp4,
   fileSize: bytes,
+  audioChannels: 2,
 );
 
 void main() {
@@ -147,6 +148,45 @@ void main() {
     test('a valid preview has no problem', () {
       final video = readVideoInfo(mp4())!;
       expect(videoEncodingProblem(video, appStorePreviewRules), isNull);
+    });
+
+    test('a silent cut is refused, and the message says so plainly', () {
+      // **The 422 this exists to replace.** A silent cut was refused by Apple
+      // with `MOV_RESAVE_STEREO` — a channel-layout code — for a file with no
+      // audio stream at all, after the upload and a round trip through the
+      // ingestion queue. Repeating Apple's word would be repeating a term for
+      // something the file does not have.
+      final video = readVideoInfo(mp4(audioChannels: 0))!;
+      expect(video.audioChannels, 0);
+      final problem = videoEncodingProblem(video, appStorePreviewRules)!;
+      expect(problem, contains('no audio track'));
+      expect(problem, contains('stereo'));
+      // Named so that somebody who has *already* had the 422 can connect the
+      // two without guessing.
+      expect(problem, contains('MOV_RESAVE_STEREO'));
+    });
+
+    test('a mono track is refused and says how many it found', () {
+      final video = readVideoInfo(mp4(audioChannels: 1))!;
+      final problem = videoEncodingProblem(video, appStorePreviewRules)!;
+      expect(problem, contains('1 audio channel'));
+      expect(problem, isNot(contains('channels')));
+    });
+
+    test('a store with no audio rule refuses nothing on audio', () {
+      // `requiredAudioChannels` is nullable because inventing a requirement
+      // refuses a file nobody's rules refuse — the same reason the file-size
+      // ambiguity is a flag rather than a constant.
+      const noRule = VideoRules(
+        store: 'a store with no opinion',
+        codecs: {'avc1': 'H.264'},
+        maxFrameRate: 30,
+        minDuration: Duration(seconds: 15),
+        maxDuration: Duration(seconds: 30),
+        maxFileSize: 500 * 1000 * 1000,
+      );
+      final silent = readVideoInfo(mp4(audioChannels: 0))!;
+      expect(videoEncodingProblem(silent, noRule), isNull);
     });
 
     test('HEVC is named, and so is what Apple takes instead', () {

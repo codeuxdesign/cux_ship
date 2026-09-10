@@ -625,7 +625,16 @@ List<String> _stateErrors(Object? state) {
   }
   return [
     for (final error in errors.whereType<Map<String, dynamic>>()) ...{
-      [error['code'], error['description']].whereType<String>().join(' - '),
+      // **Collapsed when the two fields carry the same string**, which Apple's
+      // do: a real rejection came back as
+      // `MOV_RESAVE_STEREO - MOV_RESAVE_STEREO`, which reads as two facts
+      // where there is one, in a message somebody is scanning under time
+      // pressure. `screenshotDeliveryErrors` has the identical shape and is
+      // left alone — it has never been observed duplicating, and this change
+      // is not about it.
+      {
+        ...[error['code'], error['description']].whereType<String>(),
+      }.join(' - '),
     },
   ].where((message) => message.isNotEmpty).toList();
 }
@@ -722,9 +731,12 @@ PreviewPlan previewPlan({
 /// package, because after approval the poster cannot be changed without a new
 /// version submission. So the run says the value either way, and says which of
 /// the two it is.
+/// **The default is described, not quoted.** Apple documents five seconds and
+/// was observed cutting at `00:00:05:01`, so naming an exact frame here would
+/// state a number Apple did not choose. What matters is that nobody chose it.
 String describePreviewFrame(String? frameTimeCode) => frameTimeCode == null
-    ? 'poster frame $defaultPreviewFrameTimeCode (Apple\'s default — no '
-          '$previewTimeCodeSuffix file beside the video)'
+    ? 'poster frame at Apple\'s default, about five seconds in — no '
+          '$previewTimeCodeSuffix file beside the video'
     : 'poster frame $frameTimeCode';
 
 /// The `releaseType` values `--release-type` will send.
@@ -2956,7 +2968,83 @@ class AppStore {
       }
     }
     await awaitPreviewProcessing(uploaded);
+    await _assertPosterFrames(setId!, previewType, previews);
   }
+
+  /// Sets each preview's poster frame *after* Apple has finished ingesting it,
+  /// and says what every one of them ended up at.
+  ///
+  /// **Apple accepts `previewFrameTimeCode` at reservation and then ignores
+  /// it.** Measured on a real upload: the create carried `00:00:02:06`, the
+  /// request was accepted, and the poster came back cut at Apple's own
+  /// `00:00:05:01`. The attribute is presumably read while the asset still has
+  /// no bytes, so whatever ingestion derives overwrites it.
+  ///
+  /// The consequence, before this existed, was that **a single run always left
+  /// the poster at Apple's default** — and printed success. The value only
+  /// arrived on a *second* run, through [PreviewPlan.retime], which needs a
+  /// published preview to compare against. "Run it twice" was the correct
+  /// procedure and nothing said so.
+  ///
+  /// So the timecode is asserted here, where the asset exists and Apple's
+  /// answer is real, and the create keeps sending it because it costs nothing
+  /// and may be honoured for asset types that are not this one. What changed is
+  /// that it is no longer *trusted*.
+  Future<void> _assertPosterFrames(
+    String setId,
+    String previewType,
+    List<LocalPreview> previews,
+  ) async {
+    if (writer.dryRun) {
+      return;
+    }
+    final published = await client.getAll(
+      '/v1/appPreviewSets/$setId/appPreviews',
+    );
+    final held = {
+      for (final preview in published.map(readPublishedPreview)) ...{
+        ?preview.fileName: preview,
+      },
+    };
+
+    for (final preview in previews) {
+      final name = preview.file.uri.pathSegments.last;
+      final apple = held[name];
+      // A readback Apple has not filled in yet is not an answer. Empty string
+      // and null both mean "nothing to compare against" — see
+      // [_effectiveFrameTimeCode], which learned that distinction the hard way.
+      final stored = _effectiveFrameTimeCode(apple?.frameTimeCode);
+      final wanted = preview.frameTimeCode;
+
+      if (wanted != null && stored != wanted && apple?.id != null) {
+        await writer.patch(
+          '/v1/appPreviews/${apple!.id}',
+          {
+            'data': {
+              'type': 'appPreviews',
+              'id': apple.id,
+              'attributes': {'previewFrameTimeCode': wanted},
+            },
+          },
+          describe:
+              '$previewType: $name posed at $wanted'
+              '${stored == null ? '' : ' (Apple had cut it at $stored)'}',
+        );
+        continue;
+      }
+      stdout.writeln('      $name: ${describePreviewFrame(wanted ?? stored)}');
+    }
+  }
+
+  /// A `previewFrameTimeCode` Apple has actually chosen, or null.
+  ///
+  /// **Apple answers the commit with an empty string, not a null**, because it
+  /// has not cut the poster yet — and `''` survives a `??`, so the line that
+  /// exists to name the effective poster frame printed `poster frame ` with
+  /// nothing after it. Measured on a real upload, where it hid the fact that
+  /// Apple had ignored the requested frame entirely.
+  static String? _effectiveFrameTimeCode(String? reported) =>
+      reported == null || reported.isEmpty ? null : reported;
 
   /// Moves the poster frames of previews Apple already holds.
   ///
@@ -3024,6 +3112,10 @@ class AppStore {
     // the grace period below; a parameter so a test can drive it without
     // waiting out four real polls.
     final frameGrace = <String, int>{};
+    // The last `video/frame` pair printed for each asset, so the log carries
+    // one line per transition rather than one per poll.
+    final lastSeen = <String, String>{};
+    final started = DateTime.now();
     var announced = false;
 
     while (pending.isNotEmpty) {
@@ -3039,6 +3131,23 @@ class AppStore {
         }
         final video = previewVideoState(data);
         final frame = previewFrameState(data);
+        // **Every state change, as it happens.** The loop polls two states and
+        // printed nothing until it finished, so a run that waited seven
+        // minutes and one that waited seven hours produced identical output —
+        // and the question of which asset Apple finishes first, which decides
+        // whether the second wait is dead weight, was unanswerable from
+        // outside. It costs one line per transition and it is the only
+        // instrument anybody has on a queue Apple documents in hours.
+        final seen = '${video ?? '-'}/${frame ?? '-'}';
+        if (lastSeen[id] != seen) {
+          lastSeen[id] = seen;
+          final elapsed = DateTime.now().difference(started).inSeconds;
+          stdout.writeln(
+            '      ${_attributes(data)['fileName'] ?? id} at ${elapsed}s: '
+            'video ${video ?? 'not reported'}, '
+            'poster frame ${frame ?? 'not reported'}',
+          );
+        }
         if (video == 'FAILED' || frame == 'FAILED') {
           final why = previewDeliveryErrors(data);
           throw AscApiException(422, [
@@ -3216,13 +3325,21 @@ class AppStore {
     // the line printed a bare `poster frame 00:00:05:00` in precisely the case
     // the annotation exists for, and read as a deliberate choice. The tree is
     // what knows whether anybody chose; Apple only knows what it stored.
-    final stored = verdict is Map<String, dynamic>
-        ? _attributes(verdict)['previewFrameTimeCode'] as String?
-        : preview.frameTimeCode;
-    final effective = preview.frameTimeCode == null
-        ? describePreviewFrame(null)
-        : describePreviewFrame(stored ?? preview.frameTimeCode);
-    stdout.writeln('      sent $name, $effective');
+    // **What was asked for, said as a request rather than as the answer.**
+    // Apple's commit response carries `previewFrameTimeCode: ""` — it has not
+    // cut the poster yet — and the empty string walked through a `??` and
+    // printed `poster frame ` with nothing after it, at the one moment the
+    // value was on screen. Worse, it was hiding a real discrepancy: the frame
+    // Apple eventually chose was not the one requested at all.
+    //
+    // So this line no longer pretends to report the effective frame. The
+    // effective frame is what [_assertPosterFrames] prints, after ingestion,
+    // when Apple's answer exists.
+    stdout.writeln(
+      '      sent $name'
+      '${preview.frameTimeCode == null ? '' : ', asking for poster frame '
+                '${preview.frameTimeCode}'}',
+    );
     return previewId;
   }
 

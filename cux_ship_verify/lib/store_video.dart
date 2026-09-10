@@ -42,6 +42,7 @@ class VideoInfo {
     required this.codec,
     required this.container,
     required this.fileSize,
+    required this.audioChannels,
   });
 
   /// Display dimensions, after any rotation the track matrix asks for.
@@ -78,6 +79,16 @@ class VideoInfo {
   /// Length of the whole file in bytes, which is also a limit Apple enforces
   /// and one nothing else here would carry.
   final int fileSize;
+
+  /// Channels in the first audio track, 0 when the file has none.
+  ///
+  /// **Read because Apple refuses a preview over it, in an error that names
+  /// something else.** A silent cut was refused with `MOV_RESAVE_STEREO` —
+  /// a *channel layout* code, for a file with no audio stream at all — after
+  /// the upload and a round trip through the ingestion queue. Apple's stated
+  /// requirement is stereo, and the track count is four boxes from the ones
+  /// already being walked, so the answer is free here and expensive there.
+  final int audioChannels;
 }
 
 /// What a store accepts in a preview video, named after whose rules they are.
@@ -93,6 +104,7 @@ class VideoRules {
     required this.minDuration,
     required this.maxDuration,
     required this.maxFileSize,
+    this.requiredAudioChannels,
     this.ambiguousMegabytes = false,
   });
 
@@ -108,6 +120,14 @@ class VideoRules {
   final Duration minDuration;
   final Duration maxDuration;
   final int maxFileSize;
+
+  /// Channels the store requires, or null when it states no rule.
+  ///
+  /// Apple asks for stereo and enforces it — with `MOV_RESAVE_STEREO`, after
+  /// the upload, naming a channel layout even for a file carrying no audio at
+  /// all. Nullable because a second store may not care, and a check that
+  /// invented a requirement would refuse a file nobody's rules refuse.
+  final int? requiredAudioChannels;
 
   /// Whether [maxFileSize] is one reading of a limit the store states without
   /// units, so a file just over it may still be accepted.
@@ -153,6 +173,7 @@ const appStorePreviewRules = VideoRules(
   minDuration: Duration(seconds: 15),
   maxDuration: Duration(seconds: 30),
   maxFileSize: 500 * 1000 * 1000,
+  requiredAudioChannels: 2,
   ambiguousMegabytes: true,
 );
 
@@ -166,6 +187,20 @@ String? videoEncodingProblem(VideoInfo video, VideoRules rules) {
   if (!rules.codecs.containsKey(video.codec)) {
     final accepted = <String>{...rules.codecs.values}.join(' or ');
     return 'is ${_codecName(video.codec)}; ${rules.store} takes $accepted';
+  }
+  final channels = rules.requiredAudioChannels;
+  if (channels != null && video.audioChannels != channels) {
+    // **Named plainly, because Apple's own error does not.** A silent cut was
+    // refused with `MOV_RESAVE_STEREO` — a channel-layout code — for a file
+    // with no audio stream whatsoever, after the upload and a round trip
+    // through the ingestion queue. Whatever this file has, saying so beats
+    // repeating Apple's word for something it is not.
+    final has = video.audioChannels == 0
+        ? 'has no audio track'
+        : 'has ${video.audioChannels} audio channel'
+              '${video.audioChannels == 1 ? '' : 's'}';
+    return '$has; ${rules.store} requires stereo. Apple reports this after '
+        'the upload, as MOV_RESAVE_STEREO, even when the file is silent';
   }
   if (video.duration < rules.minDuration ||
       video.duration > rules.maxDuration) {
@@ -284,6 +319,7 @@ VideoInfo? readVideoInfo(List<int> bytes) {
     codec: track.codec,
     container: container,
     fileSize: bytes.length,
+    audioChannels: _readAudioChannels(bytes, moov),
   );
 }
 
@@ -422,6 +458,48 @@ Duration? _readMvhd(List<int> bytes, _Box moov) {
   }
   return Duration(microseconds: (duration * 1000000 / timescale).round());
 }
+
+/// Channels declared by the first `soun` track, or 0 when there is none.
+///
+/// The audio sample entry's layout is fixed: a `SampleEntry` header of 16
+/// bytes — size, format, six reserved, data_reference_index — then version,
+/// revision and vendor for eight more, and `channelcount` at +24.
+///
+/// Zero for "no audio track" *and* for a track this cannot read, which is the
+/// right collapse here: both mean "cannot show that this file has the stereo
+/// Apple asks for", and the check that reads it refuses on that basis rather
+/// than claiming to know which.
+int _readAudioChannels(List<int> bytes, _Box moov) {
+  for (final trak in _findBoxes(bytes, moov.start, moov.end, 'trak')) {
+    final mdia = _findBox(bytes, trak.start, trak.end, 'mdia');
+    if (mdia == null) {
+      continue;
+    }
+    final hdlr = _findBox(bytes, mdia.start, mdia.end, 'hdlr');
+    if (hdlr == null || !_isType(bytes, hdlr.start + 8, 'soun')) {
+      continue;
+    }
+    final minf = _findBox(bytes, mdia.start, mdia.end, 'minf');
+    final stbl = minf == null
+        ? null
+        : _findBox(bytes, minf.start, minf.end, 'stbl');
+    final stsd = stbl == null
+        ? null
+        : _findBox(bytes, stbl.start, stbl.end, 'stsd');
+    if (stsd == null || _be32(bytes, stsd.start + 4) == 0) {
+      continue;
+    }
+    final entry = stsd.start + 8;
+    if (entry + 26 > stsd.end || entry + 26 > bytes.length) {
+      continue;
+    }
+    return _be16(bytes, entry + 24);
+  }
+  return 0;
+}
+
+int _be16(List<int> bytes, int offset) =>
+    (bytes[offset] << 8) | bytes[offset + 1];
 
 typedef _Track = ({int width, int height, double frameRate, String codec});
 

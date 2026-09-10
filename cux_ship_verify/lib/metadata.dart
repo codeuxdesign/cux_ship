@@ -242,14 +242,18 @@ const previewExtensions = {'.mp4', '.mov', '.m4v'};
 /// container.
 const previewTimeCodeSuffix = '.timecode';
 
-/// Apple's default poster frame when a preview names none.
+/// Roughly where Apple poses a preview that names no frame.
 ///
 /// **Recorded because it is the failure the tree exists to prevent**, not
 /// because anything here sends it: a preview uploaded without a
-/// `previewFrameTimeCode` silently poses on whatever is five seconds in, and
-/// after approval that cannot be changed without a new version submission. So
-/// the uploader prints the effective value either way, and this is what it
-/// prints when a video carries no sidecar.
+/// `previewFrameTimeCode` silently poses about five seconds in, and after
+/// approval that cannot be changed without a new version submission.
+///
+/// **Approximate, and never to be compared against.** Apple documents "5
+/// seconds"; a real upload came back cut at `00:00:05:01`, one frame along. So
+/// this is what a message *says* when nothing chose a frame, and a run decides
+/// whether anybody chose by asking the tree — never by testing Apple's value
+/// against this constant, which would not have matched even once.
 const defaultPreviewFrameTimeCode = '00:00:05:00';
 
 /// `HH:MM:SS:FF` — hours, minutes, seconds, then a frame within that second.

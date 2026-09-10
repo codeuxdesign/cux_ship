@@ -2,7 +2,25 @@
 
 ## 1.11.0-dev.2
 
-Six defects in 1.11.0-dev.1, found by a code review of the change that
+**A preview with no stereo audio track is refused offline.** Apple rejects one
+with `MOV_RESAVE_STEREO` — a *channel-layout* code, reported even for a file
+carrying no audio stream at all — after the upload and a round trip through an
+ingestion queue it documents in hours. Observed on a real release, on a silent
+cut published by mistake. `VideoInfo` gains `audioChannels` and `VideoRules`
+gains `requiredAudioChannels`, nullable because a second store may state no
+rule and a check that invented one would refuse a file nobody refuses.
+
+The message says what the file actually has — "has no audio track", "has 1
+audio channel" — rather than repeating Apple's word for something it is not,
+and names `MOV_RESAVE_STEREO` so somebody who has already had the 422 can
+connect the two.
+
+**`defaultPreviewFrameTimeCode` is documented as approximate.** Apple states
+five seconds and was observed cutting at `00:00:05:01`, so a run decides whether
+anybody chose a frame by asking the tree, never by comparing Apple's value
+against this constant — which would not have matched even once.
+
+Six further defects in 1.11.0-dev.1, found by a code review of the change that
 introduced it. Two are in the offline checks and cost a day each when they fire;
 four are the parser reading something other than what it claims to.
 

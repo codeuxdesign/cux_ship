@@ -61,6 +61,10 @@ Uint8List mp4({
   double seconds = 20,
   String codec = 'avc1',
   bool rotated = false,
+
+  /// Channels the sound track declares. 0 omits the track entirely, which
+  /// is the silent-cut case Apple refuses with MOV_RESAVE_STEREO.
+  int audioChannels = 2,
   bool soundTrackFirst = false,
   bool emptyStsd = false,
 
@@ -185,6 +189,24 @@ Uint8List mp4({
         ...'soun'.codeUnits,
         ...List<int>.filled(12, 0),
       ]),
+      // An audio sample entry: the 16-byte SampleEntry header, then version,
+      // revision and vendor, then channelcount at +24.
+      ..._box('minf', [
+        ..._box('stbl', [
+          ..._box('stsd', [
+            ...[0, 0, 0, 0], // version, flags
+            ..._be32(1), // one entry
+            ..._be32(36), // entry size
+            ...'mp4a'.codeUnits,
+            ...List<int>.filled(6, 0), // reserved
+            ...[0, 1], // data reference index
+            ...[0, 0], ...[0, 0], ..._be32(0), // version, revision, vendor
+            ...[0, audioChannels], // channelcount, at +24
+            ...[0, 16], // sample size
+            ..._be32(0),
+          ]),
+        ]),
+      ]),
     ]),
   ]);
 
@@ -196,8 +218,9 @@ Uint8List mp4({
       ..._be32(duration),
       ...List<int>.filled(80, 0), // rate, volume, matrix, pre-defined, next id
     ]),
-    if (soundTrackFirst) ...[...soundTrack],
+    if (soundTrackFirst && audioChannels > 0) ...[...soundTrack],
     ..._box('trak', [...tkhd, ...mdia]),
+    if (!soundTrackFirst && audioChannels > 0) ...[...soundTrack],
   ]);
 
   final ftyp = _box('ftyp', [
