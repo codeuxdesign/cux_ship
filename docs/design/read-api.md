@@ -239,10 +239,11 @@ better:
 - **`read.dart` is published, and removing an export is a major version.** The
   live question is whether the surface should have existed, not whether to
   break the consumer using it.
-- **Sequencing.** `--json` does not exist. A consumer reverting to
-  spawn-and-parse today gets prose-parsing, which is the defect this API was
-  built to fix. So `--json` lands first, and reverting onto it is a second
-  decision.
+- **Sequencing.** `--json` did not exist when this was written. A consumer
+  reverting to spawn-and-parse would have got prose-parsing, which is the
+  defect this API was built to fix. So `--json` landed first, and reverting
+  onto it is a second decision — see below, which is where that decision now
+  sits.
 
 ### Why this is recorded now rather than when somebody wants it
 
@@ -283,3 +284,39 @@ the argument, which had reached the same place by reasoning.
 which is a gap on its side and not a request on this one. Worth recording
 because "what does a consumer need" and "what does a consumer use" came back as
 different lists, and only the first one would have been guessed.
+
+### What has to be true before this is removed, and how
+
+Status: **open**, 10 September 2026, and it is the half of this question that
+is still live. `--json` and
+[`package:cux_ship/documents.dart`](json-output.md) shipped in 4.3.0-dev.1, so
+the sequencing constraint above is discharged: a consumer reverting to
+spawn-and-parse now gets typed documents rather than prose.
+
+**The condition is not "the consumer ported".** It is that nothing needs an
+*in-process* read. That is the one thing this library does which `--json`
+cannot: everything else it offers is now available to a caller that spawns, and
+better, because the spawn keeps the printed command line and per-step
+`secrets exec --only` that §"Reads only" argues for. What survives is a caller
+that will not spawn and accepts credentials in its own process — and the
+consumer this was built for structurally cannot be that caller, because its
+release train spawns Gradle, Xcode and `flutter build`.
+
+So the trigger is: the port lands, and no second consumer has appeared that
+wants the in-process shape.
+
+**And it is a deprecation before a removal**, not a removal. `read.dart` has
+been on pub.dev since 4.1.0 — days, so the population is very probably one, and
+"very probably one" is exactly the number pub.dev cannot confirm. `@Deprecated`
+on the exports in a minor, removal in the major after it, gives a consumer
+nobody can see a warning instead of a broken build. The cost of being wrong in
+that direction is somebody's release tooling failing to compile on a day they
+were shipping.
+
+**One thing makes this cheaper the longer it waits, which is unusual.** Release
+and rollout state — the task that would otherwise have grown this surface — is
+already argued into `--json` rather than into `read.dart`
+([json-output.md](json-output.md)). So the export list does not grow while the
+question is open, and every month of delay costs nothing rather than adding a
+name that has to be deprecated too. That is the opposite of the pressure
+§"Why this is recorded now" describes, and it is the reason there is no hurry.
