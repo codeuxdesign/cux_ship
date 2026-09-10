@@ -1,5 +1,148 @@
 # Changelog
 
+## Unreleased
+
+**A staged rollout says how far along it is.** `play tracks --json` carries
+Play's `userFraction` and a derived `audienceFraction` beside it, and the
+printed release line grows a percentage where there is one to show:
+
+    internal: "1.4.0" codes=[2132] inProgress  20%
+
+`serving` shipped in 4.3.0 saying, in its own doc comment, that it *"is not a
+fraction: a 1% staged rollout and a finished one both read `true`"*.
+`PlayTrackRelease` read three of `TrackRelease`'s seven fields and this was one
+of the four it dropped — so it is a hole in a document this package already
+publishes rather than a new capability, which is the whole of why it belongs in
+a publishing tool. `docs/design/rollout-state.md` argues that, and argues the
+halves that are **not** being built.
+
+**The case for it is not the staged rollout it looks like.** The
+1%-reads-like-100% case that motivated the ask printed **no caveat at all** in
+the consumer that asked — the release itself was on screen, without a
+percentage and without a comment — so the fraction would have sat unread there.
+What wanted a number was a summary grid that renders every destination
+unconditionally and had nowhere to get one.
+
+A second case is sharper and is **not** a reason to build this, which is worth
+separating. At the time of writing that consumer rendered *"testers are being
+given the release before it"* for a halted release, and it is **false for one
+tester in five** at a 20% halt — they have the build and they keep it, because
+the rollout stopped rather than rolled back. A real defect, and one fixable
+without any new field, by saying *some* testers have it; its fix was already in
+flight there, independently of this. `audienceFraction` makes that sentence
+exact rather than making it correct.
+
+**Two fields, because Play omits its own number exactly when it means one.**
+Google sets `userFraction` only for `inProgress` and `halted`, so a completed
+rollout carries none — and a caller reading Play's field alone gets `null` for
+the release that reached everybody, then has to learn from Google's
+documentation that this is what 100% looks like.
+
+- **`userFraction`** is Play's, exactly as sent, `null` exactly when Play sent
+  none. Spelled with Google's own key rather than as a `*Raw` sibling, because
+  ours is called something else and the name is therefore free. **Its nullness
+  is load-bearing**: it is what tells this package's inference from Google's
+  measurement, so an `audienceFraction` of `1.0` beside a null is ours and one
+  beside a `1.0` is Play's. That holds even if Google's documented
+  `0 < fraction < 1` does not — a range this package cites from googleapis'
+  generated dartdoc and has measured against no live account.
+- **`audienceFraction`** is ours: `1.0` for `completed`, `0.0` for `draft`,
+  Play's number for `inProgress` and `halted`, and `null` for the three ways of
+  not being told — plus a fourth, an `inProgress` release Play sent no fraction
+  for, which is Play contradicting its own documentation and not a case to
+  guess at. The rule is `PlayReleaseStatus.audienceFraction`, public from the
+  start, so a consumer's fixtures can call it rather than restate it — the
+  asymmetry `serving` was made public to fix.
+
+**Named for what it measures rather than for the process, and `completed` is
+what earns the name.** `audienceFraction` asks *who has this build*, and under
+that question `1.0` for a completed release is obviously right. Under
+`rolloutFraction` it is odd — there is no rollout; it is over. The one state
+where this package answers something Play declined to say is the state where
+only one of the two names can say it without contradicting itself.
+
+**It does not say who, and the doc comment refuses three readings**: not a
+fraction of the app's users but of the *track's* audience, not adjusted for
+country targeting, which this document does not carry, and not a statement
+about which devices Play chose.
+
+**`AppStoreState` names four states Apple has always had.** `IN_REVIEW`,
+`PENDING_APPLE_RELEASE`, `PROCESSING_FOR_APP_STORE` and
+`REPLACED_WITH_NEW_VERSION` were absent, so **the most ordinary mid-release
+state on the Apple side decoded as `unknown`** — a member whose own
+documentation tells the reader Apple sent something this version does not name.
+A version Apple is looking at right now is not a version in a state nobody has
+seen. Each has an independent sighting in this repository: `IN_REVIEW` alone
+appears twice in `app_store.dart`, once in `cli.dart` and seven times in
+`app_info_states_test.dart`.
+
+This does not contradict *"members are never added because a store added a
+value"*: that rule is about Apple adding one, and none of these is new. It also
+does not move the wire in either direction — a new document's `"inReview"`
+decodes as `unknown` on an older `documents.dart`, because the generated
+decoder passes `unknownValue`, with `appStoreStateRaw` carrying `IN_REVIEW`
+beside it. **It is a source-breaking change for a Dart caller with an
+exhaustive `switch` over `AppStoreState`**, which is the one cost, and it is
+listed here rather than in the schema number because it is not a schema change.
+Checked against the only Dart consumer there was before shipping without a
+pre-release: at the time of writing `AppStoreState` appeared once in that tree,
+in a fixture calling `.read()`, and nothing switched on it.
+
+**And no derived boolean over them, which is the one place this release argues
+against its own convention.** "Is it still in review" looks exactly like the
+next `serving`, and a field answering it was designed to four drafts and one of
+them was built before being removed. What removed it was not an argument but a
+table: the one consumer that would read it renders **five** distinct outcomes
+across these states — not submitted, queued, in review, approved-and-waiting-
+on-a-human, Apple publishing — so any boolean over them is a coarsening of what
+it already prints rather than an answer it lacks. `appStoreState` answers the
+question directly now that `inReview` is a member of it.
+
+The reasoning still travelled, which is the part worth keeping: Apple's
+`READY_FOR_REVIEW` is *not submitted* and differs from `WAITING_FOR_REVIEW` by
+exactly that while reading almost identically. Written down here to justify a
+field that no longer exists, it found two live defects in the consumer's own
+tree — an unsubmitted version reported as queued with Apple, and
+`PENDING_DEVELOPER_RELEASE` sharing a cell with `PENDING_APPLE_RELEASE`.
+`docs/design/rollout-state.md` records all four drafts.
+
+**`serving`'s own sentence is corrected, and the fraction is what exposed it.**
+It said it answers whether a release *"is in front of any of the track's
+audience"* while returning `false` for `halted` — and Google's wording for a
+halted release is "Users who already have these APKs are unaffected", so a
+halted rollout **is** in front of the fraction that installed it. The boolean
+was right and the sentence was wrong; it now says *still being handed to new
+users*, which is what it computes and what an operator asking "is this rollout
+stopped" means. Nothing about the value changed.
+
+**No `schema` bump.** Every field here is optional and additive, which is the
+manifest's compatibility rule and the one `--json` adopted unchanged. Both
+`play tracks --json` and `appstore versions --json` still declare `schema: 1`.
+
+**And all three entries now hold their key sets in a test**, which only
+`appstore.builds` did. A document nobody decided to widen should not widen, and
+two of the three could until the fields above went in — `appstore.versions`
+gains no key here and gains the list anyway, which is what caught the one field
+this release built and then removed.
+
+**Not a wait, and that is recorded rather than deferred.**
+`docs/design/rollout-state.md` §"The wait" is the argument: *because* the
+intermediate state is the answer, a wait is the wrong container for it — its
+contract is block-until-over, which delivers the terminal state and discards
+every intermediate one. Nothing is blocked on a rollout percentage the way
+`what-to-test` is blocked on processing, the duration is hours to days rather
+than minutes, and both stores already notify. What a caller polls on its own
+schedule is a read, and this is that read.
+
+**And not Apple's phased release**, which stays open with its cost measured:
+`appstore promote --phased` writes `/v1/appStoreVersionPhasedReleases` and
+nothing here reads it back, and carrying it would need `AscClient.getAll` to
+stop discarding `included` or an N+1 over an uncapped version listing. The
+fraction there is the thing not to build — Apple sends `currentDayNumber`, not
+a percentage, and the day-to-percent table is in Apple's support documentation
+rather than in the API. The two stores are not symmetric here and the document
+should not pretend they are.
+
 ## 4.3.0
 
 **The store reads become documents, and the format becomes classes.**

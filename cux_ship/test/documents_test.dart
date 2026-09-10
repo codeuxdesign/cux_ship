@@ -73,10 +73,17 @@ Map<String, dynamic> _buildsJson({
   'display': ['  build 169  VALID  uploaded 2026-09-09T14:02:11-07:00'],
 };
 
-/// **`serving` is derived here rather than written down**, which is the whole
-/// point of `PlayReleaseStatus.serving` being reachable. A fixture that states
-/// it can state one the encoder would never emit — `halted` and `serving: true`
-/// — and a test asserting against that is testing a document that cannot exist.
+/// **`serving` and `audienceFraction` are derived here rather than written
+/// down**, which is the whole point of both rules being reachable on
+/// `PlayReleaseStatus`. A fixture that states one can state one the encoder
+/// would never emit — `halted` and `serving: true`, or `completed` and
+/// `audienceFraction: null` — and a test asserting against that is testing a
+/// document that cannot exist.
+///
+/// `userFraction` is null throughout, which is what Play sends for the
+/// `completed` default. The non-null case is a round trip of its own below,
+/// because a `double` that survives `jsonEncode` and comes back an `int` is a
+/// failure this shape can have and a null cannot.
 Map<String, dynamic> _tracksJson({
   String? status = 'completed',
   String? statusRaw = 'completed',
@@ -99,6 +106,13 @@ Map<String, dynamic> _tracksJson({
             status == null
                 ? null
                 : PlayReleaseStatus.values.firstWhere((s) => s.wire == status),
+          ),
+          'userFraction': null,
+          'audienceFraction': PlayReleaseStatus.audienceFraction(
+            status == null
+                ? null
+                : PlayReleaseStatus.values.firstWhere((s) => s.wire == status),
+            userFraction: null,
           ),
           'display': ['  internal: "1.4.0" codes=[152] $status'],
         },
@@ -128,6 +142,43 @@ void main() {
       final json = _tracksJson();
 
       expect(PlayTracksDocument.fromJson(json).toJson(), json);
+    });
+
+    test('including a staged rollout, whose fractions survive a real encode', () {
+      // **A `double` is the one type in this document that `jsonEncode` can
+      // hand back as something else.** `1.0` is a legal JSON number and
+      // `jsonDecode` may answer an `int` for it, so a fraction that round-trips
+      // as a hand-written literal can still come back the wrong type from the
+      // text a caller actually pipes in. The fixture above is null throughout
+      // and cannot reach this.
+      final json = _tracksJson(status: 'inProgress', statusRaw: 'inProgress');
+      final release =
+          ((json['tracks'] as List).single as Map)['releases'] as List;
+      (release.single as Map)['userFraction'] = 0.2;
+      (release.single as Map)['audienceFraction'] = 0.2;
+
+      final document = PlayTracksDocument.fromJson(
+        jsonDecode(jsonEncode(json)) as Map<String, dynamic>,
+      );
+
+      expect(document.tracks.single.releases.single.userFraction, 0.2);
+      expect(document.tracks.single.releases.single.audienceFraction, 0.2);
+      expect(document.toJson(), json);
+    });
+
+    test('and a completed one, where ours is 1.0 and Play sent nothing', () {
+      // The asymmetry that makes two fields two facts rather than one fact
+      // twice: `1.0` here is this package's inference and `null` beside it is
+      // what Play actually said. Encoding `1.0` and decoding it back as an
+      // `int` would be silent — the field is `double?` and `1 == 1.0`.
+      final document = PlayTracksDocument.fromJson(
+        jsonDecode(jsonEncode(_tracksJson())) as Map<String, dynamic>,
+      );
+      final release = document.tracks.single.releases.single;
+
+      expect(release.userFraction, isNull);
+      expect(release.audienceFraction, 1.0);
+      expect(release.audienceFraction, isA<double>());
     });
 
     test('through a real encode, which is where a type would surface', () {
@@ -205,6 +256,40 @@ void main() {
       expect(builds.builds.single.processingState, isNull);
       expect(builds.builds.single.processingStateRaw, isNull);
       expect(tracks.tracks.single.releases.single.status, isNull);
+    });
+
+    test('but a state Apple has always had is named, not degraded', () {
+      // **`unknown` is for a value Apple *added*, and these are not that.**
+      // `IN_REVIEW` was absent from this enum until the rollout-state work went
+      // looking for it, so the single most ordinary mid-release state decoded
+      // as `unknown` — whose own doc comment tells the reader Apple sent
+      // something this version does not name. A version Apple is looking at
+      // right now is not a version in a state nobody has seen.
+      //
+      // Each of these has an independent sighting in this repository; see
+      // docs/design/rollout-state.md, which also records the one candidate
+      // deliberately left out and why.
+      const named = {
+        'IN_REVIEW': AppStoreState.inReview,
+        'PENDING_APPLE_RELEASE': AppStoreState.pendingAppleRelease,
+        'PROCESSING_FOR_APP_STORE': AppStoreState.processingForAppStore,
+        'REPLACED_WITH_NEW_VERSION': AppStoreState.replacedWithNewVersion,
+      };
+
+      for (final entry in named.entries) {
+        expect(
+          AppStoreState.read(entry.key),
+          entry.value,
+          reason: '${entry.key} degraded to unknown',
+        );
+      }
+
+      // The polarity, so this cannot pass by naming everything: a value Apple
+      // really has not shipped still degrades.
+      expect(
+        AppStoreState.read('SOME_STATE_APPLE_HAS_NOT_SHIPPED_YET'),
+        AppStoreState.unknown,
+      );
     });
   });
 

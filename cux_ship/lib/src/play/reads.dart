@@ -27,6 +27,7 @@ class PlayTrackRelease {
     required this.name,
     required this.versionCodes,
     required this.status,
+    required this.userFraction,
   });
 
   /// The release name, which Play generates from the version name when it was
@@ -45,6 +46,16 @@ class PlayTrackRelease {
   /// null when the response did not carry it.
   final String? status;
 
+  /// Play's `userFraction`, exactly as sent.
+  ///
+  /// **Play omits it exactly when it means one.** Google sets it only for
+  /// `inProgress` and `halted`, so a completed rollout carries no fraction at
+  /// all, and reading this field alone answers `null` for the release that
+  /// reached everybody. That is what `PlayReleaseStatus.audienceFraction` is
+  /// for, and where Google's documented `0 < fraction < 1` is cited and
+  /// caveated — nothing here has measured it against a live account.
+  final double? userFraction;
+
   /// The highest versionCode in this release, or null when it serves none.
   int? get newestVersionCode {
     int? newest;
@@ -57,8 +68,44 @@ class PlayTrackRelease {
   }
 
   /// The line `cux_ship play tracks` prints for this release.
-  String lineOn(String track) =>
-      '  $track: "$name" codes=$versionCodes $status';
+  ///
+  /// **The fraction is appended only when Play sent one**, so a completed
+  /// rollout's line is byte-for-byte what it was before this field existed.
+  /// Rendering `100%` there would be printing an inference rather than what
+  /// Play said — the inference is
+  /// `PlayReleaseStatus.audienceFraction`, and `$status` on the same line
+  /// already carries `completed`.
+  String lineOn(String track) {
+    final line = '  $track: "$name" codes=$versionCodes $status';
+    final fraction = userFraction;
+    if (fraction == null) {
+      return line;
+    }
+    return '$line  ${_percent(fraction)}';
+  }
+}
+
+/// A fraction as a percentage, with no trailing zeros.
+///
+/// **Two decimals kept and then trimmed, rather than rounded to whole
+/// percent.** Play takes any fraction in `0 < f < 1`, so a whole-percent
+/// rendering would report a 1.5% rollout as 2% and a 0.5% one as 0% — a number
+/// the store never sent, in a line a consumer prints verbatim. `0.2` renders
+/// `20%`, `0.015` renders `1.5%`.
+///
+/// The trim is a loop rather than a pattern because the arithmetic is the
+/// awkward part, not the text: `0.07 * 100` is `7.000000000000001` as a
+/// double, so the fixed-point form is what makes this printable at all.
+String _percent(double fraction) {
+  final text = (fraction * 100).toStringAsFixed(2);
+  var end = text.length;
+  while (text[end - 1] == '0') {
+    end--;
+  }
+  if (text[end - 1] == '.') {
+    end--;
+  }
+  return '${text.substring(0, end)}%';
 }
 
 /// One Play track — `production`, `beta`, `alpha`, `internal`, or a custom
@@ -176,6 +223,7 @@ PlayTrack playTrackFrom(Track track) => PlayTrack(
           ],
         ],
         status: release.status,
+        userFraction: release.userFraction,
       ),
     ],
   ],

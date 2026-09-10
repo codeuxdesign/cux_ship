@@ -124,6 +124,7 @@ void main() {
                 name: '1.4.0',
                 versionCodes: [2132],
                 status: 'completed',
+                userFraction: null,
               ),
             ],
           ),
