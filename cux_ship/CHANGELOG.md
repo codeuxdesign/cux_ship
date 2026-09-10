@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 4.4.0
 
 **Source-breaking for a Dart caller, in a minor version — read this first if
 you import `documents.dart` or `read.dart`.** The number does not carry the
