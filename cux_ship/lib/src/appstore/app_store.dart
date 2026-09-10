@@ -557,9 +557,31 @@ PublishedPreview readPublishedPreview(Map<String, dynamic> preview) {
     checksum: attributes['sourceFileChecksum'] as String?,
     videoState: previewVideoState(preview),
     frameState: previewFrameState(preview),
-    frameTimeCode: attributes['previewFrameTimeCode'] as String?,
+    // **Apple's `""` is collapsed to null here, at the boundary, rather than
+    // by each caller.** It answers the commit with an empty string — not an
+    // absent field — because it has not cut the poster yet, and `''` survives
+    // both `??` and `== null`. Every consumer that forgot printed a blank
+    // where the answer was "Apple chose for you": first the commit line, then
+    // the `--json` document, which published `"previewFrameTimeCode": ""`
+    // against a dartdoc promising `HH:MM:SS:FF` or null. Collapsing per caller
+    // was two fixes for one fact and left the third caller to find; the two
+    // conditions mean the same thing, so they become one value once.
+    frameTimeCode: _nonEmpty(attributes['previewFrameTimeCode'] as String?),
   );
 }
+
+/// [value] unless it is empty, in which case null.
+String? _nonEmpty(String? value) =>
+    value == null || value.isEmpty ? null : value;
+
+/// Writes one report line to [out], or to [stdout] when it is null.
+///
+/// **A function rather than a local holding the sink**, because `close_sinks`
+/// reads `final sink = out ?? stdout` as a sink the method forgot to close.
+/// `cli.dart` writes the same workaround out as a branch for the same lint and
+/// says it is not wrong to ask; a helper is the version that scales past one
+/// line.
+void _say(IOSink? out, String line) => (out ?? stdout).writeln(line);
 
 /// Apple's ingestion verdict on a preview's *video*, or null if it reported
 /// none.
@@ -1385,10 +1407,26 @@ AppLevelChanges appLevelChanges({
 
 /// Performs writes, or describes them and does nothing.
 class Writer {
-  Writer(this.client, {required this.dryRun});
+  Writer(this.client, {required this.dryRun, this.out});
 
   final AscClient client;
   final bool dryRun;
+
+  /// Where the "what I did" lines go, or null for [stdout].
+  ///
+  /// **It exists so a `--json` command can keep stdout to one document.** Every
+  /// write here announces itself, which is right for a person and fatal to a
+  /// parser: one `    asking for poster frame 00:00:02:06` in front of a
+  /// document makes the whole of stdout unreadable, and the failure arrives as
+  /// a parse error about character 1 that names neither the line nor the write
+  /// that emitted it.
+  ///
+  /// Read through [_out] rather than defaulted in the constructor, because
+  /// `IOOverrides` replaces `stdout` per zone and capturing it once at
+  /// construction would pin the sink a test had replaced.
+  final IOSink? out;
+
+  IOSink get _out => out ?? stdout;
 
   /// Set when a dry run skipped a write whose result later runs would need —
   /// creating a version, say. Callers use it to explain why a subsequent step
@@ -1401,11 +1439,11 @@ class Writer {
     required String describe,
   }) async {
     if (dryRun) {
-      stdout.writeln('    would create: $describe');
+      _out.writeln('    would create: $describe');
       skippedACreate = true;
       return null;
     }
-    stdout.writeln('    $describe');
+    _out.writeln('    $describe');
     return client.post(path, body);
   }
 
@@ -1415,19 +1453,19 @@ class Writer {
     required String describe,
   }) async {
     if (dryRun) {
-      stdout.writeln('    would update: $describe');
+      _out.writeln('    would update: $describe');
       return null;
     }
-    stdout.writeln('    $describe');
+    _out.writeln('    $describe');
     return client.patch(path, body);
   }
 
   Future<void> delete(String path, {required String describe}) async {
     if (dryRun) {
-      stdout.writeln('    would delete: $describe');
+      _out.writeln('    would delete: $describe');
       return;
     }
-    stdout.writeln('    $describe');
+    _out.writeln('    $describe');
     await client.delete(path);
   }
 }
@@ -2133,9 +2171,51 @@ class AppStore {
 
   // ---------------------------------------------------------------- versions
 
+  /// The App Store version record for [versionString], for a caller that only
+  /// means to *read* it.
+  ///
+  /// **[ensureVersion] cannot be used for this, and the difference is not a
+  /// nuance.** That method refuses any version outside [editableVersionStates]
+  /// — a check that exists to stop a write being rejected field by field — so
+  /// asking it for a `READY_FOR_SALE` version answers *"version 1.1.6 is
+  /// READY_FOR_SALE, which cannot be edited. Release a new version instead."*
+  /// That is a correct sentence about a write and a nonsense one about a read,
+  /// and it lands on exactly the versions a reader most wants: the live one and
+  /// the one in review.
+  ///
+  /// `appstore previews` was written against [ensureVersion] and inherited the
+  /// refusal, which defeated the command's stated purpose — answering *"is the
+  /// store showing the repo's listing?"* about a version that has, by then,
+  /// usually stopped being editable. [builds] and [versions] never went through
+  /// it; this is the read the three of them share.
+  ///
+  /// Throws [AscApiException] 404 when Apple holds no such version. Never
+  /// returns null: absence is the exception, not a value.
+  Future<Map<String, dynamic>> readVersion(
+    App app,
+    String versionString,
+  ) async {
+    final versions = await client.getAll(
+      '/v1/apps/${app.id}/appStoreVersions',
+      query: {
+        'filter[platform]': platform.api,
+        'filter[versionString]': versionString,
+      },
+    );
+    if (versions.isEmpty) {
+      throw AscApiException(404, [
+        'no App Store version $versionString for ${platform.api}',
+      ], request: 'GET /v1/appStoreVersions');
+    }
+    return versions.first;
+  }
+
   /// The App Store version record for [versionString], created if absent.
   ///
   /// Returns null only on a dry run that would have had to create one.
+  ///
+  /// **For a read, use [readVersion].** This refuses a version Apple will not
+  /// accept writes against, which is right here and wrong there.
   Future<Map<String, dynamic>?> ensureVersion(
     App app,
     String versionString, {
@@ -3169,11 +3249,15 @@ class AppStore {
   /// `upload --skip-waiting` deferred. It uploads nothing and deletes nothing:
   /// if Apple does not hold the set, there is nothing here to correct and the
   /// caller is told rather than having a set created underneath it.
+  /// [out] is where the report goes, defaulting to [stdout]. `wait-previews
+  /// --json` passes [stderr]: this is progress, and stdout carries the
+  /// document.
   Future<void> assertPosterFramesOn(
     Map<String, dynamic> localization,
     String previewType,
-    List<LocalPreview> previews,
-  ) async {
+    List<LocalPreview> previews, {
+    IOSink? out,
+  }) async {
     final sets = await client.getAll(
       '/v1/appStoreVersionLocalizations/${_id(localization)}/appPreviewSets',
     );
@@ -3181,13 +3265,19 @@ class AppStore {
         .where((s) => _attributes(s)['previewType'] == previewType)
         .toList();
     if (existing.isEmpty) {
-      stdout.writeln(
+      _say(
+        out,
         '    $previewType: Apple holds no previews of this type, so there is '
         'no poster frame to assert — publish them first',
       );
       return;
     }
-    await _assertPosterFrames(_id(existing.first)!, previewType, previews);
+    await _assertPosterFrames(
+      _id(existing.first)!,
+      previewType,
+      previews,
+      out: out,
+    );
   }
 
   /// Sets each preview's poster frame *after* Apple has finished ingesting it,
@@ -3212,8 +3302,9 @@ class AppStore {
   Future<void> _assertPosterFrames(
     String setId,
     String previewType,
-    List<LocalPreview> previews,
-  ) async {
+    List<LocalPreview> previews, {
+    IOSink? out,
+  }) async {
     if (writer.dryRun) {
       return;
     }
@@ -3237,7 +3328,8 @@ class AppStore {
       // preview this run could not find. Same class as the blank print, with
       // the opposite symptom.
       if (apple == null || apple.id == null) {
-        stdout.writeln(
+        _say(
+          out,
           '      $name: Apple did not report this preview back, so what it is '
           'posed at is unknown — check App Store Connect',
         );
@@ -3257,7 +3349,8 @@ class AppStore {
       // decision. Apple's value is worth showing beside it, and never instead
       // of it.
       if (wanted == null) {
-        stdout.writeln(
+        _say(
+          out,
           '      $name: ${describePreviewFrame(null)}'
           '${stored == null ? '' : ' (Apple cut it at $stored)'}',
         );
@@ -3265,7 +3358,7 @@ class AppStore {
       }
 
       if (stored == wanted) {
-        stdout.writeln('      $name: ${describePreviewFrame(wanted)}');
+        _say(out, '      $name: ${describePreviewFrame(wanted)}');
         continue;
       }
 
@@ -3292,7 +3385,8 @@ class AppStore {
         await _readFrameTimeCode(apple.id!),
       );
       if (confirmed == wanted) {
-        stdout.writeln(
+        _say(
+          out,
           '      $name: ${describePreviewFrame(wanted)}'
           '${stored == null ? '' : ', moved from Apple\'s $stored'}',
         );
@@ -3310,7 +3404,8 @@ class AppStore {
         // for them. The second sentence stays exactly as it is: it is the
         // cheap next action, and it pre-empts the fear that a re-run costs
         // another upload.
-        stdout.writeln(
+        _say(
+          out,
           '      $name: asked for poster frame $wanted, and Apple reports '
           '${confirmed ?? 'none'}. Re-running publishes nothing and asserts '
           'the frame again.',

@@ -861,6 +861,54 @@ void main() {
       },
     );
 
+    test(
+      'the poster-frame report can be sent somewhere other than stdout',
+      () async {
+        // **`wait-previews --json --metadata` asserts poster frames, and that is
+        // a write that announces itself.** Every line here — the store's report
+        // and `Writer`'s own `    asking for poster frame …` — went to stdout
+        // unconditionally, so it would have landed in front of the document and
+        // made the whole of stdout unparseable. The failure arrives as a parse
+        // error about character 1, naming neither the line nor the write.
+        //
+        // Asserted on *both* sinks: that the report reached the given one, and
+        // that stdout stayed empty. Checking only the first would pass on a
+        // version that wrote to both.
+        final captured = _MemoryStdout();
+        final client = _FakeClient(
+          sets: [_set('IPHONE_67')],
+          published: [
+            _preview(
+              fileName: 'promo.mp4',
+              checksum: checksumOf('bytes'.codeUnits),
+              videoState: 'COMPLETE',
+              frameTimeCode: '00:00:05:01',
+            ),
+          ],
+        );
+        final store = AppStore(
+          client,
+          Writer(client, dryRun: false, out: captured),
+          platform: AscPlatform.ios,
+        );
+
+        final onStdout = await _printed(
+          () => store.assertPosterFramesOn(_localization, 'IPHONE_67', [
+            _video('promo.mp4', 'bytes', timeCode: '00:00:02:06'),
+          ], out: captured),
+        );
+
+        await captured.close();
+
+        expect(captured.buffer.toString(), contains('promo.mp4'));
+        expect(
+          onStdout,
+          isEmpty,
+          reason: 'a document is on stdout; none of this may join it',
+        );
+      },
+    );
+
     test('a skipped wait records what the caller must finish', () async {
       // The caller prints the follow-up command, and it knows the bundle id
       // and version name that `replacePreviews` does not — so what crosses

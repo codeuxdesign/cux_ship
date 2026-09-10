@@ -42,10 +42,20 @@ Map<String, dynamic> _preview({
 /// sets, a set has previews. A fake that flattened them would agree with a
 /// reader that had the nesting wrong.
 class _FakeClient implements AscClient {
-  _FakeClient({this.versionName = '1.1.6', this.previews = const []});
+  _FakeClient({
+    this.versionName = '1.1.6',
+    this.previews = const [],
+    this.appStoreState = 'PREPARE_FOR_SUBMISSION',
+  });
 
   final String? versionName;
   final List<Map<String, dynamic>> previews;
+
+  /// **Settable, because hard-coding an editable state hid a defect.** Both
+  /// fakes on this branch pinned `PREPARE_FOR_SUBMISSION`, which made the
+  /// `editableVersionStates` check unreachable from the suite — so `previews`
+  /// refusing to *read* a `READY_FOR_SALE` version passed every test.
+  final String appStoreState;
 
   @override
   Future<List<Map<String, dynamic>>> getAll(
@@ -76,7 +86,7 @@ class _FakeClient implements AscClient {
           'id': 'version-1',
           'attributes': {
             'versionString': versionName,
-            'appStoreState': 'PREPARE_FOR_SUBMISSION',
+            'appStoreState': appStoreState,
           },
         },
       ];
@@ -296,6 +306,60 @@ void main() {
     // Not dropped, though — moved. A person running this by hand still wants
     // to know which app answered.
     expect(said.err, contains('is app app-1'));
+  });
+
+  test('a version Apple has already taken can still be read', () async {
+    // **A read must not inherit a write's precondition.** `ensureVersion`
+    // refuses anything outside `editableVersionStates` so that a PATCH is not
+    // rejected field by field — correct for a write, and nonsense here: it
+    // answered `appstore previews` on a live version with *"1.1.6 is
+    // READY_FOR_SALE, which cannot be edited. Release a new version
+    // instead."*, a refusal to look.
+    //
+    // And it landed on exactly the versions worth looking at. A version stops
+    // being editable the moment it is submitted, which is when somebody most
+    // wants to know which poster frame went with it — the attribute that is
+    // fixed from then on.
+    for (final state in const [
+      'READY_FOR_SALE',
+      'WAITING_FOR_REVIEW',
+      'IN_REVIEW',
+    ]) {
+      final said = await _previews(
+        _FakeClient(
+          appStoreState: state,
+          previews: [_preview(frameTimeCode: '00:00:02:06')],
+        ),
+      );
+
+      expect(exitCode, 0, reason: state);
+      expect(said.out, contains('poster 00:00:02:06'), reason: state);
+      expect(said.err, isNot(contains('cannot be edited')), reason: state);
+    }
+  });
+
+  test('an empty time code reaches --json as null, not as ""', () async {
+    // **The document promises `HH:MM:SS:FF` or null**, and Apple sends `""`
+    // for a poster it has not cut. Passing that through published
+    // `"previewFrameTimeCode": ""` against that dartdoc — so a consumer
+    // checking `!= null` took the "set" branch and printed an empty value,
+    // which is the identical blank-column failure the prose line was fixed
+    // for, arriving by a second route.
+    //
+    // `done` does not cover it: `done` is over the two *states*, and both are
+    // COMPLETE for a preview sitting at Apple's default frame.
+    final said = await _previews(
+      _FakeClient(previews: [_preview(frameTimeCode: '')]),
+      extra: ['--version-name', '1.1.6', '--json'],
+    );
+
+    final entry =
+        ((jsonDecode(said.out) as Map<String, dynamic>)['previews'] as List)
+                .single
+            as Map<String, dynamic>;
+    expect(entry['previewFrameTimeCode'], isNull);
+    expect(entry['previewFrameTimeCode'], isNot(''));
+    expect(entry['done'], isTrue);
   });
 
   test('a preview still ingesting is not done', () async {

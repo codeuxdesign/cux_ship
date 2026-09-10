@@ -1311,8 +1311,20 @@ Future<void> runAsc(
       );
     }
   }
+  // **`awaitPreviews` is in this list because it takes a tree**, and leaving it
+  // out is how `wait-previews --metadata` became a silent no-op: the option was
+  // declared and validated, `metadata` stayed null, and the poster-frame
+  // assertion the flag exists for sat behind `if (metadata != null)` where
+  // nothing could reach it. The command printed `previews are ready` and exited
+  // 0 having asserted nothing — on the one attribute that cannot be changed
+  // after approval, reached by following the instruction `upload --skip-waiting`
+  // prints. That is the same defect this branch exists to fix, reproduced
+  // inside the fix for it, so the gate names every command that reads a tree
+  // rather than the two that write a listing.
   final metadataPath =
-      (cmd == AscCommand.upload || cmd == AscCommand.promote) &&
+      (cmd == AscCommand.upload ||
+              cmd == AscCommand.promote ||
+              cmd == AscCommand.awaitPreviews) &&
           !noMetadata &&
           !(cmd == AscCommand.promote && betaGroup != null)
       ? (opt('metadata') ?? defaults.metadata)
@@ -1861,7 +1873,17 @@ Future<void> runAsc(
     return;
   }
 
-  final writer = Writer(client, dryRun: dryRun);
+  // **Every write announces itself, and under `--json` those lines cannot go
+  // to stdout.** `wait-previews --json --metadata` asserts poster frames,
+  // which is a PATCH, so `Writer`'s `    asking for poster frame 00:00:02:06`
+  // would land in front of the document and make the whole of stdout
+  // unparseable. Set here rather than per call site, because the rule is about
+  // the stream and not about which write happens to reach it.
+  final writer = Writer(
+    client,
+    dryRun: dryRun,
+    out: jsonOutput ? stderr : null,
+  );
   final store = AppStore(client, writer, platform: platform);
   started = store;
 
@@ -1905,20 +1927,33 @@ Future<void> runAsc(
           'answer.',
         );
       }
-      // **There is no "no such version" line here, because that answer never
-      // arrives as one.** `ensureVersion(create: false)` throws a 404 naming
-      // the version and the request when Apple holds none; it returns null
-      // only on the *create* path, where a dry-run has no version to report,
-      // and that path cannot be reached from a read. A branch for null here
-      // would be dead code claiming an API this method does not have — and it
-      // was one, until a test written against the real behaviour found it
-      // printing nothing at all where it promised a diagnosis.
-      final version = (await store.ensureVersion(app, wanted, create: false))!;
+      // **`readVersion`, not `ensureVersion`, and this is a read command.**
+      // `ensureVersion` refuses anything outside `editableVersionStates`,
+      // which is right for a write and absurd here: it answered `appstore
+      // previews --version-name 1.1.6` on a live version with *"1.1.6 is
+      // READY_FOR_SALE, which cannot be edited. Release a new version
+      // instead."* — a refusal to *look*. And it landed on exactly the
+      // versions worth looking at, since a version stops being editable the
+      // moment it is submitted, which is when somebody most wants to know what
+      // poster frame went with it.
+      //
+      // There is no "no such version" line either: absence arrives as a 404
+      // naming the version and the request.
+      final version = await store.readVersion(app, wanted);
       final on = await store.previewsOn(version);
       final lines = <String>[
         if (on.isEmpty)
           '$wanted carries no previews'
         else
+          // **The `isNotEmpty` below is belt and braces now, and deliberately
+          // kept.** `readPublishedPreview` collapses Apple's `""` to null at
+          // the boundary, so a `frameTimeCode` reaching here is either null or
+          // a real timecode and the empty branch is unreachable through that
+          // path. A mutation removing this check therefore survives — which is
+          // recorded rather than treated as a reason to delete it, because
+          // [PublishedPreview] is a public typedef anyone can build directly,
+          // and the cost of the check being wrong is the blank column this
+          // whole line exists to prevent.
           for (final entry in on) ...[
             '${entry.locale ?? '?'}  ${entry.previewType ?? '?'}  '
                 '${entry.preview.fileName ?? entry.preview.id}  '
@@ -1956,13 +1991,56 @@ Future<void> runAsc(
           "else's.",
         );
       }
-      // Null is unreachable with `create: false` — see the note in the
-      // `previews` branch above. Apple holding no such version arrives as a
-      // 404 that already names it.
-      final version = (await store.ensureVersion(app, wanted, create: false))!;
+      // **A read, like `previews` — see the note there.** Waiting on a version
+      // Apple has already taken is legitimate and common: the assets finish
+      // ingesting on Apple's schedule, not on the submission's.
+      final version = await store.readVersion(app, wanted);
+
+      // **The one thing here that is a write, and the only reason editability
+      // is checked at all.** With a tree, this command asserts poster frames,
+      // which is a PATCH — and Apple rejects a write against a submitted
+      // version field by field, with no indication that the *version* was the
+      // problem. That is what `editableVersionStates` exists to turn into one
+      // sentence, so it is applied where the write is rather than in front of
+      // the read.
+      if (metadata != null) {
+        final state =
+            (version['attributes'] as Map<String, dynamic>?)?['appStoreState']
+                as String?;
+        if (state != null && !editableVersionStates.contains(state)) {
+          fail(
+            'version $wanted is $state, so its poster frames cannot be '
+            'changed — Apple only accepts them while a version is editable. '
+            'Drop --metadata to wait and report without asserting them, or '
+            'cancel the submission in App Store Connect to edit it again.',
+          );
+        }
+      }
       final on = await store.previewsOn(version);
       if (on.isEmpty) {
-        stdout.writeln('==> $wanted carries no previews — nothing to wait for');
+        // **A document even here, because this is a success.** The early
+        // return printed prose on stdout and skipped the `--json` branch
+        // below, so a run that succeeded handed its consumer a parse error at
+        // character 1 — and only on the input where there was nothing to
+        // report, which is the input a readiness check meets first on a
+        // version whose previews have not been uploaded yet. An empty
+        // `previews` list is the answer; "no output" is not a shape a decoder
+        // can be asked to accept from a zero exit.
+        final line = '==> $wanted carries no previews — nothing to wait for';
+        if (args.flag('json')) {
+          stderr.writeln(line);
+          writeJsonDocument(
+            appStorePreviewsDocument(
+              const <PreviewOnVersion>[],
+              platform: platform,
+              bundleId: bundleId,
+              versionName: wanted,
+              display: <String>[line],
+            ),
+          );
+        } else {
+          stdout.writeln(line);
+        }
         return;
       }
       for (final entry in on) {
@@ -2022,6 +2100,9 @@ Future<void> runAsc(
               localization,
               entry.key,
               entry.value,
+              // Progress, so stderr under `--json` — and this one *writes*,
+              // so its report is the only record of what moved.
+              out: args.flag('json') ? stderr : null,
             );
           }
         }
@@ -2036,10 +2117,19 @@ Future<void> runAsc(
             platform: platform,
             bundleId: bundleId,
             versionName: wanted,
+            // **The states, not the word `ready`.** This hard-coded `ready`
+            // on every line while the document computed `done` from the same
+            // re-read — so a grace-period exit, where Apple never reports
+            // `previewFrameImage` and the wait returns anyway, produced one
+            // document saying `done: false` and `ready` about the same
+            // preview. `display` is the half a person reads, which makes it
+            // the worse half to be wrong.
             display: <String>[
               for (final entry in settled) ...[
                 '${entry.locale ?? '?'}  ${entry.previewType ?? '?'}  '
-                    '${entry.preview.fileName ?? entry.preview.id}  ready',
+                    '${entry.preview.fileName ?? entry.preview.id}  '
+                    'video ${entry.preview.videoState ?? '-'}  '
+                    'frame ${entry.preview.frameState ?? '-'}',
               ],
             ],
           ),

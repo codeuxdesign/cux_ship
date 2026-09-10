@@ -39,15 +39,15 @@ const appStoreBuildsSchema = 1;
 /// The schema `appstore versions` declares. See [appStoreBuildsSchema].
 const appStoreVersionsSchema = 1;
 
-/// The schema `play tracks` declares. See [appStoreBuildsSchema].
-/// `appstore.previews`, at 1.
+/// The schema `appstore previews` declares.
 ///
 /// **Per kind rather than one number for the file**, which is the rule
 /// `json-output.md` sets: a document nobody has changed does not get a bump
 /// because a sibling did, and a consumer decoding one kind is not told to
-/// re-read another.
+/// re-read another. See [appStoreBuildsSchema].
 const appStorePreviewsSchema = 1;
 
+/// The schema `play tracks` declares. See [appStoreBuildsSchema].
 const playTracksSchema = 1;
 
 /// Writes [document] to stdout, whole, once.

@@ -167,7 +167,19 @@ Map<String, dynamic> _version(String name) => {
   },
 };
 
-Future<String> _wait(_FakeClient client, {List<String> extra = const []}) {
+/// Runs the command and returns `(out, err)` **separately**.
+///
+/// **This helper used to point both streams at one buffer**, and that is why
+/// the `--json` defect below went unseen: the no-previews case asserted only
+/// that a line appeared *somewhere*, so it passed whether the line went to
+/// stdout — where it made the document unparseable — or to stderr, where it
+/// belongs. A harness that cannot tell those apart is not a test of either,
+/// which `previews_command_test.dart` learned first and this file inherited
+/// late.
+Future<({String out, String err})> _wait(
+  _FakeClient client, {
+  List<String> extra = const [],
+}) async {
   final args = buildAscParser(AscCommand.awaitPreviews).parse([
     '--bundle-id',
     'design.codeux.example',
@@ -177,16 +189,16 @@ Future<String> _wait(_FakeClient client, {List<String> extra = const []}) {
     '0s',
     ...extra,
   ]);
-  final captured = _MemoryStdout();
-  return IOOverrides.runZoned(
-    () async {
-      await runAsc(AscCommand.awaitPreviews, args, ascClient: client);
-      await captured.close();
-      return captured.buffer.toString();
-    },
-    stdout: () => captured,
-    stderr: () => captured,
+  final out = _MemoryStdout();
+  final err = _MemoryStdout();
+  await IOOverrides.runZoned(
+    () => runAsc(AscCommand.awaitPreviews, args, ascClient: client),
+    stdout: () => out,
+    stderr: () => err,
   );
+  await out.close();
+  await err.close();
+  return (out: out.buffer.toString(), err: err.buffer.toString());
 }
 
 void main() {
@@ -202,8 +214,8 @@ void main() {
     final said = await _wait(client);
 
     expect(exitCode, 0);
-    expect(said, contains('previews are ready'));
-    expect(said, contains('en-US IPHONE_67: promo.mp4'));
+    expect(said.out, contains('previews are ready'));
+    expect(said.out, contains('en-US IPHONE_67: promo.mp4'));
   });
 
   test(
@@ -223,12 +235,12 @@ void main() {
       expect(exitCode, previewsPendingExit);
       expect(exitCode, isNot(0));
       expect(exitCode, isNot(1));
-      expect(said, contains('not a failure'));
+      expect(said.err, contains('not a failure'));
       // The per-asset detail, because "1 preview(s) pending" cannot tell a video
       // still uploading from a poster frame not yet cut.
-      expect(said, contains('promo.mp4'));
-      expect(said, contains('video PROCESSING'));
-      expect(said, contains('Re-run'));
+      expect(said.err, contains('promo.mp4'));
+      expect(said.err, contains('video PROCESSING'));
+      expect(said.err, contains('Re-run'));
     },
   );
 
@@ -244,7 +256,7 @@ void main() {
 
     expect(exitCode, 1);
     expect(exitCode, isNot(previewsPendingExit));
-    expect(said, contains('rejected the preview'));
+    expect(said.err, contains('rejected the preview'));
   });
 
   test('a version with no previews says so rather than waiting', () async {
@@ -253,7 +265,7 @@ void main() {
     final said = await _wait(client);
 
     expect(exitCode, 0);
-    expect(said, contains('carries no previews'));
+    expect(said.out, contains('carries no previews'));
   });
 
   test('--json puts the document on stdout and progress on stderr', () async {
@@ -313,6 +325,62 @@ void main() {
     expect(err.buffer.toString(), contains('video PROCESSING'));
   });
 
+  test('--json emits a document even when there are no previews', () async {
+    // **A success must still be decodable.** This case returned early, before
+    // the `--json` branch, printing prose on stdout — so a run that exited 0
+    // handed its consumer a parse error at character 1. And it is the input a
+    // readiness check meets *first*, on a version whose previews have not been
+    // uploaded yet, which makes it the worst one to answer with a shape no
+    // decoder can take.
+    final client = _FakeClient(versions: [_version('1.1.6')]);
+
+    final said = await _wait(client, extra: ['--json']);
+
+    expect(exitCode, 0);
+    final document = jsonDecode(said.out) as Map<String, dynamic>;
+    expect(document['kind'], 'appstore.previews');
+    expect(document['versionName'], '1.1.6');
+    expect(document['previews'], isEmpty);
+    // **The invariant is that stdout *parses*, not that a phrase is absent
+    // from it.** The first draft asserted stdout did not contain "carries no
+    // previews" and failed against correct output, because `display` carries
+    // that sentence and `display` is inside the document. `jsonDecode`
+    // succeeding above is the assertion; a phrase check would forbid the
+    // document from describing itself.
+    //
+    // The sentence a person needs is not dropped — it goes to stderr as
+    // progress, and survives in `display` so a renderer has something to show.
+    expect(said.err, contains('carries no previews'));
+    expect(
+      (document['display'] as List).single,
+      contains('carries no previews'),
+    );
+  });
+
+  test('--json display reports the states rather than the word ready', () async {
+    // `display` hard-coded `ready` on every line while the document computed
+    // `done` from the same re-read. On the grace-period exit — Apple never
+    // reports `previewFrameImage`, and the wait returns anyway — that produced
+    // one document saying `done: false` and `ready` about the same preview.
+    // `display` is the half a person reads, which makes it the worse half to
+    // be wrong about.
+    final client = _FakeClient(
+      versions: [_version('1.1.6')],
+      previews: [
+        _preview(videoState: 'PROCESSING'),
+        _preview(videoState: 'COMPLETE', frameState: 'COMPLETE'),
+      ],
+    );
+
+    final said = await _wait(client, extra: ['--json']);
+
+    final document = jsonDecode(said.out) as Map<String, dynamic>;
+    final line = (document['display'] as List).single as String;
+    expect(line, contains('video COMPLETE'));
+    expect(line, contains('frame COMPLETE'));
+    expect(line, isNot(contains('ready')));
+  });
+
   test('the report names the locale and type, not just an id', () async {
     // Apple identifies a preview by an opaque id; a person waiting on one
     // wants "the en-US IPHONE_67 one", and those live two collections up.
@@ -323,7 +391,7 @@ void main() {
 
     final said = await _wait(client);
 
-    expect(said, contains('en-US'));
-    expect(said, contains('IPHONE_67'));
+    expect(said.out, contains('en-US'));
+    expect(said.out, contains('IPHONE_67'));
   });
 }

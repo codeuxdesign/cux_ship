@@ -249,6 +249,29 @@ case, and a subprocess cannot reach the check without credentials. Recorded in
 the test file too, because it is a property of every `fail` in `cli.dart` and
 not of these two.
 
+**`wait-previews` takes a `--metadata` tree, which §"`appstore wait-previews`"
+above says it would not.** That bullet — *"it carries only its own arguments.
+No artifact, no changelog, no metadata tree: it publishes nothing and waits for
+what is already there"* — was wrong about what the command has to do, not about
+what is tidy. Apple discards `previewFrameTimeCode` sent at reservation, so the
+poster frame must be asserted *after* ingestion; that is the phase `upload
+--skip-waiting` defers, and asserting it needs the tree that names the frames.
+A `wait-previews` that could not finish that job would leave the pair
+incomplete, which is the one thing the split was for. So the command publishes
+nothing and *does* write one attribute, and the flag is optional: without it
+this only waits.
+
+**The `promote --metadata --skip-waiting` refusal was not built, and did not
+need to be.** §"`upload --metadata --skip-waiting`" argued for an offline
+refusal on the grounds that submitting with assets in flight is refused by
+Apple with an error naming the version rather than the assets. The flag is
+declared only under `case AscCommand.upload`, so `promote --skip-waiting` is
+rejected by the argument parser as an unknown option and the state is
+unreachable rather than refused. Better than what was proposed — an
+unrepresentable state needs no check, and no check can drift from it — but it
+is not the shape this document argued for, and a reader looking for the refusal
+would otherwise go hunting for something that was never written.
+
 ## What is still deliberately not built
 
 **`PreviewProcessingProgress` as a public Dart API.** The consumer's answer to
