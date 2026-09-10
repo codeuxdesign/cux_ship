@@ -537,6 +537,34 @@ void main() {
       expect(load, throwsMetadata(contains('HH:MM:SS:FF')));
     });
 
+    test('a frame number past the end of a second is refused', () {
+      // **The field the format is named for was the one not checked.** Minutes
+      // and seconds were range-checked and FF was not, so 00:00:02:99 passed
+      // every offline check on a 30 fps video — and because it resolves to
+      // 5.3s it is comfortably inside the file, so the past-the-end check did
+      // not fire either. Apple takes it and rejects the frame a day later,
+      // which is precisely the cost this file exists to avoid.
+      writeValidTree();
+      writePreview('listings/en-US/previews/IPHONE_67/01-tour.mp4');
+      write(
+        'listings/en-US/previews/IPHONE_67/01-tour.mp4$previewTimeCodeSuffix',
+        '00:00:02:99',
+      );
+      expect(load, throwsMetadata(contains('frame within one second')));
+    });
+
+    test('the last frame of a second is accepted', () {
+      // 30 fps is frames 0..29, and refusing 29 would be this check inventing
+      // a rule — the same failure direction as refusing a valid size.
+      writeValidTree();
+      writePreview('listings/en-US/previews/IPHONE_67/01-tour.mp4');
+      write(
+        'listings/en-US/previews/IPHONE_67/01-tour.mp4$previewTimeCodeSuffix',
+        '00:00:02:29',
+      );
+      expect(load, returnsNormally);
+    });
+
     test('a poster frame past the end of the video is refused', () {
       // Apple takes the string and the poster silently falls back, so this
       // surfaces as a product page posing on the wrong frame — after

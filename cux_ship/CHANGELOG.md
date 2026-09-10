@@ -1,5 +1,44 @@
 # Changelog
 
+## 4.5.0-dev.2
+
+**Needs `cux_ship_verify` 1.11.0-dev.2.** Five defects in 4.5.0-dev.1, found by
+a code review of the change that introduced it. Two of them could have bitten
+the first real upload.
+
+**A preview whose poster frame Apple rejected was skipped on the next run.**
+`previewPlan` compared name, checksum and the *video* state, so a preview with a
+`COMPLETE` video and a `FAILED` frame matched as unchanged — and since
+re-running is the documented recovery from a processing timeout, the ordinary
+sequence was: upload, frame fails, the run aborts loudly, somebody re-runs, and
+the second run skips the upload and lets a promotion submit a version whose
+poster Apple threw away. Caught at upload and then waved through by the
+optimisation, which is the defect this feature exists to prevent.
+
+It compares on `!= FAILED` rather than `== COMPLETE`, deliberately: Apple is not
+guaranteed to report a frame state at all, and requiring `COMPLETE` would
+re-upload a 500 MB video on every release, for ever, silently.
+
+**The wait could never finish if Apple reported no frame state.**
+`awaitPreviewProcessing` had one success condition — both assets `COMPLETE` — so
+a preview whose `previewFrameImage` Apple simply does not report polled the full
+timeout and then failed with a message about processing that had not finished,
+on an upload that was fine. It now accepts the video's verdict after a grace
+period, and says so.
+
+**Every rejection reason was listed twice.** Apple populates
+`videoDeliveryState` and the deprecated `assetDeliveryState` together, and both
+were read — in the one message somebody reads to work out what was refused.
+
+**The "Apple's default" annotation was erased by the readback.** A preview with
+no sidecar whose commit response echoed Apple's own `00:00:05:00` printed a bare
+`poster frame 00:00:05:00`, which reads as a deliberate choice. It is the
+opposite, and it is the case the annotation exists for. The tree decides whether
+anybody chose; Apple only knows what it stored.
+
+**A commit refused with no reason said nothing about what to look at**, where
+the screenshot path in the same file names the properties to check.
+
 ## 4.5.0-dev.1
 
 **Needs `cux_ship_verify` 1.11.0-dev.1**, which carries the tree and the

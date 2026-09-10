@@ -260,7 +260,14 @@ final _timeCode = RegExp(r'^(\d{2}):(\d{2}):(\d{2}):(\d{2})$');
 /// Shape and ranges only. Whether the frame is inside the video is a question
 /// about a particular file and is asked where both are in hand, in
 /// [_loadPreviews].
-String? previewFrameTimeCodeProblem(String value) {
+///
+/// [frameRate] bounds the frames field when the caller knows it. **Optional
+/// because the shape check has callers that have no file** — a consumer
+/// validating a string before writing it — and absent it the frames field is
+/// unbounded, which is the state this shipped in: `00:00:02:99` passed every
+/// offline check on a 30 fps video, because minutes and seconds were range
+/// checked and the field the format is named for was not.
+String? previewFrameTimeCodeProblem(String value, {double? frameRate}) {
   final match = _timeCode.firstMatch(value);
   if (match == null) {
     return 'is "$value"; Apple wants a HH:MM:SS:FF timecode, e.g. '
@@ -270,6 +277,15 @@ String? previewFrameTimeCodeProblem(String value) {
   final seconds = int.parse(match.group(3)!);
   if (minutes > 59 || seconds > 59) {
     return 'is "$value"; the minutes and seconds fields go up to 59';
+  }
+  final frames = int.parse(match.group(4)!);
+  // Rounded up, so a 29.97 fps file still accepts frame 29. The bound is the
+  // count of frames in a second, and the field is zero-based.
+  final perSecond = frameRate?.ceil();
+  if (perSecond != null && frames >= perSecond) {
+    return 'is "$value"; FF is a frame within one second and this video runs '
+        'at ${frameRate!.toStringAsFixed(2)} fps, so the last frame of a '
+        'second is ${perSecond - 1}';
   }
   return null;
 }
@@ -765,12 +781,21 @@ List<LocalPreview> _loadPreviews(
   // preview it was meant for goes up posed at Apple's five-second default with
   // nothing said. The tree is asked about it here because this is the only
   // place that knows both which sidecars exist and which videos claimed one.
+  // **Matched case-insensitively, because the video filter is.** The videos
+  // are selected with `path.toLowerCase().endsWith(...)`, so `RIDE.MP4` is a
+  // preview — while this check and the sidecar lookup both compared exactly.
+  // On a case-insensitive volume the mismatch is invisible; on Linux CI, a
+  // sidecar named `01-ride.mp4.TIMECODE` was neither found nor reported as an
+  // orphan, so the preview shipped at Apple's default and the one guard
+  // against that said nothing. Absence and failure again, on the filesystem.
   final claimed = {
-    for (final file in files) ...{'${file.path}$previewTimeCodeSuffix'},
+    for (final file in files) ...{
+      '${file.path}$previewTimeCodeSuffix'.toLowerCase(),
+    },
   };
   for (final file in dir.listSync().whereType<File>()) {
-    if (file.path.endsWith(previewTimeCodeSuffix) &&
-        !claimed.contains(file.path)) {
+    if (file.path.toLowerCase().endsWith(previewTimeCodeSuffix) &&
+        !claimed.contains(file.path.toLowerCase())) {
       throw MetadataException(
         '$locale/previews/$type/${_basename(file.path)} names no video here.\n'
         '  A poster frame is named after the whole video filename, so '
@@ -817,8 +842,23 @@ List<LocalPreview> _loadPreviews(
 
 /// The poster-frame timecode beside [file], or null when there is none.
 String? _loadTimeCode(String name, File file, VideoInfo video) {
-  final sidecar = File('${file.path}$previewTimeCodeSuffix');
-  if (!sidecar.existsSync()) {
+  // **Found by matching the directory case-insensitively, not by building the
+  // exact path.** The video filter accepts `RIDE.MP4`, so the tree is already
+  // case-insensitive about previews, and an `existsSync` on a constructed name
+  // is not: on Linux a sidecar written `01-ride.mp4.TIMECODE` simply did not
+  // exist, so the preview shipped at Apple's five-second default with nothing
+  // said. Consistent with the orphan check above, which compares the same way
+  // — the two have to agree, or a sidecar is either missed by both or claimed
+  // by one and ignored by the other.
+  final wanted = '${file.path}$previewTimeCodeSuffix'.toLowerCase();
+  File? sidecar;
+  for (final candidate in file.parent.listSync().whereType<File>()) {
+    if (candidate.path.toLowerCase() == wanted) {
+      sidecar = candidate;
+      break;
+    }
+  }
+  if (sidecar == null) {
     return null;
   }
   final value = sidecar.readAsStringSync().trim();
@@ -830,7 +870,7 @@ String? _loadTimeCode(String name, File file, VideoInfo video) {
     );
   }
 
-  final shape = previewFrameTimeCodeProblem(value);
+  final shape = previewFrameTimeCodeProblem(value, frameRate: video.frameRate);
   if (shape != null) {
     throw MetadataException('$name$previewTimeCodeSuffix $shape');
   }

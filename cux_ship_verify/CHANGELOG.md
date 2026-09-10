@@ -1,5 +1,48 @@
 # Changelog
 
+## 1.11.0-dev.2
+
+Six defects in 1.11.0-dev.1, found by a code review of the change that
+introduced it. Two are in the offline checks and cost a day each when they fire;
+four are the parser reading something other than what it claims to.
+
+**A timecode's frame field was never range-checked.** `00:00:02:99` passed every
+offline check on a 30 fps video — minutes and seconds were bounded and the field
+the format is named for was not — and because it resolves to 5.3 s it is inside
+the file, so the past-the-end check did not fire either. Apple takes it and
+rejects the poster frame a day later, which is exactly the cost these checks
+exist to avoid. `previewFrameTimeCodeProblem` now takes an optional `frameRate`.
+
+**A sidecar was matched case-sensitively where videos are not.** The video
+filter lowercases, so `RIDE.MP4` is a preview; the sidecar lookup built an exact
+path and the orphan check compared exactly. On a case-sensitive filesystem —
+Linux CI — `01-ride.mp4.TIMECODE` was neither found nor reported as an orphan,
+so the preview shipped at Apple's five-second default and the one guard against
+that said nothing.
+
+**`_readCodec` bounded against the file rather than the box**, so an `stsd`
+declaring no entries (16 bytes, and legal) read straight into the next sibling's
+header and reported *its* four-character type as the codec — observed refusing a
+file with `is stts; the App Store takes H.264 or ProRes 422 HQ`.
+
+**A 64-bit box size could overflow the bounds check.** `offset + size > to`
+wraps negative near 2^63, so the guard passed, `offset += size` went negative,
+and the next read threw a `RangeError` out of a metadata loader instead of
+returning null. Now `size > to - offset`, which cannot overflow.
+
+**A negative frame rate passed every rule.** `stts` products can overflow int64;
+the guard only rejected zero. A negative rate slips under a `> 30` ceiling and
+then becomes a divisor.
+
+**A video with more than one `vide` track gave up at the first unreadable one**
+rather than trying the next.
+
+Two message defects: a file in the first 50 kB above the cap was refused for
+exceeding a number that rendered identically to its own size, and the sentence
+about Apple's ambiguous "500MB" was printed for whatever `VideoRules` it was
+handed. The ambiguity is now a field on the rules, so a second store's cap is
+its own.
+
 ## 1.11.0-dev.1
 
 **App preview videos are part of the tree, and are checked offline.**

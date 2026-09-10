@@ -62,6 +62,12 @@ Uint8List mp4({
   String codec = 'avc1',
   bool rotated = false,
   bool soundTrackFirst = false,
+  bool emptyStsd = false,
+
+  /// Raw `stts` runs, for the overflow case. Each entry is written as a
+  /// (sample_count, sample_delta) pair exactly as given, so a caller can
+  /// build a table whose products overflow int64 when summed.
+  List<List<int>>? sttsRuns,
 }) {
   const timescale = 600;
   final duration = (seconds * timescale).round();
@@ -91,21 +97,36 @@ Uint8List mp4({
     ..._be32(height << 16),
   ]);
 
-  final stsd = _box('stsd', [
-    ...[0, 0, 0, 0], // version, flags
-    ..._be32(1), // one entry
-    // The entry: its own length, then the format that names the codec. The
-    // rest of a visual sample entry is not read, so it is not written.
-    ..._be32(16),
-    ...codec.codeUnits,
-    ...List<int>.filled(8, 0),
-  ]);
+  // An `stsd` declaring no entries is 16 bytes and legal to write. A reader
+  // that bounds against the file rather than the box reads straight past it
+  // into the next sibling's header and reports that box's type as the codec.
+  final stsd = emptyStsd
+      ? _box('stsd', [
+          ...[0, 0, 0, 0], // version, flags
+          ..._be32(0), // no entries
+        ])
+      : _box('stsd', [
+          ...[0, 0, 0, 0], // version, flags
+          ..._be32(1), // one entry
+          // The entry: its own length, then the format that names the codec.
+          // The rest of a visual sample entry is not read, so it is not
+          // written.
+          ..._be32(16),
+          ...codec.codeUnits,
+          ...List<int>.filled(8, 0),
+        ]);
 
+  final runs =
+      sttsRuns ??
+      [
+        [frames, delta],
+      ];
   final stts = _box('stts', [
     ...[0, 0, 0, 0], // version, flags
-    ..._be32(1), // one run
-    ..._be32(frames),
-    ..._be32(delta),
+    ..._be32(runs.length),
+    ...[
+      for (final run in runs) ...[..._be32(run[0]), ..._be32(run[1])],
+    ],
   ]);
 
   final mdia = _box('mdia', [

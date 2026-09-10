@@ -73,6 +73,58 @@ void main() {
       expect(truncated, isNull);
     });
 
+    test('a 64-bit box size near the int64 ceiling reads as null', () {
+      // **`offset + size > to` overflows and the guard passes.** With `size`
+      // just under 2^63 the sum wraps negative, `> to` is false, and
+      // `offset += size` then indexes the buffer at a negative offset — a
+      // RangeError escaping a metadata loader rather than the null this
+      // returns for anything it cannot read. `size > to - offset` cannot
+      // overflow: both sides are non-negative and `to` is a real length.
+      // **The overflowing box has to be one the walk skips**, which is the
+      // part the first version of this test got wrong. If it is the box being
+      // sought, the walk returns it and the bogus `end` merely makes the next
+      // `_findBox` loop not execute — null, with or without the guard, so the
+      // test passed against the unfixed parser. Skipping it is what performs
+      // `offset += size`, wraps the offset negative, and indexes the buffer
+      // there on the following iteration.
+      final file = <int>[
+        ...[0, 0, 0, 16], ...'ftyp'.codeUnits, ...List<int>.filled(8, 0),
+        // size == 1 means "the real size is the 64-bit value that follows".
+        ...[0, 0, 0, 1], ...'free'.codeUnits,
+        ...[0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xF0],
+      ];
+      expect(readVideoInfo(file), isNull);
+    });
+
+    test('an stsd with no entries does not read the next box as a codec', () {
+      // Bounded against the file rather than the box, an empty `stsd` is
+      // exactly 16 bytes, so `stsd.start + 12` lands in the *sibling* box's
+      // header — reporting `stts` as the codec, in a refusal that reads like a
+      // real verdict about the file.
+      final video = readVideoInfo(mp4(emptyStsd: true));
+      expect(video, isNull);
+    });
+
+    test('an stts whose products overflow reads as null', () {
+      // `count` and `delta` are each unsigned 32-bit as the file states them,
+      // so `ticks += count * delta` can overflow int64 and come back negative
+      // — and a negative frame rate passes a `> 30` ceiling silently, then
+      // becomes a divisor in previewFrameOffset. Crafted, not corruption, but
+      // "null when the file cannot be read" is this function's whole contract.
+      // 0xFFFFFFFF squared is 1.8e19 and int64 tops out at 9.2e18, so this
+      // wraps on the first run. (0x7FFFFFFF squared, twice, lands just *under*
+      // the ceiling — which is how the first version of this test passed
+      // against the unfixed parser and proved nothing.)
+      final video = readVideoInfo(
+        mp4(
+          sttsRuns: [
+            [0xFFFFFFFF, 0xFFFFFFFF],
+          ],
+        ),
+      );
+      expect(video, isNull);
+    });
+
     test('a moov truncated mid-tree reads as null rather than throwing', () {
       // **The case the box-length check is actually for**, and the one the
       // test above does not reach: cut inside `moov`, so the outer box
@@ -195,6 +247,19 @@ void main() {
       )!;
       expect(problem, contains('without units'));
       expect(problem, contains('may well be accepted'));
+    });
+
+    test('a file just over the cap is not refused for exceeding itself', () {
+      // `_megabytes` rounds to one decimal, so everything in the first 50 kB
+      // above the limit rendered as `is 500.0 MB; ... at most 500.0 MB` — the
+      // same class of nonsense as comparing two different bases, which this
+      // message was already fixed for once. Bytes below that threshold.
+      final problem = videoEncodingProblem(
+        _sized(500 * 1000 * 1000 + 1),
+        appStorePreviewRules,
+      )!;
+      expect(problem, contains('500000001 bytes'));
+      expect(problem, contains('500000000 bytes'));
     });
 
     test('a file over both readings does not hedge', () {
