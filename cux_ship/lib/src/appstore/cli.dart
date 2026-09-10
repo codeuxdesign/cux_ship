@@ -1594,6 +1594,67 @@ Future<void> runAsc(
   // start where the rest of the offline work is: an absent CHANGELOG.md
   // section is the ordinary mistake, and finding it before a credential is
   // loaded costs nothing and leaves nothing behind.
+  // The notes when the changelog has a section for this version, and null
+  // when it does not — as opposed to [notesFor], which refuses.
+  //
+  // Its own closure rather than a flag on `notesFor`, because the two answer
+  // different questions and only one of them is "what did the caller ask for".
+  // The over-limit refusal and the uncommitted-changes refusal are kept: those
+  // are wrong *files*, not absent ones, and a run that publishes a listing
+  // from a changelog it cannot read should say so however it was pointed at
+  // one.
+  String? notesIfPresent(String forVersion) {
+    if (changelogPath == null) {
+      return literalNotes;
+    }
+    requireCommittedNotes([changelogPath]);
+    final notes = changelogNotesOf(
+      changelogPath,
+      forVersion,
+      platform: platform.changelog,
+    );
+    if (notes is! NotesText) {
+      return null;
+    }
+    if (notes.text.length > appStoreReleaseNotesLimit) {
+      fail(
+        "$changelogPath's ${notes.fromVersion} section is "
+        '${notes.text.length} characters once filtered to '
+        '${platform.changelog}; the App Store allows '
+        '$appStoreReleaseNotesLimit',
+      );
+    }
+    return notes.text;
+  }
+
+  // **The listing's release notes, resolved before anything is written.**
+  //
+  // Evaluated at the publish site, this read three ways to `fail` *after*
+  // `_publishAscListing` had written content rights, categories, the age
+  // rating, every localization, every screenshot and every preview: an
+  // uncommitted CHANGELOG.md, a missing section, and a section over Apple's
+  // limit. `notesFor`'s own doc calls moving the read into the offline phase
+  // "the better fix" and declines it for the paths that came first; this one
+  // is new, so it starts here.
+  //
+  // **A missing section is fatal only when the changelog was named.** The path
+  // defaults to the project's CHANGELOG.md, so a run that asked for
+  // screenshots and nothing else was newly refused for notes it had not
+  // requested — the flag was inferred, and inference must not manufacture a
+  // requirement. When `--changelog` or `--release-notes` was passed the notes
+  // *are* what was asked for, and an absent section stays an error, because
+  // "absent is not the same answer as empty" is the rule that flag carries.
+  String? listingReleaseNotes;
+  if (publish == ListingPublish.shared &&
+      metadata != null &&
+      versionName != null &&
+      listingNeedsVersion(metadata)) {
+    final named = opt('changelog') != null || notesPath != null;
+    listingReleaseNotes = named
+        ? notesFor(versionName)
+        : notesIfPresent(versionName);
+  }
+
   String? whatToTestNotes;
   if (cmd == AscCommand.whatToTest) {
     whatToTestNotes = notesFor(versionName!);
@@ -2057,7 +2118,7 @@ Future<void> runAsc(
           app,
           published,
           locale,
-          notesFor(versionName!),
+          listingReleaseNotes,
           versionName,
         );
       }
@@ -2232,6 +2293,22 @@ Future<void> runAsc(
     // Caught rather than left to the runtime: an uncaught exception exits 255
     // with a stack trace, and a stack trace above the one sentence that says
     // "read the e-mail" is how that sentence gets skimmed past.
+    stderr.writeln('asc_upload: $e');
+    _reportStateLeftBehind(store);
+    exitCode = 1;
+  } on PreviewsPending catch (e) {
+    // **The clause the sibling above exists to justify, missing for one
+    // release.** Replacing the wait's `AscApiException(504)` with a type that
+    // says more took its catch clause away with it: the deadline exited 255
+    // with a stack trace over the message, which is precisely the failure
+    // `ProcessingTimeout`'s comment describes — and worse here, because this
+    // exception's entire value is its wording and the outcome it reports is
+    // one the design document calls *ordinary*.
+    //
+    // Exit 1, not [previewsPendingExit]. That code belongs to `appstore
+    // wait-previews`, which does not exist yet; here the deadline means "I
+    // cannot safely proceed to a submission", which is the same fatal thing
+    // the 504 meant. Reserving a code is not the same as spending it.
     stderr.writeln('asc_upload: $e');
     _reportStateLeftBehind(store);
     exitCode = 1;

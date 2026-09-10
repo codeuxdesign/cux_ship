@@ -328,6 +328,47 @@ void main() {
     },
   );
 
+  test('an inferred changelog with no section is not a refusal', () async {
+    // **The regression the offline move was needed for.** `--changelog`
+    // defaults to the project's CHANGELOG.md, so a run that asked for
+    // screenshots and nothing else was newly refused — after publishing the
+    // whole listing — for notes it had never requested. Inference must not
+    // manufacture a requirement.
+    _write('CHANGELOG.md', '# Changelog\n\n## Unreleased\n\n- Not yet\n');
+    final client = _FakeClient(versions: [_version('old', '1.1.5')]);
+    final args = buildAscParser(AscCommand.upload).parse([
+      '--bundle-id',
+      'design.codeux.example',
+      '--version-name',
+      '1.1.6',
+      '--metadata',
+      '${_root.path}/store/appstore',
+    ]);
+    final captured = _MemoryStdout();
+    await IOOverrides.runZoned(
+      () => runAsc(AscCommand.upload, args, ascClient: client),
+      stdout: () => captured,
+      stderr: () => captured,
+    );
+    await captured.close();
+
+    expect(_whatsNewSent(client), isEmpty);
+    expect(captured.buffer.toString(), contains('==> done'));
+    expect(captured.buffer.toString(), isNot(contains('has no section')));
+  });
+
+  // **The other half of that rule is not testable from here, and saying so
+  // beats letting the pair look complete.** When `--changelog` is passed, a
+  // missing section is still a refusal — but `fail` exits rather than throws,
+  // by design and with its own comment saying why, so it kills the test runner
+  // rather than reaching an expectation.
+  //
+  // What changed is *when* it fires, and that is held structurally rather than
+  // by assertion: the resolution moved into the offline phase, above the line
+  // that builds the client, so there is no store to have written anything with
+  // by the time it can refuse. The old call site sat after
+  // `_publishAscListing` had written the entire listing.
+
   test('a dry run writes nothing at all', () async {
     final client = _FakeClient(versions: [_version('old', '1.1.5')]);
 
