@@ -48,6 +48,29 @@ to choose. The document uses Apple's own field names, `videoDeliveryState`,
 `previewFrameImageState` and `previewFrameTimeCode`, so it can be read beside
 Apple's reference without a translation table; `done` is this package's own
 opinion over both states and says so in a field of its own.
+
+**`AppStorePreviewsDocument` and `AppStorePreviewEntry` are exported.** They
+were missing from `lib/documents.dart`'s `show` list, so the feature shipped
+with a working flag, an emitted document and a `kind` a caller could name — and
+no way to type the thing it decodes into. Found by a consumer writing
+`Future<AppStorePreviewsDocument>` in another package, which is the only place
+it was visible.
+
+**A version Apple does not hold exits 5, not 1.** *"Apple has no 1.1.8 yet"* is
+an ordinary state on the way to a release — every run before the version is
+created looks like that — and exit 1 put it beside wrong credentials, an
+unreachable network and a metadata tree that will not load. A consumer could
+either match the prose, which is the failure this package exists to prevent, or
+report "a store could not be read" on the commonest path. `noSuchVersionExit`
+is 5, raised as `NoSuchVersion`, which subclasses `AscApiException` so nothing
+loses the formatted 404 it already printed.
+
+**`README.md` now carries the whole exit-code table** — 0, 1, 2, 3, 4, 5 and
+64 — with the rule that makes it predictable: an existing code never changes
+meaning, and a new condition takes a new number rather than joining an old one.
+Asked for by a consumer whose runner throws on any unrecognised non-zero, and
+who had been finding the constants by grepping.
+
 **`appstore previews` reads a version Apple has already taken.** It went through
 the same version lookup a *write* uses, so a live or in-review version answered
 "READY_FOR_SALE, which cannot be edited" — a refusal to look, landing on exactly

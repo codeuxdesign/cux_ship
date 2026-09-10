@@ -223,6 +223,16 @@ void main() {
     // The other half: the option is optional, and a run that omits it must
     // reach the credential check rather than refuse offline. Without this, the
     // test above is satisfied by a command that always demands a tree.
+    //
+    // **The `store/appstore` directory is the whole test, and its absence made
+    // the first version vacuous.** `defaults.metadata` is the *inferred* tree,
+    // `project.appStoreTreeFor(platform)` — so with no such directory it is
+    // null and this passed against a build that would happily have inferred
+    // one. It did: a bare `wait-previews` loaded the tree, validated the
+    // listing, and would have PATCHed poster frames from it. Creating the
+    // directory is what separates "the option is optional" from "no tree is
+    // acquired when none was named", and only the second is worth asserting.
+    Directory('${repo.path}/store/appstore').createSync(recursive: true);
     final result = Process.runSync(
       Platform.resolvedExecutable,
       [

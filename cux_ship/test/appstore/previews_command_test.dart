@@ -12,6 +12,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:cux_ship/src/appstore/app_store.dart';
 import 'package:cux_ship/src/appstore/asc_client.dart';
 import 'package:cux_ship/src/appstore/cli.dart';
 import 'package:test/test.dart';
@@ -234,7 +235,13 @@ void main() {
       // reaches a person, on the stream it reaches them on.
       final said = await _previews(_FakeClient(versionName: null));
 
-      expect(exitCode, 1);
+      // **Exit 5, and not 1, which is the point of the code.** Exit 1 is
+      // also wrong credentials, an unreachable network and a metadata tree
+      // that will not load — so a consumer could not tell the commonest state
+      // on the way to a release from the broken ones without matching prose.
+      expect(exitCode, noSuchVersionExit);
+      expect(exitCode, isNot(1));
+      expect(exitCode, isNot(0));
       expect(said.err, contains('404'));
       expect(said.err, contains('no App Store version 1.1.6'));
       expect(said.out, isNot(contains('carries no previews')));

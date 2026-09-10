@@ -293,6 +293,53 @@ void main() {
     });
   });
 
+  group('every kind has a type a consumer can name', () {
+    test('each document class is reachable from the public library', () {
+      // **The defect this exists for was invisible from inside this
+      // repository.** `appstore previews --json` shipped with its flag
+      // working, its document emitted, and `DocumentKind.appStorePreviews`
+      // exported — riding along inside the enum — while
+      // `AppStorePreviewsDocument` and `AppStorePreviewEntry` were absent from
+      // `lib/documents.dart`'s `show` list. So the feature was complete except
+      // that nothing outside could name the type it decodes into.
+      //
+      // Nothing here could see it: the tests import `src/documents.dart`
+      // directly, and CI's git-dependency probe asserts resolution and runs
+      // `--help`. It took a consumer writing `Future<AppStorePreviewsDocument>`
+      // in another package. That is absence and success looking alike, which is
+      // the failure this repository keeps paying for in new shapes.
+      //
+      // Written as a type literal per kind rather than reflectively, because
+      // Dart cannot enumerate a library's exports at runtime. The list below
+      // is only as good as its completeness, which is what the length
+      // assertion underneath is for.
+      const documents = <Type>[
+        AppStoreBuildsDocument,
+        AppStoreVersionsDocument,
+        AppStorePreviewsDocument,
+        PlayTracksDocument,
+      ];
+      const entries = <Type>[
+        AppStoreBuildEntry,
+        AppStoreVersionEntry,
+        AppStorePreviewEntry,
+        PlayTrackEntry,
+      ];
+
+      // **The assertion that keeps this honest.** A fifth `DocumentKind` added
+      // without its document exported fails here, rather than in somebody
+      // else's package a release later.
+      expect(
+        documents,
+        hasLength(DocumentKind.values.length),
+        reason: 'a kind whose document is not exported cannot be decoded',
+      );
+      expect(entries, hasLength(DocumentKind.values.length));
+      expect(documents.toSet(), hasLength(documents.length));
+      expect(entries.toSet(), hasLength(entries.length));
+    });
+  });
+
   group('this package’s own vocabularies are closed', () {
     test('DocumentKind has no unknown member, unlike the store enums', () {
       // The asymmetry is the design. A `kind` nobody here names means a

@@ -642,22 +642,58 @@ means two things:
 | **2** | there is work to do | `screenshots flatten --check` found unflattened screenshots |
 | **3** | upload collision | Apple or Play already holds this build number |
 | **4** | previews still ingesting | `appstore wait-previews` reached its deadline |
+| **5** | no such version | Apple holds no version by the name that was asked for |
 | **64** | usage | the arguments were wrong; nothing ran |
+| **255** | a crash | an exception nothing named — the stack trace is the report |
 
-**2, 3 and 4 are the re-runnable ones**, in the sense that the run did what it
-could and the state is recoverable — but *that property is not what the number
-means*, and a caller must not treat "non-1 and non-0" as a category. Each code
-names **one condition**, deliberately: a wrapper branching on 2 must not have to
-know which subcommand produced it, which is why `uploadCollisionExit` took 3
-rather than reusing "there is work to do", and why the preview deadline took 4
-rather than reusing either.
+**Two exceptions to the table, and both matter more than the rows.**
+
+**255 is a crash, not a code.** `main` catches three types and rethrows the
+rest, deliberately: a `SocketException` mid-promote or a response shaped
+unexpectedly exits 255 with a stack trace, because a stack trace is the right
+report for something nobody anticipated. A caller should treat it as a failure
+and read the trace, never as a condition.
+
+**`secrets exec` and `keychain exec` return the child's exit status, whatever it
+is.** `cux_ship secrets exec -- flutter test` exits what `flutter test` exited.
+So under those two commands a 2, 3, 4 or 5 means *the child's* 2, 3, 4 or 5 and
+nothing in this table applies. They are a shell, and a shell that rewrote its
+child's status would be lying about the thing it was asked to run.
+
+That is the one place "the same number never means two things" does not hold,
+and it holds *by command*: within `appstore`, `play`, `screenshots` and
+`release`, the table is exact. Anything wrapping `exec` must read the status as
+the child's.
+
+**2, 3, 4 and 5 are not failures**, in the sense that the command did what it
+could and the answer is the exit status — but *that property is not what any of
+the numbers means*, and a caller must not treat "non-1 and non-0" as a category.
+255 and the `exec` pass-through below are the proof of that: both are non-zero,
+neither is one of these conditions.
+Each code names **one condition**, deliberately: a wrapper branching on 2 must
+not have to know which subcommand produced it, which is why
+`uploadCollisionExit` took 3 rather than reusing "there is work to do", the
+preview deadline took 4 rather than reusing either, and "Apple holds no such
+version" took 5.
+
+**5 is the one most worth knowing about**, because without it that condition
+was exit 1 — the same code as wrong credentials, an unreachable network and a
+metadata tree that will not load. A readiness check asking *"is the store
+showing 1.1.8's listing?"* before anybody has created a 1.1.8 is not broken; it
+has its answer, and every run before the version exists looks like that. Exit 1
+left a caller matching prose to tell the commonest path from the failures.
 
 **The rule for anything added later, so a caller can size its risk:** an
 existing code never changes meaning, and a new condition takes a new number
-rather than joining an old one. So a future waiting command would exit 5, not 4
+rather than joining an old one. So a future waiting command would exit 6, not 4
 — even though "a wait did not finish" describes both. Conflating two conditions
 under one number is the thing this vocabulary exists to prevent, and it applies
 to the future as much as to the past.
+
+5 is that rule being spent rather than merely stated: it was added *after* this
+table was written, by a consumer pointing out that "Apple holds no such version"
+met the test — a distinct condition, branched on rather than read — and asking
+for it in those words.
 
 The consequence for a caller is worth stating plainly: **enumerate the codes you
 accept, per command.** A general "this one is re-runnable" predicate written

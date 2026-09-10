@@ -750,6 +750,47 @@ class PreviewProcessingProgress {
 /// vocabulary rather than one per command.
 const previewsPendingExit = 4;
 
+/// What `cux_ship` exits with when Apple holds no version by the name asked
+/// for.
+///
+/// **An ordinary state on the way to a release, not a failure**, and that is
+/// the whole argument. Every run before the version is created looks like
+/// this: a readiness check asking *"is the store showing 1.1.8's listing?"*
+/// before anybody has made a 1.1.8 is not broken, it has its answer.
+///
+/// Without a code of its own it arrived as 1 — which `cli.dart` also uses for
+/// wrong credentials, a network that went away, a metadata tree that will not
+/// load, and every unrecognised exception. So a consumer had three options and
+/// all of them were bad: match the prose, which is the failure this package
+/// exists to prevent; report "a store could not be read", which is a
+/// plausible-looking lie on the commonest path; or not ask.
+///
+/// 5 by the rule [previewsPendingExit] states: **one code per distinct
+/// condition**, and a new condition takes a new number rather than joining an
+/// old one. "Apple does not hold this version" passes that test the same way
+/// "Apple has not finished ingesting" did — it is a state a caller *branches*
+/// on rather than reads.
+///
+/// Raised as [NoSuchVersion], which subclasses [AscApiException] so nothing
+/// loses the formatted 404 it already printed.
+const noSuchVersionExit = 5;
+
+/// Apple holds no App Store version named [versionString] on [platform].
+///
+/// A subclass rather than a sibling, so a caller that already handles
+/// [AscApiException] keeps working and one that wants to tell this apart can.
+/// **The `on NoSuchVersion` clause must precede `on AscApiException`**, since
+/// Dart takes the first matching clause and every instance of this is one.
+class NoSuchVersion extends AscApiException {
+  NoSuchVersion(this.versionString, this.platform)
+    : super(404, [
+        'no App Store version $versionString for ${platform.api}',
+      ], request: 'GET /v1/appStoreVersions');
+
+  final String versionString;
+  final AscPlatform platform;
+}
+
 /// Raised when a preview wait reached its deadline with work outstanding.
 ///
 /// **A distinct type because it is a distinct outcome**, not a failure with a
@@ -2203,9 +2244,7 @@ class AppStore {
       },
     );
     if (versions.isEmpty) {
-      throw AscApiException(404, [
-        'no App Store version $versionString for ${platform.api}',
-      ], request: 'GET /v1/appStoreVersions');
+      throw NoSuchVersion(versionString, platform);
     }
     return versions.first;
   }
@@ -2246,9 +2285,10 @@ class AppStore {
     }
 
     if (!create) {
-      throw AscApiException(404, [
-        'no App Store version $versionString for ${platform.api}',
-      ], request: 'GET /v1/appStoreVersions');
+      // The same condition [readVersion] reports, so the same type: a caller
+      // asking not to create has asked a question, and "there is no such
+      // version" is its answer rather than a fault.
+      throw NoSuchVersion(versionString, platform);
     }
 
     // Apple allows exactly one editable version at a time, and it creates a
