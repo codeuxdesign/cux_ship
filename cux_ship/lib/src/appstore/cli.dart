@@ -329,6 +329,45 @@ ArgParser buildAscParser(AscCommand cmd) {
     )
     ..addFlag('dry-run', negatable: false, help: 'Every read, no writes.');
 
+  // **Both commands that can create an App Store version take it**, because
+  // both decide what a version does once Apple approves — which was one
+  // command's decision until a consumer showed the other needed it.
+  //
+  // `promote --release-type` was the only way to set it, and a `--prepare`
+  // step that publishes the listing and stops — no artifact, no promote, so a
+  // human can read the finished page before submitting — creates the version
+  // through `upload --metadata` and could not say anything about it. It was
+  // left MANUAL by the create default with no command available to that flow
+  // able to change it.
+  if (cmd == AscCommand.upload || cmd == AscCommand.promote) {
+    parser.addOption(
+      'release-type',
+      // Deliberately no `allowed:`. The args package would reject SCHEDULED
+      // with one generic line, and SCHEDULED is the value that most needs a
+      // sentence explaining what is missing.
+      help:
+          'What starts the public release once Apple approves: MANUAL, or '
+          'AFTER_APPROVAL to go out on approval. A different axis from '
+          '--phased, which is how fast it rolls out once started. Unset '
+          'leaves whatever App Store Connect holds — a new version is created '
+          'MANUAL, an existing one is not touched.',
+    );
+  }
+
+  if (cmd == AscCommand.upload) {
+    parser.addFlag(
+      'json',
+      negatable: false,
+      help:
+          'With --dry-run, print what would change as one JSON document on '
+          'stdout instead of the report: which locales and which fields, and '
+          '"matches" when nothing would. Refused without --dry-run — a '
+          'document describing writes that already happened would have to '
+          'describe partial ones, which an intention never does. See '
+          'docs/design/dry-run-json.md.',
+    );
+  }
+
   switch (cmd) {
     case AscCommand.upload:
       parser
@@ -433,18 +472,6 @@ ArgParser buildAscParser(AscCommand cmd) {
           help:
               "Release over Apple's seven-day phased schedule once approved. "
               'Not a fraction — Apple runs the schedule itself.',
-        )
-        ..addOption(
-          'release-type',
-          // Deliberately no `allowed:`. The args package would reject
-          // SCHEDULED with one generic line, and SCHEDULED is the value that
-          // most needs a sentence explaining what is missing.
-          help:
-              'What starts the public release once Apple approves: MANUAL, or '
-              'AFTER_APPROVAL to go out on approval. A different axis from '
-              '--phased, which is how fast it rolls out once started. Unset '
-              'leaves whatever App Store Connect holds — a new version is '
-              'created MANUAL, an existing one is not touched.',
         );
     case AscCommand.whatToTest:
       // Only the build. The notes themselves come from the shared options
@@ -764,7 +791,7 @@ Future<void> publishReleaseNotes(
     return;
   }
   if (await store.isFirstVersion(app, version)) {
-    stdout.writeln(
+    store.say(
       '==> ${versionName ?? 'this'} is this app\'s first App Store version, '
       'so it has no\n'
       '    "What\'s New" — the release notes are skipped and the '
@@ -783,7 +810,7 @@ Future<void> publishReleaseNotes(
   // its notes, which is the thing this whole function exists to stop happening
   // in silence.
   if (declaredLocales.isNotEmpty && !declaredLocales.contains(locale)) {
-    stdout.writeln(
+    store.say(
       '==> release notes skipped: this tree declares '
       '${declaredLocales.join(", ")} and the notes would go to $locale.\n'
       '    Pass --locale ${declaredLocales.first} to publish them there.',
@@ -791,11 +818,11 @@ Future<void> publishReleaseNotes(
     return;
   }
 
-  stdout.writeln('==> release notes');
+  store.say('==> release notes');
   var releaseNotes = notes;
   if (needsStrippingForApple(notes)) {
     releaseNotes = stripForApple(notes);
-    stdout.writeln(
+    store.say(
       '    the App Store rejects emoji in "What\'s New", so these are '
       'stripped:\n'
       '      ${_removedCharacters(notes, releaseNotes)}\n'
@@ -829,6 +856,116 @@ Future<void> publishReleaseNotes(
   }, existing: await store.versionLocalizations(version));
 }
 
+/// What a listing publish wrote, or under `--dry-run` would have written.
+///
+/// **The comparisons are the product, not a by-product.** `appLevelChanges`
+/// and `versionLevelChanges` already decide, field by field, what differs
+/// between the tree and what Apple holds — a run flattens that into prose and
+/// throws the structure away. Carrying it out lets `--dry-run --json` answer
+/// *"does the store still show the repository's listing?"* from a computation
+/// this package already performs, rather than from a caller matching
+/// `would update: en-US: description` with a regular expression.
+class ListingOutcome {
+  const ListingOutcome({
+    required this.version,
+    required this.app,
+    required this.versionLevel,
+    required this.appleOnlyLocales,
+    required this.versionComparisonSkipped,
+    required this.assetChanges,
+  });
+
+  /// The `appStoreVersions` record written against, or null when the tree
+  /// needed none.
+  final Map<String, dynamic>? version;
+
+  /// What differed at the app level — categories, age rating, content rights,
+  /// app-info localizations. Null when nothing read them.
+  final AppLevelChanges? app;
+
+  /// What differed at the version level — copyright, review details, and the
+  /// per-locale listing text. Null when nothing read them.
+  final VersionLevelChanges? versionLevel;
+
+  /// Locales Apple holds that the tree never mentions.
+  ///
+  /// **Not a difference, and deliberately not counted as one.** "Present means
+  /// owned" is the tree's rule: a locale it does not declare is one this
+  /// repository makes no claim about, so finding one is not a mismatch and
+  /// must not make the answer false.
+  ///
+  /// It is carried because *"every field we declare agrees"* is a narrower
+  /// claim than the sentence a reader hears, and the gap has to be visible
+  /// rather than merely unclaimed — a `de-DE` somebody added in App Store
+  /// Connect is exactly the thing an operator wants to know about while being
+  /// told the listing matches.
+  final List<String> appleOnlyLocales;
+
+  /// Set when the version-scoped half could not be compared at all.
+  ///
+  /// **A dry run creates no version**, so `ensureVersion` returns null when
+  /// Apple holds neither the named version nor an editable one to rename — the
+  /// state of every dry run before a release is prepared. Nothing
+  /// version-scoped is then read, and in reality every field of it would be
+  /// written.
+  final bool versionComparisonSkipped;
+
+  /// Screenshot and preview sets that differ from the tree.
+  ///
+  /// **Assets were compared and left out of the answer.** The document
+  /// promised `version`, `app` and *assets*; the first two were carried and
+  /// the third was not, so replacing a screenshot and changing nothing else
+  /// reported `matches: true`.
+  final List<String> assetChanges;
+
+  /// Whether anything at all would change.
+  ///
+  /// **"Not compared" is not "nothing differs", and this returned true for
+  /// it.** With no version to compare against, [versionLevel] stays null and
+  /// an `isEmpty ?? true` reads absence as agreement — so the one field this
+  /// document exists for answered the opposite of the truth on an ordinary
+  /// run. The prose beside it was honest the whole time: it prints *(dry run
+  /// created no version, so the fields below are skipped)*.
+  ///
+  /// Nothing was asserted about the asset half either, and that is stated in
+  /// [AppStoreListingDiffDocument.matches] rather than papered over here:
+  /// screenshots and previews are compared, but by methods that report their
+  /// findings as prose and return `void`.
+  bool get matches =>
+      !versionComparisonSkipped &&
+      assetChanges.isEmpty &&
+      (app?.isEmpty ?? true) &&
+      (versionLevel?.isEmpty ?? true);
+
+  /// Locale to the field names differing in it, both scopes merged.
+  ///
+  /// **Merged, because a locale is one thing to a reader.** Apple splits the
+  /// listing text across `appStoreVersionLocalizations` and
+  /// `appInfoLocalizations` — the description is version-scoped, the localized
+  /// name is app-scoped — and that split is Apple's filing system rather than
+  /// anything an operator asked about. `en-US: description, name` is the
+  /// sentence somebody acts on; two lists to reconcile is not.
+  ///
+  /// The document keeps them apart under `version` and `app`, because a
+  /// program may care which resource a write would land on. This is for the
+  /// prose beside it.
+  Map<String, List<String>> get changedByLocale {
+    const none = <MapEntry<String, Map<String, String>>>[];
+    final merged = <String, Set<String>>{};
+    for (final source in [app?.localizations, versionLevel?.localizations]) {
+      for (final entry in source?.entries ?? none) {
+        merged
+            .putIfAbsent(entry.key, () => <String>{})
+            .addAll(entry.value.keys);
+      }
+    }
+    return {
+      for (final entry in merged.entries)
+        entry.key: entry.value.toList()..sort(),
+    };
+  }
+}
+
 /// Publishes the App Store listing from a metadata tree.
 ///
 /// **Its own function because two commands need it, for opposite reasons.** A
@@ -838,10 +975,11 @@ Future<void> publishReleaseNotes(
 /// `appStoreVersionLocalizations` through `ensureVersion`, which *creates* the
 /// version record, so publishing beside a TestFlight build would bring an App
 /// Store version into existence for a release nobody had decided to make.
-/// Returns the `appStoreVersions` record it wrote against, or null when the
-/// tree needed none — so a caller can write the release notes against the same
-/// version rather than resolving it a second time.
-Future<Map<String, dynamic>?> _publishAscListing(
+/// Returns what it did, or under a dry run what it would have done — see
+/// [ListingOutcome]. The `appStoreVersions` record is in there so a caller can
+/// write the release notes against the same version rather than resolving it a
+/// second time.
+Future<ListingOutcome> _publishAscListing(
   AppStore store,
   App app,
   AppStoreMetadata metadata,
@@ -855,7 +993,35 @@ Future<Map<String, dynamic>?> _publishAscListing(
   /// Upload the previews and stop, leaving the ingestion wait and the
   /// poster-frame assertion to `appstore wait-previews`.
   bool skipPreviewWait = false,
+
+  /// Whether to report the effective release type, or leave it to the caller.
+  ///
+  /// False from `promote`, which resolves the version itself and has already
+  /// printed the line by the time it calls this — see there.
+  bool reportReleaseType = true,
+
+  /// What the version should do once Apple approves, or null to leave it.
+  ///
+  /// **Passed here because this function creates the version.** A `--prepare`
+  /// flow — publish the listing, stop, let a human read the page before
+  /// submitting — reaches App Store Connect through exactly this path and
+  /// through no promote, so without it the version is created MANUAL by the
+  /// default and nothing that flow can run is able to say otherwise.
+  String? releaseType,
+
+  /// Where this function's report goes, or null for [stdout].
+  ///
+  /// **`--dry-run --json` passes [stderr].** Thirteen lines here announce what
+  /// is being compared and written, and every one of them would land in front
+  /// of the document — which is not a hypothetical: the first run of the tests
+  /// for that flag failed on `==> en-US: description` at character 1, having
+  /// already been fixed once for the dry-run banner two hundred lines up.
+  /// Routing the function rather than its lines is what stops the next line
+  /// added here from reintroducing it.
+  IOSink? out,
 }) async {
+  void say(String line) => (out ?? stdout).writeln(line);
+
   // **Decide what needs writing before demanding something to write to.**
   //
   // The app-level half used to open with `editableAppInfo`, which threw when
@@ -894,7 +1060,7 @@ Future<Map<String, dynamic>?> _publishAscListing(
   if (changes.unverifiable.isNotEmpty) {
     // Said out loud: these are being written because they could not be shown
     // to already match, which is not the same as knowing they differ.
-    stdout.writeln(
+    say(
       '==> could not read the current ${changes.unverifiable.join(", ")}, '
       'so ${changes.unverifiable.length == 1 ? 'it is' : 'they are'} '
       'written rather than assumed unchanged',
@@ -912,7 +1078,7 @@ Future<Map<String, dynamic>?> _publishAscListing(
     // Only when the tree actually declares app-level fields. Saying "already
     // matches" about fields nobody asked for would report a comparison that
     // never happened.
-    stdout.writeln('==> app-level listing: already matches, nothing written');
+    say('==> app-level listing: already matches, nothing written');
   }
 
   if (metadata.ageRating != null &&
@@ -973,9 +1139,48 @@ Future<Map<String, dynamic>?> _publishAscListing(
       'Apple scopes them to a version rather than to the app',
     );
   }
+  // **Hoisted so the return can carry them**, not because anything here reads
+  // them twice. The version-level comparison happens inside a nested block and
+  // was consumed on the spot; `--dry-run --json` needs it after the fact, and
+  // a second computation would be a second thing to disagree.
+  VersionLevelChanges? versionLevel;
+  var appleOnlyLocales = const <String>[];
+
   final version = needsVersion
-      ? await store.ensureVersion(app, versionName!, create: true)
+      ? await store.ensureVersion(
+          app,
+          versionName!,
+          create: true,
+          releaseType: releaseType,
+        )
       : null;
+
+  // **Effective, not intended**, the same rule the promote path states: read
+  // off the record Apple acknowledged rather than off the flag, because the
+  // interesting case is the run where nobody passed one. A `--prepare` step
+  // that leaves a version MANUAL and says nothing is how somebody discovers
+  // after approval that the release is waiting on a button they did not know
+  // about.
+  //
+  // Printed whenever a version exists rather than only when the flag was
+  // passed, for that reason exactly. Suppressed on a dry run, where nothing
+  // was written and the record's current value would be a claim a real run
+  // falsifies.
+  //
+  // **And suppressed when the caller prints it itself.** A promote resolves
+  // the version, reports the release type, and *then* publishes the listing —
+  // which comes back through here and reported it a second time. The line is
+  // this function's only when nobody upstream has already said it.
+  if (version != null && !store.writer.dryRun && reportReleaseType) {
+    final effective =
+        (version['attributes'] as Map<String, dynamic>?)?['releaseType'];
+    if (effective is String) {
+      say(
+        '==> release type: $effective'
+        '${effective == 'MANUAL' ? ' — release it yourself once approved' : ''}',
+      );
+    }
+  }
 
   // **The review contact is an acquisition too, and it refuses.**
   // `fromEnvironment` rejects a half-set contact and a malformed phone
@@ -997,13 +1202,13 @@ Future<Map<String, dynamic>?> _publishAscListing(
 
   final contentRights = changes.contentRights;
   if (contentRights != null) {
-    stdout.writeln('==> content rights');
+    say('==> content rights');
     await store.writeContentRights(app, contentRights);
   }
 
   if (appInfo != null) {
     if (changes.categories.isNotEmpty) {
-      stdout.writeln('==> categories');
+      say('==> categories');
       // Read every relationship first, including the four subcategory slots
       // this tool never writes — the check has to cover what the PATCH omits,
       // because omission is the thing in question. Skipped on a dry run,
@@ -1023,12 +1228,12 @@ Future<Map<String, dynamic>?> _publishAscListing(
     }
     final ageRating = changes.ageRating;
     if (ageRating != null) {
-      stdout.writeln('==> age rating');
+      say('==> age rating');
       await store.writeAgeRating(ageRating);
     }
 
     for (final entry in changes.localizations.entries) {
-      stdout.writeln('==> ${entry.key}: ${entry.value.keys.join(", ")}');
+      say('==> ${entry.key}: ${entry.value.keys.join(", ")}');
       await store.writeAppInfoLocalization(
         appInfo,
         entry.key,
@@ -1046,9 +1251,7 @@ Future<Map<String, dynamic>?> _publishAscListing(
   // than one fetched here — see the invariant beside that acquisition.
   if (needsVersion) {
     if (version == null) {
-      stdout.writeln(
-        '    (dry run created no version, so the fields below are skipped)',
-      );
+      say('    (dry run created no version, so the fields below are skipped)');
     } else {
       // **Compared before writing, the same as the app-level half above.**
       // These fields used to be rewritten with identical values on every run:
@@ -1069,20 +1272,35 @@ Future<Map<String, dynamic>?> _publishAscListing(
         // notes to send it with — see there.
         contact: reviewContact,
       );
+      versionLevel = versionChanges;
+
+      // **What Apple holds and the tree does not mention.** Not a difference —
+      // "present means owned" means an undeclared locale is one this
+      // repository makes no claim about — but the gap has to be visible rather
+      // than merely unclaimed, so a reader told "every field we declare
+      // agrees" can see what that sentence excluded.
+      final declared = {for (final l in metadata.locales) l.locale};
+      appleOnlyLocales = <String>[
+        for (final l in localizations) ...[
+          if ((l['attributes'] as Map<String, dynamic>?)?['locale']
+              case final String locale)
+            if (!declared.contains(locale)) ...[locale],
+        ],
+      ]..sort();
 
       if (versionChanges.isEmpty && declaresVersionText(metadata)) {
-        stdout.writeln('==> version text: already matches, nothing written');
+        say('==> version text: already matches, nothing written');
       }
 
       final copyright = versionChanges.copyright;
       if (copyright != null) {
-        stdout.writeln('==> copyright');
+        say('==> copyright');
         await store.writeVersionAttributes(version, {'copyright': copyright});
       }
 
       final reviewDetails = versionChanges.reviewDetails;
       if (reviewDetails != null) {
-        stdout.writeln('==> review notes');
+        say('==> review notes');
         await store.writeReviewDetails(
           version,
           reviewDetails.notes,
@@ -1094,9 +1312,7 @@ Future<Map<String, dynamic>?> _publishAscListing(
       for (final localeMetadata in metadata.locales) {
         final changedText = versionChanges.localizations[localeMetadata.locale];
         if (changedText != null) {
-          stdout.writeln(
-            '==> ${localeMetadata.locale}: ${changedText.keys.join(", ")}',
-          );
+          say('==> ${localeMetadata.locale}: ${changedText.keys.join(", ")}');
           await store.writeVersionLocalization(
             version,
             localeMetadata.locale,
@@ -1115,14 +1331,14 @@ Future<Map<String, dynamic>?> _publishAscListing(
             known: localizations,
           );
           if (localization == null) {
-            stdout.writeln(
+            say(
               '    (no ${localeMetadata.locale} localization yet, so its '
               'screenshots and previews are skipped)',
             );
             continue;
           }
           for (final entry in localeMetadata.screenshots.entries) {
-            stdout.writeln('==> ${localeMetadata.locale}: ${entry.key}');
+            say('==> ${localeMetadata.locale}: ${entry.key}');
             await store.replaceScreenshots(
               localization,
               entry.key,
@@ -1134,9 +1350,7 @@ Future<Map<String, dynamic>?> _publishAscListing(
           // already landed by the time this run starts waiting — and if the
           // wait times out, the screenshots are not left unwritten behind it.
           for (final entry in localeMetadata.previews.entries) {
-            stdout.writeln(
-              '==> ${localeMetadata.locale}: ${entry.key} (preview)',
-            );
+            say('==> ${localeMetadata.locale}: ${entry.key} (preview)');
             await store.replacePreviews(
               localization,
               entry.key,
@@ -1148,7 +1362,16 @@ Future<Map<String, dynamic>?> _publishAscListing(
       }
     }
   }
-  return version;
+  return ListingOutcome(
+    version: version,
+    app: changes,
+    versionLevel: versionLevel,
+    appleOnlyLocales: appleOnlyLocales,
+    // Set exactly where the prose says the fields are skipped, so the two
+    // cannot disagree about whether a comparison happened.
+    versionComparisonSkipped: needsVersion && version == null,
+    assetChanges: List<String>.unmodifiable(store.assetChanges),
+  );
 }
 
 /// Runs [cmd] against App Store Connect.
@@ -1273,6 +1496,56 @@ Future<void> runAsc(
   final noMetadata = cmd == AscCommand.upload && flag('no-metadata');
   if (noMetadata && opt('metadata') != null) {
     fail('--metadata and --no-metadata ask for opposite things');
+  }
+
+  // **Refused rather than ignored, and that is the whole decision.** The
+  // alternative was to accept `--json` on a real upload and let it do nothing,
+  // which is worse than it sounds: a flag that is neither honoured nor refused
+  // is a promise the caller cannot check, and people build a theory around it.
+  // The consumer who asked for this command has that scar from the other side
+  // — a build tool's flag ignored since a version bump, believed for a long
+  // time to be the difference between a passing and a failing run.
+  //
+  // This repository already answers it the same way: `--data-safety` is gone
+  // from `play upload` and gone *loudly*, still declared and hidden so that
+  // passing it names the command that took over.
+  // **A missing required argument is refused here, before credentials.**
+  //
+  // These two used to be checked inside their command branches, which run
+  // *after* the account is resolved — so `appstore previews` with no
+  // `--version-name` answered "no App Store Connect credentials", naming the
+  // environment for a mistake in the arguments. That is worst for exactly the
+  // person it reaches first: somebody who has not set the environment up yet
+  // is sent to fix something that is not broken, and the thing that is wrong
+  // goes unmentioned.
+  //
+  // It is the same instinct as the refusals below — an argument error is a
+  // refusal rather than a failure — applied one phase earlier. Reported by the
+  // consumer, who met it with the credentials genuinely absent.
+  if (const {AscCommand.previews, AscCommand.awaitPreviews}.contains(cmd)) {
+    final wanted = opt('version-name');
+    if (wanted == null || wanted.isEmpty) {
+      fail(
+        cmd == AscCommand.previews
+            ? 'which version? Pass `appstore previews --version-name 1.2.0`. '
+                  'Previews are version-scoped, so "the previews" has no '
+                  'single answer.'
+            : 'which version? Pass `appstore wait-previews --version-name '
+                  '1.2.0`. Deliberately not defaulted to the newest, for the '
+                  'reason `wait` gives about build numbers: waiting from '
+                  'another machine is waiting for a *specific* version, and '
+                  '"newest" would succeed on somebody else\'s.',
+      );
+    }
+  }
+
+  if (cmd == AscCommand.upload && flag('json') && !flag('dry-run')) {
+    fail(
+      '--json needs --dry-run. Every other --json here is a read, and this '
+      'one describes what a run *would* write — a document about writes that '
+      'already happened would have to describe partial ones, which an '
+      'intention never does. Add --dry-run, or drop --json.',
+    );
   }
   final betaGroup = opt('beta-group');
   // A promotion to a group publishes no listing — which is `--beta-group`'s
@@ -1913,11 +2186,25 @@ Future<void> runAsc(
     dryRun: dryRun,
     out: jsonOutput ? stderr : null,
   );
-  final store = AppStore(client, writer, platform: platform);
+  // **One sink for the whole class, set here.** `--json` reaches into
+  // `AppStore` now that `upload --dry-run --json` exists, and routing the
+  // reachable lines has been tried three times: each round covered what was
+  // reachable then, and the next flag to reach a new block undid it.
+  final store = AppStore(
+    client,
+    writer,
+    platform: platform,
+    out: jsonOutput ? stderr : null,
+  );
   started = store;
 
   if (dryRun) {
-    stdout.writeln(
+    // stderr under `--json`, on the rule this file states everywhere: stdout
+    // carries the document and nothing else. `--json` implies `--dry-run`
+    // here, so this is the one banner every document-producing run of this
+    // command reaches — which makes it the first thing a consumer's decoder
+    // would have hit.
+    (jsonOutput ? stderr : stdout).writeln(
       '==> dry run: every read happens, no write does. App Store Connect has\n'
       '    no edit transaction, so this cannot rehearse Apple\'s validation of\n'
       '    a write the way the Play uploader can.',
@@ -1954,14 +2241,8 @@ Future<void> runAsc(
       return;
     }
     if (cmd == AscCommand.previews) {
-      final wanted = args.option('version-name');
-      if (wanted == null || wanted.isEmpty) {
-        fail(
-          'which version? Pass `appstore previews --version-name 1.2.0`. '
-          'Previews are version-scoped, so "the previews" has no single '
-          'answer.',
-        );
-      }
+      // Refused offline, before any credential — see `requiredVersionName`.
+      final wanted = args.option('version-name')!;
       // **`readVersion`, not `ensureVersion`, and this is a read command.**
       // `ensureVersion` refuses anything outside `editableVersionStates`,
       // which is right for a write and absurd here: it answered `appstore
@@ -2016,16 +2297,8 @@ Future<void> runAsc(
     }
 
     if (cmd == AscCommand.awaitPreviews) {
-      final wanted = args.option('version-name');
-      if (wanted == null || wanted.isEmpty) {
-        fail(
-          'which version? Pass `appstore wait-previews --version-name 1.2.0`. '
-          'Deliberately not defaulted to the newest, for the reason `wait` '
-          'gives about build numbers: waiting from another machine is waiting '
-          'for a *specific* version, and "newest" would succeed on somebody '
-          "else's.",
-        );
-      }
+      // Refused offline, before any credential — see `requiredVersionName`.
+      final wanted = args.option('version-name')!;
       // **A read, like `previews` — see the note there.** Waiting on a version
       // Apple has already taken is legitimate and common: the assets finish
       // ingesting on Apple's schedule, not on the submission's.
@@ -2131,13 +2404,12 @@ Future<void> runAsc(
             continue;
           }
           for (final entry in locale.previews.entries) {
+            // The report follows [AppStore.out], set once where the store
+            // is built — `--json` points it at stderr.
             await store.assertPosterFramesOn(
               localization,
               entry.key,
               entry.value,
-              // Progress, so stderr under `--json` — and this one *writes*,
-              // so its report is the only record of what moved.
-              out: args.flag('json') ? stderr : null,
             );
           }
         }
@@ -2466,7 +2738,7 @@ Future<void> runAsc(
     // being shipped for the copy to be ahead of, and moving the live page now
     // is the entire purpose of the command.
     if (publish == ListingPublish.none && metadata != null) {
-      stdout.writeln(
+      (jsonOutput ? stderr : stdout).writeln(
         '==> listing: untouched — an upload does not publish it.\n'
         '    Publish deliberately with --metadata and no artifact.',
       );
@@ -2485,6 +2757,8 @@ Future<void> runAsc(
         // command that publishes a preview never consulted it — an escape
         // hatch that existed, was spelled correctly, and was unreachable.
         skipPreviewWait: flag('skip-waiting'),
+        releaseType: releaseType,
+        out: jsonOutput ? stderr : null,
       );
       // **The "What's New" a listing-only publish used to drop on the floor.**
       // `--changelog` is accepted by this command and was read only for the
@@ -2521,7 +2795,7 @@ Future<void> runAsc(
           '        --metadata ${metadataPath ?? '<tree>'}',
         );
       }
-      if (published == null &&
+      if (published.version == null &&
           (opt('changelog') != null || notesPath != null)) {
         // **The narrowed remains of the defect this change closes.** A tree
         // declaring only app-level fields — categories, age rating, content
@@ -2530,7 +2804,7 @@ Future<void> runAsc(
         // genuinely not publishable here, but saying nothing is what the
         // original bug did, and the whole point is that a flag taken and
         // dropped must not look like a command that did what was asked.
-        stdout.writeln(
+        (jsonOutput ? stderr : stdout).writeln(
           '==> release notes skipped: this tree declares nothing Apple scopes '
           'to a version,\n'
           '    so no version was created to carry them. Add version-scoped '
@@ -2538,11 +2812,11 @@ Future<void> runAsc(
           '    or publish the notes with `appstore promote --changelog`.',
         );
       }
-      if (published != null) {
+      if (published.version case final versionRecord?) {
         await publishReleaseNotes(
           store,
           app,
-          published,
+          versionRecord,
           locale,
           listingReleaseNotes,
           versionName,
@@ -2550,6 +2824,70 @@ Future<void> runAsc(
             for (final l in metadata.locales) ...{l.locale},
           },
         );
+      }
+
+      // **The document, and the run stops here.** Under `--dry-run --json`
+      // nothing after this point would write anything either — the promote
+      // block is gated on `promote` and an artifact upload on having one — but
+      // returning is what keeps stdout to a single document rather than
+      // relying on the rest of this function staying quiet.
+      //
+      // Exit 0 whatever `matches` says. It is an answer, not a failure: a
+      // caller reading the document has the fact, and putting it in the status
+      // as well would be two sources for one thing, free to disagree, with
+      // somebody later having to decide which wins.
+      if (jsonOutput) {
+        writeJsonDocument(
+          appStoreListingDiffDocument(
+            published,
+            platform: platform,
+            bundleId: bundleId,
+            versionName: published.version == null ? null : versionName,
+            // **Never empty, which README.md promises of every `display` and
+            // this one broke.** The lines came only from `changedByLocale`, so
+            // a difference in a field that is not per-locale — `copyright`, a
+            // category, an age rating — rendered `matches: false` beside an
+            // empty array. A caller following the documented advice, *print
+            // those lines rather than rendering the fields yourself*, showed
+            // nothing at all for a genuine mismatch.
+            display: <String>[
+              if (published.matches)
+                'every field this tree declares already matches the App Store'
+              else ...[
+                if (published.versionComparisonSkipped) ...[
+                  'no $versionName on the App Store yet, so nothing '
+                      'version-scoped could be compared — all of it would be '
+                      'written',
+                ],
+                for (final entry in published.changedByLocale.entries) ...[
+                  '${entry.key}: ${entry.value.join(", ")}',
+                ],
+                for (final field
+                    in published.versionLevel?.copyright == null
+                        ? const <String>[]
+                        : const <String>['copyright']) ...['version: $field'],
+                if (published.versionLevel?.reviewDetails != null) ...[
+                  'version: reviewDetails',
+                ],
+                if (published.app?.categories.isNotEmpty ?? false) ...[
+                  'app: categories',
+                ],
+                if (published.app?.ageRating != null) ...['app: ageRating'],
+                if (published.app?.contentRights != null) ...[
+                  'app: contentRights',
+                ],
+                for (final asset in published.assetChanges) ...[
+                  '$asset differ',
+                ],
+              ],
+              for (final locale in published.appleOnlyLocales) ...[
+                'note: Apple also holds $locale, which this tree does not '
+                    'declare',
+              ],
+            ],
+          ),
+        );
+        return;
       }
     }
 
@@ -2649,9 +2987,13 @@ Future<void> runAsc(
         // release went out MANUAL after somebody had decided otherwise, and
         // no line anywhere said so.
         //
-        // Promote only. A listing publish also creates a version, but it is
-        // not deciding how a release starts — the promote that later adopts
-        // that version is, and this is where the decision lands.
+        // **This used to say "promote only", on the reasoning that a listing
+        // publish creates a version but does not decide how a release
+        // starts.** That was wrong about a flow it did not know: a `--prepare`
+        // step publishes the listing and stops, so the version it creates is
+        // the one that gets submitted by hand, and its release type is decided
+        // there and nowhere else. `_publishAscListing` prints the same line
+        // for the same reason.
         //
         // Suppressed on a dry run, where nothing was written: printing the
         // record's current value beside a flag asking for a different one
@@ -2707,6 +3049,8 @@ Future<void> runAsc(
             locale,
             versionName,
             fail,
+            // Already reported above, against the same record.
+            reportReleaseType: false,
           );
         }
 

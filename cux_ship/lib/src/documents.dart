@@ -63,15 +63,30 @@ part 'documents.g.dart';
 ///
 /// **Read before `schema`.** The counters are per kind, so a reader that
 /// checks the number first has checked it against nothing. Closed, with no
-/// `unknown` member, because these three are this package's own names rather
-/// than a store's — an unrecognized one means the document came from a version
-/// that knows a kind this one does not, and refusing is the answer.
+/// `unknown` member, because these are this package's own names rather than a
+/// store's — an unrecognized one means the document came from a version that
+/// knows a kind this one does not, and refusing is the answer.
+///
+/// The word here used to be "these three", which was wrong from the moment a
+/// fourth arrived and wrong again at the fifth. A count in prose is a fact that
+/// goes stale without anybody editing it.
 @JsonEnum(valueField: 'wire')
 enum DocumentKind {
   appStoreBuilds('appstore.builds'),
   appStoreVersions('appstore.versions'),
   appStorePreviews('appstore.previews'),
-  playTracks('play.tracks');
+  playTracks('play.tracks'),
+
+  /// **Named for what it describes, not for the flag that produced it.**
+  /// `appstore.dry-run` was the first name and named the *mode*, which would
+  /// have spent the word on this document and left the next command to grow a
+  /// dry run without it.
+  appStoreListingDiff('appstore.listing-diff'),
+
+  /// **The one kind that describes no store.** `verify` is offline and reads
+  /// the repository, so there is no platform and no bundle id — which is why
+  /// it is not `appstore.verify`.
+  verify('verify');
 
   const DocumentKind(this.wire);
 
@@ -1164,3 +1179,220 @@ class PlayTracksDocument {
 /// than two — the encoder computes it from the same set.
 bool isEditableVersionState(String? state) =>
     state != null && editableVersionStates.contains(state);
+
+/// One artifact `verify` looked at, or declined to.
+///
+/// **`what` is a kind rather than a sentence**, so a caller can branch on it —
+/// `changelog`, `section`, `appstore`, `play`, `data-safety`. [where] says
+/// which one, absent when there was nothing to find.
+@JsonSerializable(explicitToJson: true)
+class VerifyCheck {
+  const VerifyCheck({required this.what, this.where, this.why});
+
+  factory VerifyCheck.fromJson(Map<String, dynamic> json) =>
+      _$VerifyCheckFromJson(json);
+
+  /// What kind of artifact this is.
+  final String what;
+
+  /// Which one, for a check that ran. Null in [VerifyDocument.skipped].
+  ///
+  /// **Not called `path`, which is what it was first**, because two of the
+  /// five are not paths: `section` carries `1.0.1 (pubspec.yaml)` — a version
+  /// and where it was declared — and `appstore` carries the tree with the
+  /// platform it was checked against, since one path cannot say which of the
+  /// two rule sets applied. A field named `path` holding those would be a name
+  /// a consumer could reasonably `File()` and be wrong about.
+  ///
+  /// It is exactly the string the report prints after the artifact's name, so
+  /// the document and the prose cannot drift.
+  final String? where;
+
+  /// Why it did not run. Null in [VerifyDocument.checked].
+  ///
+  /// A sentence, because the reason is for a person: the caller has already
+  /// branched on [what] by the time it reads this.
+  final String? why;
+
+  Map<String, dynamic> toJson() => _$VerifyCheckToJson(this);
+}
+
+/// `cux_ship verify --json`.
+///
+/// **[checked] and [skipped] are the point, not [ok].** A caller reading `ok:
+/// true` alone has learned nothing about *coverage* — which is the defect the
+/// prose version was changed to close, when a clean run printed one line and a
+/// reader could not tell whether the data safety declaration had been
+/// validated or silently passed over.
+///
+/// [checked] alone was not enough either, and the consumer said why: a reader
+/// notices an omission only by already holding the expected set in their head,
+/// so a check that silently did not run is invisible unless somebody is
+/// keeping the list. [skipped] makes it impossible to miss rather than merely
+/// possible to catch — **absence stops being inferred from what is not in a
+/// list**, which is a thing nobody does reliably.
+@JsonSerializable(explicitToJson: true)
+class VerifyDocument {
+  const VerifyDocument({
+    required this.schema,
+    required this.kind,
+    required this.ok,
+    required this.checked,
+    required this.skipped,
+    required this.problems,
+    required this.display,
+  });
+
+  factory VerifyDocument.fromJson(Map<String, dynamic> json) =>
+      _$VerifyDocumentFromJson(json);
+
+  /// This kind's schema number. Refuse one you do not recognize.
+  final int schema;
+
+  final DocumentKind kind;
+
+  /// Whether every check that ran found nothing.
+  ///
+  /// **Not "the release is publishable" on its own** — read it beside
+  /// [skipped], because a run that checked one artifact and skipped three is
+  /// `ok: true` and says almost nothing.
+  final bool ok;
+
+  /// Every artifact that was inspected, with where it was found.
+  final List<VerifyCheck> checked;
+
+  /// Every artifact that was not, with why.
+  final List<VerifyCheck> skipped;
+
+  /// What was wrong, each written for a person to read and fix.
+  ///
+  /// **Strings rather than structure, deliberately.** Nobody has asked to
+  /// branch on a problem's identity — the consumer prints them and counts
+  /// them — and starting with strings makes a structured version an addition
+  /// rather than a replacement. See `dry-run-json.md`.
+  final List<String> problems;
+
+  /// What `cux_ship verify` prints. Display text.
+  final List<String> display;
+
+  Map<String, dynamic> toJson() => _$VerifyDocumentToJson(this);
+}
+
+/// What one scope of a listing would have written.
+///
+/// **Field names, not values.** A document carrying both copies of every
+/// string is one nobody reads, and the tree is on disk while the store is one
+/// read away — so naming `en-US` and `description, keywords` is enough for a
+/// reader to act, which means opening the command. Values are an addition
+/// later rather than a removal.
+@JsonSerializable(explicitToJson: true)
+class ListingChangeSet {
+  const ListingChangeSet({required this.fields, required this.localizations});
+
+  factory ListingChangeSet.fromJson(Map<String, dynamic> json) =>
+      _$ListingChangeSetFromJson(json);
+
+  /// Scope-wide fields that differ, e.g. `copyright`, `contentRights`,
+  /// `ageRating`, `categories`, `reviewDetails`.
+  final List<String> fields;
+
+  /// Locale to the attribute names that differ in it.
+  final Map<String, List<String>> localizations;
+
+  Map<String, dynamic> toJson() => _$ListingChangeSetToJson(this);
+}
+
+/// `cux_ship appstore upload --metadata … --dry-run --json`.
+///
+/// **[matches] is the answer and the reason this exists.** A readiness check
+/// asking *"is the store still showing the repository's listing?"* had to run
+/// the dry run and match its prose with a regular expression, which is the
+/// thing this package exists to stop people doing.
+///
+/// **It is not a claim that the store page is correct**, and the difference is
+/// load-bearing. It means every field this repository *declares* agrees with
+/// Apple. A field the tree does not name is not compared, because "present
+/// means owned" is the tree's rule everywhere — so a description edited in App
+/// Store Connect, in a locale the tree does not carry, is invisible to it.
+///
+/// [appleOnlyLocales] is that exclusion made visible rather than merely
+/// unclaimed. Without it, `matches: true` beside a `de-DE` nobody here declares
+/// is a true statement whose reader draws a stronger conclusion — the same
+/// shape as a rollout status reading as "live" when the store had not approved
+/// it.
+@JsonSerializable(explicitToJson: true)
+class AppStoreListingDiffDocument {
+  const AppStoreListingDiffDocument({
+    required this.schema,
+    required this.kind,
+    required this.platform,
+    required this.bundleId,
+    required this.versionName,
+    required this.matches,
+    required this.version,
+    required this.app,
+    required this.assets,
+    required this.appleOnlyLocales,
+    required this.display,
+  });
+
+  factory AppStoreListingDiffDocument.fromJson(Map<String, dynamic> json) =>
+      _$AppStoreListingDiffDocumentFromJson(json);
+
+  /// This kind's schema number. Refuse one you do not recognize.
+  final int schema;
+
+  final DocumentKind kind;
+
+  @JsonKey(toJson: _platformToJson, fromJson: _platformFromJson)
+  final AscPlatform platform;
+
+  final String bundleId;
+
+  /// The version the listing was compared against, or null when the tree
+  /// declares nothing Apple scopes to a version.
+  final String? versionName;
+
+  /// **The answer**: true when nothing this repository declares would change.
+  ///
+  /// Covers all three scopes — [version], [app] and [assets]. It shipped
+  /// covering the first two, so a replaced screenshot reported `true`.
+  ///
+  /// **False whenever the comparison could not be made**, which is not the
+  /// same statement as "something differs" and is deliberately reported the
+  /// same way. A dry run creates no version, so a tree whose version Apple
+  /// does not hold yet has nothing to compare against — and in that state
+  /// every version-scoped field would in fact be written, so `false` is also
+  /// the truthful answer. It returned `true` there, reading absence as
+  /// agreement, on every dry run before a release is prepared.
+  ///
+  /// Read [appleOnlyLocales] beside it before saying the listing matches.
+  final bool matches;
+
+  /// Version-scoped differences — the listing text, copyright, review details.
+  final ListingChangeSet version;
+
+  /// App-scoped differences — categories, age rating, content rights, and the
+  /// app-info localizations.
+  final ListingChangeSet app;
+
+  /// Screenshot and preview sets that differ, as `<type> <kind>`.
+  ///
+  /// **Not a [ListingChangeSet], because an asset set has no field names.**
+  /// What differs is the set itself — its files, or a preview's poster frame —
+  /// and naming the type and kind is what a reader acts on.
+  final List<String> assets;
+
+  /// Locales Apple holds that the tree never mentions.
+  ///
+  /// Empty is the ordinary answer. Non-empty does **not** make [matches]
+  /// false: these are locales this repository makes no claim about, and
+  /// treating them as differences would report a permanent mismatch for every
+  /// project whose tree is deliberately partial.
+  final List<String> appleOnlyLocales;
+
+  /// What the command prints. Display text.
+  final List<String> display;
+
+  Map<String, dynamic> toJson() => _$AppStoreListingDiffDocumentToJson(this);
+}

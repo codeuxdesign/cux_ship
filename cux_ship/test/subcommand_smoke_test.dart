@@ -219,6 +219,209 @@ void main() {
     );
   });
 
+  test('a missing --version-name is refused before credentials are', () {
+    // **The order is the finding.** These refusals used to sit inside their
+    // command branches, which run after the account is resolved — so a run
+    // with neither the argument nor the environment answered "no App Store
+    // Connect credentials", naming the environment for a mistake in the
+    // arguments and sending somebody to fix a thing that was not broken.
+    //
+    // It also made them untestable: `fail` calls `exit`, and a subprocess
+    // could not reach them without a real account. Moving them offline is what
+    // gives them a test at all, which is the second reason it was worth doing.
+    for (final command in const ['previews', 'wait-previews']) {
+      final result = Process.runSync(
+        Platform.resolvedExecutable,
+        [
+          '--enable-asserts',
+          cliSnapshot,
+          'appstore',
+          command,
+          '--bundle-id',
+          'design.codeux.consumer',
+        ],
+        workingDirectory: repo.path,
+        environment: {'APPLE_API_KEY_ID': '', 'APPLE_API_PRIVATE_KEY_PATH': ''},
+      );
+      final said = '${result.stdout}${result.stderr}';
+
+      expect(result.exitCode, isNot(0), reason: said);
+      expect(said, contains('which version?'), reason: command);
+      expect(
+        said,
+        isNot(contains('no App Store Connect credentials')),
+        reason: 'the arguments are wrong, and that is what must be said',
+      );
+    }
+  });
+
+  test('an empty --version-name is refused too, not treated as given', () {
+    // **`--version-name ""` parses, and an `== null` check waves it through**
+    // — the option is present, so the parser is satisfied and only the
+    // emptiness test catches it. A run that got past here would ask Apple for
+    // a version named nothing, and the 404 would name the argument as `` in a
+    // sentence about App Store Connect rather than about the command line.
+    //
+    // Easy to write a guard for and easy to write only half of, which is why
+    // it is a case rather than a line in the one above: a mutation dropping
+    // `wanted.isEmpty` leaves that test green.
+    final result = Process.runSync(
+      Platform.resolvedExecutable,
+      [
+        '--enable-asserts',
+        cliSnapshot,
+        'appstore',
+        'previews',
+        '--bundle-id',
+        'design.codeux.consumer',
+        '--version-name',
+        '',
+      ],
+      workingDirectory: repo.path,
+      environment: {'APPLE_API_KEY_ID': '', 'APPLE_API_PRIVATE_KEY_PATH': ''},
+    );
+    final said = '${result.stdout}${result.stderr}';
+
+    expect(result.exitCode, isNot(0), reason: said);
+    expect(said, contains('which version?'));
+    expect(said, isNot(contains('no App Store Connect credentials')));
+  });
+
+  test('upload takes --release-type, and refuses a value Apple has not', () {
+    // **The flag is new on `upload`** — it was declared inside the promote
+    // case, so a `--prepare` flow that creates the version through
+    // `upload --metadata` could not set it and got the MANUAL create default
+    // with nothing available to change it.
+    //
+    // Two halves, because either alone is satisfied by the wrong build: the
+    // parser must *accept* it here (a command that still rejected it would
+    // pass a refusal test), and the value must be validated (a command that
+    // accepted anything would pass an acceptance test).
+    final accepted = Process.runSync(
+      Platform.resolvedExecutable,
+      [
+        '--enable-asserts',
+        cliSnapshot,
+        'appstore',
+        'upload',
+        '--bundle-id',
+        'design.codeux.consumer',
+        '--version-name',
+        '1.1.6',
+        '--release-type',
+        'AFTER_APPROVAL',
+      ],
+      workingDirectory: repo.path,
+      environment: {'APPLE_API_KEY_ID': '', 'APPLE_API_PRIVATE_KEY_PATH': ''},
+    );
+    final acceptedSaid = '${accepted.stdout}${accepted.stderr}';
+    expect(
+      acceptedSaid,
+      isNot(contains('Could not find an option')),
+      reason: 'the parser has to know the flag on upload, not only on promote',
+    );
+
+    final refused = Process.runSync(
+      Platform.resolvedExecutable,
+      [
+        '--enable-asserts',
+        cliSnapshot,
+        'appstore',
+        'upload',
+        '--bundle-id',
+        'design.codeux.consumer',
+        '--version-name',
+        '1.1.6',
+        '--release-type',
+        'NONSENSE',
+      ],
+      workingDirectory: repo.path,
+      environment: {'APPLE_API_KEY_ID': '', 'APPLE_API_PRIVATE_KEY_PATH': ''},
+    );
+    final refusedSaid = '${refused.stdout}${refused.stderr}';
+    expect(refused.exitCode, isNot(0), reason: refusedSaid);
+    expect(refusedSaid, contains('NONSENSE'));
+    expect(
+      refusedSaid,
+      isNot(contains('no App Store Connect credentials')),
+      reason: 'the value is wrong, and the refusal is offline',
+    );
+  });
+
+  test('upload --json without --dry-run is refused, not ignored', () {
+    // **Refused rather than inert, which is the decision this pins.** A flag
+    // accepted and doing nothing is a promise the caller cannot check, and the
+    // consumer who asked for this has the scar from the other side: a build
+    // tool's flag ignored since a version bump, believed for a long time to be
+    // the difference between a passing and a failing run.
+    //
+    // The refusal is offline — it fires with the other incompatible-flag
+    // checks, long before credentials — so this reaches it with none.
+    final result = Process.runSync(
+      Platform.resolvedExecutable,
+      [
+        '--enable-asserts',
+        cliSnapshot,
+        'appstore',
+        'upload',
+        '--bundle-id',
+        'design.codeux.consumer',
+        '--version-name',
+        '1.1.6',
+        '--json',
+      ],
+      workingDirectory: repo.path,
+      environment: {'APPLE_API_KEY_ID': '', 'APPLE_API_PRIVATE_KEY_PATH': ''},
+    );
+    final said = '${result.stdout}${result.stderr}';
+
+    expect(result.exitCode, isNot(0), reason: said);
+    expect(said, contains('--json needs --dry-run'));
+    // **The discriminator.** Without the refusal the run carries on and dies
+    // at the credential check instead, so asserting only "non-zero" would pass
+    // against the inert version this exists to forbid.
+    expect(
+      said,
+      isNot(contains('no App Store Connect credentials')),
+      reason: 'a run that reached credentials never refused the flag',
+    );
+  });
+
+  test('upload --json with --dry-run is accepted', () {
+    // The other half: the refusal must be about the pairing, not about the
+    // flag. Without this, a command that always refused `--json` would satisfy
+    // the case above.
+    final result = Process.runSync(
+      Platform.resolvedExecutable,
+      [
+        '--enable-asserts',
+        cliSnapshot,
+        'appstore',
+        'upload',
+        '--bundle-id',
+        'design.codeux.consumer',
+        '--version-name',
+        '1.1.6',
+        '--json',
+        '--dry-run',
+      ],
+      workingDirectory: repo.path,
+      environment: {'APPLE_API_KEY_ID': '', 'APPLE_API_PRIVATE_KEY_PATH': ''},
+    );
+    final said = '${result.stdout}${result.stderr}';
+
+    expect(said, isNot(contains('--json needs --dry-run')));
+    // **It gets *past* the pairing check and refuses further on**, for having
+    // nothing to publish — this fixture is a bare repository. That is the
+    // assertion worth making: naming a later refusal proves the earlier one
+    // did not fire, where "exit non-zero" would be satisfied by either.
+    expect(
+      said,
+      contains('nothing to do'),
+      reason: 'the pairing is accepted, so the run reaches a later refusal',
+    );
+  });
+
   test('wait-previews without --metadata does not invent a tree', () {
     // The other half: the option is optional, and a run that omits it must
     // reach the credential check rather than refuse offline. Without this, the

@@ -49,6 +49,70 @@ to choose. The document uses Apple's own field names, `videoDeliveryState`,
 Apple's reference without a translation table; `done` is this package's own
 opinion over both states and says so in a field of its own.
 
+**`package:cux_ship/exit_codes.dart`** exports the four exit-code constants, so
+a caller spawning the binary can name `noSuchVersionExit` instead of writing
+`5` with a comment beside it. Its own library rather than a corner of
+`documents.dart`, whose rule about field names and JSON keys a handful of
+integers does not fit, and not `read.dart`, which is for callers that spawn
+nothing. Reported by a consumer, ranked below everything else and right that it
+is readability rather than correctness — an existing code never changes
+meaning, so a hard-coded digit stays correct.
+
+**`appstore upload` takes `--release-type`.** It was declared on `promote`
+alone, so a flow that publishes the listing and stops — no artifact, no
+promote, so a human can read the finished page before submitting — created the
+App Store version through `upload --metadata`, got the `MANUAL` create default,
+and had no command available to it that could say otherwise. The release type
+of the version somebody then submits by hand was decided by a default nobody
+chose.
+
+The listing path also reports the effective value now, as the promote path
+does: read back from the record Apple acknowledged rather than echoed from the
+flag, and printed whether or not one was passed — because the case worth
+naming is the run where nobody did. Reported by a consumer running exactly that
+flow.
+
+**`matches` covers all three scopes, and is false when it could not compare.**
+It shipped covering the version and app text only, so replacing a screenshot
+reported `matches: true` — and a dry run for a version Apple does not hold yet
+reported `true` as well, reading "not compared" as "nothing differs" while the
+prose beside it said the fields were skipped. Assets are recorded now and
+carried as `assets`, and an unmade comparison is never an agreement.
+
+**`appstore upload --metadata … --dry-run --json`.** One document saying
+whether the App Store still shows what the repository declares, and where it
+does not: `matches`, plus the changed field names per locale, split into
+`version` and `app` because Apple files the listing text across two resources.
+The comparison is not new — `versionLevelChanges` and `appLevelChanges` have
+always computed it, field by field, and a run flattened it into prose that a
+readiness check then had to match with a regular expression.
+
+**`matches: true` is not "the store page is correct"**, and the difference is
+carried in the document rather than left in a doc comment. It means every field
+this repository *declares* agrees with Apple; a locale the tree never mentions
+is nobody's claim, so it does not make the answer false — and `appleOnlyLocales`
+names those, because unclaimed and invisible are not the same thing.
+
+**`--json` is refused without `--dry-run`** rather than accepted and ignored: a
+flag that does nothing is a promise a caller cannot check. A difference exits
+**0**, because it is an answer rather than a failure — the opposite call from
+`verify --json`, which exits 1 because it exists to fail a build.
+
+**`verify --json`.** One document on stdout carrying `ok`, `problems`, and —
+the reason it has the shape it does — both `checked` and `skipped`. `checked`
+names every artifact inspected and where; `skipped` names every one that was
+not, and why. With `checked` alone a reader notices an omission only by already
+holding the expected set in their head, so a check that silently did not run is
+invisible unless somebody is keeping the list: the same failure the `checked`
+lines were added to close, one level up. Asked for by the consumer, who spotted
+that the fix had it too.
+
+`ok` is computed from `problems` rather than assembled beside it, so the two
+cannot disagree. Problems stay strings, because nobody has asked to branch on a
+problem's identity and starting with strings makes structure an addition rather
+than a replacement. A run with nothing to check is still a refusal rather than
+an empty document.
+
 **`AppStorePreviewsDocument` and `AppStorePreviewEntry` are exported.** They
 were missing from `lib/documents.dart`'s `show` list, so the feature shipped
 with a working flag, an emitted document and a `kind` a caller could name — and

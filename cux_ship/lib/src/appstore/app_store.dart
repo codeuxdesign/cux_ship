@@ -574,15 +574,6 @@ PublishedPreview readPublishedPreview(Map<String, dynamic> preview) {
 String? _nonEmpty(String? value) =>
     value == null || value.isEmpty ? null : value;
 
-/// Writes one report line to [out], or to [stdout] when it is null.
-///
-/// **A function rather than a local holding the sink**, because `close_sinks`
-/// reads `final sink = out ?? stdout` as a sink the method forgot to close.
-/// `cli.dart` writes the same workaround out as a branch for the same lint and
-/// says it is not wrong to ask; a helper is the version that scales past one
-/// line.
-void _say(IOSink? out, String line) => (out ?? stdout).writeln(line);
-
 /// Apple's ingestion verdict on a preview's *video*, or null if it reported
 /// none.
 ///
@@ -1786,11 +1777,32 @@ class App {
 }
 
 class AppStore {
-  AppStore(this.client, this.writer, {required this.platform});
+  AppStore(this.client, this.writer, {required this.platform, this.out});
 
   final AscClient client;
   final Writer writer;
   final AscPlatform platform;
+
+  /// Where this class's running report goes, or null for [stdout].
+  ///
+  /// **`--json` reaches deep into here now, which it did not when the flag was
+  /// only on reads.** `upload --metadata --dry-run --json` runs the listing
+  /// publisher, which calls into this class, which announces what it compared
+  /// and what it would write — and every one of those lines would land in
+  /// front of the document.
+  ///
+  /// Routing the class rather than the reachable lines is deliberate. Three
+  /// separate rounds of this fix have each covered the writes that were
+  /// reachable *then*, and each time the next flag to reach a new block
+  /// reintroduced the defect. A caller that sets this once cannot be
+  /// undone by somebody adding a line.
+  final IOSink? out;
+
+  /// Writes one report line to [out], or to [stdout] when it is null.
+  ///
+  /// A method rather than a local holding the sink, because `close_sinks`
+  /// reads `final sink = out ?? stdout` as a sink this class forgot to close.
+  void say(String line) => (out ?? stdout).writeln(line);
 
   /// What this run did to a version record, or null if it did nothing to one.
   ///
@@ -2028,7 +2040,7 @@ class AppStore {
   Future<void> listBetaGroups(App app) async {
     final groups = await betaGroups(app);
     if (groups.isEmpty) {
-      stdout.writeln(
+      say(
         '  no beta groups — create one in App Store Connect > TestFlight > '
         'Groups. They cannot be created over the API.',
       );
@@ -2047,7 +2059,7 @@ class AppStore {
       );
     for (final group in sorted) {
       final attributes = _attributes(group);
-      stdout.writeln(
+      say(
         '  ${attributes['name']}  '
         '${betaGroupKind(group).name}'
         '${attributes['publicLinkEnabled'] == true ? '  (public link)' : ''}',
@@ -2197,9 +2209,7 @@ class AppStore {
           'new build; a build is submitted at most once.',
         );
       }
-      stdout.writeln(
-        '    already submitted for beta review — Apple says $state',
-      );
+      say('    already submitted for beta review — Apple says $state');
       return;
     }
     await writer.post('/v1/betaAppReviewSubmissions', {
@@ -2222,7 +2232,7 @@ class AppStore {
     final state = data is Map<String, dynamic>
         ? _attributes(data)['externalBuildState']
         : null;
-    stdout.writeln('==> external build state: ${state ?? '(not reported)'}');
+    say('==> external build state: ${state ?? '(not reported)'}');
   }
 
   // ---------------------------------------------------------------- versions
@@ -2910,12 +2920,14 @@ class AppStore {
         published: published.map(readPublishedScreenshot).toList(),
         local: files.map(localScreenshot).toList(),
       )) {
-        stdout.writeln(
+        say(
           '    $displayType: ${files.length} screenshot(s) already published, '
           'unchanged',
         );
         return;
       }
+      // Past the skip, so the comparison said these differ.
+      assetChanges.add('$displayType screenshots');
 
       await writer.delete(
         '/v1/appScreenshotSets/$setId',
@@ -3031,7 +3043,7 @@ class AppStore {
         ], request: 'GET /v1/appScreenshots');
       }
       if (!announced) {
-        stdout.writeln(
+        say(
           '      waiting for Apple to process '
           '${pending.length} screenshot(s)',
         );
@@ -3115,7 +3127,7 @@ class AppStore {
         ...why,
       ], request: 'PATCH /v1/appScreenshots');
     }
-    stdout.writeln('      sent $name');
+    say('      sent $name');
     return screenshotId;
   }
 
@@ -3130,6 +3142,22 @@ class AppStore {
   /// neither. Threading a result back through `_publishAscListing` for one
   /// line of output would widen a signature two callers share.
   final previewsLeftIngesting = <String>[];
+
+  /// Asset sets this run found different from the tree, as `<type> <kind>`.
+  ///
+  /// **Screenshots and previews are compared and the answer was thrown away.**
+  /// Both `replaceScreenshots` and `replacePreviews` decide, against what
+  /// Apple holds, whether anything needs writing — and both report that as
+  /// prose and return `void`. So `upload --dry-run --json` could say a listing
+  /// matched while a replaced screenshot was waiting to be uploaded: the
+  /// comparison had run, said "different", printed a line, and told the caller
+  /// nothing.
+  ///
+  /// Recorded rather than returned because both methods are called in a loop
+  /// per locale and per type, and a return value would have to be merged by
+  /// every caller. This is the shape [previewsLeftIngesting] already uses for
+  /// the same reason.
+  final assetChanges = <String>[];
 
   /// Replaces one preview type's videos with [previews].
   ///
@@ -3186,18 +3214,21 @@ class AppStore {
       final plan = previewPlan(published: held, local: local);
 
       if (plan == PreviewPlan.unchanged) {
-        stdout.writeln(
+        say(
           '    $previewType: ${previews.length} preview(s) already published, '
           'unchanged',
         );
         for (var i = 0; i < held.length; i++) {
-          stdout.writeln(
+          say(
             '      ${held[i].fileName}: '
             '${describePreviewFrame(held[i].frameTimeCode)}',
           );
         }
         return;
       }
+      // Past the skip: a retime and a replace are both differences, and a
+      // poster frame that moved is the one a reader most wants named.
+      assetChanges.add('$previewType previews');
 
       if (plan == PreviewPlan.retime) {
         await _retimePreviews(previewType, held, local);
@@ -3230,7 +3261,7 @@ class AppStore {
       // been sent anyway — for a preview that is the whole point of the dry
       // run, since the poster frame is the input nobody can see afterwards.
       for (final preview in previews) {
-        stdout.writeln(
+        say(
           '      would send ${preview.file.uri.pathSegments.last}, '
           '${describePreviewFrame(preview.frameTimeCode)}',
         );
@@ -3249,7 +3280,7 @@ class AppStore {
     if (skipWaiting) {
       final locale = _attributes(localization)['locale'] as String?;
       previewsLeftIngesting.add('${locale ?? '?'}/$previewType');
-      stdout.writeln(
+      say(
         '      not waiting for Apple to process these, as asked — and the '
         'poster frame is not set yet',
       );
@@ -3304,15 +3335,17 @@ class AppStore {
   /// `upload --skip-waiting` deferred. It uploads nothing and deletes nothing:
   /// if Apple does not hold the set, there is nothing here to correct and the
   /// caller is told rather than having a set created underneath it.
-  /// [out] is where the report goes, defaulting to [stdout]. `wait-previews
-  /// --json` passes [stderr]: this is progress, and stdout carries the
-  /// document.
+  /// The report goes wherever [AppStore.out] says — `--json` points it at
+  /// stderr, because stdout carries the document.
+  ///
+  /// **This used to take an `out` of its own**, added when this was the only
+  /// method `--json` could reach. It is a field on the class now: the next
+  /// method a flag reaches should not need the same parameter added to it.
   Future<void> assertPosterFramesOn(
     Map<String, dynamic> localization,
     String previewType,
-    List<LocalPreview> previews, {
-    IOSink? out,
-  }) async {
+    List<LocalPreview> previews,
+  ) async {
     final sets = await client.getAll(
       '/v1/appStoreVersionLocalizations/${_id(localization)}/appPreviewSets',
     );
@@ -3320,19 +3353,13 @@ class AppStore {
         .where((s) => _attributes(s)['previewType'] == previewType)
         .toList();
     if (existing.isEmpty) {
-      _say(
-        out,
+      say(
         '    $previewType: Apple holds no previews of this type, so there is '
         'no poster frame to assert — publish them first',
       );
       return;
     }
-    await _assertPosterFrames(
-      _id(existing.first)!,
-      previewType,
-      previews,
-      out: out,
-    );
+    await _assertPosterFrames(_id(existing.first)!, previewType, previews);
   }
 
   /// Sets each preview's poster frame *after* Apple has finished ingesting it,
@@ -3357,9 +3384,8 @@ class AppStore {
   Future<void> _assertPosterFrames(
     String setId,
     String previewType,
-    List<LocalPreview> previews, {
-    IOSink? out,
-  }) async {
+    List<LocalPreview> previews,
+  ) async {
     if (writer.dryRun) {
       return;
     }
@@ -3383,8 +3409,7 @@ class AppStore {
       // preview this run could not find. Same class as the blank print, with
       // the opposite symptom.
       if (apple == null || apple.id == null) {
-        _say(
-          out,
+        say(
           '      $name: Apple did not report this preview back, so what it is '
           'posed at is unknown — check App Store Connect',
         );
@@ -3404,8 +3429,7 @@ class AppStore {
       // decision. Apple's value is worth showing beside it, and never instead
       // of it.
       if (wanted == null) {
-        _say(
-          out,
+        say(
           '      $name: ${describePreviewFrame(null)}'
           '${stored == null ? '' : ' (Apple cut it at $stored)'}',
         );
@@ -3413,7 +3437,7 @@ class AppStore {
       }
 
       if (stored == wanted) {
-        _say(out, '      $name: ${describePreviewFrame(wanted)}');
+        say('      $name: ${describePreviewFrame(wanted)}');
         continue;
       }
 
@@ -3440,8 +3464,7 @@ class AppStore {
         await _readFrameTimeCode(apple.id!),
       );
       if (confirmed == wanted) {
-        _say(
-          out,
+        say(
           '      $name: ${describePreviewFrame(wanted)}'
           '${stored == null ? '' : ', moved from Apple\'s $stored'}',
         );
@@ -3459,8 +3482,7 @@ class AppStore {
         // for them. The second sentence stays exactly as it is: it is the
         // cheap next action, and it pre-empts the fear that a re-run costs
         // another upload.
-        _say(
-          out,
+        say(
           '      $name: asked for poster frame $wanted, and Apple reports '
           '${confirmed ?? 'none'}. Re-running publishes nothing and asserts '
           'the frame again.',
@@ -3615,7 +3637,7 @@ class AppStore {
         if (onProgress != null) {
           onProgress(progress);
         } else if (changed) {
-          stdout.writeln(
+          say(
             '      ${progress.fileName ?? id} at '
             '${progress.waited.inSeconds}s: '
             'video ${video ?? 'not reported'}, '
@@ -3685,7 +3707,7 @@ class AppStore {
             if (onProgress != null) {
               onProgress(abandoned);
             } else {
-              stdout.writeln(
+              say(
                 '      ${abandoned.fileName ?? id}: Apple reports no '
                 'poster-frame state; taking the video\'s COMPLETE as final',
               );
@@ -3727,7 +3749,7 @@ class AppStore {
         );
       }
       if (!announced && onProgress == null) {
-        stdout.writeln(
+        say(
           '      waiting for Apple to process ${pending.length} preview(s) — '
           'this is slower than a screenshot, and can take hours',
         );
@@ -3840,7 +3862,7 @@ class AppStore {
     // So this line no longer pretends to report the effective frame. The
     // effective frame is what [_assertPosterFrames] prints, after ingestion,
     // when Apple's answer exists.
-    stdout.writeln(
+    say(
       '      sent $name'
       '${preview.frameTimeCode == null ? '' : ', asking for poster frame '
                 '${preview.frameTimeCode}'}',
@@ -3888,7 +3910,7 @@ class AppStore {
     String? submissionId;
     if (open.isNotEmpty) {
       submissionId = _id(open.first);
-      stdout.writeln('==> reusing the open review submission $submissionId');
+      say('==> reusing the open review submission $submissionId');
     } else {
       final created = await writer.post('/v1/reviewSubmissions', {
         'data': {
@@ -3905,7 +3927,7 @@ class AppStore {
     }
 
     if (submissionId == null) {
-      stdout.writeln(
+      say(
         '    would then add version ${_attributes(version)['versionString']} '
         'and submit',
       );
@@ -3979,11 +4001,11 @@ class AppStore {
       query: {'filter[platform]': platform.api},
     );
     if (versions.isEmpty) {
-      stdout.writeln('  no versions yet, so no screenshot sets exist');
+      say('  no versions yet, so no screenshot sets exist');
       return;
     }
     for (final version in versions.take(3)) {
-      stdout.writeln('  ${_attributes(version)['versionString']}:');
+      say('  ${_attributes(version)['versionString']}:');
       final localizations = await client.getAll(
         '/v1/appStoreVersions/${_id(version)}/appStoreVersionLocalizations',
       );
@@ -3995,13 +4017,13 @@ class AppStore {
         final types = sets
             .map((s) => _attributes(s)['screenshotDisplayType'])
             .join(', ');
-        stdout.writeln(
+        say(
           '    ${_attributes(localization)['locale']}: '
           '${types.isEmpty ? "(none)" : types}',
         );
       }
     }
-    stdout.writeln(
+    say(
       '  names this tool validates against: '
       '${screenshotSpecs.keys.join(", ")}',
     );
@@ -4033,7 +4055,7 @@ class AppStore {
       final right = int.tryParse('${_attributes(b)['version']}') ?? -1;
       return right.compareTo(left);
     });
-    stdout.writeln(_attributes(usable.first)['version']);
+    say('${_attributes(usable.first)['version']}');
   }
 }
 

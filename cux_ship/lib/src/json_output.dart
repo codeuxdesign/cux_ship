@@ -24,6 +24,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'appstore/app_store.dart';
+import 'appstore/cli.dart';
 import 'appstore/reads.dart';
 import 'documents.dart';
 import 'play/reads.dart';
@@ -50,6 +51,13 @@ const appStorePreviewsSchema = 1;
 /// The schema `play tracks` declares. See [appStoreBuildsSchema].
 const playTracksSchema = 1;
 
+/// The schema `verify` declares. See [appStoreBuildsSchema].
+const verifySchema = 1;
+
+/// The schema `appstore upload --dry-run --json` declares. See
+/// [appStoreBuildsSchema].
+const appStoreListingDiffSchema = 1;
+
 /// Writes [document] to stdout, whole, once.
 ///
 /// **Once and at the end, because `fail()` calls `exit()`.** A document
@@ -62,13 +70,89 @@ const playTracksSchema = 1;
 /// small, and the reader is as often a person as a program.
 ///
 /// [document] is one of the classes in documents.dart. Typed as [Object]
-/// because there are three of them with no common supertype — and giving them
+/// because they have no common supertype — and giving them
 /// one would put a name in `documents.dart` that exists for this function's
 /// convenience rather than for a caller's use. `JsonEncoder`'s default
 /// `toEncodable` calls `toJson()`, so this needs nothing else.
 void writeJsonDocument(Object document) {
   stdout.writeln(const JsonEncoder.withIndent('  ').convert(document));
 }
+
+/// `cux_ship appstore upload --metadata … --dry-run --json`.
+///
+/// **[AppStoreListingDiffDocument.matches] is computed here**, from the same
+/// change sets the fields are rendered from, so the answer and the detail
+/// cannot disagree. A caller passing it in would eventually pass `true` beside
+/// a non-empty `version.localizations`, and the document would say two things.
+///
+/// **`appleOnlyLocales` is deliberately not an input to it.** Those are
+/// locales this repository declares nothing about — counting them as
+/// differences would report a permanent mismatch for every project whose tree
+/// is partial on purpose, which is most of them.
+AppStoreListingDiffDocument appStoreListingDiffDocument(
+  ListingOutcome outcome, {
+  required AscPlatform platform,
+  required String bundleId,
+  required String? versionName,
+  required List<String> display,
+}) => AppStoreListingDiffDocument(
+  schema: appStoreListingDiffSchema,
+  kind: DocumentKind.appStoreListingDiff,
+  platform: platform,
+  bundleId: bundleId,
+  versionName: versionName,
+  matches: outcome.matches,
+  version: ListingChangeSet(
+    fields: <String>[
+      if (outcome.versionLevel?.copyright != null) 'copyright',
+      if (outcome.versionLevel?.reviewDetails != null) 'reviewDetails',
+    ],
+    localizations: <String, List<String>>{
+      for (final entry
+          in outcome.versionLevel?.localizations.entries ??
+              const <MapEntry<String, Map<String, String>>>[])
+        entry.key: entry.value.keys.toList()..sort(),
+    },
+  ),
+  app: ListingChangeSet(
+    fields: <String>[
+      if (outcome.app?.categories.isNotEmpty ?? false) 'categories',
+      if (outcome.app?.ageRating != null) 'ageRating',
+      if (outcome.app?.contentRights != null) 'contentRights',
+    ],
+    localizations: <String, List<String>>{
+      for (final entry
+          in outcome.app?.localizations.entries ??
+              const <MapEntry<String, Map<String, String>>>[])
+        entry.key: entry.value.keys.toList()..sort(),
+    },
+  ),
+  assets: outcome.assetChanges,
+  appleOnlyLocales: outcome.appleOnlyLocales,
+  display: display,
+);
+
+/// `cux_ship verify --json`.
+///
+/// **[VerifyDocument.ok] is computed here rather than passed in**, so it cannot
+/// disagree with [problems]. A caller assembling both would eventually hand
+/// this an `ok: true` beside a non-empty list, and the document would say two
+/// things — which is the defect `matches` and `serving` are both shaped to
+/// avoid, one field down.
+VerifyDocument verifyDocument({
+  required List<VerifyCheck> checked,
+  required List<VerifyCheck> skipped,
+  required List<String> problems,
+  required List<String> display,
+}) => VerifyDocument(
+  schema: verifySchema,
+  kind: DocumentKind.verify,
+  ok: problems.isEmpty,
+  checked: checked,
+  skipped: skipped,
+  problems: problems,
+  display: display,
+);
 
 /// `cux_ship appstore builds --json`.
 AppStoreBuildsDocument appStoreBuildsDocument(

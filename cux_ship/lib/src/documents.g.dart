@@ -79,6 +79,8 @@ const _$DocumentKindEnumMap = {
   DocumentKind.appStoreVersions: 'appstore.versions',
   DocumentKind.appStorePreviews: 'appstore.previews',
   DocumentKind.playTracks: 'play.tracks',
+  DocumentKind.appStoreListingDiff: 'appstore.listing-diff',
+  DocumentKind.verify: 'verify',
 };
 
 AppStoreVersionEntry _$AppStoreVersionEntryFromJson(
@@ -311,3 +313,97 @@ Map<String, dynamic> _$PlayTracksDocumentToJson(PlayTracksDocument instance) =>
       'uploadedVersionCodes': instance.uploadedVersionCodes,
       'display': instance.display,
     };
+
+VerifyCheck _$VerifyCheckFromJson(Map<String, dynamic> json) => VerifyCheck(
+  what: json['what'] as String,
+  where: json['where'] as String?,
+  why: json['why'] as String?,
+);
+
+Map<String, dynamic> _$VerifyCheckToJson(VerifyCheck instance) =>
+    <String, dynamic>{
+      'what': instance.what,
+      'where': instance.where,
+      'why': instance.why,
+    };
+
+VerifyDocument _$VerifyDocumentFromJson(Map<String, dynamic> json) =>
+    VerifyDocument(
+      schema: (json['schema'] as num).toInt(),
+      kind: $enumDecode(_$DocumentKindEnumMap, json['kind']),
+      ok: json['ok'] as bool,
+      checked: (json['checked'] as List<dynamic>)
+          .map((e) => VerifyCheck.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      skipped: (json['skipped'] as List<dynamic>)
+          .map((e) => VerifyCheck.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      problems: (json['problems'] as List<dynamic>)
+          .map((e) => e as String)
+          .toList(),
+      display: (json['display'] as List<dynamic>)
+          .map((e) => e as String)
+          .toList(),
+    );
+
+Map<String, dynamic> _$VerifyDocumentToJson(VerifyDocument instance) =>
+    <String, dynamic>{
+      'schema': instance.schema,
+      'kind': _$DocumentKindEnumMap[instance.kind]!,
+      'ok': instance.ok,
+      'checked': instance.checked.map((e) => e.toJson()).toList(),
+      'skipped': instance.skipped.map((e) => e.toJson()).toList(),
+      'problems': instance.problems,
+      'display': instance.display,
+    };
+
+ListingChangeSet _$ListingChangeSetFromJson(Map<String, dynamic> json) =>
+    ListingChangeSet(
+      fields: (json['fields'] as List<dynamic>)
+          .map((e) => e as String)
+          .toList(),
+      localizations: (json['localizations'] as Map<String, dynamic>).map(
+        (k, e) =>
+            MapEntry(k, (e as List<dynamic>).map((e) => e as String).toList()),
+      ),
+    );
+
+Map<String, dynamic> _$ListingChangeSetToJson(ListingChangeSet instance) =>
+    <String, dynamic>{
+      'fields': instance.fields,
+      'localizations': instance.localizations,
+    };
+
+AppStoreListingDiffDocument _$AppStoreListingDiffDocumentFromJson(
+  Map<String, dynamic> json,
+) => AppStoreListingDiffDocument(
+  schema: (json['schema'] as num).toInt(),
+  kind: $enumDecode(_$DocumentKindEnumMap, json['kind']),
+  platform: _platformFromJson(json['platform'] as String),
+  bundleId: json['bundleId'] as String,
+  versionName: json['versionName'] as String?,
+  matches: json['matches'] as bool,
+  version: ListingChangeSet.fromJson(json['version'] as Map<String, dynamic>),
+  app: ListingChangeSet.fromJson(json['app'] as Map<String, dynamic>),
+  assets: (json['assets'] as List<dynamic>).map((e) => e as String).toList(),
+  appleOnlyLocales: (json['appleOnlyLocales'] as List<dynamic>)
+      .map((e) => e as String)
+      .toList(),
+  display: (json['display'] as List<dynamic>).map((e) => e as String).toList(),
+);
+
+Map<String, dynamic> _$AppStoreListingDiffDocumentToJson(
+  AppStoreListingDiffDocument instance,
+) => <String, dynamic>{
+  'schema': instance.schema,
+  'kind': _$DocumentKindEnumMap[instance.kind]!,
+  'platform': _platformToJson(instance.platform),
+  'bundleId': instance.bundleId,
+  'versionName': instance.versionName,
+  'matches': instance.matches,
+  'version': instance.version.toJson(),
+  'app': instance.app.toJson(),
+  'assets': instance.assets,
+  'appleOnlyLocales': instance.appleOnlyLocales,
+  'display': instance.display,
+};
