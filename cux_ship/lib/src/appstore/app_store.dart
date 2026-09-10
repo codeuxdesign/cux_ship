@@ -3180,10 +3180,23 @@ class AppStore {
           '${stored == null ? '' : ', moved from Apple\'s $stored'}',
         );
       } else {
+        // **What was observed, and what to do — no cause.** This named one
+        // hypothesis ("the poster may still be being cut") as though it were
+        // the explanation. A wrong cause is worse than no cause, because it
+        // forecloses the search: a reader told the cause is *time* waits, and
+        // comes back to the same line, when it might be a timecode Apple
+        // refused silently or an asset id that moved. "Still reports" carried
+        // the same freight in one word — *still* asserts a continuation of a
+        // state nobody has established.
+        //
+        // The hypotheses live here, where somebody reading source is looking
+        // for them. The second sentence stays exactly as it is: it is the
+        // cheap next action, and it pre-empts the fear that a re-run costs
+        // another upload.
         stdout.writeln(
-          '      $name: asked for poster frame $wanted and Apple still reports '
-          '${confirmed ?? 'none'} — the poster may still be being cut. '
-          'Re-running publishes nothing and asserts the frame again.',
+          '      $name: asked for poster frame $wanted, and Apple reports '
+          '${confirmed ?? 'none'}. Re-running publishes nothing and asserts '
+          'the frame again.',
         );
       }
     }

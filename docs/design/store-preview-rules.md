@@ -236,12 +236,25 @@ preview: **7 minutes 29 seconds** from commit to both `videoDeliveryState` and
 never approached, and Apple's documented twenty-four hours is a ceiling rather
 than a typical case.
 
-Two things it did *not* settle. **Which asset finishes first is still unknown** —
-the loop's only exit is both-`COMPLETE`, so a run that ends tells you nothing
-about the order. That is now instrumented: one line per state transition, which
-is the only instrument anybody has on this queue. And **the hypothesis that
-Apple might never report `previewFrameImage` did not fire on this file**, which
-is one file; the grace period stays.
+Two things it did *not* settle. **Which asset finishes first is still
+unknown** — the loop's only exit is both-`COMPLETE`, so a run that ends tells
+you nothing about the order.
+
+**Instrumenting it is not the same as measuring it, and this section read as
+though it were.** dev.2 prints one line per state transition; that makes the
+ordering *observable on the next upload that happens*, which is a different
+claim from knowing it. The consumer made the correction and it is worth keeping
+in these words, because the gap between "we can now see this" and "we now know
+this" is exactly where a design document starts lying to its next reader.
+
+Nor is the next upload cheap to summon: the one project running previews
+declined to manufacture one, on the grounds that clearing a published set to
+re-upload 20 MB puts a live App Store version through an ingestion cycle to
+produce a log line. That is the right call. The number arrives with the next
+re-cut, or the first preview on another platform or locale.
+
+And **the hypothesis that Apple might never report `previewFrameImage` did not
+fire on this file**, which is one file; the grace period stays.
 
 ### Proposed: the wait is welded to the upload
 

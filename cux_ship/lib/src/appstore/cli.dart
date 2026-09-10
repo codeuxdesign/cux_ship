@@ -663,6 +663,13 @@ ListingPublish listingPublish({
 ///
 /// Both were written inside the promote block. A second copy on the upload
 /// path would have been two chances for the next fix to land on one of them.
+///
+/// **Apple does not gate this on a build.** The one thing that could have made
+/// publishing notes from a listing-only run wrong — `whatsNew` being editable
+/// only once a build is attached — was measured against a live version in
+/// `PREPARE_FOR_SUBMISSION` with none: the write lands and Apple says nothing.
+/// So the version being editable is the whole condition, which is what the
+/// refusal branch below is left guarding.
 Future<void> publishReleaseNotes(
   AppStore store,
   App app,
@@ -704,14 +711,21 @@ Future<void> publishReleaseNotes(
       'whatsNew': releaseNotes,
     }, existing: await store.versionLocalizations(version));
   } on AscApiException catch (e) {
-    // **`Attribute 'whatsNew' cannot be edited at this time` has more than one
-    // cause, and this path can meet a new one.**
+    // **A backstop for a version locked by review, and measured to be only
+    // that.**
     //
-    // [AppStore.isFirstVersion] already removes the cause this package knew
-    // about. The refusal is a *state* refusal, so it also fires for a version
-    // locked by review — and, unverified at the time of writing, possibly for
-    // a version with no build attached, which is a state only this caller can
-    // reach: the promote path always has a build by the time it writes.
+    // `Attribute 'whatsNew' cannot be edited at this time` is a *state*
+    // refusal. [AppStore.isFirstVersion] removes one cause of it. The open
+    // question was whether a version with **no build attached** was another —
+    // a state only this caller can reach, because the promote path always has
+    // a build by the time it writes, and one that would have made writing the
+    // notes here wrong in principle.
+    //
+    // **It is not.** Measured against a live App Store version in
+    // `PREPARE_FOR_SUBMISSION` with no build: the write lands, exit 0, no
+    // refusal of any kind. So this branch is for the locked case rather than
+    // for the ordinary one, and publishing the notes from a listing-only run
+    // is sound rather than merely convenient.
     //
     // Rethrown rather than swallowed, and with the causes named. The listing
     // itself is already published and re-running is safe, so failing here
