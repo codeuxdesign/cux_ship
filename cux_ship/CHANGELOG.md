@@ -41,7 +41,18 @@ unsubmitted version: a false alarm in the state an operator is most likely to
 be looking at.
 
 **No `schema` bump** — both fields are optional and additive, and
-`appstore.versions` still declares `schema: 1`.
+`appstore.versions` still declares `schema: 1`. **A caller that decodes a
+document is unaffected**, in either direction: an older `documents.dart`
+ignores keys it does not know, and a newer one reads an older document with
+both fields null.
+
+**It is a source-breaking change for a Dart caller that *constructs* an
+`AppStoreVersionEntry`**, which is a different thing and does not live in the
+schema number. Both fields are `required`, so a hand-built entry — a test
+fixture, most likely — stops compiling until it names them. That is
+deliberate: `required` makes the break loud and immediate rather than leaving a
+fixture quietly asserting against a document this package no longer emits. The
+one Dart consumer there is builds exactly such a fixture and expects it.
 
 **And the phased release still is not carried**, though the same request could
 now do it for almost nothing. Nobody passes `--phased`. Cheap is not a reason

@@ -625,10 +625,17 @@ priced together and only one of them has a caller.
 
 **The build number ships.** `AppStoreVersionEntry` carries `buildNumber` and
 `buildNumberAsInt`, `appstore versions` asks for `include=build`, and the
-rendered line gains ` build 169` where Apple named one. The consumer's summary
-grid is the call site: it printed a bare `LIVE` because the versions listing
-carried no build, and said so in its own source — *"the released build is a fact
-only Apple holds"* — which was true and is now recoverable.
+rendered line gains ` build 169` where Apple named one.
+
+**The consumer's summary grid is the call site**, and the shape of why is worth
+keeping. It printed a bare `LIVE` and explained that in its own source as a
+fact only Apple held. Apple does hold it — and hands it over in the same
+request, which is the half that sentence missed. *"Only Apple holds it"* is
+true and reads as *unobtainable*, and a limitation written that way is one
+nobody goes back and tests. That consumer has since corrected its own wording;
+the correction is recorded here rather than the original quoted, because the
+sentence is being deleted from the tree it describes and a quotation would
+outlive it.
 
 **The phased release does not.** Same request could carry it, at
 `include=build,appStoreVersionPhasedRelease` and a second resolver. Nobody

@@ -2694,7 +2694,8 @@ class AppStore {
 
   // ------------------------------------------------------------------- reads
 
-  /// Every App Store version record for [app] on this platform.
+  /// Every App Store version record for [app] on this platform, and the builds
+  /// they name.
   ///
   /// What App Store Connect actually holds, as opposed to what a previous run
   /// reported having sent — the same reason `play tracks` exists: a push
@@ -2704,8 +2705,6 @@ class AppStore {
   /// model this feeds. Reading and rendering are separated because a consumer
   /// wants both and a second formatter beside the first is a second thing to
   /// drift.
-  /// Every App Store version record for [app] on this platform, and the builds
-  /// they name.
   ///
   /// **The `include` is what carries the build number, and it costs no second
   /// request.** Apple's `appStoreVersions` attributes have no build in them —
