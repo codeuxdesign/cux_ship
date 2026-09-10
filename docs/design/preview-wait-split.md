@@ -45,8 +45,15 @@ The escape hatch exists, is spelled correctly, and is unreachable.
 Every clause is true of a preview upload, and more so. The transfer is exclusive
 and bounded (Apple takes one set per type per locale), the wait is shareable and
 takes minutes to hours, and the poster-frame assertion after it takes seconds.
-A caller publishing two platforms' listings from one commit serialises both
-ingestion queues today for the sake of two transfers.
+
+**But the parallelism argument does not apply to the only real caller, and it
+should not be used to justify this.** Answered directly: that project publishes
+`store/appstore/ios` and `store/appstore/macos` from one commit, and **only iOS
+has a `previews/` directory** — macOS has none and plausibly never will. So
+there is one ingestion queue, nothing to overlap, and the split buys **ergonomics
+rather than time** for the caller it was proposed for. Judge it on that. The
+concurrency case is real for a project with previews on two platforms and no
+such project exists yet.
 
 ## Proposed: one flag and one command
 
@@ -85,8 +92,7 @@ a command becomes unreadable.
 cux_ship appstore wait-previews \
   --bundle-id design.codeux.howitwent \
   --version-name 1.1.6 \
-  [--platform ios] [--locale en-US] [--preview-type IPHONE_67] \
-  [--timeout 2h] [--poll 30s]
+  [--platform ios] [--timeout 2h] [--poll 30s]
 ```
 
 Mirroring `appstore wait` deliberately:
@@ -104,9 +110,12 @@ Mirroring `appstore wait` deliberately:
   `--skip-waiting` deferred. That makes the pair complete: `upload
   --skip-waiting` transfers, `wait-previews` finishes.
 
-`--locale` and `--preview-type` are optional narrowings, defaulting to every
-preview the version holds. Unlike the build case there can legitimately be
-several, and a caller waiting on one locale's set should not block on another's.
+~~`--locale` and `--preview-type` are optional narrowings~~ — **dropped.** The
+only caller has one locale, one preview type and one video, and said plainly
+they would not use them. They stay in this paragraph as a record of having been
+considered: a project with several locales' previews in flight would want them,
+and adding them then is cheap. Adding them now would be a flag with no consumer,
+which this repository has a rule about.
 
 ### `PreviewProcessingProgress`, and a callback
 
@@ -135,7 +144,8 @@ per transition, so nothing changes for a caller who passes nothing.
 
 ## The one decision that is not a mirror
 
-**Reaching the deadline should exit zero, and the build path does not.**
+**Reaching the deadline is not a failure, and the build path treats it as
+one.**
 
 `appstore wait` raises `ProcessingTimeout` because a build that never becomes
 visible has usually been *refused*, and Apple reports that only by e-mail — the
@@ -145,52 +155,97 @@ measurement section records a real ingestion at 7m29s with no idea whether that
 is typical.
 
 So `wait-previews` reaching its deadline should print what is still pending, say
-how to resume, and exit **zero**. An outcome the documentation calls *ordinary*
+how to resume, and **not fail**. An outcome the documentation calls *ordinary*
 should not be an error, and the current 504 is worse than merely wrong: its text
 tells the operator to re-run the upload, which is the loudest possible
 instruction to do the thing that was, until dev.2, a silent defect.
 
+**"Not a failure" is not the same as exit zero, and the first draft of this
+conflated them.** The consumer's runner branches on exit status and never on
+text — deliberately, because their SHIPPING §12.2 records a status escaping from
+four regular expressions matched against stdout. Exiting zero at the deadline
+makes "all complete" and "still pending" indistinguishable to exactly the caller
+this is for, and sends it back to parsing prose.
+
+So: **0 when everything reached `COMPLETE`, and a distinct non-zero code for
+"reached the deadline, still pending"** — distinct from the code a real failure
+uses, so a script can branch on three outcomes without reading a word. This
+repository already treats exit codes as a vocabulary rather than a boolean;
+`screenshots flatten --check` exits 2 for "would change", and `provenance`
+records choosing 3 *because* 2 was taken. The pending code is the same kind of
+statement.
+
 `upload --metadata` without `--skip-waiting` keeps raising, because there the
-deadline means "I cannot safely proceed to the next phase". Same condition, two
-callers, two right answers — which is exactly why the wait wants to be a command
-rather than a step.
+deadline means "I cannot safely proceed to the next phase".
 
-## What is deliberately not proposed
+Same condition, three outcomes, two callers — which is exactly why the wait
+wants to be a command rather than a step.
 
-**`appstore previews` as a read command.** `builds` and `versions` exist and a
-preview listing would fit beside them, but nobody has asked for one, and this
-repository has a rule about flags on commands with no consumer — *"a promise
-made to nobody"*. The wait's progress lines report the same states.
+## Also proposed, because they acquired a consumer
 
-**A `--json` document.** Same reason, and `appstore wait` does not have one
-either: *"`wait` reports progress nobody decodes."* If a consumer wants to drive
-this from a script, that is the moment to add it, and the consumer is the one
-who should say so.
+Both of these were in a "deliberately not proposed" section, on the grounds that
+nobody had asked. Somebody asked, in the same message that answered the
+questions above, and **they arrive together for one reason: the new caller is a
+reader where everything before it was a doer.** That is worth weighing as a
+single change of shape rather than as two feature requests.
+
+**`appstore previews` — a read command.** The consumer is building
+`tool/train.sh ready`, which answers *"can production run, and is the store
+showing the repo's listing?"* **without waiting for anything**. That wants a
+listing, not a wait. Without it, `ready` has to run `upload --metadata
+--dry-run` and read prose — which is the thing this package exists to stop
+people doing. It sits beside `builds` and `versions`, which is where a reader
+belongs.
+
+**`--json` on it.** Same consumer, and their reason is structural rather than
+convenient: `tool/train/lib/src/status.dart` already spawns reads with `--json`,
+and their pubspec states the property that makes it safe — reads are spawned
+children under one credential, and the train only ever holds *decoded
+documents*, never a store client. `ready` needs to print `preview apple30.mp4
+COMPLETE, poster frame 00:00:02:06`, which is a document rather than a line of
+output.
+
+Note this weakens the `appstore wait` precedent rather than following it: that
+command has no `--json` because *"`wait` reports progress nobody decodes."* The
+sentence was true when written and is now false for previews, which is the
+ordinary way a rule like that expires. `docs/design/json-output.md` governs the
+document's shape.
+
+## What is still deliberately not proposed
 
 **Changing the 30-minute default.** It is sized against nothing and one
 measurement is not a distribution. `--timeout` makes it a caller's problem
 rather than a guess baked into a release, which is the useful half.
 
-## Questions for the consumer, which this cannot answer alone
+**`PreviewProcessingProgress` as a public Dart API.** The consumer's answer to
+"do you want this programmatically" was *yes, via `--json`* — which is a
+different thing, and the cheaper one. The class stays internal to shape the
+callback and the document; nothing needs to import it.
 
-The one project running this in anger drives it from `tool/train.sh`, and the
-shape above is worth nothing if it does not fit there:
+## Answered by the consumer, and what each answer changed
 
-1. **Does `train.sh` publish listings for more than one platform from one
-   commit?** If it does, the parallelism argument is the whole point and
-   `--skip-waiting` should come first. If it publishes one, the split is
-   ergonomics rather than time.
-2. **Would it call `wait-previews`, or would it rather the upload just did not
-   wait and something later checked?** The build path assumes a caller that
-   runs the follow-up; a CI job that ends may want a *status* it can poll from
-   a later invocation instead.
-3. **Is exit-zero-at-deadline right for it**, or does a script want a distinct
-   exit code for "still pending" so it can branch without parsing text? The
-   build path's non-zero is load-bearing for its caller; this one's may be too,
-   in the other direction.
-4. **`--locale` and `--preview-type` narrowing: needed, or noise?** They are
-   cheap to add and cheap to regret.
-5. **Does anything want `PreviewProcessingProgress` programmatically**, or is
-   stdout enough? `BuildProcessingProgress` exists because a consumer asked;
-   this one is proposed on the assumption that the same consumer will want the
-   same thing, and that assumption is worth checking rather than inheriting.
+The five questions this document opened with were put to the one project
+running previews in anger. Every answer moved something, and three of them moved
+a decision rather than a detail — which is the argument for having asked before
+writing code rather than after.
+
+| asked | answered | what changed |
+|---|---|---|
+| More than one platform per commit? | Yes, but **only iOS has previews** | The parallelism justification is withdrawn; this is ergonomics |
+| Call `wait-previews`, or poll later? | **Both, and they are different commands** | `appstore previews` promoted from not-proposed |
+| Exit zero at the deadline? | Not sufficient — **they branch on status, never text** | A distinct pending exit code, not plain zero |
+| `--locale` / `--preview-type`? | **Noise** for them | Dropped |
+| `PreviewProcessingProgress` programmatically? | **Yes, as `--json`** | `--json` promoted from not-proposed |
+
+Two of those overturned things this document had already decided, and one —
+the exit code — overturned a decision it had argued for at length. The reasoning
+that produced it was not wrong about *failure*; it was wrong about conflating
+"not a failure" with "exit zero", which only a caller that branches on status
+would notice.
+
+**One premise was also corrected on their side rather than mine**: they had told
+me the train never publishes the App Store listing, and on reading the source
+found `metadataPath` defaults from the project, so it has been publishing all
+along. The thing that was missing was only ever a pause. Recorded because this
+document's first draft was written against the wrong picture of the caller and
+came out substantially the same, which is luck rather than method.
