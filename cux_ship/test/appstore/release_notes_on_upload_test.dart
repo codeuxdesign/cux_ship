@@ -355,46 +355,67 @@ void main() {
     },
   );
 
-  test('an inferred changelog with no section is not a refusal', () async {
-    // **The regression the offline move was needed for.** `--changelog`
-    // defaults to the project's CHANGELOG.md, so a run that asked for
-    // screenshots and nothing else was newly refused — after publishing the
-    // whole listing — for notes it had never requested. Inference must not
-    // manufacture a requirement.
-    _write('CHANGELOG.md', '# Changelog\n\n## Unreleased\n\n- Not yet\n');
-    final client = _FakeClient(versions: [_version('old', '1.1.5')]);
-    final args = buildAscParser(AscCommand.upload).parse([
-      '--bundle-id',
-      'design.codeux.example',
-      '--version-name',
-      '1.1.6',
-      '--metadata',
-      '${_root.path}/store/appstore',
-    ]);
-    final captured = _MemoryStdout();
-    await IOOverrides.runZoned(
-      () => runAsc(AscCommand.upload, args, ascClient: client),
-      stdout: () => captured,
-      stderr: () => captured,
+  // **Two behaviours here are implemented and not covered, and saying which
+  // beats a test that passes vacuously.**
+  //
+  // A missing changelog section is fatal only when `--changelog` or
+  // `--release-notes` *named* one; where the path is merely inferred from the
+  // project, an absent section means no notes. Neither half survives this
+  // harness. `fail` exits rather than throws — deliberately, with its own
+  // comment saying why — so the named case kills the runner instead of
+  // reaching an expectation. And the inferred case cannot be reached at all:
+  // `changelogPath` falls back to `defaults.changelog`, which is empty when
+  // `runAsc` is called directly, so a test written for it has no changelog to
+  // infer and asserts nothing. A first draft of that test sat here and passed
+  // for exactly that reason.
+  //
+  // What *is* held, and structurally rather than by assertion: the resolution
+  // moved above the line that builds the client, so whichever way it refuses,
+  // nothing has been written when it does. The old call site sat after
+  // `_publishAscListing` had published the entire listing.
+
+  test('notes are not written to a locale the tree does not declare', () async {
+    // The notes go to the CLI's `--locale`, which defaults to en-US, while the
+    // tree declares its own. A de-DE-only tree published without
+    // `--locale de-DE` would POST a *new* en-US version localization carrying
+    // release notes and no description — a record nothing in the tree owns.
+    File(
+      '${_root.path}/store/appstore/listings/en-US/description.txt',
+    ).deleteSync();
+    _write(
+      'store/appstore/listings/de-DE/description.txt',
+      'Eine Simulation, kein Spiel.',
     );
-    await captured.close();
+    final client = _FakeClient(versions: [_version('old', '1.1.5')]);
+
+    final said = await _upload(client);
 
     expect(_whatsNewSent(client), isEmpty);
-    expect(captured.buffer.toString(), contains('==> done'));
-    expect(captured.buffer.toString(), isNot(contains('has no section')));
+    expect(said, contains('release notes skipped'));
+    expect(said, contains('--locale de-DE'));
   });
 
-  // **The other half of that rule is not testable from here, and saying so
-  // beats letting the pair look complete.** When `--changelog` is passed, a
-  // missing section is still a refusal — but `fail` exits rather than throws,
-  // by design and with its own comment saying why, so it kills the test runner
-  // rather than reaching an expectation.
-  //
-  // What changed is *when* it fires, and that is held structurally rather than
-  // by assertion: the resolution moved into the offline phase, above the line
-  // that builds the client, so there is no store to have written anything with
-  // by the time it can refuse. The old call site sat after
-  // `_publishAscListing` had written the entire listing.
+  test('an app-level-only tree says why the notes were skipped', () async {
+    // A tree declaring only app-level fields needs no version, so there is
+    // nothing to hang release notes off. The notes are genuinely not
+    // publishable — but saying nothing is what the original defect did, and a
+    // flag taken and dropped must not read as a command that did what it was
+    // asked.
+    Directory(
+      '${_root.path}/store/appstore/listings',
+    ).deleteSync(recursive: true);
+    _write(
+      'store/appstore/info/content_rights.txt',
+      'DOES_NOT_USE_THIRD_PARTY_CONTENT',
+    );
+    final client = _FakeClient(versions: [_version('old', '1.1.5')]);
+
+    final said = await _upload(client);
+
+    expect(_whatsNewSent(client), isEmpty);
+    expect(said, contains('release notes skipped'));
+    expect(said, contains('nothing Apple scopes'));
+  });
 
   test(
     'a dry run over an editable version reports the notes it would write',

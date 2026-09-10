@@ -2116,7 +2116,13 @@ Future<void> runAsc(
       //
       // Skipped when the tree needed no version: there is then nothing to hang
       // release notes off, and `--version-name` was not required.
-      if (published == null && listingReleaseNotes != null) {
+      // **Gated on the flag, not on the resolved notes**, which is what the
+      // first attempt got wrong: the notes are only resolved when the tree
+      // needs a version, so on an app-level-only tree `listingReleaseNotes`
+      // is always null and the message could never fire — a skip notice that
+      // was itself silent.
+      if (published == null &&
+          (opt('changelog') != null || notesPath != null)) {
         // **The narrowed remains of the defect this change closes.** A tree
         // declaring only app-level fields — categories, age rating, content
         // rights, a localized name — needs no version, so there is no record

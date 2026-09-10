@@ -961,6 +961,91 @@ void main() {
       );
     });
 
+    test(
+      'a caller reporting its own way gets a heartbeat, not one line',
+      () async {
+        // The callback was gated on a state *transition*, so a preview sitting
+        // at PROCESSING for hours reported once and then nothing — the opposite
+        // of the heartbeat its own doc promises, and a consumer using it for
+        // liveness would conclude the process had hung.
+        final client = _FakeClient()
+          ..polls = [
+            _preview(fileName: 'promo.mp4', videoState: 'PROCESSING'),
+            _preview(fileName: 'promo.mp4', videoState: 'PROCESSING'),
+            _preview(
+              fileName: 'promo.mp4',
+              videoState: 'COMPLETE',
+              frameState: 'COMPLETE',
+            ),
+          ];
+
+        final seen = <PreviewProcessingProgress>[];
+        await _printed(
+          () => storeOf(client).awaitPreviewProcessing(
+            ['preview-1'],
+            poll: Duration.zero,
+            onProgress: seen.add,
+          ),
+        );
+
+        // Three polls, three reports — the middle one carries no change.
+        expect(seen, hasLength(3));
+        expect(seen.map((p) => p.videoState), [
+          'PROCESSING',
+          'PROCESSING',
+          'COMPLETE',
+        ]);
+      },
+    );
+
+    test('a caller reporting its own way gets no prose on stdout', () async {
+      // `cli.dart` states the invariant this protects: under `--json`, stdout
+      // carries the document and nothing else. Two writeln calls in this loop
+      // were unconditional, so the planned `wait-previews --json` would have
+      // emitted prose into the document stream on exactly the runs that wait.
+      final client = _FakeClient()
+        ..polls = [
+          _preview(fileName: 'promo.mp4', videoState: 'PROCESSING'),
+          _preview(
+            fileName: 'promo.mp4',
+            videoState: 'COMPLETE',
+            frameState: 'COMPLETE',
+          ),
+        ];
+
+      final said = await _printed(
+        () => storeOf(client).awaitPreviewProcessing(
+          ['preview-1'],
+          poll: Duration.zero,
+          onProgress: (_) {},
+        ),
+      );
+
+      expect(said, isEmpty);
+    });
+
+    test('the grace-period decision reaches a caller that took over', () async {
+      // `COMPLETE` beside a null frame state reads identically whether the
+      // wait has given up on the frame or is still counting — a decision the
+      // two states cannot express, and one the default path announces in
+      // prose the callback never saw.
+      final client = _FakeClient()
+        ..polls = [_preview(fileName: 'promo.mp4', videoState: 'COMPLETE')];
+
+      final seen = <PreviewProcessingProgress>[];
+      final said = await _printed(
+        () => storeOf(client).awaitPreviewProcessing(
+          ['preview-1'],
+          poll: Duration.zero,
+          framePolls: 2,
+          onProgress: seen.add,
+        ),
+      );
+
+      expect(seen.any((p) => p.frameStateAbandoned), isTrue);
+      expect(said, isEmpty, reason: 'the caller reports, not this function');
+    });
+
     test('a failed poster frame is a rejection, not a success', () async {
       final client = _FakeClient()
         ..polls = [
