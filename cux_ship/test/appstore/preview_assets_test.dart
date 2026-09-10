@@ -77,6 +77,7 @@ PublishedPreview _published(
   String? name,
   String? sum, {
   String? state = 'COMPLETE',
+  String? frameState,
   String? timeCode,
   String? id = 'preview-1',
 }) => (
@@ -84,11 +85,35 @@ PublishedPreview _published(
   fileName: name,
   checksum: sum,
   videoState: state,
+  frameState: frameState,
   frameTimeCode: timeCode,
 );
 
 LocalPreviewAsset _local(String name, String sum, {String? timeCode}) =>
     (fileName: name, checksum: sum, frameTimeCode: timeCode);
+
+/// The PATCHes that set a poster frame, as opposed to the one that commits an
+/// upload.
+///
+/// **Both go to `/v1/appPreviews/{id}`**, so counting requests by path cannot
+/// tell them apart — an assertion that a retime happened was satisfied by the
+/// commit alone, and an assertion that one did *not* happen could never pass.
+/// The bodies are what differ: a commit sets `uploaded` and
+/// `sourceFileChecksum`, a retime sets `previewFrameTimeCode`.
+List<Map<String, dynamic>> _framePatches(_FakeClient client) => [
+  for (final body in client.patched) ...{
+    ...() {
+      final data = body['data'];
+      final attributes = data is Map<String, dynamic>
+          ? data['attributes']
+          : null;
+      return attributes is Map<String, dynamic> &&
+              attributes.containsKey('previewFrameTimeCode')
+          ? [attributes]
+          : <Map<String, dynamic>>[];
+    }(),
+  },
+];
 
 class _MemoryStdout implements Stdout {
   final buffer = StringBuffer();
@@ -137,6 +162,9 @@ class _FakeClient implements AscClient {
   List<Map<String, dynamic>> polls = const [];
   var _poll = 0;
 
+  /// The frame a retime PATCH actually stored, when the fake honoured it.
+  String? _framePatched;
+
   final requests = <String>[];
   final reserved = <Map<String, dynamic>>[];
   final patched = <Map<String, dynamic>>[];
@@ -152,6 +180,19 @@ class _FakeClient implements AscClient {
       return sets;
     }
     if (path.endsWith('/appPreviews')) {
+      // After an upload the set holds what Apple ingested, which is not
+      // necessarily what was asked for.
+      if (published.isEmpty && ingestedTimeCode != null) {
+        return [
+          _preview(
+            id: 'new-preview',
+            fileName: ingestedFileName,
+            videoState: 'COMPLETE',
+            frameState: 'COMPLETE',
+            frameTimeCode: _framePatched ?? ingestedTimeCode,
+          ),
+        ];
+      }
       return published;
     }
     return const [];
@@ -163,6 +204,21 @@ class _FakeClient implements AscClient {
     Map<String, String>? query,
   }) async {
     requests.add('GET $path');
+    // The readback after a retime asks for one preview by id, and wants the
+    // frame Apple now holds rather than the next scripted poll.
+    if (_framePatched != null || (ingestedTimeCode != null && _poll > 0)) {
+      if (path.startsWith('/v1/appPreviews/')) {
+        return {
+          'data': _preview(
+            id: 'new-preview',
+            fileName: ingestedFileName,
+            videoState: 'COMPLETE',
+            frameState: 'COMPLETE',
+            frameTimeCode: _framePatched ?? ingestedTimeCode,
+          ),
+        };
+      }
+    }
     final data = polls[_poll < polls.length ? _poll : polls.length - 1];
     _poll++;
     return {'data': data};
@@ -206,15 +262,53 @@ class _FakeClient implements AscClient {
   ) async {
     requests.add('PATCH $path');
     patched.add(body);
+    if (!patchIsIgnored) {
+      final data = body['data'];
+      final attributes = data is Map<String, dynamic>
+          ? data['attributes']
+          : null;
+      if (attributes is Map<String, dynamic> &&
+          attributes['previewFrameTimeCode'] is String) {
+        _framePatched = attributes['previewFrameTimeCode'] as String;
+      }
+    }
     return {
       'data': _preview(
         id: 'new-preview',
         fileName: 'promo.mp4',
-        videoState: 'UPLOAD_COMPLETE',
+        videoState: failCommitWithoutReason ? 'FAILED' : 'UPLOAD_COMPLETE',
         frameTimeCode: _sentTimeCode(),
       ),
     };
   }
+
+  /// Whether the commit answers FAILED with an empty `errors[]`.
+  ///
+  /// The shape the no-reason hint exists for: Apple refusing an asset and
+  /// saying nothing about why. A fake that always supplied a reason could
+  /// not reach the branch that supplies one on Apple's behalf.
+  bool failCommitWithoutReason = false;
+
+  /// What the post-ingestion read reports as `previewFrameTimeCode`.
+  ///
+  /// **The fake could not express the defect the field trip found**:
+  /// Apple accepts the timecode at reservation, ignores it, and cuts the
+  /// poster at its own default. Echoing only what was sent made a single
+  /// run look correct, which is exactly how it shipped.
+  String? ingestedTimeCode;
+
+  /// The filename Apple reports the ingested preview under.
+  ///
+  /// Differing from what was uploaded is how a run finds no match for a file
+  /// it just sent — a preview Apple dropped, or a name it normalised.
+  String ingestedFileName = 'promo.mp4';
+
+  /// Whether a `previewFrameTimeCode` PATCH is accepted and then ignored.
+  ///
+  /// **This is the defect the whole retime exists for, applied to the retry.**
+  /// A fake that always honoured the write could not tell a run that verifies
+  /// from one that assumes, which is the difference the field report turned on.
+  bool patchIsIgnored = false;
 
   /// What the reservation asked for, so the commit response can echo it the
   /// way Apple does — the readback is what the log line prints.
@@ -224,7 +318,10 @@ class _FakeClient implements AscClient {
       if (data is Map<String, dynamic>) {
         final attributes = data['attributes'];
         if (attributes is Map<String, dynamic>) {
-          return attributes['previewFrameTimeCode'] as String?;
+          final sent = attributes['previewFrameTimeCode'] as String?;
+          if (sent != null) {
+            return sent;
+          }
         }
       }
     }
@@ -304,6 +401,68 @@ void main() {
       expect(previewFrameState(preview), 'FAILED');
     });
 
+    test('a duplicated code and description are reported once', () {
+      // Apple's real rejection came back with `code` and `description` set to
+      // the same string — `MOV_RESAVE_STEREO - MOV_RESAVE_STEREO` — which
+      // reads as two facts where there is one, in a message somebody is
+      // scanning under time pressure.
+      final why = previewDeliveryErrors({
+        'type': 'appPreviews',
+        'id': 'preview-1',
+        'attributes': {
+          'videoDeliveryState': {
+            'state': 'FAILED',
+            'errors': [
+              {'code': 'MOV_RESAVE_STEREO', 'description': 'MOV_RESAVE_STEREO'},
+            ],
+          },
+        },
+      });
+      expect(why, ['MOV_RESAVE_STEREO']);
+    });
+
+    test('a video error is reported once, not once per field', () {
+      // Apple populates `videoDeliveryState` and the deprecated
+      // `assetDeliveryState` together, and reading both listed every reason
+      // twice — in the one message somebody reads to work out what was
+      // refused.
+      final why = previewDeliveryErrors({
+        'type': 'appPreviews',
+        'id': 'preview-1',
+        'attributes': {
+          'videoDeliveryState': {
+            'state': 'FAILED',
+            'errors': [
+              {'code': 'BAD_FPS', 'description': 'frame rate above 30'},
+            ],
+          },
+          'assetDeliveryState': {
+            'state': 'FAILED',
+            'errors': [
+              {'code': 'BAD_FPS', 'description': 'frame rate above 30'},
+            ],
+          },
+        },
+      });
+      expect(why, ['BAD_FPS - frame rate above 30']);
+    });
+
+    test('the deprecated field is still read when it is the only one', () {
+      final why = previewDeliveryErrors({
+        'type': 'appPreviews',
+        'id': 'preview-1',
+        'attributes': {
+          'assetDeliveryState': {
+            'state': 'FAILED',
+            'errors': [
+              {'code': 'OLD', 'description': 'from the deprecated field'},
+            ],
+          },
+        },
+      });
+      expect(why, ['OLD - from the deprecated field']);
+    });
+
     test('a rejection reports both assets\' reasons, labelled', () {
       final why = previewDeliveryErrors(
         _preview(
@@ -372,6 +531,43 @@ void main() {
       }
     });
 
+    test('a rejected poster frame is not skipped on the next run', () {
+      // **The defect the feature exists to prevent, reintroduced through the
+      // skip.** Run 1 uploads, the frame fails, `awaitPreviewProcessing`
+      // throws and the release aborts. Re-running is the *documented* recovery
+      // from a processing timeout, so run 2 is the ordinary next step — and it
+      // matched on name, checksum and video state, called the set unchanged,
+      // and let a promotion submit a version whose poster Apple threw away.
+      expect(
+        previewPlan(
+          published: [
+            _published(
+              '01.mp4',
+              'aaa',
+              frameState: 'FAILED',
+              timeCode: '00:00:02:06',
+            ),
+          ],
+          local: [_local('01.mp4', 'aaa', timeCode: '00:00:02:06')],
+        ),
+        PreviewPlan.replace,
+      );
+    });
+
+    test('a frame state Apple never reports is not held against it', () {
+      // `!= FAILED` rather than `== COMPLETE`, and the difference is a release
+      // that re-uploads a 500 MB video on every run for ever: Apple is not
+      // guaranteed to report a frame state at all, and a null is a fact about
+      // the response rather than evidence against the asset.
+      expect(
+        previewPlan(
+          published: [_published('01.mp4', 'aaa', timeCode: '00:00:02:06')],
+          local: [_local('01.mp4', 'aaa', timeCode: '00:00:02:06')],
+        ),
+        PreviewPlan.unchanged,
+      );
+    });
+
     test('a tree that names no frame leaves Apple\'s alone', () {
       // "Present means owned" applied to an attribute: a video with no
       // sidecar does not reset a poster frame somebody set in the console.
@@ -420,9 +616,14 @@ void main() {
       // five seconds is exactly what that convention exists to prevent, and
       // here it cannot be corrected after approval without a new submission.
       final said = describePreviewFrame(null);
-      expect(said, contains(defaultPreviewFrameTimeCode));
       expect(said, contains('default'));
+      expect(said, contains('five seconds'));
       expect(said, contains(previewTimeCodeSuffix));
+      // **Described, not quoted.** Apple documents five seconds and was
+      // observed cutting at 00:00:05:01, so naming an exact frame here would
+      // state a number Apple did not choose — and would invite a comparison
+      // against `defaultPreviewFrameTimeCode` that could never match.
+      expect(said, isNot(contains(defaultPreviewFrameTimeCode)));
     });
   });
 
@@ -518,6 +719,103 @@ void main() {
       expect(attributes['fileSize'], 5);
     });
 
+    test('Apple cutting its own frame is reported as a default', () async {
+      // **The annotation was reintroduced in `_assertPosterFrames`, forty
+      // lines after being fixed at the commit site.** With no sidecar,
+      // `wanted` is null and `stored` is Apple's value, so
+      // `describePreviewFrame(wanted ?? stored)` took the non-null branch and
+      // printed a bare `poster frame 00:00:05:01` — a default reported as a
+      // decision, in the one case the annotation exists for.
+      //
+      // The old fake could not show it: it modelled the *commit* echo, which
+      // is empty, not the post-ingestion *set* readback, which is populated.
+      // Measured: a real set held 00:00:05:01 after ingestion.
+      final client = _FakeClient()
+        ..ingestedTimeCode = '00:00:05:01'
+        ..polls = [
+          _preview(
+            id: 'new-preview',
+            videoState: 'COMPLETE',
+            frameState: 'COMPLETE',
+          ),
+        ];
+
+      final said = await _printed(
+        () => storeOf(client).replacePreviews(_localization, 'IPHONE_67', [
+          _video('promo.mp4', 'bytes'),
+        ]),
+      );
+
+      expect(said, contains('default'));
+      expect(said, contains('Apple cut it at 00:00:05:01'));
+      expect(_framePatches(client), isEmpty);
+    });
+
+    test('a preview Apple did not report back makes no claim', () async {
+      // Falling through printed the *tree's* timecode as the outcome: a
+      // confident sentence about an asset the run could not find. Same class
+      // as the blank print, opposite symptom.
+      final client = _FakeClient()
+        ..ingestedFileName = 'something-else.mp4'
+        ..ingestedTimeCode = '00:00:05:01'
+        ..polls = [
+          _preview(
+            id: 'new-preview',
+            videoState: 'COMPLETE',
+            frameState: 'COMPLETE',
+          ),
+        ];
+
+      final said = await _printed(
+        () => storeOf(client).replacePreviews(_localization, 'IPHONE_67', [
+          _video('promo.mp4', 'bytes', timeCode: '00:00:02:06'),
+        ]),
+      );
+
+      expect(said, contains('did not report this preview back'));
+      // Scoped to the per-file report line: the *commit* line legitimately
+      // says `asking for poster frame 00:00:02:06`, which is a request rather
+      // than a claim about what Apple holds.
+      expect(
+        said,
+        isNot(contains('promo.mp4: poster frame')),
+        reason: 'the tree\'s value is not evidence about Apple\'s asset',
+      );
+    });
+
+    test('a poster frame that did not stick is reported, not claimed', () async {
+      // **The retry repeats the assumption that failed on the create** unless
+      // it is read back: the whole defect is that Apple accepts this attribute
+      // and ignores it. It also closes the hole the grace period opens — that
+      // period proceeds when Apple never reports a frame state, which is
+      // exactly when the poster may not be cut yet, and a PATCH landing before
+      // ingestion is the thing Apple discards.
+      final client = _FakeClient()
+        ..ingestedTimeCode = '00:00:05:01'
+        ..patchIsIgnored = true
+        ..polls = [
+          _preview(
+            id: 'new-preview',
+            videoState: 'COMPLETE',
+            frameState: 'COMPLETE',
+          ),
+        ];
+
+      final said = await _printed(
+        () => storeOf(client).replacePreviews(_localization, 'IPHONE_67', [
+          _video('promo.mp4', 'bytes', timeCode: '00:00:02:06'),
+        ]),
+      );
+
+      expect(said, contains('Apple still reports 00:00:05:01'));
+      expect(said, contains('Re-running'));
+      expect(
+        said,
+        isNot(contains('poster frame 00:00:02:06,')),
+        reason: 'a write that did not land is not a poster frame that moved',
+      );
+    });
+
     test('the matching set is the one replaced, and only it', () async {
       // The fake answers the collection read with every type it holds,
       // because the real one does — `replacePreviews` filters client-side.
@@ -590,7 +888,8 @@ void main() {
           [_video('promo.mp4', 'bytes')],
         ),
       );
-      expect(said, contains(defaultPreviewFrameTimeCode));
+      expect(said, contains('would send promo.mp4'));
+      expect(said, contains('default'));
     });
   });
 
@@ -617,6 +916,34 @@ void main() {
         ).awaitPreviewProcessing(['preview-1'], poll: Duration.zero),
       );
 
+      expect(
+        client.requests.where((r) => r.contains('appPreviews')),
+        hasLength(2),
+      );
+    });
+
+    test('a frame state Apple never reports does not wait for ever', () async {
+      // **The wait had exactly one success condition — both COMPLETE — so a
+      // preview whose `previewFrameImage` Apple simply does not report could
+      // never finish.** Every release would poll the full timeout and then
+      // throw a 504 about processing that had not finished, on an upload that
+      // was completely fine. Nothing has watched a real preview through the
+      // queue, so this is bounded rather than assumed either way.
+      final client = _FakeClient()
+        ..polls = [_preview(fileName: 'promo.mp4', videoState: 'COMPLETE')];
+
+      final said = await _printed(
+        () => storeOf(client).awaitPreviewProcessing(
+          ['preview-1'],
+          poll: Duration.zero,
+          framePolls: 2,
+        ),
+      );
+
+      expect(said, contains('no poster-frame state'));
+      // Bounded, and it did wait: the grace period is what distinguishes this
+      // from treating a null as done on the first poll, which would submit
+      // while a frame was genuinely still being cut.
       expect(
         client.requests.where((r) => r.contains('appPreviews')),
         hasLength(2),
@@ -652,6 +979,29 @@ void main() {
               contains('previewFrameTimeCode'),
               contains('00:00:44:00'),
             ),
+          ),
+        ),
+      );
+    });
+
+    test('a failed video on commit says what to look at', () async {
+      // The screenshot path has carried this hint since the day the commit
+      // response stopped being discarded; the preview path did not, so an
+      // immediate FAILED with an empty errors[] produced one sentence naming
+      // the file and nothing about what to do with it.
+      final client = _FakeClient()..failCommitWithoutReason = true;
+
+      await expectLater(
+        _printed(
+          () => storeOf(client).replacePreviews(_localization, 'IPHONE_67', [
+            _video('promo.mp4', 'bytes', timeCode: '00:00:02:06'),
+          ]),
+        ),
+        throwsA(
+          isA<AscApiException>().having(
+            (e) => e.toString(),
+            'message',
+            allOf(contains('promo.mp4'), contains('dry-run')),
           ),
         ),
       );

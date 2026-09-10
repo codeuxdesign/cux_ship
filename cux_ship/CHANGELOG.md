@@ -1,5 +1,91 @@
 # Changelog
 
+## 4.5.0-dev.2
+
+### Found by the first real upload, not by the review
+
+**Apple accepts `previewFrameTimeCode` at reservation and ignores it.** The
+create carried `00:00:02:06`, Apple accepted the request, and the poster came
+back cut at Apple's own `00:00:05:01`. So a single `upload --metadata` run left
+every preview at the default *and printed success*; the value only arrived on a
+second run, through `PreviewPlan.retime`, which needs a published preview to
+compare against. "Run it twice" was the correct procedure and nothing said so.
+
+The timecode is now asserted after ingestion, in the same run, where the asset
+exists and Apple's answer is real. The create still sends it — harmless, and it
+may be honoured for other asset types — but it is no longer trusted.
+
+**Apple answers the commit with `previewFrameTimeCode: ""`, not null**, having
+not cut the poster yet. The empty string walked through a `??` and through a
+null check, so the line that exists to name the effective poster frame printed
+`poster frame ` with nothing after it — and it was hiding the discrepancy
+above, at the one moment it was visible, on the one input that cannot be
+changed after approval. The commit line now reports what was *asked for*, and
+the effective frame is printed after ingestion.
+
+**A silent cut is refused offline.** Apple rejected one with
+`MOV_RESAVE_STEREO` — a channel-layout code, for a file with no audio stream at
+all — after the upload and a round trip through the ingestion queue.
+`cux_ship_verify` was already four boxes away from the answer.
+
+**The wait prints one line per state change.** It polled two states and printed
+nothing until it finished, so a run that waited seven minutes and one that
+waited seven hours produced identical output, and which asset Apple finishes
+first was unanswerable from outside.
+
+**A duplicated error code and description are reported once.** Apple sets both
+to the same string, so a real rejection read `MOV_RESAVE_STEREO -
+MOV_RESAVE_STEREO`.
+
+**`describePreviewFrame` no longer quotes an exact default.** Apple documents
+five seconds and was observed cutting at `00:00:05:01`, so naming a frame
+stated a number Apple did not choose.
+
+### Measured, at last
+
+One real ingestion: **7m29s** from upload to both `videoDeliveryState` and
+`previewFrameImage.state` reaching `COMPLETE`, on an 886x1920, 29.57 s, 20.4 MB
+stereo H.264 preview. So the 30-minute default was never approached, and the
+hypothesis that Apple might never report `previewFrameImage` did not fire on
+this file. One sample, one app — the grace period added in dev.2 stays.
+
+**Needs `cux_ship_verify` 1.11.0-dev.2.** Five defects in 4.5.0-dev.1, found by
+a code review of the change that introduced it. Two of them could have bitten
+the first real upload.
+
+**A preview whose poster frame Apple rejected was skipped on the next run.**
+`previewPlan` compared name, checksum and the *video* state, so a preview with a
+`COMPLETE` video and a `FAILED` frame matched as unchanged — and since
+re-running is the documented recovery from a processing timeout, the ordinary
+sequence was: upload, frame fails, the run aborts loudly, somebody re-runs, and
+the second run skips the upload and lets a promotion submit a version whose
+poster Apple threw away. Caught at upload and then waved through by the
+optimisation, which is the defect this feature exists to prevent.
+
+It compares on `!= FAILED` rather than `== COMPLETE`, deliberately: Apple is not
+guaranteed to report a frame state at all, and requiring `COMPLETE` would
+re-upload a 500 MB video on every release, for ever, silently.
+
+**The wait could never finish if Apple reported no frame state.**
+`awaitPreviewProcessing` had one success condition — both assets `COMPLETE` — so
+a preview whose `previewFrameImage` Apple simply does not report polled the full
+timeout and then failed with a message about processing that had not finished,
+on an upload that was fine. It now accepts the video's verdict after a grace
+period, and says so.
+
+**Every rejection reason was listed twice.** Apple populates
+`videoDeliveryState` and the deprecated `assetDeliveryState` together, and both
+were read — in the one message somebody reads to work out what was refused.
+
+**The "Apple's default" annotation was erased by the readback.** A preview with
+no sidecar whose commit response echoed Apple's own `00:00:05:00` printed a bare
+`poster frame 00:00:05:00`, which reads as a deliberate choice. It is the
+opposite, and it is the case the annotation exists for. The tree decides whether
+anybody chose; Apple only knows what it stored.
+
+**A commit refused with no reason said nothing about what to look at**, where
+the screenshot path in the same file names the properties to check.
+
 ## 4.5.0-dev.1
 
 **Needs `cux_ship_verify` 1.11.0-dev.1**, which carries the tree and the

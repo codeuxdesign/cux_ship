@@ -61,7 +61,21 @@ Uint8List mp4({
   double seconds = 20,
   String codec = 'avc1',
   bool rotated = false,
+
+  /// Channels the sound track declares. 0 omits the track entirely, which
+  /// is the silent-cut case Apple refuses with MOV_RESAVE_STEREO.
+  int audioChannels = 2,
+
+  /// Truncates the audio `stsd` payload below the eight bytes its entry
+  /// count needs, so a reader that does not bound first reads past it.
+  bool shortAudioStsd = false,
   bool soundTrackFirst = false,
+  bool emptyStsd = false,
+
+  /// Raw `stts` runs, for the overflow case. Each entry is written as a
+  /// (sample_count, sample_delta) pair exactly as given, so a caller can
+  /// build a table whose products overflow int64 when summed.
+  List<List<int>>? sttsRuns,
 }) {
   const timescale = 600;
   final duration = (seconds * timescale).round();
@@ -91,21 +105,36 @@ Uint8List mp4({
     ..._be32(height << 16),
   ]);
 
-  final stsd = _box('stsd', [
-    ...[0, 0, 0, 0], // version, flags
-    ..._be32(1), // one entry
-    // The entry: its own length, then the format that names the codec. The
-    // rest of a visual sample entry is not read, so it is not written.
-    ..._be32(16),
-    ...codec.codeUnits,
-    ...List<int>.filled(8, 0),
-  ]);
+  // An `stsd` declaring no entries is 16 bytes and legal to write. A reader
+  // that bounds against the file rather than the box reads straight past it
+  // into the next sibling's header and reports that box's type as the codec.
+  final stsd = emptyStsd
+      ? _box('stsd', [
+          ...[0, 0, 0, 0], // version, flags
+          ..._be32(0), // no entries
+        ])
+      : _box('stsd', [
+          ...[0, 0, 0, 0], // version, flags
+          ..._be32(1), // one entry
+          // The entry: its own length, then the format that names the codec.
+          // The rest of a visual sample entry is not read, so it is not
+          // written.
+          ..._be32(16),
+          ...codec.codeUnits,
+          ...List<int>.filled(8, 0),
+        ]);
 
+  final runs =
+      sttsRuns ??
+      [
+        [frames, delta],
+      ];
   final stts = _box('stts', [
     ...[0, 0, 0, 0], // version, flags
-    ..._be32(1), // one run
-    ..._be32(frames),
-    ..._be32(delta),
+    ..._be32(runs.length),
+    ...[
+      for (final run in runs) ...[..._be32(run[0]), ..._be32(run[1])],
+    ],
   ]);
 
   final mdia = _box('mdia', [
@@ -164,6 +193,30 @@ Uint8List mp4({
         ...'soun'.codeUnits,
         ...List<int>.filled(12, 0),
       ]),
+      // An audio sample entry: the 16-byte SampleEntry header, then version,
+      // revision and vendor, then channelcount at +24.
+      ..._box('minf', [
+        ..._box('stbl', [
+          if (shortAudioStsd) ...[
+            ..._box('stsd', [
+              ...[0, 0, 0], // three bytes: not even a full version+flags
+            ]),
+          ] else ...[
+            ..._box('stsd', [
+              ...[0, 0, 0, 0], // version, flags
+              ..._be32(1), // one entry
+              ..._be32(36), // entry size
+              ...'mp4a'.codeUnits,
+              ...List<int>.filled(6, 0), // reserved
+              ...[0, 1], // data reference index
+              ...[0, 0], ...[0, 0], ..._be32(0), // version, revision, vendor
+              ...[0, audioChannels], // channelcount, at +24
+              ...[0, 16], // sample size
+              ..._be32(0),
+            ]),
+          ],
+        ]),
+      ]),
     ]),
   ]);
 
@@ -175,8 +228,9 @@ Uint8List mp4({
       ..._be32(duration),
       ...List<int>.filled(80, 0), // rate, volume, matrix, pre-defined, next id
     ]),
-    if (soundTrackFirst) ...[...soundTrack],
+    if (soundTrackFirst && audioChannels > 0) ...[...soundTrack],
     ..._box('trak', [...tkhd, ...mdia]),
+    if (!soundTrackFirst && audioChannels > 0) ...[...soundTrack],
   ]);
 
   final ftyp = _box('ftyp', [

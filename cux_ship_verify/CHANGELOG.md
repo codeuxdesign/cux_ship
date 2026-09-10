@@ -1,5 +1,66 @@
 # Changelog
 
+## 1.11.0-dev.2
+
+**A preview with no stereo audio track is refused offline.** Apple rejects one
+with `MOV_RESAVE_STEREO` — a *channel-layout* code, reported even for a file
+carrying no audio stream at all — after the upload and a round trip through an
+ingestion queue it documents in hours. Observed on a real release, on a silent
+cut published by mistake. `VideoInfo` gains `audioChannels` and `VideoRules`
+gains `requiredAudioChannels`, nullable because a second store may state no
+rule and a check that invented one would refuse a file nobody refuses.
+
+The message says what the file actually has — "has no audio track", "has 1
+audio channel" — rather than repeating Apple's word for something it is not,
+and names `MOV_RESAVE_STEREO` so somebody who has already had the 422 can
+connect the two.
+
+**`defaultPreviewFrameTimeCode` is documented as approximate.** Apple states
+five seconds and was observed cutting at `00:00:05:01`, so a run decides whether
+anybody chose a frame by asking the tree, never by comparing Apple's value
+against this constant — which would not have matched even once.
+
+Six further defects in 1.11.0-dev.1, found by a code review of the change that
+introduced it. Two are in the offline checks and cost a day each when they fire;
+four are the parser reading something other than what it claims to.
+
+**A timecode's frame field was never range-checked.** `00:00:02:99` passed every
+offline check on a 30 fps video — minutes and seconds were bounded and the field
+the format is named for was not — and because it resolves to 5.3 s it is inside
+the file, so the past-the-end check did not fire either. Apple takes it and
+rejects the poster frame a day later, which is exactly the cost these checks
+exist to avoid. `previewFrameTimeCodeProblem` now takes an optional `frameRate`.
+
+**A sidecar was matched case-sensitively where videos are not.** The video
+filter lowercases, so `RIDE.MP4` is a preview; the sidecar lookup built an exact
+path and the orphan check compared exactly. On a case-sensitive filesystem —
+Linux CI — `01-ride.mp4.TIMECODE` was neither found nor reported as an orphan,
+so the preview shipped at Apple's five-second default and the one guard against
+that said nothing.
+
+**`_readCodec` bounded against the file rather than the box**, so an `stsd`
+declaring no entries (16 bytes, and legal) read straight into the next sibling's
+header and reported *its* four-character type as the codec — observed refusing a
+file with `is stts; the App Store takes H.264 or ProRes 422 HQ`.
+
+**A 64-bit box size could overflow the bounds check.** `offset + size > to`
+wraps negative near 2^63, so the guard passed, `offset += size` went negative,
+and the next read threw a `RangeError` out of a metadata loader instead of
+returning null. Now `size > to - offset`, which cannot overflow.
+
+**A negative frame rate passed every rule.** `stts` products can overflow int64;
+the guard only rejected zero. A negative rate slips under a `> 30` ceiling and
+then becomes a divisor.
+
+**A video with more than one `vide` track gave up at the first unreadable one**
+rather than trying the next.
+
+Two message defects: a file in the first 50 kB above the cap was refused for
+exceeding a number that rendered identically to its own size, and the sentence
+about Apple's ambiguous "500MB" was printed for whatever `VideoRules` it was
+handed. The ambiguity is now a field on the rules, so a second store's cap is
+its own.
+
 ## 1.11.0-dev.1
 
 **App preview videos are part of the tree, and are checked offline.**

@@ -42,6 +42,7 @@ class VideoInfo {
     required this.codec,
     required this.container,
     required this.fileSize,
+    required this.audioChannels,
   });
 
   /// Display dimensions, after any rotation the track matrix asks for.
@@ -78,6 +79,16 @@ class VideoInfo {
   /// Length of the whole file in bytes, which is also a limit Apple enforces
   /// and one nothing else here would carry.
   final int fileSize;
+
+  /// Channels in the first audio track, 0 when the file has none.
+  ///
+  /// **Read because Apple refuses a preview over it, in an error that names
+  /// something else.** A silent cut was refused with `MOV_RESAVE_STEREO` —
+  /// a *channel layout* code, for a file with no audio stream at all — after
+  /// the upload and a round trip through the ingestion queue. Apple's stated
+  /// requirement is stereo, and the track count is four boxes from the ones
+  /// already being walked, so the answer is free here and expensive there.
+  final int audioChannels;
 }
 
 /// What a store accepts in a preview video, named after whose rules they are.
@@ -93,6 +104,8 @@ class VideoRules {
     required this.minDuration,
     required this.maxDuration,
     required this.maxFileSize,
+    this.requiredAudioChannels,
+    this.ambiguousMegabytes = false,
   });
 
   /// For the message: "the App Store", not this object's name.
@@ -107,6 +120,24 @@ class VideoRules {
   final Duration minDuration;
   final Duration maxDuration;
   final int maxFileSize;
+
+  /// Channels the store requires, or null when it states no rule.
+  ///
+  /// Apple asks for stereo and enforces it — with `MOV_RESAVE_STEREO`, after
+  /// the upload, naming a channel layout even for a file carrying no audio at
+  /// all. Nullable because a second store may not care, and a check that
+  /// invented a requirement would refuse a file nobody's rules refuse.
+  final int? requiredAudioChannels;
+
+  /// Whether [maxFileSize] is one reading of a limit the store states without
+  /// units, so a file just over it may still be accepted.
+  ///
+  /// A field rather than a fact baked into the message, because the message is
+  /// about *this store's* page: Apple writes "500MB" and means one of two
+  /// numbers, and a second store's cap is its own business. Printed
+  /// unconditionally it would tell a Play uploader that Google's limit is a
+  /// reading of Apple's documentation.
+  final bool ambiguousMegabytes;
 }
 
 /// Apple's app preview rules, from the App Store Connect help's preview
@@ -142,6 +173,8 @@ const appStorePreviewRules = VideoRules(
   minDuration: Duration(seconds: 15),
   maxDuration: Duration(seconds: 30),
   maxFileSize: 500 * 1000 * 1000,
+  requiredAudioChannels: 2,
+  ambiguousMegabytes: true,
 );
 
 /// Why [video] is not something [rules] accepts, or null when it is.
@@ -154,6 +187,20 @@ String? videoEncodingProblem(VideoInfo video, VideoRules rules) {
   if (!rules.codecs.containsKey(video.codec)) {
     final accepted = <String>{...rules.codecs.values}.join(' or ');
     return 'is ${_codecName(video.codec)}; ${rules.store} takes $accepted';
+  }
+  final channels = rules.requiredAudioChannels;
+  if (channels != null && video.audioChannels != channels) {
+    // **Named plainly, because Apple's own error does not.** A silent cut was
+    // refused with `MOV_RESAVE_STEREO` — a channel-layout code — for a file
+    // with no audio stream whatsoever, after the upload and a round trip
+    // through the ingestion queue. Whatever this file has, saying so beats
+    // repeating Apple's word for something it is not.
+    final has = video.audioChannels == 0
+        ? 'has no audio track'
+        : 'has ${video.audioChannels} audio channel'
+              '${video.audioChannels == 1 ? '' : 's'}';
+    return '$has; ${rules.store} requires stereo. Apple reports this after '
+        'the upload, as MOV_RESAVE_STEREO, even when the file is silent';
   }
   if (video.duration < rules.minDuration ||
       video.duration > rules.maxDuration) {
@@ -170,20 +217,36 @@ String? videoEncodingProblem(VideoInfo video, VideoRules rules) {
         '${_rate(rules.maxFrameRate)}';
   }
   if (video.fileSize > rules.maxFileSize) {
-    // The band between the two readings of "500MB" is named rather than
-    // silently refused, because in it this is *our* rule and not Apple's — and
-    // somebody staring at a 505 MB file that Apple might well have taken
-    // deserves to know that shrinking it is a precaution rather than a
-    // requirement.
-    // The same nominal number read as MiB: 500 decimal MB -> 500 MiB.
+    // **Both numbers to enough precision to differ.** `_megabytes` rounds to
+    // one decimal, so a file anywhere in the first 50 kB above the cap printed
+    // as `is 500.0 MB; the App Store takes at most 500.0 MB` — refused for
+    // exceeding a number equal to itself. The same class of defect as the
+    // mismatched base this message was already fixed for once.
+    final over = video.fileSize - rules.maxFileSize;
+    final size = over < 100000
+        ? '${video.fileSize} bytes'
+        : _megabytes(video.fileSize);
+    final cap = over < 100000
+        ? '${rules.maxFileSize} bytes'
+        : _megabytes(rules.maxFileSize);
+
+    // The ambiguity is Apple's, so the sentence about it is only true of
+    // Apple. Printed for whatever `rules` it was handed, it would tell a Play
+    // uploader that Google's cap is a reading of Apple's page — CONTRIBUTING's
+    // "a claim about both stores is checked against both", one store early.
+    // **Two conditions, not one.** The store's limit has to be the ambiguous
+    // kind *and* the file has to fall between the two readings of it — a file
+    // over both is refused by either reading, and hedging there would offer
+    // false hope. Collapsing these to the flag alone is a tempting tidy-up and
+    // it silently widens the hedge to every oversized file.
     final binary = rules.maxFileSize / 1000000 * 1024 * 1024;
-    final ambiguous = video.fileSize <= binary;
-    return 'is ${_megabytes(video.fileSize)}; ${rules.store} takes at most '
-        '${_megabytes(rules.maxFileSize)}'
-        '${ambiguous ? ' — Apple writes "500MB" without units, and this is '
-                  'the decimal reading. Your file is under the other one, so it '
-                  'may well be accepted; refusing it here is the cheap error and '
-                  'a 24-hour rejection is not.' : ''}';
+    final band = rules.ambiguousMegabytes && video.fileSize <= binary
+        ? ' — ${rules.store} writes this limit without units, and it is read '
+              'here as decimal MB. Your file is under the binary reading, so '
+              'it may well be accepted; refusing it here is the cheap error '
+              'and a 24-hour rejection is not.'
+        : '';
+    return 'is $size; ${rules.store} takes at most $cap$band';
   }
   return null;
 }
@@ -259,6 +322,7 @@ VideoInfo? readVideoInfo(List<int> bytes) {
     codec: track.codec,
     container: container,
     fileSize: bytes.length,
+    audioChannels: _readAudioChannels(bytes, moov),
   );
 }
 
@@ -318,7 +382,14 @@ _Box? _findBox(List<int> bytes, int from, int to, String type) {
       // "To the end of the enclosing box", which is legal for the last one.
       size = to - offset;
     }
-    if (size < header || offset + size > to) {
+    // **`to - offset` rather than `offset + size`, because the sum can
+    // overflow.** A 64-bit box size near 2^63 makes `offset + size` wrap
+    // negative, so `> to` is false, the guard passes, and `offset += size`
+    // then indexes the buffer at a negative offset — a RangeError escaping
+    // a metadata loader rather than the null this returns for anything it
+    // cannot read. Subtracting cannot overflow: both sides are non-negative
+    // and `to` is a real length.
+    if (size < header || size > to - offset) {
       // A length that runs past its parent means the tree is not what it
       // claims. Stop rather than guess: reading on from a bad offset produces
       // plausible integers out of arbitrary bytes, which is worse than
@@ -349,7 +420,14 @@ List<_Box> _findBoxes(List<int> bytes, int from, int to, String type) {
     } else if (size == 0) {
       size = to - offset;
     }
-    if (size < header || offset + size > to) {
+    // **`to - offset` rather than `offset + size`, because the sum can
+    // overflow.** A 64-bit box size near 2^63 makes `offset + size` wrap
+    // negative, so `> to` is false, the guard passes, and `offset += size`
+    // then indexes the buffer at a negative offset — a RangeError escaping
+    // a metadata loader rather than the null this returns for anything it
+    // cannot read. Subtracting cannot overflow: both sides are non-negative
+    // and `to` is a real length.
+    if (size < header || size > to - offset) {
       return found;
     }
     if (_isType(bytes, offset + 4, type)) {
@@ -384,6 +462,55 @@ Duration? _readMvhd(List<int> bytes, _Box moov) {
   return Duration(microseconds: (duration * 1000000 / timescale).round());
 }
 
+/// Channels declared by the first `soun` track, or 0 when there is none.
+///
+/// The audio sample entry's layout is fixed: a `SampleEntry` header of 16
+/// bytes — size, format, six reserved, data_reference_index — then version,
+/// revision and vendor for eight more, and `channelcount` at +24.
+///
+/// Zero for "no audio track" *and* for a track this cannot read, which is the
+/// right collapse here: both mean "cannot show that this file has the stereo
+/// Apple asks for", and the check that reads it refuses on that basis rather
+/// than claiming to know which.
+int _readAudioChannels(List<int> bytes, _Box moov) {
+  for (final trak in _findBoxes(bytes, moov.start, moov.end, 'trak')) {
+    final mdia = _findBox(bytes, trak.start, trak.end, 'mdia');
+    if (mdia == null) {
+      continue;
+    }
+    final hdlr = _findBox(bytes, mdia.start, mdia.end, 'hdlr');
+    if (hdlr == null || !_isType(bytes, hdlr.start + 8, 'soun')) {
+      continue;
+    }
+    final minf = _findBox(bytes, mdia.start, mdia.end, 'minf');
+    final stbl = minf == null
+        ? null
+        : _findBox(bytes, minf.start, minf.end, 'stbl');
+    final stsd = stbl == null
+        ? null
+        : _findBox(bytes, stbl.start, stbl.end, 'stsd');
+    // **Bounded before the entry count is read, not after.** This had the two
+    // in the other order, so an `stsd` whose payload is under eight bytes read
+    // its count from the sibling box's header — or off the end of the buffer,
+    // as a `RangeError` escaping a metadata loader. Both are defect classes
+    // fixed elsewhere in this same file: `_readCodec` reading `stts` as a
+    // codec, and `_findBox`'s comment about what must never escape. `_be32`
+    // indexes raw where `_isType` guards, which is what makes the order matter.
+    final entry = stsd == null ? 0 : stsd.start + 8;
+    if (stsd == null ||
+        entry + 26 > stsd.end ||
+        entry + 26 > bytes.length ||
+        _be32(bytes, stsd.start + 4) == 0) {
+      continue;
+    }
+    return _be16(bytes, entry + 24);
+  }
+  return 0;
+}
+
+int _be16(List<int> bytes, int offset) =>
+    (bytes[offset] << 8) | bytes[offset + 1];
+
 typedef _Track = ({int width, int height, double frameRate, String codec});
 
 /// The first `trak` under [moov] whose handler is `vide`, read out.
@@ -407,7 +534,11 @@ _Track? _findVideoTrack(List<int> bytes, _Box moov) {
     final codec = _readCodec(bytes, mdia);
     final rate = _readFrameRate(bytes, mdia);
     if (size == null || codec == null || rate == null) {
-      return null;
+      // `continue`, not `return null`: a file may carry more than one track
+      // with a `vide` handler — a poster or preview track ahead of the real
+      // one is legal QuickTime — and abandoning the whole file at the first
+      // unreadable one reports a valid video as unreadable.
+      continue;
     }
     return (
       width: size.width,
@@ -474,7 +605,19 @@ String? _readCodec(List<int> bytes, _Box mdia) {
   final stsd = _findBox(bytes, stbl.start, stbl.end, 'stsd');
   // version + flags (4), entry count (4), then the first entry: size (4) and
   // the format that names the codec.
-  if (stsd == null || stsd.start + 16 > bytes.length) {
+  // **Bounded by the box, not by the file**, which is the difference between
+  // reading this box and reading the next one. An `stsd` with `entry_count`
+  // zero, or one truncated after the count, is exactly 16 bytes — so a check
+  // against `bytes.length` passes and `stsd.start + 12` lands in the *sibling*
+  // box's header, returning its four-character type as the codec. Observed
+  // reporting `stts` as a codec, in a refusal that reads like a real verdict.
+  // [_readTkhd] already bounds against `tkhd.end` for the same reason.
+  if (stsd == null ||
+      stsd.start + 16 > stsd.end ||
+      stsd.start + 16 > bytes.length) {
+    return null;
+  }
+  if (_be32(bytes, stsd.start + 4) == 0) {
     return null;
   }
   return _type(bytes, stsd.start + 12);
@@ -529,5 +672,16 @@ double? _readFrameRate(List<int> bytes, _Box mdia) {
   if (samples == 0 || ticks == 0) {
     return null;
   }
-  return samples / (ticks / timescale);
+  final rate = samples / (ticks / timescale);
+  // **A rate that is not a positive real number is not a reading.** `count`
+  // and `delta` are both unsigned 32-bit as the file states them, so their
+  // products and sums can overflow int64 and come back negative — and a
+  // negative rate passes a `> maxFrameRate` ceiling silently, then becomes a
+  // divisor in `previewFrameOffset`. Crafted input rather than corruption, but
+  // the whole contract of this function is "null when the file cannot be
+  // read", and a negative frame rate means exactly that.
+  if (rate <= 0 || !rate.isFinite) {
+    return null;
+  }
+  return rate;
 }

@@ -174,11 +174,33 @@ one that was sent. The two differing is exactly the thing worth seeing.
 
 ## Three decisions that follow from the slowness
 
-**The timecode goes in the reservation, not the commit.** Apple accepts it in
-both. Sending it at reservation means the asset never exists, even briefly,
-without the frame it was meant to have — so a run that dies between the PUTs and
-the commit leaves something Apple discards rather than something posed at five
-seconds.
+**The timecode goes in the reservation — and is asserted again after
+ingestion, because Apple ignores the first one.**
+
+The original reasoning was that sending it at reservation means the asset never
+exists, even briefly, without the frame it was meant to have. That is correct in
+intent and was wrong in fact, and the first real upload is what said so: the
+create carried `00:00:02:06`, Apple accepted the request, and the poster came
+back cut at Apple's own `00:00:05:01`. The attribute is presumably read while
+the asset still has no bytes, so whatever ingestion derives overwrites it.
+
+The consequence was as bad as it sounds. **A single run left every preview at
+Apple's default and printed success.** The value arrived only on a *second* run,
+through [PreviewPlan.retime], which needs a published preview to compare
+against — so "run it twice" was the correct procedure and nothing said so.
+
+So the timecode is asserted after both states report `COMPLETE`, where the asset
+exists and Apple's answer is real, and the create keeps sending it because it
+costs nothing and may be honoured for asset types that are not this one. What
+changed is that it is no longer *trusted*.
+
+**This is what the blank line was hiding**, and the two defects are worth
+keeping together. Apple answers the commit with `previewFrameTimeCode: ""` — an
+empty string, not a null, because the poster is not cut yet — and `''` survives
+both a `??` and a null check, so the line whose entire job is to name the
+effective poster frame printed `poster frame ` with nothing after it. The one
+input that cannot be corrected after approval, unreported, at the one moment the
+discrepancy was on screen.
 
 **A moved poster frame is patched, not re-uploaded.** This is what
 `PreviewPlan.retime` exists for. Folding it into `replace` would be *correct*,
@@ -204,9 +226,63 @@ minutes goes looking for a broken upload that is not broken; the message says
 the videos are uploaded, that the wait is what stopped, and that the submission
 is the thing that has to wait rather than the upload being the thing to retry.
 
+### Measured: 7m29s, once
+
+Status: **decided**, and the sample size is one.
+
+The first real ingestion, on an 886×1920 / 29.57 s / 20.4 MB stereo H.264
+preview: **7 minutes 29 seconds** from commit to both `videoDeliveryState` and
+`previewFrameImage.state` reporting `COMPLETE`. So the thirty-minute default was
+never approached, and Apple's documented twenty-four hours is a ceiling rather
+than a typical case.
+
+Two things it did *not* settle. **Which asset finishes first is still unknown** —
+the loop's only exit is both-`COMPLETE`, so a run that ends tells you nothing
+about the order. That is now instrumented: one line per state transition, which
+is the only instrument anybody has on this queue. And **the hypothesis that
+Apple might never report `previewFrameImage` did not fire on this file**, which
+is one file; the grace period stays.
+
+### Proposed: the wait is welded to the upload
+
+Status: **proposed**, and argued at length in
+[preview-wait-split.md](preview-wait-split.md), which is where the interface
+lives. This section is the summary and the reason it is not built yet.
+
+Raised by the first consumer's owner, in the form *"maybe there should be
+another status/wait command — how is this handled for builds?"* The answer is
+that builds already have it and previews are the one asset that did not get it:
+
+| asset | worst case | timeout | `--timeout` / `--poll` | wait command | skip flag |
+|---|---|---|---|---|---|
+| build | about an hour | 45 min | yes | `appstore wait` | `--skip-waiting` |
+| screenshot | seconds to minutes | 10 min | no | no | no |
+| preview | **24 hours** | 30 min | no | no | no |
+
+And `--skip-waiting` cannot help even if reached for: it is evaluated inside the
+artifact branch, and a metadata-only run has no artifact. So the one command
+that publishes a preview has no way not to wait.
+
+The shape to copy is the build path's, and `cli.dart` already states the
+principle — *"`upload --skip-waiting` does the transfer, `appstore wait` does the
+poll"*. `upload --metadata --skip-waiting` would publish and stop, printing the
+next command; `appstore wait` would learn previews, with `--timeout` and
+`--poll`. Reaching the deadline then becomes a *resumable state* rather than a
+non-zero exit.
+
+**The cheap version, if the split is too much**, is to make the timeout and poll
+configurable from the CLI and to exit zero at the deadline with "still
+processing, here is how to check". An outcome this document calls *ordinary*
+should not be an error.
+
+Not done in dev.2 because the sharp edge that made it urgent is gone: the
+timeout message told the operator to re-run, and re-running was the path into
+the skip that ignored a rejected poster frame. That skip is fixed, so the
+printed remedy is honest and the split is an improvement rather than a repair.
+
 ### Open: thirty minutes is a guess
 
-Status: **open**.
+Status: **open**, and now with one measurement against it.
 
 Nothing here has watched a real preview through Apple's queue. Thirty minutes is
 chosen as "long enough that the common case finishes, short enough that a CI job

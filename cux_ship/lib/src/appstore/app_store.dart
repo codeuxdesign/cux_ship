@@ -519,6 +519,7 @@ typedef PublishedPreview = ({
   String? fileName,
   String? checksum,
   String? videoState,
+  String? frameState,
   String? frameTimeCode,
 });
 
@@ -544,6 +545,7 @@ PublishedPreview readPublishedPreview(Map<String, dynamic> preview) {
     fileName: attributes['fileName'] as String?,
     checksum: attributes['sourceFileChecksum'] as String?,
     videoState: previewVideoState(preview),
+    frameState: previewFrameState(preview),
     frameTimeCode: attributes['previewFrameTimeCode'] as String?,
   );
 }
@@ -591,9 +593,16 @@ String? previewFrameState(Map<String, dynamic> preview) {
 /// would say nothing at all about the second.
 List<String> previewDeliveryErrors(Map<String, dynamic> preview) {
   final attributes = _attributes(preview);
+  // **The video's errors from one field or the other, never both.** Apple
+  // populates `videoDeliveryState` and the deprecated `assetDeliveryState`
+  // together today, and reading both listed every rejection reason twice — in
+  // the one message somebody reads while working out what Apple refused.
+  // `videoDeliveryState` is the current field, so it wins, exactly as it does
+  // in [previewVideoState]; the deprecated one is the fallback for a response
+  // that carries only it.
+  final video = _stateErrors(attributes['videoDeliveryState']);
   return [
-    ..._stateErrors(attributes['videoDeliveryState']),
-    ..._stateErrors(attributes['assetDeliveryState']),
+    ...video.isEmpty ? _stateErrors(attributes['assetDeliveryState']) : video,
     ...() {
       final frame = attributes['previewFrameImage'];
       return frame is Map<String, dynamic>
@@ -616,7 +625,16 @@ List<String> _stateErrors(Object? state) {
   }
   return [
     for (final error in errors.whereType<Map<String, dynamic>>()) ...{
-      [error['code'], error['description']].whereType<String>().join(' - '),
+      // **Collapsed when the two fields carry the same string**, which Apple's
+      // do: a real rejection came back as
+      // `MOV_RESAVE_STEREO - MOV_RESAVE_STEREO`, which reads as two facts
+      // where there is one, in a message somebody is scanning under time
+      // pressure. `screenshotDeliveryErrors` has the identical shape and is
+      // left alone — it has never been observed duplicating, and this change
+      // is not about it.
+      {
+        ...[error['code'], error['description']].whereType<String>(),
+      }.join(' - '),
     },
   ].where((message) => message.isNotEmpty).toList();
 }
@@ -677,6 +695,26 @@ PreviewPlan previewPlan({
         published[i].videoState != 'COMPLETE') {
       return PreviewPlan.replace;
     }
+    // **And the poster frame's own verdict, which this compared on for one
+    // release and should not have.** A preview whose video is COMPLETE and
+    // whose frame Apple *rejected* matched on name, checksum and video state,
+    // so it came back `unchanged` — and since re-running is the documented
+    // recovery from a processing timeout, the ordinary sequence was: upload,
+    // frame fails, the run aborts loudly, somebody re-runs, and the second run
+    // skips the upload and submits the version with a poster frame Apple threw
+    // away. Caught at upload and then waved through by the skip, which is the
+    // defect this whole feature exists to prevent, reintroduced through the
+    // optimisation.
+    //
+    // **`!= FAILED` rather than `== COMPLETE`, deliberately.** Apple is not
+    // guaranteed to report a frame state at all — see [awaitPreviewProcessing],
+    // which cannot wait for one forever for the same reason — and requiring
+    // COMPLETE would mean a null state re-uploaded the video on every single
+    // release, for ever, silently. Only an explicit rejection is evidence
+    // against the asset.
+    if (published[i].frameState == 'FAILED') {
+      return PreviewPlan.replace;
+    }
     final wanted = local[i].frameTimeCode;
     if (wanted != null && published[i].frameTimeCode != wanted) {
       retime = true;
@@ -693,9 +731,12 @@ PreviewPlan previewPlan({
 /// package, because after approval the poster cannot be changed without a new
 /// version submission. So the run says the value either way, and says which of
 /// the two it is.
+/// **The default is described, not quoted.** Apple documents five seconds and
+/// was observed cutting at `00:00:05:01`, so naming an exact frame here would
+/// state a number Apple did not choose. What matters is that nobody chose it.
 String describePreviewFrame(String? frameTimeCode) => frameTimeCode == null
-    ? 'poster frame $defaultPreviewFrameTimeCode (Apple\'s default — no '
-          '$previewTimeCodeSuffix file beside the video)'
+    ? 'poster frame at Apple\'s default, about five seconds in — no '
+          '$previewTimeCodeSuffix file beside the video'
     : 'poster frame $frameTimeCode';
 
 /// The `releaseType` values `--release-type` will send.
@@ -2927,7 +2968,147 @@ class AppStore {
       }
     }
     await awaitPreviewProcessing(uploaded);
+    await _assertPosterFrames(setId!, previewType, previews);
   }
+
+  /// Sets each preview's poster frame *after* Apple has finished ingesting it,
+  /// and says what every one of them ended up at.
+  ///
+  /// **Apple accepts `previewFrameTimeCode` at reservation and then ignores
+  /// it.** Measured on a real upload: the create carried `00:00:02:06`, the
+  /// request was accepted, and the poster came back cut at Apple's own
+  /// `00:00:05:01`. The attribute is presumably read while the asset still has
+  /// no bytes, so whatever ingestion derives overwrites it.
+  ///
+  /// The consequence, before this existed, was that **a single run always left
+  /// the poster at Apple's default** — and printed success. The value only
+  /// arrived on a *second* run, through [PreviewPlan.retime], which needs a
+  /// published preview to compare against. "Run it twice" was the correct
+  /// procedure and nothing said so.
+  ///
+  /// So the timecode is asserted here, where the asset exists and Apple's
+  /// answer is real, and the create keeps sending it because it costs nothing
+  /// and may be honoured for asset types that are not this one. What changed is
+  /// that it is no longer *trusted*.
+  Future<void> _assertPosterFrames(
+    String setId,
+    String previewType,
+    List<LocalPreview> previews,
+  ) async {
+    if (writer.dryRun) {
+      return;
+    }
+    final published = await client.getAll(
+      '/v1/appPreviewSets/$setId/appPreviews',
+    );
+    final held = {
+      for (final preview in published.map(readPublishedPreview)) ...{
+        ?preview.fileName: preview,
+      },
+    };
+
+    for (final preview in previews) {
+      final name = preview.file.uri.pathSegments.last;
+      final apple = held[name];
+      final wanted = preview.frameTimeCode;
+
+      // **An asset Apple did not report back is not an asset to make claims
+      // about.** Falling through to the reporting line printed the *tree's*
+      // timecode as though it were the outcome — a confident sentence about a
+      // preview this run could not find. Same class as the blank print, with
+      // the opposite symptom.
+      if (apple == null || apple.id == null) {
+        stdout.writeln(
+          '      $name: Apple did not report this preview back, so what it is '
+          'posed at is unknown — check App Store Connect',
+        );
+        continue;
+      }
+
+      // A readback Apple has not filled in yet is not an answer. Empty string
+      // and null both mean "nothing to compare against" — see
+      // [_effectiveFrameTimeCode], which learned that distinction the hard way.
+      final stored = _effectiveFrameTimeCode(apple.frameTimeCode);
+
+      // **The annotation follows the tree, not the readback** — the same rule
+      // the commit line learned, and reintroduced here forty lines later. With
+      // no sidecar, `wanted` is null and `stored` is whatever Apple chose, so
+      // `describePreviewFrame(wanted ?? stored)` took the non-null branch and
+      // printed a bare `poster frame 00:00:05:01`: a default, reported as a
+      // decision. Apple's value is worth showing beside it, and never instead
+      // of it.
+      if (wanted == null) {
+        stdout.writeln(
+          '      $name: ${describePreviewFrame(null)}'
+          '${stored == null ? '' : ' (Apple cut it at $stored)'}',
+        );
+        continue;
+      }
+
+      if (stored == wanted) {
+        stdout.writeln('      $name: ${describePreviewFrame(wanted)}');
+        continue;
+      }
+
+      await writer.patch('/v1/appPreviews/${apple.id}', {
+        'data': {
+          'type': 'appPreviews',
+          'id': apple.id,
+          'attributes': {'previewFrameTimeCode': wanted},
+        },
+      }, describe: '$previewType: $name — asking for poster frame $wanted');
+
+      // **Read back, because the defect being fixed is that Apple accepts this
+      // attribute and ignores it.** Reporting success from the request would
+      // repeat, on the retry, the exact assumption that failed on the create —
+      // and on the one input nobody can correct after approval.
+      //
+      // It also closes the hole the grace period opens. That period exists to
+      // proceed when Apple never reports a frame state, which is precisely
+      // when the poster may not have been cut yet — and a PATCH that lands
+      // before ingestion is the thing this whole function exists because Apple
+      // discards. So the run does not claim the frame moved; it asks Apple and
+      // repeats the answer.
+      final confirmed = _effectiveFrameTimeCode(
+        await _readFrameTimeCode(apple.id!),
+      );
+      if (confirmed == wanted) {
+        stdout.writeln(
+          '      $name: ${describePreviewFrame(wanted)}'
+          '${stored == null ? '' : ', moved from Apple\'s $stored'}',
+        );
+      } else {
+        stdout.writeln(
+          '      $name: asked for poster frame $wanted and Apple still reports '
+          '${confirmed ?? 'none'} — the poster may still be being cut. '
+          'Re-running publishes nothing and asserts the frame again.',
+        );
+      }
+    }
+  }
+
+  /// What Apple currently reports as one preview's poster frame.
+  ///
+  /// Its own read rather than a re-listing of the set: the caller wants one
+  /// asset's answer immediately after writing it, and a collection read would
+  /// be a larger request for a smaller question.
+  Future<String?> _readFrameTimeCode(String previewId) async {
+    final response = await client.get('/v1/appPreviews/$previewId');
+    final data = response['data'];
+    return data is Map<String, dynamic>
+        ? _attributes(data)['previewFrameTimeCode'] as String?
+        : null;
+  }
+
+  /// A `previewFrameTimeCode` Apple has actually chosen, or null.
+  ///
+  /// **Apple answers the commit with an empty string, not a null**, because it
+  /// has not cut the poster yet — and `''` survives a `??`, so the line that
+  /// exists to name the effective poster frame printed `poster frame ` with
+  /// nothing after it. Measured on a real upload, where it hid the fact that
+  /// Apple had ignored the requested frame entirely.
+  static String? _effectiveFrameTimeCode(String? reported) =>
+      reported == null || reported.isEmpty ? null : reported;
 
   /// Moves the poster frames of previews Apple already holds.
   ///
@@ -2984,12 +3165,21 @@ class AppStore {
     List<String> previewIds, {
     Duration timeout = const Duration(minutes: 30),
     Duration poll = const Duration(seconds: 15),
+    int framePolls = 4,
   }) async {
     if (previewIds.isEmpty || writer.dryRun) {
       return;
     }
     final deadline = DateTime.now().add(timeout);
     final pending = [...previewIds];
+    // How many polls each asset has spent COMPLETE-with-no-frame-state. See
+    // the grace period below; a parameter so a test can drive it without
+    // waiting out four real polls.
+    final frameGrace = <String, int>{};
+    // The last `video/frame` pair printed for each asset, so the log carries
+    // one line per transition rather than one per poll.
+    final lastSeen = <String, String>{};
+    final started = DateTime.now();
     var announced = false;
 
     while (pending.isNotEmpty) {
@@ -3005,6 +3195,23 @@ class AppStore {
         }
         final video = previewVideoState(data);
         final frame = previewFrameState(data);
+        // **Every state change, as it happens.** The loop polls two states and
+        // printed nothing until it finished, so a run that waited seven
+        // minutes and one that waited seven hours produced identical output —
+        // and the question of which asset Apple finishes first, which decides
+        // whether the second wait is dead weight, was unanswerable from
+        // outside. It costs one line per transition and it is the only
+        // instrument anybody has on a queue Apple documents in hours.
+        final seen = '${video ?? '-'}/${frame ?? '-'}';
+        if (lastSeen[id] != seen) {
+          lastSeen[id] = seen;
+          final elapsed = DateTime.now().difference(started).inSeconds;
+          stdout.writeln(
+            '      ${_attributes(data)['fileName'] ?? id} at ${elapsed}s: '
+            'video ${video ?? 'not reported'}, '
+            'poster frame ${frame ?? 'not reported'}',
+          );
+        }
         if (video == 'FAILED' || frame == 'FAILED') {
           final why = previewDeliveryErrors(data);
           throw AscApiException(422, [
@@ -3024,10 +3231,36 @@ class AppStore {
             ],
           ], request: 'GET /v1/appPreviews');
         }
-        // The poster frame is generated after the video, so a COMPLETE video
-        // beside a null frame state is still in flight rather than done.
         if (video == 'COMPLETE' && frame == 'COMPLETE') {
           continue;
+        }
+        // **A COMPLETE video beside a frame state Apple never reports is done,
+        // after a grace period.** The poster frame is cut after the video, so
+        // a null state usually means "not yet" and waiting is right — but
+        // *usually* is doing a lot of work in that sentence, and the original
+        // treated null as pending for ever. If Apple simply does not report
+        // `previewFrameImage` for a preview — which nothing here has watched a
+        // real upload long enough to rule out — then every release waits the
+        // full timeout and fails with a message about processing that did not
+        // finish, on an upload that was completely fine.
+        //
+        // So the wait is bounded on that one state rather than unbounded: keep
+        // asking while there is still a plausible chance the frame is coming,
+        // then accept the video's verdict as the whole verdict. The cost of
+        // being wrong here is a submission whose poster frame is still being
+        // cut; the cost of the previous behaviour was every submission
+        // failing. [previewPlan] is the backstop — a frame that goes on to
+        // fail is caught on the next run rather than skipped.
+        if (video == 'COMPLETE' && frame == null) {
+          final waited = (frameGrace[id] ?? 0) + 1;
+          frameGrace[id] = waited;
+          if (waited >= framePolls) {
+            stdout.writeln(
+              '      ${_attributes(data)['fileName'] ?? id}: Apple reports no '
+              'poster-frame state; taking the video\'s COMPLETE as final',
+            );
+            continue;
+          }
         }
         stillPending.add(id);
       }
@@ -3130,20 +3363,46 @@ class AppStore {
     final verdict = committed['data'];
     if (verdict is Map<String, dynamic> &&
         previewVideoState(verdict) == 'FAILED') {
+      final why = previewDeliveryErrors(verdict);
       throw AscApiException(422, [
         'Apple rejected the preview $name.',
-        ...previewDeliveryErrors(verdict),
+        ...why,
+        // The hint `_uploadScreenshot` carries and this did not. An immediate
+        // FAILED with an empty `errors[]` otherwise produced one sentence
+        // naming the file and nothing about what to do, where the screenshot
+        // path in the same file says which properties to look at.
+        if (why.isEmpty) ...[
+          'It reported no reason, which usually means the dimensions, '
+              'duration, frame rate or codec. `--metadata --dry-run` checks '
+              'all four offline, and names the one that is wrong.',
+        ],
       ], request: 'PATCH /v1/appPreviews');
     }
 
     // **The effective poster frame, printed as sent.** Apple reports back what
     // it stored, so the readback is preferred over what was asked for — the
     // two differing is exactly the thing worth seeing.
-    final stored = verdict is Map<String, dynamic>
-        ? _attributes(verdict)['previewFrameTimeCode'] as String?
-        : preview.frameTimeCode;
+    //
+    // **But the annotation follows the tree, not the readback.** A video with
+    // no sidecar whose commit response echoes Apple's own `00:00:05:00` has a
+    // non-null `stored`, and [describePreviewFrame] annotates only a null — so
+    // the line printed a bare `poster frame 00:00:05:00` in precisely the case
+    // the annotation exists for, and read as a deliberate choice. The tree is
+    // what knows whether anybody chose; Apple only knows what it stored.
+    // **What was asked for, said as a request rather than as the answer.**
+    // Apple's commit response carries `previewFrameTimeCode: ""` — it has not
+    // cut the poster yet — and the empty string walked through a `??` and
+    // printed `poster frame ` with nothing after it, at the one moment the
+    // value was on screen. Worse, it was hiding a real discrepancy: the frame
+    // Apple eventually chose was not the one requested at all.
+    //
+    // So this line no longer pretends to report the effective frame. The
+    // effective frame is what [_assertPosterFrames] prints, after ingestion,
+    // when Apple's answer exists.
     stdout.writeln(
-      '      sent $name, ${describePreviewFrame(stored ?? preview.frameTimeCode)}',
+      '      sent $name'
+      '${preview.frameTimeCode == null ? '' : ', asking for poster frame '
+                '${preview.frameTimeCode}'}',
     );
     return previewId;
   }

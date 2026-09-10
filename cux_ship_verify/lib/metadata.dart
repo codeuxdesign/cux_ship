@@ -242,14 +242,18 @@ const previewExtensions = {'.mp4', '.mov', '.m4v'};
 /// container.
 const previewTimeCodeSuffix = '.timecode';
 
-/// Apple's default poster frame when a preview names none.
+/// Roughly where Apple poses a preview that names no frame.
 ///
 /// **Recorded because it is the failure the tree exists to prevent**, not
 /// because anything here sends it: a preview uploaded without a
-/// `previewFrameTimeCode` silently poses on whatever is five seconds in, and
-/// after approval that cannot be changed without a new version submission. So
-/// the uploader prints the effective value either way, and this is what it
-/// prints when a video carries no sidecar.
+/// `previewFrameTimeCode` silently poses about five seconds in, and after
+/// approval that cannot be changed without a new version submission.
+///
+/// **Approximate, and never to be compared against.** Apple documents "5
+/// seconds"; a real upload came back cut at `00:00:05:01`, one frame along. So
+/// this is what a message *says* when nothing chose a frame, and a run decides
+/// whether anybody chose by asking the tree — never by testing Apple's value
+/// against this constant, which would not have matched even once.
 const defaultPreviewFrameTimeCode = '00:00:05:00';
 
 /// `HH:MM:SS:FF` — hours, minutes, seconds, then a frame within that second.
@@ -260,7 +264,14 @@ final _timeCode = RegExp(r'^(\d{2}):(\d{2}):(\d{2}):(\d{2})$');
 /// Shape and ranges only. Whether the frame is inside the video is a question
 /// about a particular file and is asked where both are in hand, in
 /// [_loadPreviews].
-String? previewFrameTimeCodeProblem(String value) {
+///
+/// [frameRate] bounds the frames field when the caller knows it. **Optional
+/// because the shape check has callers that have no file** — a consumer
+/// validating a string before writing it — and absent it the frames field is
+/// unbounded, which is the state this shipped in: `00:00:02:99` passed every
+/// offline check on a 30 fps video, because minutes and seconds were range
+/// checked and the field the format is named for was not.
+String? previewFrameTimeCodeProblem(String value, {double? frameRate}) {
   final match = _timeCode.firstMatch(value);
   if (match == null) {
     return 'is "$value"; Apple wants a HH:MM:SS:FF timecode, e.g. '
@@ -271,7 +282,58 @@ String? previewFrameTimeCodeProblem(String value) {
   if (minutes > 59 || seconds > 59) {
     return 'is "$value"; the minutes and seconds fields go up to 59';
   }
+  final frames = int.parse(match.group(4)!);
+  // Rounded up, so a 29.97 fps file still accepts frame 29. The bound is the
+  // count of frames in a second, and the field is zero-based.
+  final perSecond = frameRate?.ceil();
+  if (perSecond != null && frames >= perSecond) {
+    return 'is "$value"; FF is a frame within one second and this video runs '
+        'at ${frameRate!.toStringAsFixed(2)} fps, so the last frame of a '
+        'second is ${perSecond - 1}';
+  }
   return null;
+}
+
+/// The one path among [candidates] that poses the video at [videoPath], or
+/// null when none does.
+///
+/// **Matched case-insensitively, because the video filter is.** The tree
+/// accepts `RIDE.MP4` as a preview, so an `existsSync` on a constructed
+/// `RIDE.MP4.timecode` is not the same question: on a case-sensitive
+/// filesystem a sidecar written `01-ride.mp4.TIMECODE` simply did not exist,
+/// the preview shipped at Apple's default, and the orphan check — which does
+/// compare case-insensitively — counted it as claimed and said nothing.
+///
+/// **Two candidates are an error rather than a coin flip.** On Linux both
+/// spellings can exist at once, and taking the first directory entry picks by
+/// an order the platform does not define. For a value that cannot be changed
+/// after approval, "whichever the filesystem listed first" is not an answer.
+///
+/// A pure function over paths rather than a directory walk, so that the
+/// ambiguity can be exercised on any platform — the case that motivates it is
+/// unreachable on a case-insensitive volume, where the second file cannot be
+/// created, and a guard nobody can watch fail is a guard nobody has checked.
+String? posterFrameSidecar(
+  String videoPath,
+  Iterable<String> candidates, {
+  String label = '',
+}) {
+  final wanted = '$videoPath$previewTimeCodeSuffix'.toLowerCase();
+  final matches = [
+    for (final candidate in candidates) ...{
+      if (candidate.toLowerCase() == wanted) candidate,
+    },
+  ];
+  if (matches.length > 1) {
+    throw MetadataException(
+      '${label.isEmpty ? videoPath : label} has ${matches.length} poster-frame '
+      'files differing only in case: '
+      '${matches.map(_basename).join(', ')}.\n'
+      '  Which one applies depends on the order the filesystem lists them, so '
+      'delete all but one.',
+    );
+  }
+  return matches.isEmpty ? null : matches.single;
 }
 
 /// [value] as a position in the video, given the rate its frames run at.
@@ -765,12 +827,21 @@ List<LocalPreview> _loadPreviews(
   // preview it was meant for goes up posed at Apple's five-second default with
   // nothing said. The tree is asked about it here because this is the only
   // place that knows both which sidecars exist and which videos claimed one.
+  // **Matched case-insensitively, because the video filter is.** The videos
+  // are selected with `path.toLowerCase().endsWith(...)`, so `RIDE.MP4` is a
+  // preview — while this check and the sidecar lookup both compared exactly.
+  // On a case-insensitive volume the mismatch is invisible; on Linux CI, a
+  // sidecar named `01-ride.mp4.TIMECODE` was neither found nor reported as an
+  // orphan, so the preview shipped at Apple's default and the one guard
+  // against that said nothing. Absence and failure again, on the filesystem.
   final claimed = {
-    for (final file in files) ...{'${file.path}$previewTimeCodeSuffix'},
+    for (final file in files) ...{
+      '${file.path}$previewTimeCodeSuffix'.toLowerCase(),
+    },
   };
   for (final file in dir.listSync().whereType<File>()) {
-    if (file.path.endsWith(previewTimeCodeSuffix) &&
-        !claimed.contains(file.path)) {
+    if (file.path.toLowerCase().endsWith(previewTimeCodeSuffix) &&
+        !claimed.contains(file.path.toLowerCase())) {
       throw MetadataException(
         '$locale/previews/$type/${_basename(file.path)} names no video here.\n'
         '  A poster frame is named after the whole video filename, so '
@@ -817,10 +888,23 @@ List<LocalPreview> _loadPreviews(
 
 /// The poster-frame timecode beside [file], or null when there is none.
 String? _loadTimeCode(String name, File file, VideoInfo video) {
-  final sidecar = File('${file.path}$previewTimeCodeSuffix');
-  if (!sidecar.existsSync()) {
+  // **Found by matching the directory case-insensitively, not by building the
+  // exact path.** The video filter accepts `RIDE.MP4`, so the tree is already
+  // case-insensitive about previews, and an `existsSync` on a constructed name
+  // is not: on Linux a sidecar written `01-ride.mp4.TIMECODE` simply did not
+  // exist, so the preview shipped at Apple's five-second default with nothing
+  // said. Consistent with the orphan check above, which compares the same way
+  // — the two have to agree, or a sidecar is either missed by both or claimed
+  // by one and ignored by the other.
+  final chosen = posterFrameSidecar(
+    file.path,
+    file.parent.listSync().whereType<File>().map((f) => f.path),
+    label: name,
+  );
+  if (chosen == null) {
     return null;
   }
+  final sidecar = File(chosen);
   final value = sidecar.readAsStringSync().trim();
   if (value.isEmpty) {
     throw MetadataException(
@@ -830,7 +914,7 @@ String? _loadTimeCode(String name, File file, VideoInfo video) {
     );
   }
 
-  final shape = previewFrameTimeCodeProblem(value);
+  final shape = previewFrameTimeCodeProblem(value, frameRate: video.frameRate);
   if (shape != null) {
     throw MetadataException('$name$previewTimeCodeSuffix $shape');
   }
