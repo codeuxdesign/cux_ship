@@ -523,6 +523,17 @@ typedef PublishedPreview = ({
   String? frameTimeCode,
 });
 
+/// One published preview, with the two things that name it to a person.
+///
+/// Apple identifies a preview by an opaque id; a caller waiting on a version
+/// wants "the en-US IPHONE_67 one", which lives two collections up.
+typedef PreviewOnVersion = ({
+  String? locale,
+  String? previewType,
+  String? setId,
+  PublishedPreview preview,
+});
+
 /// One preview as the metadata tree has it, reduced the same way.
 typedef LocalPreviewAsset = ({
   String fileName,
@@ -546,9 +557,31 @@ PublishedPreview readPublishedPreview(Map<String, dynamic> preview) {
     checksum: attributes['sourceFileChecksum'] as String?,
     videoState: previewVideoState(preview),
     frameState: previewFrameState(preview),
-    frameTimeCode: attributes['previewFrameTimeCode'] as String?,
+    // **Apple's `""` is collapsed to null here, at the boundary, rather than
+    // by each caller.** It answers the commit with an empty string — not an
+    // absent field — because it has not cut the poster yet, and `''` survives
+    // both `??` and `== null`. Every consumer that forgot printed a blank
+    // where the answer was "Apple chose for you": first the commit line, then
+    // the `--json` document, which published `"previewFrameTimeCode": ""`
+    // against a dartdoc promising `HH:MM:SS:FF` or null. Collapsing per caller
+    // was two fixes for one fact and left the third caller to find; the two
+    // conditions mean the same thing, so they become one value once.
+    frameTimeCode: _nonEmpty(attributes['previewFrameTimeCode'] as String?),
   );
 }
+
+/// [value] unless it is empty, in which case null.
+String? _nonEmpty(String? value) =>
+    value == null || value.isEmpty ? null : value;
+
+/// Writes one report line to [out], or to [stdout] when it is null.
+///
+/// **A function rather than a local holding the sink**, because `close_sinks`
+/// reads `final sink = out ?? stdout` as a sink the method forgot to close.
+/// `cli.dart` writes the same workaround out as a branch for the same lint and
+/// says it is not wrong to ask; a helper is the version that scales past one
+/// line.
+void _say(IOSink? out, String line) => (out ?? stdout).writeln(line);
 
 /// Apple's ingestion verdict on a preview's *video*, or null if it reported
 /// none.
@@ -637,6 +670,174 @@ List<String> _stateErrors(Object? state) {
       }.join(' - '),
     },
   ].where((message) => message.isNotEmpty).toList();
+}
+
+/// One poll of one preview, as the wait saw it.
+///
+/// **The preview analogue of [BuildProcessingProgress], and it carries two
+/// states rather than one.** That is the whole structural difference: Apple
+/// ingests the video and then cuts the poster frame out of it, reports them
+/// separately, and a preview is not finished until both say `COMPLETE`.
+///
+/// It exists for the reason the build one does — *"a consumer streaming that to
+/// a log wants a heartbeat with its own timestamps and its own destination"* —
+/// and a queue Apple documents in hours makes that argument stronger rather
+/// than weaker.
+class PreviewProcessingProgress {
+  const PreviewProcessingProgress({
+    required this.previewId,
+    required this.fileName,
+    required this.videoState,
+    required this.frameState,
+    required this.waited,
+    required this.timeout,
+    this.frameStateAbandoned = false,
+  });
+
+  final String previewId;
+
+  /// What the tree called this video, when Apple reported a name for it.
+  final String? fileName;
+
+  /// Apple's `videoDeliveryState.state`, or null when it reported none.
+  ///
+  /// **Null is a fact about the response, not a stage.** See
+  /// [previewVideoState]: Apple deprecated `assetDeliveryState` here, and a
+  /// reader consulting the wrong field reports null for every preview.
+  final String? videoState;
+
+  /// Apple's `previewFrameImage.state.state`, or null when it reported none.
+  ///
+  /// Null is ordinary early on — the frame is cut after the video — and, on at
+  /// least one real upload, is what Apple reports for several minutes while the
+  /// video is already `COMPLETE`.
+  final String? frameState;
+
+  final Duration waited;
+  final Duration timeout;
+
+  /// Whether the wait has stopped expecting a poster-frame state for this
+  /// asset and is taking the video's verdict as the whole verdict.
+  ///
+  /// **A decision, not a state Apple reported**, and the one thing a caller
+  /// could not reconstruct from the two states alone: `COMPLETE` beside a null
+  /// frame reads identically whether the grace period has run out or is still
+  /// counting. See [AppStore.awaitPreviewProcessing].
+  final bool frameStateAbandoned;
+
+  /// Whether Apple has finished with both assets.
+  bool get done => videoState == 'COMPLETE' && frameState == 'COMPLETE';
+
+  /// Whether either asset was rejected.
+  bool get failed => videoState == 'FAILED' || frameState == 'FAILED';
+}
+
+/// What `cux_ship` exits with when a preview wait reaches its deadline with
+/// assets still processing.
+///
+/// **Not a failure, and not zero either.** Apple documents ingestion as taking
+/// up to twenty-four hours, so a deadline says "not yet" rather than "wrong" —
+/// but a caller that branches on exit status, and never on text, cannot tell
+/// "not yet" from "finished" if both are 0. The first consumer branches that
+/// way deliberately, after a status escaped from four regular expressions
+/// matched against stdout.
+///
+/// 4 rather than 2, which `screenshots flatten --check` uses for "there is work
+/// to do", and rather than 3, which [uploadCollisionExit] holds. The meanings
+/// are close enough that reusing 2 is tempting, and that is the argument
+/// against it: a wrapper branching on 2 would conflate a tree that needs
+/// flattening with an asset Apple has not finished, and the codes here are one
+/// vocabulary rather than one per command.
+const previewsPendingExit = 4;
+
+/// What `cux_ship` exits with when Apple holds no version by the name asked
+/// for.
+///
+/// **An ordinary state on the way to a release, not a failure**, and that is
+/// the whole argument. Every run before the version is created looks like
+/// this: a readiness check asking *"is the store showing 1.1.8's listing?"*
+/// before anybody has made a 1.1.8 is not broken, it has its answer.
+///
+/// Without a code of its own it arrived as 1 — which `cli.dart` also uses for
+/// wrong credentials, a network that went away, a metadata tree that will not
+/// load, and every unrecognised exception. So a consumer had three options and
+/// all of them were bad: match the prose, which is the failure this package
+/// exists to prevent; report "a store could not be read", which is a
+/// plausible-looking lie on the commonest path; or not ask.
+///
+/// 5 by the rule [previewsPendingExit] states: **one code per distinct
+/// condition**, and a new condition takes a new number rather than joining an
+/// old one. "Apple does not hold this version" passes that test the same way
+/// "Apple has not finished ingesting" did — it is a state a caller *branches*
+/// on rather than reads.
+///
+/// Raised as [NoSuchVersion], which subclasses [AscApiException] so nothing
+/// loses the formatted 404 it already printed.
+const noSuchVersionExit = 5;
+
+/// Apple holds no App Store version named [versionString] on [platform].
+///
+/// A subclass rather than a sibling, so a caller that already handles
+/// [AscApiException] keeps working. **The `on NoSuchVersion` clause must
+/// precede `on AscApiException`**, since Dart takes the first matching clause
+/// and every instance of this is one.
+///
+/// **Telling it apart is available inside this package, and outside it only as
+/// [noSuchVersionExit].** This sentence used to say *"one that wants to tell
+/// this apart can"*, full stop, which is false from outside: the type is not
+/// exported, and it deliberately is not. `read.dart` — the only library that
+/// publishes catchable exceptions — sets the bar at *something outside this
+/// repository cannot be written without it*, and nothing that library exposes
+/// can raise this: its surface is `builds()`, `versions()` and `awaitBuild()`,
+/// none of which resolves a named version. [ProcessingTimeout] is exported
+/// because `awaitBuild` documents throwing it; this has no such caller.
+///
+/// So the route for a consumer is the exit code, which is what it was minted
+/// for and what `package:cux_ship/exit_codes.dart` exports. Adding the type to
+/// a public library to make this comment true would be API surface nobody
+/// could reach.
+class NoSuchVersion extends AscApiException {
+  NoSuchVersion(this.versionString, this.platform)
+    : super(404, [
+        'no App Store version $versionString for ${platform.api}',
+      ], request: 'GET /v1/appStoreVersions');
+
+  final String versionString;
+  final AscPlatform platform;
+}
+
+/// Raised when a preview wait reached its deadline with work outstanding.
+///
+/// **A distinct type because it is a distinct outcome**, not a failure with a
+/// friendlier message. [ProcessingTimeout] is the build equivalent and means
+/// something else: a build that never appears has usually been *refused*, and
+/// Apple says so only by e-mail. Nothing is wrong here; Apple is simply not
+/// done.
+class PreviewsPending implements Exception {
+  PreviewsPending({required this.pending, required this.waited});
+
+  /// The previews still in flight, most-informative field first.
+  final List<PreviewProcessingProgress> pending;
+
+  final Duration waited;
+
+  @override
+  String toString() {
+    final lines = [
+      'Apple has not finished processing ${pending.length} preview(s) after '
+          '${waited.inMinutes} minutes.',
+      for (final preview in pending) ...{
+        '  ${preview.fileName ?? preview.previewId}: video '
+            '${preview.videoState ?? "not reported"}, poster frame '
+            '${preview.frameState ?? "not reported"}',
+      },
+      'This is not a failure. Apple documents preview ingestion as taking up '
+          'to 24 hours,',
+      'and the assets are uploaded — this run stopped waiting rather than '
+          'block.',
+    ];
+    return lines.join('\n');
+  }
 }
 
 /// What a run has to do to make Apple's previews match the tree's.
@@ -1262,10 +1463,26 @@ AppLevelChanges appLevelChanges({
 
 /// Performs writes, or describes them and does nothing.
 class Writer {
-  Writer(this.client, {required this.dryRun});
+  Writer(this.client, {required this.dryRun, this.out});
 
   final AscClient client;
   final bool dryRun;
+
+  /// Where the "what I did" lines go, or null for [stdout].
+  ///
+  /// **It exists so a `--json` command can keep stdout to one document.** Every
+  /// write here announces itself, which is right for a person and fatal to a
+  /// parser: one `    asking for poster frame 00:00:02:06` in front of a
+  /// document makes the whole of stdout unreadable, and the failure arrives as
+  /// a parse error about character 1 that names neither the line nor the write
+  /// that emitted it.
+  ///
+  /// Read through [_out] rather than defaulted in the constructor, because
+  /// `IOOverrides` replaces `stdout` per zone and capturing it once at
+  /// construction would pin the sink a test had replaced.
+  final IOSink? out;
+
+  IOSink get _out => out ?? stdout;
 
   /// Set when a dry run skipped a write whose result later runs would need —
   /// creating a version, say. Callers use it to explain why a subsequent step
@@ -1278,11 +1495,11 @@ class Writer {
     required String describe,
   }) async {
     if (dryRun) {
-      stdout.writeln('    would create: $describe');
+      _out.writeln('    would create: $describe');
       skippedACreate = true;
       return null;
     }
-    stdout.writeln('    $describe');
+    _out.writeln('    $describe');
     return client.post(path, body);
   }
 
@@ -1292,19 +1509,19 @@ class Writer {
     required String describe,
   }) async {
     if (dryRun) {
-      stdout.writeln('    would update: $describe');
+      _out.writeln('    would update: $describe');
       return null;
     }
-    stdout.writeln('    $describe');
+    _out.writeln('    $describe');
     return client.patch(path, body);
   }
 
   Future<void> delete(String path, {required String describe}) async {
     if (dryRun) {
-      stdout.writeln('    would delete: $describe');
+      _out.writeln('    would delete: $describe');
       return;
     }
-    stdout.writeln('    $describe');
+    _out.writeln('    $describe');
     await client.delete(path);
   }
 }
@@ -2010,9 +2227,49 @@ class AppStore {
 
   // ---------------------------------------------------------------- versions
 
+  /// The App Store version record for [versionString], for a caller that only
+  /// means to *read* it.
+  ///
+  /// **[ensureVersion] cannot be used for this, and the difference is not a
+  /// nuance.** That method refuses any version outside [editableVersionStates]
+  /// — a check that exists to stop a write being rejected field by field — so
+  /// asking it for a `READY_FOR_SALE` version answers *"version 1.1.6 is
+  /// READY_FOR_SALE, which cannot be edited. Release a new version instead."*
+  /// That is a correct sentence about a write and a nonsense one about a read,
+  /// and it lands on exactly the versions a reader most wants: the live one and
+  /// the one in review.
+  ///
+  /// `appstore previews` was written against [ensureVersion] and inherited the
+  /// refusal, which defeated the command's stated purpose — answering *"is the
+  /// store showing the repo's listing?"* about a version that has, by then,
+  /// usually stopped being editable. [builds] and [versions] never went through
+  /// it; this is the read the three of them share.
+  ///
+  /// Throws [AscApiException] 404 when Apple holds no such version. Never
+  /// returns null: absence is the exception, not a value.
+  Future<Map<String, dynamic>> readVersion(
+    App app,
+    String versionString,
+  ) async {
+    final versions = await client.getAll(
+      '/v1/apps/${app.id}/appStoreVersions',
+      query: {
+        'filter[platform]': platform.api,
+        'filter[versionString]': versionString,
+      },
+    );
+    if (versions.isEmpty) {
+      throw NoSuchVersion(versionString, platform);
+    }
+    return versions.first;
+  }
+
   /// The App Store version record for [versionString], created if absent.
   ///
   /// Returns null only on a dry run that would have had to create one.
+  ///
+  /// **For a read, use [readVersion].** This refuses a version Apple will not
+  /// accept writes against, which is right here and wrong there.
   Future<Map<String, dynamic>?> ensureVersion(
     App app,
     String versionString, {
@@ -2043,9 +2300,10 @@ class AppStore {
     }
 
     if (!create) {
-      throw AscApiException(404, [
-        'no App Store version $versionString for ${platform.api}',
-      ], request: 'GET /v1/appStoreVersions');
+      // The same condition [readVersion] reports, so the same type: a caller
+      // asking not to create has asked a question, and "there is no such
+      // version" is its answer rather than a fault.
+      throw NoSuchVersion(versionString, platform);
     }
 
     // Apple allows exactly one editable version at a time, and it creates a
@@ -2863,6 +3121,16 @@ class AppStore {
 
   // ---------------------------------------------------------------- previews
 
+  /// What this run uploaded and deliberately did not wait for, as
+  /// `locale/previewType` — empty unless `--skip-waiting` was passed.
+  ///
+  /// **A field rather than a return value**, on the precedent of
+  /// [Writer.skippedACreate]: the caller that has to print the follow-up
+  /// command knows the bundle id and version name, and this method knows
+  /// neither. Threading a result back through `_publishAscListing` for one
+  /// line of output would widen a signature two callers share.
+  final previewsLeftIngesting = <String>[];
+
   /// Replaces one preview type's videos with [previews].
   ///
   /// **Deliberately the same shape as [replaceScreenshots]**, because the
@@ -2879,8 +3147,19 @@ class AppStore {
   Future<void> replacePreviews(
     Map<String, dynamic> localization,
     String previewType,
-    List<LocalPreview> previews,
-  ) async {
+    List<LocalPreview> previews, {
+
+    /// Upload and stop, leaving the wait and the poster-frame assertion to
+    /// `appstore wait-previews`.
+    ///
+    /// **Skipping the wait skips the poster frame with it**, and that is
+    /// louder here than the TestFlight notes `--skip-waiting` already defers:
+    /// Apple discards the timecode sent at reservation, so a preview left
+    /// un-asserted poses at Apple's default — invisible rather than merely
+    /// absent, and unchangeable after approval. The caller prints the command
+    /// that finishes the job; see [previewsLeftIngesting].
+    bool skipWaiting = false,
+  }) async {
     final sets = await client.getAll(
       '/v1/appStoreVersionLocalizations/${_id(localization)}/appPreviewSets',
     );
@@ -2967,8 +3246,93 @@ class AppStore {
         uploaded.add(previewId);
       }
     }
+    if (skipWaiting) {
+      final locale = _attributes(localization)['locale'] as String?;
+      previewsLeftIngesting.add('${locale ?? '?'}/$previewType');
+      stdout.writeln(
+        '      not waiting for Apple to process these, as asked — and the '
+        'poster frame is not set yet',
+      );
+      return;
+    }
     await awaitPreviewProcessing(uploaded);
     await _assertPosterFrames(setId!, previewType, previews);
+  }
+
+  /// Every `appPreviews` record on [version], across every localization and
+  /// preview type.
+  ///
+  /// **Three collection reads, because Apple nests them that way**: a version
+  /// has localizations, a localization has preview sets, a set has previews.
+  /// There is no filter that flattens it, and `include` does not reach two
+  /// levels down.
+  ///
+  /// Returned with the locale and type beside each record, because a caller
+  /// waiting on a version wants to say *which* preview is still ingesting and
+  /// those two are the only things that identify it to a person.
+  Future<List<PreviewOnVersion>> previewsOn(
+    Map<String, dynamic> version,
+  ) async {
+    final found = <PreviewOnVersion>[];
+    for (final localization in await versionLocalizations(version)) {
+      final locale = _attributes(localization)['locale'] as String?;
+      final sets = await client.getAll(
+        '/v1/appStoreVersionLocalizations/${_id(localization)}/appPreviewSets',
+      );
+      for (final set in sets) {
+        final type = _attributes(set)['previewType'] as String?;
+        final previews = await client.getAll(
+          '/v1/appPreviewSets/${_id(set)}/appPreviews',
+        );
+        for (final preview in previews) {
+          found.add((
+            locale: locale,
+            previewType: type,
+            setId: _id(set),
+            preview: readPublishedPreview(preview),
+          ));
+        }
+      }
+    }
+    return found;
+  }
+
+  /// Asserts the poster frames of an already-published preview set.
+  ///
+  /// **The half of `replacePreviews` that has to happen after ingestion**,
+  /// reachable on its own so that `appstore wait-previews` can finish what
+  /// `upload --skip-waiting` deferred. It uploads nothing and deletes nothing:
+  /// if Apple does not hold the set, there is nothing here to correct and the
+  /// caller is told rather than having a set created underneath it.
+  /// [out] is where the report goes, defaulting to [stdout]. `wait-previews
+  /// --json` passes [stderr]: this is progress, and stdout carries the
+  /// document.
+  Future<void> assertPosterFramesOn(
+    Map<String, dynamic> localization,
+    String previewType,
+    List<LocalPreview> previews, {
+    IOSink? out,
+  }) async {
+    final sets = await client.getAll(
+      '/v1/appStoreVersionLocalizations/${_id(localization)}/appPreviewSets',
+    );
+    final existing = sets
+        .where((s) => _attributes(s)['previewType'] == previewType)
+        .toList();
+    if (existing.isEmpty) {
+      _say(
+        out,
+        '    $previewType: Apple holds no previews of this type, so there is '
+        'no poster frame to assert — publish them first',
+      );
+      return;
+    }
+    await _assertPosterFrames(
+      _id(existing.first)!,
+      previewType,
+      previews,
+      out: out,
+    );
   }
 
   /// Sets each preview's poster frame *after* Apple has finished ingesting it,
@@ -2993,8 +3357,9 @@ class AppStore {
   Future<void> _assertPosterFrames(
     String setId,
     String previewType,
-    List<LocalPreview> previews,
-  ) async {
+    List<LocalPreview> previews, {
+    IOSink? out,
+  }) async {
     if (writer.dryRun) {
       return;
     }
@@ -3018,7 +3383,8 @@ class AppStore {
       // preview this run could not find. Same class as the blank print, with
       // the opposite symptom.
       if (apple == null || apple.id == null) {
-        stdout.writeln(
+        _say(
+          out,
           '      $name: Apple did not report this preview back, so what it is '
           'posed at is unknown — check App Store Connect',
         );
@@ -3038,7 +3404,8 @@ class AppStore {
       // decision. Apple's value is worth showing beside it, and never instead
       // of it.
       if (wanted == null) {
-        stdout.writeln(
+        _say(
+          out,
           '      $name: ${describePreviewFrame(null)}'
           '${stored == null ? '' : ' (Apple cut it at $stored)'}',
         );
@@ -3046,7 +3413,7 @@ class AppStore {
       }
 
       if (stored == wanted) {
-        stdout.writeln('      $name: ${describePreviewFrame(wanted)}');
+        _say(out, '      $name: ${describePreviewFrame(wanted)}');
         continue;
       }
 
@@ -3073,15 +3440,30 @@ class AppStore {
         await _readFrameTimeCode(apple.id!),
       );
       if (confirmed == wanted) {
-        stdout.writeln(
+        _say(
+          out,
           '      $name: ${describePreviewFrame(wanted)}'
           '${stored == null ? '' : ', moved from Apple\'s $stored'}',
         );
       } else {
-        stdout.writeln(
-          '      $name: asked for poster frame $wanted and Apple still reports '
-          '${confirmed ?? 'none'} — the poster may still be being cut. '
-          'Re-running publishes nothing and asserts the frame again.',
+        // **What was observed, and what to do — no cause.** This named one
+        // hypothesis ("the poster may still be being cut") as though it were
+        // the explanation. A wrong cause is worse than no cause, because it
+        // forecloses the search: a reader told the cause is *time* waits, and
+        // comes back to the same line, when it might be a timecode Apple
+        // refused silently or an asset id that moved. "Still reports" carried
+        // the same freight in one word — *still* asserts a continuation of a
+        // state nobody has established.
+        //
+        // The hypotheses live here, where somebody reading source is looking
+        // for them. The second sentence stays exactly as it is: it is the
+        // cheap next action, and it pre-empts the fear that a re-run costs
+        // another upload.
+        _say(
+          out,
+          '      $name: asked for poster frame $wanted, and Apple reports '
+          '${confirmed ?? 'none'}. Re-running publishes nothing and asserts '
+          'the frame again.',
         );
       }
     }
@@ -3166,6 +3548,7 @@ class AppStore {
     Duration timeout = const Duration(minutes: 30),
     Duration poll = const Duration(seconds: 15),
     int framePolls = 4,
+    void Function(PreviewProcessingProgress)? onProgress,
   }) async {
     if (previewIds.isEmpty || writer.dryRun) {
       return;
@@ -3179,6 +3562,9 @@ class AppStore {
     // The last `video/frame` pair printed for each asset, so the log carries
     // one line per transition rather than one per poll.
     final lastSeen = <String, String>{};
+    // The most recent poll of each asset, so a deadline can report what each
+    // one was actually doing rather than only how many there were.
+    final latest = <String, PreviewProcessingProgress>{};
     final started = DateTime.now();
     var announced = false;
 
@@ -3202,12 +3588,36 @@ class AppStore {
         // whether the second wait is dead weight, was unanswerable from
         // outside. It costs one line per transition and it is the only
         // instrument anybody has on a queue Apple documents in hours.
+        // **Reported every poll, printed only on a change.** The callback was
+        // gated on the transition too, which made it the opposite of the
+        // heartbeat its own doc promises: on a queue measured in hours, a
+        // preview sitting at PROCESSING fired once and then nothing, and a
+        // consumer using it for liveness would conclude the process had hung.
+        // Printing stays on the transition, because a line every fifteen
+        // seconds saying the same thing is not a log anybody reads.
+        //
+        // `fileName` is read without an `as String?`: that cast was the only
+        // new unchecked one in this change, and a non-string there would throw
+        // out of the wait where the line it replaced merely printed oddly.
+        final reported = _attributes(data)['fileName'];
+        final progress = PreviewProcessingProgress(
+          previewId: id,
+          fileName: reported is String ? reported : null,
+          videoState: video,
+          frameState: frame,
+          waited: DateTime.now().difference(started),
+          timeout: timeout,
+        );
+        latest[id] = progress;
         final seen = '${video ?? '-'}/${frame ?? '-'}';
-        if (lastSeen[id] != seen) {
-          lastSeen[id] = seen;
-          final elapsed = DateTime.now().difference(started).inSeconds;
+        final changed = lastSeen[id] != seen;
+        lastSeen[id] = seen;
+        if (onProgress != null) {
+          onProgress(progress);
+        } else if (changed) {
           stdout.writeln(
-            '      ${_attributes(data)['fileName'] ?? id} at ${elapsed}s: '
+            '      ${progress.fileName ?? id} at '
+            '${progress.waited.inSeconds}s: '
             'video ${video ?? 'not reported'}, '
             'poster frame ${frame ?? 'not reported'}',
           );
@@ -3255,10 +3665,31 @@ class AppStore {
           final waited = (frameGrace[id] ?? 0) + 1;
           frameGrace[id] = waited;
           if (waited >= framePolls) {
-            stdout.writeln(
-              '      ${_attributes(data)['fileName'] ?? id}: Apple reports no '
-              'poster-frame state; taking the video\'s COMPLETE as final',
+            // **Through the callback, not past it.** This and the "waiting
+            // for Apple" line below wrote to stdout unconditionally, so a
+            // caller that had taken over reporting got its transitions
+            // redirected and these two anyway — which for the planned
+            // `wait-previews --json` means prose in the document stream, on
+            // exactly the interesting runs. `cli.dart` states the invariant:
+            // under `--json`, stdout carries the document and nothing else.
+            final abandoned = PreviewProcessingProgress(
+              previewId: id,
+              fileName: progress.fileName,
+              videoState: video,
+              frameState: frame,
+              waited: DateTime.now().difference(started),
+              timeout: timeout,
+              frameStateAbandoned: true,
             );
+            latest[id] = abandoned;
+            if (onProgress != null) {
+              onProgress(abandoned);
+            } else {
+              stdout.writeln(
+                '      ${abandoned.fileName ?? id}: Apple reports no '
+                'poster-frame state; taking the video\'s COMPLETE as final',
+              );
+            }
             continue;
           }
         }
@@ -3271,21 +3702,31 @@ class AppStore {
         return;
       }
       if (DateTime.now().isAfter(deadline)) {
-        // Ours, not Apple's — every poll was answered.
-        throw AscApiException(504, [
-          'Apple has not finished processing ${pending.length} preview(s) '
-              'after ${timeout.inMinutes} minutes.',
-          'That is not a failure: Apple\'s own guidance is that a preview can '
-              'take up to 24 hours to process, and this run stopped waiting '
-              'rather than submit a version whose assets are still in flight, '
-              'which Apple refuses with an error naming the version instead '
-              'of the previews.',
-          'The videos are uploaded. Re-running publishes the listing again '
-              'and skips them once Apple reports them COMPLETE; the '
-              'submission is what has to wait.',
-        ], request: 'GET /v1/appPreviews');
+        // **Ours, not Apple's — every poll was answered**, which is why this
+        // is [PreviewsPending] rather than an API error. What the caller does
+        // with it differs: an inline `upload --metadata` cannot safely proceed
+        // to a submission and treats it as fatal, while `appstore
+        // wait-previews` reports it and exits [previewsPendingExit]. Same
+        // condition, two callers, two right answers — the argument for the
+        // wait being a command rather than a step.
+        throw PreviewsPending(
+          waited: DateTime.now().difference(started),
+          pending: [
+            for (final id in pending) ...{
+              latest[id] ??
+                  PreviewProcessingProgress(
+                    previewId: id,
+                    fileName: null,
+                    videoState: null,
+                    frameState: null,
+                    waited: DateTime.now().difference(started),
+                    timeout: timeout,
+                  ),
+            },
+          ],
+        );
       }
-      if (!announced) {
+      if (!announced && onProgress == null) {
         stdout.writeln(
           '      waiting for Apple to process ${pending.length} preview(s) — '
           'this is slower than a screenshot, and can take hours',

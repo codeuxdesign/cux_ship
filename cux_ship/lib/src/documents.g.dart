@@ -77,6 +77,7 @@ Map<String, dynamic> _$AppStoreBuildsDocumentToJson(
 const _$DocumentKindEnumMap = {
   DocumentKind.appStoreBuilds: 'appstore.builds',
   DocumentKind.appStoreVersions: 'appstore.versions',
+  DocumentKind.appStorePreviews: 'appstore.previews',
   DocumentKind.playTracks: 'play.tracks',
 };
 
@@ -167,6 +168,58 @@ Map<String, dynamic> _$AppStoreVersionsDocumentToJson(
   'platform': _platformToJson(instance.platform),
   'bundleId': instance.bundleId,
   'versions': instance.versions.map((e) => e.toJson()).toList(),
+  'display': instance.display,
+};
+
+AppStorePreviewEntry _$AppStorePreviewEntryFromJson(
+  Map<String, dynamic> json,
+) => AppStorePreviewEntry(
+  id: json['id'] as String?,
+  locale: json['locale'] as String?,
+  previewType: json['previewType'] as String?,
+  fileName: json['fileName'] as String?,
+  videoDeliveryState: json['videoDeliveryState'] as String?,
+  previewFrameImageState: json['previewFrameImageState'] as String?,
+  previewFrameTimeCode: json['previewFrameTimeCode'] as String?,
+  done: json['done'] as bool,
+);
+
+Map<String, dynamic> _$AppStorePreviewEntryToJson(
+  AppStorePreviewEntry instance,
+) => <String, dynamic>{
+  'id': instance.id,
+  'locale': instance.locale,
+  'previewType': instance.previewType,
+  'fileName': instance.fileName,
+  'videoDeliveryState': instance.videoDeliveryState,
+  'previewFrameImageState': instance.previewFrameImageState,
+  'previewFrameTimeCode': instance.previewFrameTimeCode,
+  'done': instance.done,
+};
+
+AppStorePreviewsDocument _$AppStorePreviewsDocumentFromJson(
+  Map<String, dynamic> json,
+) => AppStorePreviewsDocument(
+  schema: (json['schema'] as num).toInt(),
+  kind: $enumDecode(_$DocumentKindEnumMap, json['kind']),
+  platform: _platformFromJson(json['platform'] as String),
+  bundleId: json['bundleId'] as String,
+  versionName: json['versionName'] as String,
+  previews: (json['previews'] as List<dynamic>)
+      .map((e) => AppStorePreviewEntry.fromJson(e as Map<String, dynamic>))
+      .toList(),
+  display: (json['display'] as List<dynamic>).map((e) => e as String).toList(),
+);
+
+Map<String, dynamic> _$AppStorePreviewsDocumentToJson(
+  AppStorePreviewsDocument instance,
+) => <String, dynamic>{
+  'schema': instance.schema,
+  'kind': _$DocumentKindEnumMap[instance.kind]!,
+  'platform': _platformToJson(instance.platform),
+  'bundleId': instance.bundleId,
+  'versionName': instance.versionName,
+  'previews': instance.previews.map((e) => e.toJson()).toList(),
   'display': instance.display,
 };
 

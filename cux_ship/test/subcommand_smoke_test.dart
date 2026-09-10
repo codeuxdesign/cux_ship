@@ -169,6 +169,91 @@ void main() {
     expect(stderr, isNot(contains('RELEASING-APPLE')));
   });
 
+  // **`wait-previews --metadata` was accepted and ignored**, which is the
+  // defect this pair pins. `metadataPath` gated on `upload || promote`, so the
+  // option parsed, validated nothing, and left `metadata` null — putting the
+  // poster-frame assertion the flag exists for behind a condition nothing
+  // could satisfy. The command printed `previews are ready` and exited 0
+  // having asserted nothing, on the one attribute that cannot be changed after
+  // approval, reached by following the instruction `upload --skip-waiting`
+  // prints.
+  //
+  // **A missing tree is the cheap probe for "was the option read at all".**
+  // `--metadata` is resolved offline, before any credential, so a path that
+  // does not exist separates the two worlds without a fixture: loaded means a
+  // refusal naming the directory, ignored means the run sails past and asks
+  // for credentials instead. That is exactly how the defect was found, and it
+  // is a subprocess test because the refusal calls `exit`.
+  test('wait-previews reads its --metadata tree rather than ignoring it', () {
+    final result = Process.runSync(
+      Platform.resolvedExecutable,
+      [
+        '--enable-asserts',
+        cliSnapshot,
+        'appstore',
+        'wait-previews',
+        '--bundle-id',
+        'design.codeux.consumer',
+        '--version-name',
+        '1.1.6',
+        '--metadata',
+        '${repo.path}/no-such-tree',
+      ],
+      workingDirectory: repo.path,
+      environment: {'APPLE_API_KEY_ID': '', 'APPLE_API_PRIVATE_KEY_PATH': ''},
+    );
+    final said = '${result.stdout}${result.stderr}';
+    expect(result.exitCode, isNot(0), reason: said);
+    expect(
+      said,
+      contains('no-such-tree'),
+      reason: 'the tree has to be looked at for its absence to be reported',
+    );
+    // **The discriminator.** Before the fix this reached the credential check,
+    // because nothing had looked at the tree — so asserting only "non-zero"
+    // would have passed against the bug.
+    expect(
+      said,
+      isNot(contains('no App Store Connect credentials')),
+      reason: 'a run that got as far as credentials never read the tree',
+    );
+  });
+
+  test('wait-previews without --metadata does not invent a tree', () {
+    // The other half: the option is optional, and a run that omits it must
+    // reach the credential check rather than refuse offline. Without this, the
+    // test above is satisfied by a command that always demands a tree.
+    //
+    // **The `store/appstore` directory is the whole test, and its absence made
+    // the first version vacuous.** `defaults.metadata` is the *inferred* tree,
+    // `project.appStoreTreeFor(platform)` — so with no such directory it is
+    // null and this passed against a build that would happily have inferred
+    // one. It did: a bare `wait-previews` loaded the tree, validated the
+    // listing, and would have PATCHed poster frames from it. Creating the
+    // directory is what separates "the option is optional" from "no tree is
+    // acquired when none was named", and only the second is worth asserting.
+    Directory('${repo.path}/store/appstore').createSync(recursive: true);
+    final result = Process.runSync(
+      Platform.resolvedExecutable,
+      [
+        '--enable-asserts',
+        cliSnapshot,
+        'appstore',
+        'wait-previews',
+        '--bundle-id',
+        'design.codeux.consumer',
+        '--version-name',
+        '1.1.6',
+      ],
+      workingDirectory: repo.path,
+      environment: {'APPLE_API_KEY_ID': '', 'APPLE_API_PRIVATE_KEY_PATH': ''},
+    );
+    expect(
+      '${result.stdout}${result.stderr}',
+      contains('no App Store Connect credentials'),
+    );
+  });
+
   // Offline refusals, testable end to end because they fire before any
   // credential is loaded. The build number is required by decision rather
   // than accident — the 2.2.0 `wait` note made the same call — so the

@@ -236,49 +236,81 @@ preview: **7 minutes 29 seconds** from commit to both `videoDeliveryState` and
 never approached, and Apple's documented twenty-four hours is a ceiling rather
 than a typical case.
 
-Two things it did *not* settle. **Which asset finishes first is still unknown** —
-the loop's only exit is both-`COMPLETE`, so a run that ends tells you nothing
-about the order. That is now instrumented: one line per state transition, which
-is the only instrument anybody has on this queue. And **the hypothesis that
-Apple might never report `previewFrameImage` did not fire on this file**, which
-is one file; the grace period stays.
+Two things it did *not* settle. **Which asset finishes first is still
+unknown** — the loop's only exit is both-`COMPLETE`, so a run that ends tells
+you nothing about the order.
 
-### Proposed: the wait is welded to the upload
+**Instrumenting it is not the same as measuring it, and this section read as
+though it were.** dev.2 prints one line per state transition; that makes the
+ordering *observable on the next upload that happens*, which is a different
+claim from knowing it. The consumer made the correction and it is worth keeping
+in these words, because the gap between "we can now see this" and "we now know
+this" is exactly where a design document starts lying to its next reader.
 
-Status: **proposed**, and argued at length in
+Nor is the next upload cheap to summon: the one project running previews
+declined to manufacture one, on the grounds that clearing a published set to
+re-upload 20 MB puts a live App Store version through an ingestion cycle to
+produce a log line. That is the right call. The number arrives with the next
+re-cut, or the first preview on another platform or locale.
+
+And **the hypothesis that Apple might never report `previewFrameImage` did not
+fire on this file**, which is one file; the grace period stays.
+
+**The fix it produced has now survived a real submission.** 1.1.6 went to review
+on both Apple platforms on 10 September 2026 with the video `COMPLETE` and the
+poster frame reported at the asked-for `00:00:02:06`. That is the dev.2 change —
+assert the timecode *after* ingestion rather than trusting the value sent at
+reservation — working end to end on a release nobody was testing with.
+
+**Stated at the precision it actually has**, because this is the claim most
+worth not inflating: what was confirmed is that **Apple reported the frame at the
+asked-for value at submission time**. It is not a confirmation that the product
+page poses on that frame, which cannot be checked until the version is approved
+and is the thing the whole sidecar exists for. One is this package reading
+Apple's answer; the other is the outcome, and only the second is what a reader
+of this document ultimately wants.
+
+### Built: the wait is no longer welded to the upload
+
+Status: **built**, and argued at length in
 [preview-wait-split.md](preview-wait-split.md), which is where the interface
-lives. This section is the summary and the reason it is not built yet.
+lives and which records where the building disagreed with the arguing. This
+section is the summary.
 
 Raised by the first consumer's owner, in the form *"maybe there should be
-another status/wait command — how is this handled for builds?"* The answer is
-that builds already have it and previews are the one asset that did not get it:
+another status/wait command — how is this handled for builds?"* The answer was
+that builds already had it and previews were the one asset that did not:
 
 | asset | worst case | timeout | `--timeout` / `--poll` | wait command | skip flag |
 |---|---|---|---|---|---|
 | build | about an hour | 45 min | yes | `appstore wait` | `--skip-waiting` |
 | screenshot | seconds to minutes | 10 min | no | no | no |
-| preview | **24 hours** | 30 min | no | no | no |
+| preview, before | **24 hours** | 30 min | no | no | declared, unreachable |
+| preview, now | **24 hours** | 30 min | **yes** | **`wait-previews`** | **reachable** |
 
-And `--skip-waiting` cannot help even if reached for: it is evaluated inside the
-artifact branch, and a metadata-only run has no artifact. So the one command
-that publishes a preview has no way not to wait.
+`--skip-waiting` was the sharpest of those: evaluated inside the artifact branch,
+and a metadata-only run has no artifact, so the one command that publishes a
+preview never consulted it. The escape hatch existed, was spelled correctly, and
+could not be reached.
 
-The shape to copy is the build path's, and `cli.dart` already states the
-principle — *"`upload --skip-waiting` does the transfer, `appstore wait` does the
-poll"*. `upload --metadata --skip-waiting` would publish and stop, printing the
-next command; `appstore wait` would learn previews, with `--timeout` and
-`--poll`. Reaching the deadline then becomes a *resumable state* rather than a
-non-zero exit.
+**Two things this section proposed were overturned by the consumer, and both are
+recorded here rather than quietly replaced**, because a summary that reads as
+though it had been right all along is worse than no summary.
 
-**The cheap version, if the split is too much**, is to make the timeout and poll
-configurable from the CLI and to exit zero at the deadline with "still
-processing, here is how to check". An outcome this document calls *ordinary*
-should not be an error.
+*"Reaching the deadline becomes a resumable state rather than a non-zero exit"* —
+half right. It is resumable; it is also a **distinct** non-zero exit, 4, because
+the consumer branches on exit status and never on text. And the cheap version
+this section floated — *"exit zero at the deadline with 'still processing'"* —
+was rejected outright for the same reason: exit zero makes "still going"
+indistinguishable from "done" to precisely the caller the outcome is for. The
+reasoning here was not wrong about *failure*. It was wrong to conflate "not a
+failure" with "exit zero", which only a caller that reads status rather than
+prose would notice, and one did.
 
-Not done in dev.2 because the sharp edge that made it urgent is gone: the
-timeout message told the operator to re-run, and re-running was the path into
-the skip that ignored a rejected poster frame. That skip is fixed, so the
-printed remedy is honest and the split is an improvement rather than a repair.
+The third command, `appstore previews`, was not proposed by this section at all.
+It arrived from the same conversation: the consumer was building a readiness
+check that must not wait for anything, and every command previews had until then
+was a doer.
 
 ### Open: thirty minutes is a guess
 
@@ -311,6 +343,15 @@ Two things make the wrong value cheap rather than expensive, which is why this
 did not block the work: the timeout is a parameter, and reaching it is
 recoverable by re-running — the unchanged-asset skip means a second run uploads
 nothing and only re-checks.
+
+**Three more since, from `preview-wait-split.md`, which is built.** `--timeout`
+and `--poll` are now the caller's to set rather than constants; `wait-previews`
+makes the wait re-enterable from any machine, so a deadline reached is a wait to
+resume rather than an upload to redo; and `previewsPendingExit` makes running
+out of time distinguishable from failing *by exit status*, which is what a
+caller that never reads prose actually needs. None of that makes thirty minutes
+right. It makes being wrong about it recoverable in every direction, which is
+why the measurement is still worth taking and still not urgent.
 
 ### Open: nothing requires a preview
 

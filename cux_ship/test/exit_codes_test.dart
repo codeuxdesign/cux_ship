@@ -14,6 +14,10 @@
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:cux_ship/src/appstore/app_store.dart'
+    show noSuchVersionExit, previewsPendingExit;
+import 'package:cux_ship/src/appstore/flatten_cli.dart'
+    show needsFlatteningExit;
 import 'package:cux_ship/src/provenance.dart' show uploadCollisionExit;
 import 'package:test/test.dart';
 
@@ -124,6 +128,37 @@ void main() {
       reason: 'screenshots flatten --check',
     );
     expect(uploadCollisionExit, isNot(64), reason: 'EX_USAGE, a usage error');
+  });
+
+  test('the whole vocabulary is distinct, and pinned to its numbers', () {
+    // **Literals, not the constants.** The per-code tests assert
+    // `exitCode == theConstant`, which moves with the constant — so setting
+    // `noSuchVersionExit` to 4 collided it with `previewsPendingExit` and
+    // every test stayed green. A consumer's shell script hardcodes the
+    // *number*; this is the test that pins what they wrote down.
+    //
+    // It is also what keeps README.md's exit-code table honest, since that
+    // table is the published contract and nothing else compares it to the
+    // source.
+    expect(needsFlatteningExit, 2);
+    expect(uploadCollisionExit, 3);
+    expect(previewsPendingExit, 4);
+    expect(noSuchVersionExit, 5);
+
+    // And no two of them are the same, which is the property the numbers
+    // exist for: one code per distinct condition. Written as a set so adding
+    // a sixth that duplicates an existing one fails here rather than in a
+    // consumer.
+    const all = <int>[
+      0,
+      1,
+      needsFlatteningExit,
+      uploadCollisionExit,
+      previewsPendingExit,
+      noSuchVersionExit,
+      64,
+    ];
+    expect(all.toSet(), hasLength(all.length));
   });
 
   test('a usage error still exits 64, not the collision code', () {

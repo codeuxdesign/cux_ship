@@ -2,6 +2,100 @@
 
 ## Unreleased
 
+**A listing-only upload publishes the release notes.** `upload --metadata
+--changelog CHANGELOG.md` accepted the flag and wrote no "What's New in This
+Version" — the write existed and lived inside the promote block, so `promote
+--changelog` was correct and a listing-only publish silently was not. Found by
+a consumer whose flow never reaches promote by design: publish everything, look
+at it in App Store Connect, then submit by hand.
+
+`publishReleaseNotes` is now one function with two callers, carrying the two
+rules that travel with the write — a first version has no "What's New", and the
+App Store rejects emoji in `whatsNew`.
+
+**The preview wait reports through a callback.** `PreviewProcessingProgress`
+sits beside `BuildProcessingProgress` and carries two states rather than one,
+because Apple ingests the video and then cuts the poster frame out of it.
+Passing no callback prints exactly what it printed before.
+
+**Reaching the wait's deadline is `PreviewsPending` rather than a 504.** A
+distinct type for a distinct outcome: `ProcessingTimeout` means a build that
+never appeared, which has usually been refused. Nothing is wrong here — Apple
+is not done — and it carries each preview's two states rather than a count.
+`previewsPendingExit` is 4, and `appstore wait-previews` is the command that
+exits it; see `docs/design/preview-wait-split.md`.
+
+**`appstore wait-previews` waits on previews already uploaded**, the sibling
+`appstore wait` has had since builds needed one. Previews had the longest
+documented tail of any asset here — Apple says twenty-four hours — and the
+fewest ways to manage it: no `--timeout`, no `--poll`, no command that only
+waits, and a `--skip-waiting` that a metadata-only run never consulted. All
+four are fixed. Three outcomes, three exit codes, so a caller that branches on
+status never has to match prose: 0 ready, 4 still ingesting, 1 refused.
+
+**`appstore previews` lists what Apple holds**, without waiting for anything.
+It sits beside `builds` and `versions`, and it prints the one input nobody can
+change after approval and no other output shows: the poster frame each preview
+is posed at. A frame Apple has not cut yet reads `(not set)` rather than as a
+blank column — it comes back as an empty string, not as an absent field.
+
+**`--json` on both.** On the read it is the usual document on stdout; on the
+wait it splits by *stream* rather than by flag — progress on stderr always, the
+document on stdout under `--json` — because a wait is progress and then an
+answer, and one document at the end cannot be rendered as progress. A person
+gets the live report and a program gets a clean document without either having
+to choose. The document uses Apple's own field names, `videoDeliveryState`,
+`previewFrameImageState` and `previewFrameTimeCode`, so it can be read beside
+Apple's reference without a translation table; `done` is this package's own
+opinion over both states and says so in a field of its own.
+
+**`AppStorePreviewsDocument` and `AppStorePreviewEntry` are exported.** They
+were missing from `lib/documents.dart`'s `show` list, so the feature shipped
+with a working flag, an emitted document and a `kind` a caller could name — and
+no way to type the thing it decodes into. Found by a consumer writing
+`Future<AppStorePreviewsDocument>` in another package, which is the only place
+it was visible.
+
+**A version Apple does not hold exits 5, not 1.** *"Apple has no 1.1.8 yet"* is
+an ordinary state on the way to a release — every run before the version is
+created looks like that — and exit 1 put it beside wrong credentials, an
+unreachable network and a metadata tree that will not load. A consumer could
+either match the prose, which is the failure this package exists to prevent, or
+report "a store could not be read" on the commonest path. `noSuchVersionExit`
+is 5, raised as `NoSuchVersion`, which subclasses `AscApiException` so nothing
+loses the formatted 404 it already printed.
+
+**`README.md` now carries the whole exit-code table** — 0, 1, 2, 3, 4, 5 and
+64 — with the rule that makes it predictable: an existing code never changes
+meaning, and a new condition takes a new number rather than joining an old one.
+Asked for by a consumer whose runner throws on any unrecognised non-zero, and
+who had been finding the constants by grepping.
+
+**`appstore previews` reads a version Apple has already taken.** It went through
+the same version lookup a *write* uses, so a live or in-review version answered
+"READY_FOR_SALE, which cannot be edited" — a refusal to look, landing on exactly
+the versions worth looking at, since a version stops being editable the moment
+it is submitted. `wait-previews` checks editability only when `--metadata` makes
+it write.
+
+**`wait-previews --metadata` asserts the poster frames, which it accepted the
+flag for and did not do.** The option was declared, validated, and then ignored:
+the tree was only loaded for `upload` and `promote`, so the assertion sat behind
+a condition nothing could satisfy and the command reported success having
+asserted nothing — on the one attribute that cannot be changed after approval,
+reached by following the instruction `upload --skip-waiting` prints.
+
+**`--json` answers with a document in two cases where it did not.** A version
+carrying no previews printed prose and returned, so a run that exited 0 handed
+its consumer a parse error; and `display` said `ready` for previews the same
+document reported as unfinished. Under `--json` every write's own report now
+goes to stderr, so stdout carries the document and nothing else.
+
+**A poster frame Apple has not cut is null in the document, not `""`.** Apple
+answers with an empty string, which is now collapsed where the preview is read
+rather than by each caller — the dartdoc has always promised `HH:MM:SS:FF` or
+null.
+
 **`serving` is about the rollout, not about availability — the doc comments now
 say so.** No behaviour changes and the mapping is unchanged: `completed ||
 inProgress => true` is the right split for what Play's `status` field *is*. What

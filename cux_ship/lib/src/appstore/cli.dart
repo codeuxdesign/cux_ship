@@ -75,6 +75,7 @@ import 'package:cux_ship_verify/metadata.dart';
 import 'package:cux_ship_verify/release_notes.dart';
 
 import '../asc_platforms.dart';
+import '../json_output.dart';
 import '../listing_requirements.dart';
 import '../notes_source.dart';
 import '../reachable.dart';
@@ -105,6 +106,8 @@ enum AscCommand {
   screenshotTypes('screenshot-types'),
   buildNumber('build-number'),
   awaitBuild('wait'),
+  awaitPreviews('wait-previews'),
+  previews('previews'),
   signing('signing');
 
   const AscCommand(this.name);
@@ -120,6 +123,15 @@ enum AscCommand {
     AscCommand.screenshotTypes,
     AscCommand.buildNumber,
     AscCommand.awaitBuild,
+    // **A read that can also assert a poster frame**, which is the one place
+    // this set is doing double duty. `wait-previews` polls, and with a
+    // `--metadata` tree it finishes the job `upload --skip-waiting` deferred
+    // by moving the timecode Apple ignored at reservation. Listed here because
+    // what `isRead` actually gates is the confirmation prompt and the offline
+    // argument checks, and neither is wanted for a command that mostly waits;
+    // the write it can make is one the tree already asked for.
+    AscCommand.awaitPreviews,
+    AscCommand.previews,
     AscCommand.signing,
   }.contains(this);
 }
@@ -195,11 +207,74 @@ ArgParser buildAscParser(AscCommand cmd) {
     return parser;
   }
 
+  if (cmd == AscCommand.awaitPreviews) {
+    parser
+      ..addOption(
+        'version-name',
+        help:
+            'The App Store version whose previews to wait for. Required, and '
+            'deliberately not defaulted to the newest — the same reason '
+            '`wait` gives about build numbers: the point of waiting from '
+            'another machine is to wait for a *specific* version, and '
+            '"newest" would succeed on somebody else\'s.',
+      )
+      ..addOption(
+        'metadata',
+        help:
+            'The tree the previews came from. Optional: without it this only '
+            'waits, and with it the poster frames are asserted once Apple has '
+            'finished — which is the phase `upload --skip-waiting` defers, '
+            'and which needs the tree because Apple discards the timecode '
+            'sent at reservation.',
+      )
+      ..addOption(
+        'timeout',
+        defaultsTo: '30m',
+        help:
+            'How long to wait before reporting what is still pending, e.g. '
+            '2h or 90s. Reaching it is not a failure — Apple documents '
+            'preview ingestion as taking up to 24 hours — so the exit code '
+            'for it is distinct from both success and error.',
+      )
+      ..addOption('poll', defaultsTo: '30s', help: 'How often to ask.')
+      ..addFlag(
+        'json',
+        negatable: false,
+        help:
+            'Print the result as a JSON document on stdout. Progress goes to '
+            'stderr either way, so a caller gets a live report and a clean '
+            'document without choosing between them — which is what a wait '
+            'needs and a read does not, because a wait has progress and then '
+            'an answer. See docs/design/json-output.md.',
+      );
+    return parser;
+  }
+
   if (cmd.isRead) {
     // Only the two listings. `build-number` already prints one value a caller
     // can use unquoted, `wait` reports progress nobody decodes, and
     // `beta-groups` / `screenshot-types` have asked no one for a document —
     // and a flag on a command with no consumer is a promise made to nobody.
+    if (cmd == AscCommand.previews) {
+      parser
+        ..addOption(
+          'version-name',
+          help:
+              'The App Store version whose previews to print. Required: '
+              'previews are version-scoped, so "the previews" is not a '
+              'question with one answer.',
+        )
+        ..addFlag(
+          'json',
+          negatable: false,
+          help:
+              'Print the listing as a JSON document instead of prose. stdout '
+              'carries the document and nothing else; every other line goes '
+              'to stderr. See docs/design/json-output.md.',
+        );
+      return parser;
+    }
+
     if (cmd == AscCommand.builds || cmd == AscCommand.versions) {
       parser.addFlag(
         'json',
@@ -390,6 +465,8 @@ ArgParser buildAscParser(AscCommand cmd) {
     case AscCommand.screenshotTypes:
     case AscCommand.buildNumber:
     case AscCommand.awaitBuild:
+    case AscCommand.awaitPreviews:
+    case AscCommand.previews:
     case AscCommand.signing:
       throw StateError('unreachable: handled by cmd.isRead or above');
   }
@@ -642,6 +719,116 @@ ListingPublish listingPublish({
   return promote ? ListingPublish.afterVersion : ListingPublish.shared;
 }
 
+/// Writes the App Store "What's New" for a version, or says why it did not.
+///
+/// **One function because two commands publish it, and for one release only
+/// one of them did.** `promote --changelog` wrote it; `upload --metadata
+/// --changelog` accepted the flag and wrote nothing, so a listing published
+/// without a promotion showed an empty "What's New in This Version" — a flag
+/// taken and silently dropped, on copy a shopper reads. Reported by the
+/// consumer whose whole flow is *publish, look at it, then submit*, which is
+/// precisely the flow that never reaches the promote path.
+///
+/// Two rules travel with it and are the reason this is not two call sites:
+///
+///   - **A first version has no "What's New"** to be new against, and Apple
+///     refuses the write with a message that does not explain itself.
+///   - **The App Store rejects emoji in `whatsNew`** — measured, after this
+///     file spent a release asserting the opposite — so they are stripped, and
+///     the run names the characters because what ships then differs from
+///     CHANGELOG.md.
+///
+/// Both were written inside the promote block. A second copy on the upload
+/// path would have been two chances for the next fix to land on one of them.
+///
+/// **Apple does not gate this on a build.** The one thing that could have made
+/// publishing notes from a listing-only run wrong — `whatsNew` being editable
+/// only once a build is attached — was measured against a live version in
+/// `PREPARE_FOR_SUBMISSION` with none: the write lands and Apple says nothing.
+/// So the version being editable is the whole condition, which is what the
+/// refusal branch below is left guarding.
+Future<void> publishReleaseNotes(
+  AppStore store,
+  App app,
+  Map<String, dynamic> version,
+  String locale,
+  String? notes,
+  String? versionName, {
+
+  /// The locales the metadata tree carries, when there is a tree. Empty means
+  /// "do not check" — `promote --changelog` with no `--metadata` publishes
+  /// notes against a listing this run never read.
+  Set<String> declaredLocales = const {},
+}) async {
+  if (notes == null) {
+    return;
+  }
+  if (await store.isFirstVersion(app, version)) {
+    stdout.writeln(
+      '==> ${versionName ?? 'this'} is this app\'s first App Store version, '
+      'so it has no\n'
+      '    "What\'s New" — the release notes are skipped and the '
+      'description stands',
+    );
+    return;
+  }
+  // **Only for a locale the listing actually has.** The notes go to the CLI's
+  // `--locale`, which defaults to en-US, while the tree declares its own — so
+  // a `listings/de-DE/`-only tree published without `--locale de-DE` would
+  // POST a *new* en-US version localization carrying release notes and no
+  // description. `writeVersionLocalization` creates the record when none
+  // exists, and that record is one nothing else in the tree owns.
+  //
+  // Skipped loudly rather than quietly: this is a listing that will not carry
+  // its notes, which is the thing this whole function exists to stop happening
+  // in silence.
+  if (declaredLocales.isNotEmpty && !declaredLocales.contains(locale)) {
+    stdout.writeln(
+      '==> release notes skipped: this tree declares '
+      '${declaredLocales.join(", ")} and the notes would go to $locale.\n'
+      '    Pass --locale ${declaredLocales.first} to publish them there.',
+    );
+    return;
+  }
+
+  stdout.writeln('==> release notes');
+  var releaseNotes = notes;
+  if (needsStrippingForApple(notes)) {
+    releaseNotes = stripForApple(notes);
+    stdout.writeln(
+      '    the App Store rejects emoji in "What\'s New", so these are '
+      'stripped:\n'
+      '      ${_removedCharacters(notes, releaseNotes)}\n'
+      '    what ships here differs from CHANGELOG.md; Play publishes it '
+      'verbatim',
+    );
+  }
+  // Not compared, unlike the listing text: these notes are per-release and
+  // come from CHANGELOG.md, so "unchanged since last time" is not a state a
+  // release is expected to be in. The read is still passed in, so this write
+  // decides POST or PATCH from a reading rather than making its own.
+  // **Not wrapped, and the explanation lives in
+  // `AscApiException.guidanceFor`.** Apple's answer to a version that will not
+  // take notes is `Attribute 'whatsNew' cannot be edited at this time`, which
+  // names the attribute and not the condition — so it needs an explanation,
+  // and this used to append one to `e.details`. That list is documented as one
+  // entry per Apple `errors[]` element and is publicly exported through
+  // `read.dart`, so appending told a consumer Apple had said three sentences
+  // it had not. The guidance seam exists for precisely this kind of error and
+  // keeps Apple's words Apple's.
+  //
+  // **Measured, and worth keeping beside the write:** whether a version with
+  // *no build attached* refuses this was the open question that decided
+  // whether publishing notes from a listing-only run was sound at all — that
+  // state is reachable only from this caller. Against a live version in
+  // `PREPARE_FOR_SUBMISSION` with no build, the write lands, exit 0, no
+  // refusal. So the remaining cause is a version locked by review, which
+  // `ensureVersion` usually refuses first.
+  await store.writeVersionLocalization(version, locale, {
+    'whatsNew': releaseNotes,
+  }, existing: await store.versionLocalizations(version));
+}
+
 /// Publishes the App Store listing from a metadata tree.
 ///
 /// **Its own function because two commands need it, for opposite reasons.** A
@@ -651,7 +838,10 @@ ListingPublish listingPublish({
 /// `appStoreVersionLocalizations` through `ensureVersion`, which *creates* the
 /// version record, so publishing beside a TestFlight build would bring an App
 /// Store version into existence for a release nobody had decided to make.
-Future<void> _publishAscListing(
+/// Returns the `appStoreVersions` record it wrote against, or null when the
+/// tree needed none — so a caller can write the release notes against the same
+/// version rather than resolving it a second time.
+Future<Map<String, dynamic>?> _publishAscListing(
   AppStore store,
   App app,
   AppStoreMetadata metadata,
@@ -660,8 +850,12 @@ Future<void> _publishAscListing(
   // Passed rather than reached for: the caller's closure names the subcommand
   // in its message, and a listing failure should say whether it came from an
   // upload or a promote.
-  Never Function(String) fail,
-) async {
+  Never Function(String) fail, {
+
+  /// Upload the previews and stop, leaving the ingestion wait and the
+  /// poster-frame assertion to `appstore wait-previews`.
+  bool skipPreviewWait = false,
+}) async {
   // **Decide what needs writing before demanding something to write to.**
   //
   // The app-level half used to open with `editableAppInfo`, which threw when
@@ -943,12 +1137,18 @@ Future<void> _publishAscListing(
             stdout.writeln(
               '==> ${localeMetadata.locale}: ${entry.key} (preview)',
             );
-            await store.replacePreviews(localization, entry.key, entry.value);
+            await store.replacePreviews(
+              localization,
+              entry.key,
+              entry.value,
+              skipWaiting: skipPreviewWait,
+            );
           }
         }
       }
     }
   }
+  return version;
 }
 
 /// Runs [cmd] against App Store Connect.
@@ -1015,6 +1215,16 @@ Future<void> runAsc(
   // is reported only after the network has already been touched.
   Duration? awaitTimeout;
   Duration? awaitPoll;
+  if (cmd == AscCommand.awaitPreviews) {
+    final timeoutText = args.option('timeout')!;
+    final pollText = args.option('poll')!;
+    awaitTimeout =
+        _duration(timeoutText) ??
+        fail('--timeout is "$timeoutText" — write it as 2h or 90s.');
+    awaitPoll =
+        _duration(pollText) ?? fail('--poll is "$pollText" — write it as 30s.');
+  }
+
   if (cmd == AscCommand.awaitBuild) {
     final timeoutText = args.option('timeout')!;
     final pollText = args.option('poll')!;
@@ -1101,11 +1311,46 @@ Future<void> runAsc(
       );
     }
   }
+  // **`awaitPreviews` is in this list because it takes a tree**, and leaving it
+  // out is how `wait-previews --metadata` became a silent no-op: the option was
+  // declared and validated, `metadata` stayed null, and the poster-frame
+  // assertion the flag exists for sat behind `if (metadata != null)` where
+  // nothing could reach it. The command printed `previews are ready` and exited
+  // 0 having asserted nothing — on the one attribute that cannot be changed
+  // after approval, reached by following the instruction `upload --skip-waiting`
+  // prints. That is the same defect this branch exists to fix, reproduced
+  // inside the fix for it, so the gate names every command that reads a tree
+  // rather than the two that write a listing.
+  // **And `awaitPreviews` takes the flag only, never the inferred tree**, which
+  // is the half the first fix got wrong. `defaults.metadata` is
+  // `project.appStoreTreeFor(platform)` — non-null in every repository that has
+  // a `store/appstore` directory, which is all of them — so widening the gate
+  // without narrowing the source made a bare `wait-previews --version-name X`
+  // load a tree nobody named. It then validated the listing, refused runs whose
+  // CHANGELOG.md had uncommitted changes, applied the editability check with
+  // advice to "drop --metadata" that could not be followed because none was
+  // passed, and **PATCHed poster frames from a tree the caller had not
+  // mentioned** — with no confirmation prompt, because the command is a read,
+  // and no `--dry-run` to rehearse it.
+  //
+  // `--no-metadata` could not switch it off either: that flag is `upload`'s and
+  // this parser does not declare it. So the escape hatch was absent for a
+  // behaviour that should never have been on.
+  //
+  // Inference is right for `upload` and `promote`, which exist to publish a
+  // tree and are asked to find it. It is wrong here, where the tree is an
+  // *option* on a command whose job is to wait.
+  final wantsTree =
+      cmd == AscCommand.upload ||
+      cmd == AscCommand.promote ||
+      cmd == AscCommand.awaitPreviews;
   final metadataPath =
-      (cmd == AscCommand.upload || cmd == AscCommand.promote) &&
+      wantsTree &&
           !noMetadata &&
           !(cmd == AscCommand.promote && betaGroup != null)
-      ? (opt('metadata') ?? defaults.metadata)
+      ? (cmd == AscCommand.awaitPreviews
+            ? opt('metadata')
+            : opt('metadata') ?? defaults.metadata)
       : null;
   // The tree the beta app description lives in — deliberately not the gated
   // [metadataPath]. `--no-metadata` declines the App Store listing publish,
@@ -1345,7 +1590,13 @@ Future<void> runAsc(
       }
     }
 
-    stdout.writeln(
+    // **stderr under `--json`, like every other line this file writes.** This
+    // block was unconditionally safe until `wait-previews` — the only
+    // `--json`-capable command that loads a tree — could reach it: `upload` and
+    // `promote` declare no `--json`, so nothing here had ever run in a document
+    // producer. It printed in front of the document, two hundred lines upstream
+    // of the branch that exists to stop exactly that.
+    (jsonOutput ? stderr : stdout).writeln(
       '==> ${metadata.locales.length} locale(s), '
       '${metadata.categories.length} categor(y|ies)'
       '${metadata.ageRating == null ? '' : ', age rating'}'
@@ -1375,7 +1626,7 @@ Future<void> runAsc(
           if (locale.version[field] != null) field: locale.version[field]!,
       };
       for (final problem in await unreachableUrls(urls)) {
-        stdout.writeln(
+        (jsonOutput ? stderr : stdout).writeln(
           '==> note: ${locale.locale} ${problem.field} '
           '${problem.url} ${problem.detail}',
         );
@@ -1484,6 +1735,67 @@ Future<void> runAsc(
   // start where the rest of the offline work is: an absent CHANGELOG.md
   // section is the ordinary mistake, and finding it before a credential is
   // loaded costs nothing and leaves nothing behind.
+  // The notes when the changelog has a section for this version, and null
+  // when it does not — as opposed to [notesFor], which refuses.
+  //
+  // Its own closure rather than a flag on `notesFor`, because the two answer
+  // different questions and only one of them is "what did the caller ask for".
+  // The over-limit refusal and the uncommitted-changes refusal are kept: those
+  // are wrong *files*, not absent ones, and a run that publishes a listing
+  // from a changelog it cannot read should say so however it was pointed at
+  // one.
+  String? notesIfPresent(String forVersion) {
+    if (changelogPath == null) {
+      return literalNotes;
+    }
+    requireCommittedNotes([changelogPath]);
+    final notes = changelogNotesOf(
+      changelogPath,
+      forVersion,
+      platform: platform.changelog,
+    );
+    if (notes is! NotesText) {
+      return null;
+    }
+    if (notes.text.length > appStoreReleaseNotesLimit) {
+      fail(
+        "$changelogPath's ${notes.fromVersion} section is "
+        '${notes.text.length} characters once filtered to '
+        '${platform.changelog}; the App Store allows '
+        '$appStoreReleaseNotesLimit',
+      );
+    }
+    return notes.text;
+  }
+
+  // **The listing's release notes, resolved before anything is written.**
+  //
+  // Evaluated at the publish site, this read three ways to `fail` *after*
+  // `_publishAscListing` had written content rights, categories, the age
+  // rating, every localization, every screenshot and every preview: an
+  // uncommitted CHANGELOG.md, a missing section, and a section over Apple's
+  // limit. `notesFor`'s own doc calls moving the read into the offline phase
+  // "the better fix" and declines it for the paths that came first; this one
+  // is new, so it starts here.
+  //
+  // **A missing section is fatal only when the changelog was named.** The path
+  // defaults to the project's CHANGELOG.md, so a run that asked for
+  // screenshots and nothing else was newly refused for notes it had not
+  // requested — the flag was inferred, and inference must not manufacture a
+  // requirement. When `--changelog` or `--release-notes` was passed the notes
+  // *are* what was asked for, and an absent section stays an error, because
+  // "absent is not the same answer as empty" is the rule that flag carries.
+  String? listingReleaseNotes;
+  if (publish == ListingPublish.shared &&
+      metadata != null &&
+      versionName != null &&
+      listingNeedsVersion(metadata)) {
+    final named = opt('changelog') != null || notesPath != null;
+    listingReleaseNotes = named
+        ? notesFor(versionName)
+        : notesIfPresent(versionName);
+  }
+
   String? whatToTestNotes;
   if (cmd == AscCommand.whatToTest) {
     whatToTestNotes = notesFor(versionName!);
@@ -1590,7 +1902,17 @@ Future<void> runAsc(
     return;
   }
 
-  final writer = Writer(client, dryRun: dryRun);
+  // **Every write announces itself, and under `--json` those lines cannot go
+  // to stdout.** `wait-previews --json --metadata` asserts poster frames,
+  // which is a PATCH, so `Writer`'s `    asking for poster frame 00:00:02:06`
+  // would land in front of the document and make the whole of stdout
+  // unparseable. Set here rather than per call site, because the rule is about
+  // the stream and not about which write happens to reach it.
+  final writer = Writer(
+    client,
+    dryRun: dryRun,
+    out: jsonOutput ? stderr : null,
+  );
   final store = AppStore(client, writer, platform: platform);
   started = store;
 
@@ -1605,10 +1927,16 @@ Future<void> runAsc(
   try {
     final app = await store.resolveApp(bundleId);
     if (cmd != AscCommand.buildNumber) {
-      // **Under `--json`, stdout carries the document and nothing else.** This
-      // is the only line that reaches stdout before a listing does, and it is
-      // the whole of what stdout purity costs on this path — `resolveApp`
-      // prints nothing, and the listings are the last thing to run.
+      // **Under `--json`, stdout carries the document and nothing else.**
+      //
+      // This used to say it was *the only* line reaching stdout before a
+      // listing does, which stopped being true when `wait-previews` gained a
+      // `--metadata` tree: the offline validation block above prints two of its
+      // own, and it had never run under a `--json`-capable command before —
+      // `upload` and `promote` declare no `--json`. The claim is not repaired
+      // by counting again, because the next command to reach that block would
+      // falsify it once more; what is true is the rule, and each writer honours
+      // it where it writes.
       //
       // Written out as a branch rather than as `jsonOutput ? stderr : stdout`
       // because `close_sinks` reads a local holding either one as a sink this
@@ -1625,6 +1953,228 @@ Future<void> runAsc(
       await store.printBuildNumber(app);
       return;
     }
+    if (cmd == AscCommand.previews) {
+      final wanted = args.option('version-name');
+      if (wanted == null || wanted.isEmpty) {
+        fail(
+          'which version? Pass `appstore previews --version-name 1.2.0`. '
+          'Previews are version-scoped, so "the previews" has no single '
+          'answer.',
+        );
+      }
+      // **`readVersion`, not `ensureVersion`, and this is a read command.**
+      // `ensureVersion` refuses anything outside `editableVersionStates`,
+      // which is right for a write and absurd here: it answered `appstore
+      // previews --version-name 1.1.6` on a live version with *"1.1.6 is
+      // READY_FOR_SALE, which cannot be edited. Release a new version
+      // instead."* — a refusal to *look*. And it landed on exactly the
+      // versions worth looking at, since a version stops being editable the
+      // moment it is submitted, which is when somebody most wants to know what
+      // poster frame went with it.
+      //
+      // There is no "no such version" line either: absence arrives as a 404
+      // naming the version and the request.
+      final version = await store.readVersion(app, wanted);
+      final on = await store.previewsOn(version);
+      final lines = <String>[
+        if (on.isEmpty)
+          '$wanted carries no previews'
+        else
+          // **The `isNotEmpty` below is belt and braces now, and deliberately
+          // kept.** `readPublishedPreview` collapses Apple's `""` to null at
+          // the boundary, so a `frameTimeCode` reaching here is either null or
+          // a real timecode and the empty branch is unreachable through that
+          // path. A mutation removing this check therefore survives — which is
+          // recorded rather than treated as a reason to delete it, because
+          // [PublishedPreview] is a public typedef anyone can build directly,
+          // and the cost of the check being wrong is the blank column this
+          // whole line exists to prevent.
+          for (final entry in on) ...[
+            '${entry.locale ?? '?'}  ${entry.previewType ?? '?'}  '
+                '${entry.preview.fileName ?? entry.preview.id}  '
+                'video ${entry.preview.videoState ?? '-'}  '
+                'frame ${entry.preview.frameState ?? '-'}  '
+                'poster ${entry.preview.frameTimeCode?.isNotEmpty ?? false ? entry.preview.frameTimeCode : '(not set)'}',
+          ],
+      ];
+      if (args.flag('json')) {
+        writeJsonDocument(
+          appStorePreviewsDocument(
+            on,
+            platform: platform,
+            bundleId: bundleId,
+            versionName: wanted,
+            display: lines,
+          ),
+        );
+        return;
+      }
+      for (final line in lines) {
+        stdout.writeln(line);
+      }
+      return;
+    }
+
+    if (cmd == AscCommand.awaitPreviews) {
+      final wanted = args.option('version-name');
+      if (wanted == null || wanted.isEmpty) {
+        fail(
+          'which version? Pass `appstore wait-previews --version-name 1.2.0`. '
+          'Deliberately not defaulted to the newest, for the reason `wait` '
+          'gives about build numbers: waiting from another machine is waiting '
+          'for a *specific* version, and "newest" would succeed on somebody '
+          "else's.",
+        );
+      }
+      // **A read, like `previews` — see the note there.** Waiting on a version
+      // Apple has already taken is legitimate and common: the assets finish
+      // ingesting on Apple's schedule, not on the submission's.
+      final version = await store.readVersion(app, wanted);
+
+      // **The one thing here that is a write, and the only reason editability
+      // is checked at all.** With a tree, this command asserts poster frames,
+      // which is a PATCH — and Apple rejects a write against a submitted
+      // version field by field, with no indication that the *version* was the
+      // problem. That is what `editableVersionStates` exists to turn into one
+      // sentence, so it is applied where the write is rather than in front of
+      // the read.
+      if (metadata != null) {
+        final state =
+            (version['attributes'] as Map<String, dynamic>?)?['appStoreState']
+                as String?;
+        if (state != null && !editableVersionStates.contains(state)) {
+          fail(
+            'version $wanted is $state, so its poster frames cannot be '
+            'changed — Apple only accepts them while a version is editable. '
+            'Drop --metadata to wait and report without asserting them, or '
+            'cancel the submission in App Store Connect to edit it again.',
+          );
+        }
+      }
+      final on = await store.previewsOn(version);
+      if (on.isEmpty) {
+        // **A document even here, because this is a success.** The early
+        // return printed prose on stdout and skipped the `--json` branch
+        // below, so a run that succeeded handed its consumer a parse error at
+        // character 1 — and only on the input where there was nothing to
+        // report, which is the input a readiness check meets first on a
+        // version whose previews have not been uploaded yet. An empty
+        // `previews` list is the answer; "no output" is not a shape a decoder
+        // can be asked to accept from a zero exit.
+        final line = '==> $wanted carries no previews — nothing to wait for';
+        if (args.flag('json')) {
+          stderr.writeln(line);
+          writeJsonDocument(
+            appStorePreviewsDocument(
+              const <PreviewOnVersion>[],
+              platform: platform,
+              bundleId: bundleId,
+              versionName: wanted,
+              display: <String>[line],
+            ),
+          );
+        } else {
+          stdout.writeln(line);
+        }
+        return;
+      }
+      for (final entry in on) {
+        // stderr under `--json`, because stdout carries the document and
+        // nothing else — the invariant this file states for every other
+        // `--json` command, and the one an unconditional writeln breaks.
+        final line =
+            '==> ${entry.locale ?? '?'} ${entry.previewType ?? '?'}: '
+            '${entry.preview.fileName ?? entry.preview.id}';
+        if (args.flag('json')) {
+          stderr.writeln(line);
+        } else {
+          stdout.writeln(line);
+        }
+      }
+      // **Progress on stderr, always.** A wait is progress and *then* an
+      // answer, so one document at the end cannot be rendered as progress —
+      // splitting by stream rather than by flag gives a person the live report
+      // and a program the clean document, without either having to choose. It
+      // also sidesteps NDJSON: streaming progress as data later becomes a
+      // compatible addition rather than a redesign.
+      await store.awaitPreviewProcessing(
+        [
+          for (final entry in on) ...{?entry.preview.id},
+        ],
+        timeout: awaitTimeout ?? const Duration(minutes: 30),
+        poll: awaitPoll ?? const Duration(seconds: 30),
+        onProgress: (progress) => stderr.writeln(
+          '      ${progress.fileName ?? progress.previewId} at '
+          '${progress.waited.inSeconds}s: '
+          'video ${progress.videoState ?? 'not reported'}, '
+          'poster frame ${progress.frameState ?? 'not reported'}'
+          '${progress.frameStateAbandoned ? ' (taking the video as final)' : ''}',
+        ),
+      );
+      // **With a tree, the wait finishes the job rather than only reporting
+      // it.** Apple discards `previewFrameTimeCode` sent at reservation, so
+      // the frame has to be asserted after ingestion — which is exactly the
+      // phase `upload --skip-waiting` defers, and the reason this command
+      // takes a `--metadata` the plan originally said it would not.
+      if (metadata != null) {
+        final localizations = await store.versionLocalizations(version);
+        for (final locale in metadata.locales) {
+          // Read once for this version and handed to every locale, rather
+          // than re-read per locale: nothing in this command writes a
+          // localization, so one reading cannot go stale under it.
+          final localization = await store.localizationForUpload(
+            version,
+            locale.locale,
+            known: localizations,
+          );
+          if (localization == null) {
+            continue;
+          }
+          for (final entry in locale.previews.entries) {
+            await store.assertPosterFramesOn(
+              localization,
+              entry.key,
+              entry.value,
+              // Progress, so stderr under `--json` — and this one *writes*,
+              // so its report is the only record of what moved.
+              out: args.flag('json') ? stderr : null,
+            );
+          }
+        }
+      }
+      if (args.flag('json')) {
+        // Re-read, because this document is about what Apple holds now and
+        // the wait's own polls are progress rather than a settled answer.
+        final settled = await store.previewsOn(version);
+        writeJsonDocument(
+          appStorePreviewsDocument(
+            settled,
+            platform: platform,
+            bundleId: bundleId,
+            versionName: wanted,
+            // **The states, not the word `ready`.** This hard-coded `ready`
+            // on every line while the document computed `done` from the same
+            // re-read — so a grace-period exit, where Apple never reports
+            // `previewFrameImage` and the wait returns anyway, produced one
+            // document saying `done: false` and `ready` about the same
+            // preview. `display` is the half a person reads, which makes it
+            // the worse half to be wrong.
+            display: <String>[
+              for (final entry in settled) ...[
+                '${entry.locale ?? '?'}  ${entry.previewType ?? '?'}  '
+                    '${entry.preview.fileName ?? entry.preview.id}  '
+                    'video ${entry.preview.videoState ?? '-'}  '
+                    'frame ${entry.preview.frameState ?? '-'}',
+              ],
+            ],
+          ),
+        );
+        return;
+      }
+      stdout.writeln('==> previews are ready');
+      return;
+    }
+
     if (cmd == AscCommand.awaitBuild) {
       // Positional, because it is required anyway and `wait 2132` is what the
       // command is for. `--build-number` still works: the composition this
@@ -1923,14 +2473,84 @@ Future<void> runAsc(
     } else if (publish == ListingPublish.shared) {
       // Non-null by construction: [listingPublish] returns [none] when there
       // is no metadata, and this is the only thing that reads [shared].
-      await _publishAscListing(
+      final published = await _publishAscListing(
         store,
         app,
         metadata!,
         locale,
         versionName,
         fail,
+        // **The flag reaches the metadata path at last.** It is declared on
+        // `upload` and was read only inside the artifact branch, so the one
+        // command that publishes a preview never consulted it — an escape
+        // hatch that existed, was spelled correctly, and was unreachable.
+        skipPreviewWait: flag('skip-waiting'),
       );
+      // **The "What's New" a listing-only publish used to drop on the floor.**
+      // `--changelog` is accepted by this command and was read only for the
+      // TestFlight notes an artifact upload writes — so a metadata-only run
+      // passed it, said nothing, and left the App Store showing an empty
+      // "What's New in This Version". See [publishReleaseNotes], which carries
+      // the first-version rule and the emoji strip so that both publishers get
+      // them.
+      //
+      // Skipped when the tree needed no version: there is then nothing to hang
+      // release notes off, and `--version-name` was not required.
+      // **Gated on the flag, not on the resolved notes**, which is what the
+      // first attempt got wrong: the notes are only resolved when the tree
+      // needs a version, so on an app-level-only tree `listingReleaseNotes`
+      // is always null and the message could never fire — a skip notice that
+      // was itself silent.
+      // **A skipped wait leaves the poster frame unset, and that has to be
+      // the loudest line of the run.** `--skip-waiting` already defers the
+      // TestFlight notes and says so; this is worse, because Apple discards
+      // the timecode sent at reservation — so a preview left un-asserted poses
+      // at Apple's default, which is invisible rather than absent and cannot
+      // be changed after approval. The follow-up is not advice.
+      if (store.previewsLeftIngesting.isNotEmpty) {
+        final on = platform == AscPlatform.ios
+            ? ''
+            : ' --platform ${platform.name}';
+        stdout.writeln(
+          '==> ${store.previewsLeftIngesting.length} preview set(s) are '
+          'uploaded and still ingesting, and their poster frames are NOT set '
+          'yet.\n'
+          '    Finish with:\n'
+          '      cux_ship appstore wait-previews$on --bundle-id $bundleId '
+          '--version-name $versionName \\\n'
+          '        --metadata ${metadataPath ?? '<tree>'}',
+        );
+      }
+      if (published == null &&
+          (opt('changelog') != null || notesPath != null)) {
+        // **The narrowed remains of the defect this change closes.** A tree
+        // declaring only app-level fields — categories, age rating, content
+        // rights, a localized name — needs no version, so there is no record
+        // to hang release notes off and none was created. The notes are
+        // genuinely not publishable here, but saying nothing is what the
+        // original bug did, and the whole point is that a flag taken and
+        // dropped must not look like a command that did what was asked.
+        stdout.writeln(
+          '==> release notes skipped: this tree declares nothing Apple scopes '
+          'to a version,\n'
+          '    so no version was created to carry them. Add version-scoped '
+          'listing text,\n'
+          '    or publish the notes with `appstore promote --changelog`.',
+        );
+      }
+      if (published != null) {
+        await publishReleaseNotes(
+          store,
+          app,
+          published,
+          locale,
+          listingReleaseNotes,
+          versionName,
+          declaredLocales: {
+            for (final l in metadata.locales) ...{l.locale},
+          },
+        );
+      }
     }
 
     // -------------------------------------------------------------- promote
@@ -2046,49 +2666,14 @@ Future<void> runAsc(
         }
         await store.attachBuild(version, chosen);
 
-        final notes = notesFor(versionName);
-        if (notes != null) {
-          // A first release has no "What's New": there is no previous version
-          // for it to be new against, and Apple refuses the write with a
-          // message that does not explain itself. The description carries the
-          // story for a first release, and it is already published from
-          // store/appstore/.
-          if (await store.isFirstVersion(app, version)) {
-            stdout.writeln(
-              '==> $versionName is this app\'s first App Store version, so it '
-              'has no\n'
-              '    "What\'s New" — the release notes are skipped and the '
-              'description stands',
-            );
-          } else {
-            stdout.writeln('==> release notes');
-            // The App Store refuses emoji in `whatsNew` too — measured, after
-            // this file spent a release asserting the opposite. Announced
-            // more loudly than the TestFlight strip above, and with the
-            // characters named: this is copy a shopper reads, and quietly
-            // publishing something other than what the changelog says is the
-            // failure mode worth spending three lines to avoid.
-            var releaseNotes = notes;
-            if (needsStrippingForApple(notes)) {
-              releaseNotes = stripForApple(notes);
-              stdout.writeln(
-                '    the App Store rejects emoji in "What\'s New", so these '
-                'are stripped:\n'
-                '      ${_removedCharacters(notes, releaseNotes)}\n'
-                '    what ships here differs from CHANGELOG.md; Play '
-                'publishes it verbatim',
-              );
-            }
-            // Not compared, unlike the listing text: these notes are
-            // per-release and come from CHANGELOG.md, so "unchanged since
-            // last time" is not a state a release is expected to be in.
-            // The read is still passed in, so this write decides POST or
-            // PATCH from a reading rather than making its own.
-            await store.writeVersionLocalization(version, locale, {
-              'whatsNew': releaseNotes,
-            }, existing: await store.versionLocalizations(version));
-          }
-        }
+        await publishReleaseNotes(
+          store,
+          app,
+          version,
+          locale,
+          notesFor(versionName),
+          versionName,
+        );
         if (flag('phased')) {
           stdout.writeln('==> phased release');
           await store.enablePhasedRelease(version);
@@ -2109,6 +2694,12 @@ Future<void> runAsc(
         // it possible at all. Before the submission, so a review sees the copy
         // that was meant to accompany it rather than the previous release's.
         if (publish == ListingPublish.afterVersion) {
+          // No `skipPreviewWait`: `--skip-waiting` is declared on `upload`
+          // alone, so `promote --skip-waiting` does not parse and the refusal
+          // the design document proposed would guard a combination nobody can
+          // type. A promotion submits for review, and Apple refuses a
+          // submission whose assets are in flight — so a promote must wait,
+          // and here it cannot do otherwise by construction.
           await _publishAscListing(
             store,
             app,
@@ -2129,6 +2720,21 @@ Future<void> runAsc(
     } else {
       stdout.writeln('==> done');
     }
+  } on NoSuchVersion catch (e) {
+    // **Before [AscApiException], which this subclasses** — Dart takes the
+    // first matching clause, so the order is the behaviour and not a
+    // formatting choice. Below it, every instance of this would be answered
+    // by the general clause and exit 1.
+    //
+    // Its own code because it is an ordinary state rather than a fault: every
+    // run before the version exists looks like this, and a readiness check
+    // asking about 1.1.8 before anybody has made a 1.1.8 has its answer. Exit
+    // 1 put it beside wrong credentials and a network that went away, which
+    // left a consumer matching prose to tell the commonest path from the
+    // broken ones.
+    stderr.writeln('asc_upload: $e');
+    _reportStateLeftBehind(store);
+    exitCode = noSuchVersionExit;
   } on AscApiException catch (e) {
     stderr.writeln('asc_upload: $e');
     _reportStateLeftBehind(store);
@@ -2137,6 +2743,41 @@ Future<void> runAsc(
     // Caught rather than left to the runtime: an uncaught exception exits 255
     // with a stack trace, and a stack trace above the one sentence that says
     // "read the e-mail" is how that sentence gets skimmed past.
+    stderr.writeln('asc_upload: $e');
+    _reportStateLeftBehind(store);
+    exitCode = 1;
+  } on PreviewsPending catch (e) {
+    // **Two callers, two right answers, which is the argument for the wait
+    // being a command.** For `wait-previews` the deadline is the outcome, not
+    // a failure: Apple documents ingestion in hours, the assets are uploaded,
+    // and nothing is wrong. It exits [previewsPendingExit] so a script can
+    // branch on three states — done, still going, broken — without reading a
+    // word, which is what the one consumer asked for after a status of theirs
+    // escaped from four regular expressions matched against stdout.
+    //
+    // Everywhere else the same condition means "I cannot safely proceed to a
+    // submission", and stays exit 1.
+    if (cmd == AscCommand.awaitPreviews) {
+      stderr.writeln('asc_upload: $e');
+      stderr.writeln(
+        '  Re-run `cux_ship appstore wait-previews` to keep waiting; nothing '
+        'is re-uploaded.',
+      );
+      exitCode = previewsPendingExit;
+      return;
+    }
+    // **The clause the sibling above exists to justify, missing for one
+    // release.** Replacing the wait's `AscApiException(504)` with a type that
+    // says more took its catch clause away with it: the deadline exited 255
+    // with a stack trace over the message, which is precisely the failure
+    // `ProcessingTimeout`'s comment describes — and worse here, because this
+    // exception's entire value is its wording and the outcome it reports is
+    // one the design document calls *ordinary*.
+    //
+    // Exit 1, not [previewsPendingExit]. That code belongs to `appstore
+    // wait-previews`, which does not exist yet; here the deadline means "I
+    // cannot safely proceed to a submission", which is the same fatal thing
+    // the 504 meant. Reserving a code is not the same as spending it.
     stderr.writeln('asc_upload: $e');
     _reportStateLeftBehind(store);
     exitCode = 1;

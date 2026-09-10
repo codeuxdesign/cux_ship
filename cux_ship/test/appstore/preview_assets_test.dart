@@ -807,13 +807,122 @@ void main() {
         ]),
       );
 
-      expect(said, contains('Apple still reports 00:00:05:01'));
-      expect(said, contains('Re-running'));
+      // What was observed and what to do, with no cause offered: a wrong
+      // hypothesis forecloses the search, and "still reports" asserts a
+      // continuation of a state nobody has established.
+      expect(said, contains('and Apple reports 00:00:05:01'));
+      expect(said, isNot(contains('still reports')));
+      expect(said, isNot(contains('may still be being cut')));
+      // The second sentence is the useful half — the cheap next action, and
+      // the reassurance that a re-run costs no upload.
+      expect(said, contains('Re-running publishes nothing'));
+      // **`moved from` is the discriminator**, not the timecode: both branches
+      // now name the frame that was asked for, and only the success branch
+      // claims Apple took it. Asserting on the timecode matched the request
+      // this line legitimately quotes.
       expect(
         said,
-        isNot(contains('poster frame 00:00:02:06,')),
+        isNot(contains('moved from')),
         reason: 'a write that did not land is not a poster frame that moved',
       );
+    });
+
+    test(
+      '--skip-waiting uploads, does not wait, and says the frame is unset',
+      () async {
+        // **The flag reached the metadata path for the first time here.** It is
+        // declared on `upload` and was read only inside the artifact branch, so
+        // the one command that publishes a preview never consulted it.
+        //
+        // Skipping the wait skips the poster-frame assertion with it, which is
+        // louder than the TestFlight notes the flag already defers: Apple
+        // discards the timecode sent at reservation, so an un-asserted preview
+        // poses at Apple's default — invisible rather than absent, and
+        // unchangeable after approval.
+        final client = _FakeClient();
+
+        final said = await _printed(
+          () => storeOf(client).replacePreviews(_localization, 'IPHONE_67', [
+            _video('promo.mp4', 'bytes', timeCode: '00:00:02:06'),
+          ], skipWaiting: true),
+        );
+
+        // Uploaded and committed — the transfer is the part that was asked for.
+        expect(client.uploads, hasLength(1));
+        expect(said, contains('sent promo.mp4'));
+        // But not waited on, and not asserted.
+        expect(
+          client.requests.where((r) => r.startsWith('GET /v1/appPreviews/')),
+          isEmpty,
+          reason: 'the wait polls that path, and there was to be no wait',
+        );
+        expect(_framePatches(client), isEmpty);
+        expect(said, contains('poster frame is not set yet'));
+      },
+    );
+
+    test(
+      'the poster-frame report can be sent somewhere other than stdout',
+      () async {
+        // **`wait-previews --json --metadata` asserts poster frames, and that is
+        // a write that announces itself.** Every line here — the store's report
+        // and `Writer`'s own `    asking for poster frame …` — went to stdout
+        // unconditionally, so it would have landed in front of the document and
+        // made the whole of stdout unparseable. The failure arrives as a parse
+        // error about character 1, naming neither the line nor the write.
+        //
+        // Asserted on *both* sinks: that the report reached the given one, and
+        // that stdout stayed empty. Checking only the first would pass on a
+        // version that wrote to both.
+        final captured = _MemoryStdout();
+        final client = _FakeClient(
+          sets: [_set('IPHONE_67')],
+          published: [
+            _preview(
+              fileName: 'promo.mp4',
+              checksum: checksumOf('bytes'.codeUnits),
+              videoState: 'COMPLETE',
+              frameTimeCode: '00:00:05:01',
+            ),
+          ],
+        );
+        final store = AppStore(
+          client,
+          Writer(client, dryRun: false, out: captured),
+          platform: AscPlatform.ios,
+        );
+
+        final onStdout = await _printed(
+          () => store.assertPosterFramesOn(_localization, 'IPHONE_67', [
+            _video('promo.mp4', 'bytes', timeCode: '00:00:02:06'),
+          ], out: captured),
+        );
+
+        await captured.close();
+
+        expect(captured.buffer.toString(), contains('promo.mp4'));
+        expect(
+          onStdout,
+          isEmpty,
+          reason: 'a document is on stdout; none of this may join it',
+        );
+      },
+    );
+
+    test('a skipped wait records what the caller must finish', () async {
+      // The caller prints the follow-up command, and it knows the bundle id
+      // and version name that `replacePreviews` does not — so what crosses
+      // between them is this list.
+      final client = _FakeClient();
+      final store = storeOf(client);
+
+      await _printed(
+        () => store.replacePreviews(_localization, 'IPHONE_67', [
+          _video('promo.mp4', 'bytes'),
+        ], skipWaiting: true),
+      );
+
+      expect(store.previewsLeftIngesting, ['en-US/IPHONE_67']);
     });
 
     test('the matching set is the one replaced, and only it', () async {
@@ -950,6 +1059,91 @@ void main() {
       );
     });
 
+    test(
+      'a caller reporting its own way gets a heartbeat, not one line',
+      () async {
+        // The callback was gated on a state *transition*, so a preview sitting
+        // at PROCESSING for hours reported once and then nothing — the opposite
+        // of the heartbeat its own doc promises, and a consumer using it for
+        // liveness would conclude the process had hung.
+        final client = _FakeClient()
+          ..polls = [
+            _preview(fileName: 'promo.mp4', videoState: 'PROCESSING'),
+            _preview(fileName: 'promo.mp4', videoState: 'PROCESSING'),
+            _preview(
+              fileName: 'promo.mp4',
+              videoState: 'COMPLETE',
+              frameState: 'COMPLETE',
+            ),
+          ];
+
+        final seen = <PreviewProcessingProgress>[];
+        await _printed(
+          () => storeOf(client).awaitPreviewProcessing(
+            ['preview-1'],
+            poll: Duration.zero,
+            onProgress: seen.add,
+          ),
+        );
+
+        // Three polls, three reports — the middle one carries no change.
+        expect(seen, hasLength(3));
+        expect(seen.map((p) => p.videoState), [
+          'PROCESSING',
+          'PROCESSING',
+          'COMPLETE',
+        ]);
+      },
+    );
+
+    test('a caller reporting its own way gets no prose on stdout', () async {
+      // `cli.dart` states the invariant this protects: under `--json`, stdout
+      // carries the document and nothing else. Two writeln calls in this loop
+      // were unconditional, so the planned `wait-previews --json` would have
+      // emitted prose into the document stream on exactly the runs that wait.
+      final client = _FakeClient()
+        ..polls = [
+          _preview(fileName: 'promo.mp4', videoState: 'PROCESSING'),
+          _preview(
+            fileName: 'promo.mp4',
+            videoState: 'COMPLETE',
+            frameState: 'COMPLETE',
+          ),
+        ];
+
+      final said = await _printed(
+        () => storeOf(client).awaitPreviewProcessing(
+          ['preview-1'],
+          poll: Duration.zero,
+          onProgress: (_) {},
+        ),
+      );
+
+      expect(said, isEmpty);
+    });
+
+    test('the grace-period decision reaches a caller that took over', () async {
+      // `COMPLETE` beside a null frame state reads identically whether the
+      // wait has given up on the frame or is still counting — a decision the
+      // two states cannot express, and one the default path announces in
+      // prose the callback never saw.
+      final client = _FakeClient()
+        ..polls = [_preview(fileName: 'promo.mp4', videoState: 'COMPLETE')];
+
+      final seen = <PreviewProcessingProgress>[];
+      final said = await _printed(
+        () => storeOf(client).awaitPreviewProcessing(
+          ['preview-1'],
+          poll: Duration.zero,
+          framePolls: 2,
+          onProgress: seen.add,
+        ),
+      );
+
+      expect(seen.any((p) => p.frameStateAbandoned), isTrue);
+      expect(said, isEmpty, reason: 'the caller reports, not this function');
+    });
+
     test('a failed poster frame is a rejection, not a success', () async {
       final client = _FakeClient()
         ..polls = [
@@ -1044,17 +1238,98 @@ void main() {
           ),
         ),
         throwsA(
-          isA<AscApiException>().having(
+          isA<PreviewsPending>().having(
             (e) => e.toString(),
             'message',
             allOf(
               contains('24 hours'),
               contains('not a failure'),
               contains('uploaded'),
+              // **Each asset's own state, not just a count.** A caller told
+              // "1 preview(s) still processing" cannot tell a video still
+              // uploading from a poster frame Apple has not cut, and those
+              // want different things done about them.
+              contains('video PROCESSING'),
             ),
           ),
         ),
       );
+    });
+
+    test(
+      'the pending outcome carries each preview, not just a count',
+      () async {
+        // `PreviewsPending` is a distinct type from `ProcessingTimeout` because
+        // it is a distinct outcome: a build that never appears has usually been
+        // refused, and Apple says so only by e-mail. Nothing is wrong here —
+        // Apple is simply not done, which is why it carries the states rather
+        // than an apology.
+        final client = _FakeClient()
+          ..polls = [_preview(fileName: 'promo.mp4', videoState: 'PROCESSING')];
+
+        await expectLater(
+          _printed(
+            () => storeOf(client).awaitPreviewProcessing(
+              ['preview-1'],
+              timeout: Duration.zero,
+              poll: Duration.zero,
+            ),
+          ),
+          throwsA(
+            isA<PreviewsPending>()
+                .having((e) => e.pending, 'pending', hasLength(1))
+                .having(
+                  (e) => e.pending.single.fileName,
+                  'fileName',
+                  'promo.mp4',
+                )
+                .having(
+                  (e) => e.pending.single.videoState,
+                  'videoState',
+                  'PROCESSING',
+                )
+                .having((e) => e.pending.single.done, 'done', isFalse),
+          ),
+        );
+      },
+    );
+
+    test('a caller can report the wait its own way', () async {
+      // The reason `BuildProcessingProgress` exists, one asset along: a
+      // consumer streaming a wait Apple documents in hours wants a heartbeat
+      // with its own timestamps and its own destination, which it cannot have
+      // if the only report is a line on this process's stdout.
+      final client = _FakeClient()
+        ..polls = [
+          _preview(fileName: 'promo.mp4', videoState: 'PROCESSING'),
+          _preview(
+            fileName: 'promo.mp4',
+            videoState: 'COMPLETE',
+            frameState: 'COMPLETE',
+          ),
+        ];
+
+      final seen = <PreviewProcessingProgress>[];
+      final said = await _printed(
+        () => storeOf(client).awaitPreviewProcessing(
+          ['preview-1'],
+          poll: Duration.zero,
+          onProgress: seen.add,
+        ),
+      );
+
+      expect(seen.map((p) => p.videoState), ['PROCESSING', 'COMPLETE']);
+      expect(seen.last.done, isTrue);
+      expect(seen.first.done, isFalse);
+      // A caller that took the callback gets the report *instead of* the
+      // default line, not as well as it.
+      //
+      // **Matched on the filename, not on the elapsed seconds.** `at 0s:` is
+      // only the default line's text while both zero-delay polls land inside
+      // the same second; on a loaded machine it prints `at 1s:` and the
+      // assertion passes with the default output still there, so deleting the
+      // `onProgress` branch would have survived.
+      expect(said, isNot(contains('promo.mp4 at')));
     });
 
     test('a dry run waits for nothing', () async {

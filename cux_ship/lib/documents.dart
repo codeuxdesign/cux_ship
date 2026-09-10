@@ -51,6 +51,8 @@ export 'src/documents.dart'
     show
         AppStoreBuildEntry,
         AppStoreBuildsDocument,
+        AppStorePreviewEntry,
+        AppStorePreviewsDocument,
         AppStoreState,
         AppStoreVersionEntry,
         AppStoreVersionsDocument,

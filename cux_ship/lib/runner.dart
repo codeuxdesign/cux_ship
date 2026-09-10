@@ -380,6 +380,15 @@ class _AscSubcommand extends Command<void> {
       'Wait for a build Apple is processing, and say which of the three ways '
           'it ended. Needs only the API key, so it belongs on a cheap runner '
           'rather than the macOS one that built it.',
+    AscCommand.previews =>
+      'Print the preview videos on an App Store version, with both ingestion '
+          'states and the poster frame each is posed at — the one input that '
+          'cannot be changed after approval, and which no other output shows.',
+    AscCommand.awaitPreviews =>
+      'Wait for the preview videos on an App Store version, which Apple '
+          'ingests far more slowly than a build — reaching the deadline is '
+          'reported rather than treated as a failure, and exits its own code. '
+          'With --metadata it also asserts the poster frames.',
     AscCommand.signing =>
       'Print the certificates, App IDs and profiles the developer account '
           'holds, so drift from automatic signing is visible. Reads only, and '

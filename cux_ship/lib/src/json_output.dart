@@ -23,6 +23,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'appstore/app_store.dart';
 import 'appstore/reads.dart';
 import 'documents.dart';
 import 'play/reads.dart';
@@ -37,6 +38,14 @@ const appStoreBuildsSchema = 1;
 
 /// The schema `appstore versions` declares. See [appStoreBuildsSchema].
 const appStoreVersionsSchema = 1;
+
+/// The schema `appstore previews` declares.
+///
+/// **Per kind rather than one number for the file**, which is the rule
+/// `json-output.md` sets: a document nobody has changed does not get a bump
+/// because a sibling did, and a consumer decoding one kind is not told to
+/// re-read another. See [appStoreBuildsSchema].
+const appStorePreviewsSchema = 1;
 
 /// The schema `play tracks` declares. See [appStoreBuildsSchema].
 const playTracksSchema = 1;
@@ -123,6 +132,47 @@ AppStoreBuildEntry _build(AppStoreBuild build) {
     display: <String>[build.line],
   );
 }
+
+/// `cux_ship appstore previews --json`.
+///
+/// **Apple's field names survive into the document**, which the one consumer
+/// asked for explicitly: `videoDeliveryState`, `previewFrameImage` and
+/// `previewFrameTimeCode` are what the App Store Connect reference calls
+/// these, so a reader can hold the two side by side. `done` is this package's
+/// reading and is named as a separate field rather than replacing either
+/// state — the same split the build documents make.
+AppStorePreviewsDocument appStorePreviewsDocument(
+  List<PreviewOnVersion> previews, {
+  required AscPlatform platform,
+  required String bundleId,
+  required String versionName,
+  required List<String> display,
+}) => AppStorePreviewsDocument(
+  schema: appStorePreviewsSchema,
+  kind: DocumentKind.appStorePreviews,
+  platform: platform,
+  bundleId: bundleId,
+  versionName: versionName,
+  previews: <AppStorePreviewEntry>[
+    for (final on in previews) ...[
+      AppStorePreviewEntry(
+        id: on.preview.id,
+        locale: on.locale,
+        previewType: on.previewType,
+        fileName: on.preview.fileName,
+        videoDeliveryState: on.preview.videoState,
+        previewFrameImageState: on.preview.frameState,
+        previewFrameTimeCode: on.preview.frameTimeCode,
+        done:
+            on.preview.videoState == 'COMPLETE' &&
+            on.preview.frameState == 'COMPLETE',
+      ),
+    ],
+  ],
+  // Never empty, for the reason the versions document spells out: a listing
+  // with no previews and a reader that forgot to render must not look alike.
+  display: display,
+);
 
 /// `cux_ship appstore versions --json`.
 AppStoreVersionsDocument appStoreVersionsDocument(
