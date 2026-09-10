@@ -108,6 +108,22 @@ commit. Nothing checks this: publishing `cux_ship` against a constraint that is
 too loose is accepted by pub and fails later, in a consumer's resolution, as a
 compile error in a package they did not write.
 
+**Such a branch has a red `Resolve as a git dependency` check, and it is
+expected.** That job builds the branch's `cux_ship` against the *published*
+`cux_ship_verify`, which does not have the new API — so it fails to compile on
+names that do not exist yet, while every other check is green because the
+workspace resolves the sibling from disk. Nothing can make it green before the
+publish: raising the constraint on the branch is the one thing that would, and
+it breaks `pub get` for the whole repository instead.
+
+Two consequences worth being deliberate about. It is safe to merge with that
+check red, provided it is the *only* red one and its failure is undefined names
+from `cux_ship_verify` rather than anything else. And the branch cannot be
+consumed as a git ref while it is red — a consumer wanting to try it before the
+publish needs a `dependency_overrides` on `cux_ship_verify` at the same ref,
+which is worth saying out loud because "pin the branch" is the obvious
+suggestion and it does not work.
+
 ## What is not automated, and why
 
 **Nothing warns that a version line is stale, and nothing warns that a publish

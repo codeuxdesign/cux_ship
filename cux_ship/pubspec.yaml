@@ -67,6 +67,21 @@ dependencies:
   # constraint names a version that does not exist on pub.dev yet, and CI's
   # consumer probe goes red every release. Raise it only when something here
   # actually needs a newer cux_ship_verify.
+  #
+  # **And when something here does need one, that probe is red until the
+  # publish, unavoidably — which is the case the paragraph above does not
+  # cover.** A branch adding API to cux_ship_verify and using it from cux_ship
+  # cannot go green: the workspace resolves the sibling from disk, so
+  # everything passes locally, while `Resolve as a git dependency` builds the
+  # branch's cux_ship against the *published* verify and fails to compile on
+  # names that do not exist there yet. Raising the constraint on the branch
+  # does not fix it and breaks `pub get` for the whole repository instead.
+  #
+  # So the check is red on purpose for exactly one shape of change, and green
+  # again the moment cux_ship_verify publishes and this line moves in the same
+  # release commit. It is written here because red-on-purpose and red-by-
+  # accident look identical to whoever sees the board next, and this is the
+  # line they will be sent to.
   cux_ship_verify: ^1.10.0
   # ES256 over the .p8 private key. App Store Connect accepts nothing else, and
   # package:crypto has no ECDSA, so this or pointycastle-by-hand were the
