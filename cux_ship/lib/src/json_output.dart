@@ -103,37 +103,17 @@ AppStoreBuildEntry _build(AppStoreBuild build) => AppStoreBuildEntry(
   // on.** A consumer built its Apple advice on `usable == false` and told the
   // operator to wait for `VALID` in every case — right for `PROCESSING`, wrong
   // for `FAILED` and `INVALID`, which are Apple refusing the binary and never
-  // change again. "Wait forever" was the advice for exactly the two states
-  // where the answer is "upload a different build".
+  // change again.
   //
-  // Null rather than false for a state nobody here names, because whether
-  // waiting helps is the question an unrecognized state most plainly cannot
-  // answer. An expired build is settled whatever its processing said.
-  mayBecomeUsable: _mayBecomeUsable(build),
+  // **The rule itself is on [ProcessingState], not here**, so the three copies
+  // of it already living in `app_store.dart` and `cli.dart` have somewhere to
+  // move to: the next change deletes them rather than reconciling a fourth.
+  needsNewUpload: ProcessingState.needsNewUpload(
+    ProcessingState.read(build.processingState),
+    expired: build.expired,
+  ),
   display: <String>[build.line],
 );
-
-/// **Switched on the enum, not on Apple's strings.** A `switch` case pattern
-/// has to be a compile-time constant and `ProcessingState.processing.wire` is
-/// not one, so this branched on string literals until somebody noticed that
-/// `'PROCESSING'` was written in the enum and again here. Reading to a member
-/// first buys two things: one copy of each spelling, and exhaustiveness — a
-/// member added to [ProcessingState] now breaks this switch rather than
-/// falling silently into a default that answers `null`.
-bool? _mayBecomeUsable(AppStoreBuild build) {
-  if (build.expired) {
-    return false;
-  }
-  return switch (ProcessingState.read(build.processingState)) {
-    ProcessingState.processing => true,
-    ProcessingState.valid ||
-    ProcessingState.failed ||
-    ProcessingState.invalid => false,
-    // The store sent nothing, or sent something nobody here names. Whether
-    // waiting helps is the question neither can answer.
-    ProcessingState.unknown || null => null,
-  };
-}
 
 /// `cux_ship appstore versions --json`.
 AppStoreVersionsDocument appStoreVersionsDocument(

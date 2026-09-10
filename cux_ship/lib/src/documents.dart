@@ -23,8 +23,14 @@
 // `status`.
 //
 // Two fields rather than one, and they are two different facts: what this
-// package *understood*, and what the store *said*. A caller writes against the
-// first and falls back to the second in the one case the first cannot cover.
+// package *understood*, and what the store *said*.
+//
+// **The store's word is the authoritative one; ours is a reading of it.** That
+// ordering matters more than it sounds. A caller writes against ours in the
+// ordinary case because it is closed and does not move — but when ours says
+// `unknown`, the raw field is not a second-best source, it is the whole of
+// what is known. Calling it a "fallback" invites reaching for it last in
+// precisely the case where it is all there is.
 //
 // **`unknown` is a value of our vocabulary rather than a hole in it.** It has
 // a `wire` spelling of its own, so it survives a round trip — which the
@@ -82,8 +88,8 @@ enum DocumentKind {
 @JsonEnum(valueField: 'wire')
 enum ProcessingState {
   /// Apple is still processing the upload. Not releasable *yet* — see
-  /// [AppStoreBuildEntry.mayBecomeUsable], which is the difference between
-  /// this and [failed].
+  /// [AppStoreBuildEntry.needsNewUpload], which is the difference between this
+  /// and [failed].
   processing('processing', 'PROCESSING'),
 
   /// Processed and usable, subject to expiry — see [AppStoreBuildEntry.usable].
@@ -128,9 +134,44 @@ enum ProcessingState {
           (s) => s.appleValue == appleValue,
           orElse: () => unknown,
         );
+
+  /// Whether a build in [state] can only be fixed by uploading another one.
+  ///
+  /// **The single definition of terminal-versus-transient**, and the reason it
+  /// is here rather than inside the encoder: `'VALID'`, `'FAILED'` and
+  /// `'INVALID'` are compared as string literals in about eleven places in
+  /// `app_store.dart` and `cli.dart`, and three of those are this same rule
+  /// written out again. Putting it on the vocabulary means the next change is
+  /// a deletion of those three rather than a reconciliation with a fourth.
+  ///
+  /// True for [failed] and [invalid], which are Apple refusing the binary, and
+  /// for any expired build — **including a [valid] one**, which is the case a
+  /// "will waiting help" phrasing flattens: expiry is terminal reached from a
+  /// healthy state, and answering it the same way as a healthy build hides it.
+  /// Null when the state is [unknown] or absent, on the same terms as every
+  /// other derived answer here.
+  static bool? needsNewUpload(ProcessingState? state, {required bool expired}) {
+    if (expired) {
+      return true;
+    }
+    return switch (state) {
+      valid || processing => false,
+      failed || invalid => true,
+      unknown || null => null,
+    };
+  }
 }
 
-/// This package's vocabulary for Apple's `appStoreState`.
+/// This package's vocabulary for a *version's* `appStoreState`.
+///
+/// **A version's, and not an `appInfos` record's — the same spellings govern
+/// two different rules.** A version in `WAITING_FOR_REVIEW` is with Apple and
+/// a write against it is rightly refused; the `appInfos` record beside it
+/// still accepts a `PATCH`, measured against a live account. This package
+/// keeps two sets for that reason (`editableVersionStates` and
+/// `editableAppInfoStates`, which differ by exactly that state), and a
+/// consumer meeting these words on an app info will reasonably reach for this
+/// enum and get the version's rule. It is not the app info's.
 ///
 /// **Incomplete on purpose, and safely so.** These are the states this
 /// repository has handled or observed; Apple's vocabulary is longer and moves.
@@ -142,6 +183,9 @@ enum AppStoreState {
   prepareForSubmission('prepareForSubmission', 'PREPARE_FOR_SUBMISSION'),
   readyForReview('readyForReview', 'READY_FOR_REVIEW'),
   waitingForReview('waitingForReview', 'WAITING_FOR_REVIEW'),
+  // Named on a consumer's evidence rather than this repository's: their tree
+  // has met it, and `app_info_states_test.dart` here carries it too.
+  accepted('accepted', 'ACCEPTED'),
   rejected('rejected', 'REJECTED'),
   developerRejected('developerRejected', 'DEVELOPER_REJECTED'),
   metadataRejected('metadataRejected', 'METADATA_REJECTED'),
@@ -292,7 +336,7 @@ class AppStoreBuildEntry {
     required this.uploadedDate,
     required this.expired,
     required this.usable,
-    required this.mayBecomeUsable,
+    required this.needsNewUpload,
     required this.display,
   });
 
@@ -313,22 +357,27 @@ class AppStoreBuildEntry {
   /// not apply.
   final int? buildNumberAsInt;
 
-  /// **This package's reading of Apple's `processingState`**, or null when
-  /// Apple sent none.
+  /// **This package's reading of [processingStateRaw]**, or null when Apple
+  /// sent nothing.
   ///
-  /// Write against this: it is a documented, closed vocabulary, and
-  /// [ProcessingState.unknown] is a value of it rather than a hole in it.
-  /// [processingStateRaw] is what Apple actually said, and is the fallback for
-  /// the case this does not name. Most callers want [usable] or
-  /// [mayBecomeUsable] instead of either.
+  /// Convenient rather than authoritative: a documented, closed vocabulary
+  /// that does not move when Apple's does, so it is what to write against in
+  /// the ordinary case. [ProcessingState.unknown] means this version had no
+  /// word for what Apple sent, and [processingStateRaw] is then the only
+  /// information there is. Most callers want [usable] or [needsNewUpload]
+  /// instead of either.
   @JsonKey(unknownEnumValue: ProcessingState.unknown)
   final ProcessingState? processingState;
 
-  /// Apple's `processingState`, exactly as sent, or null when it was absent.
+  /// **Apple's `processingState`, exactly as sent — the authoritative value.**
+  /// Null when Apple sent none.
   ///
-  /// **The fallback, and the only thing that survives Apple shipping a state
-  /// this version does not name** — [processingState] is
-  /// [ProcessingState.unknown] then, and this says what the word was.
+  /// [processingState] is this package's *reading* of this field, not the
+  /// other way round. Calling this one a fallback would be backwards, and
+  /// backwards in a way that costs something: when the reading is
+  /// [ProcessingState.unknown] this is not a second-best source, it is the
+  /// whole of what is known — so a consumer who has internalised "raw is the
+  /// fallback" reaches for it last in the one case where it is all there is.
   final String? processingStateRaw;
 
   /// Apple's `uploadedDate`, exactly as sent.
@@ -356,8 +405,8 @@ class AppStoreBuildEntry {
   /// a refusal. Two booleans, two consequences, two shapes.
   final bool usable;
 
-  /// Whether waiting could still make this build [usable], or null when that
-  /// cannot be said.
+  /// Whether this build can only be fixed by uploading another one, or null
+  /// when that cannot be said.
   ///
   /// **[usable] alone hides the question an operator actually has**, and this
   /// field exists because that cost a consumer a real defect: it built advice
@@ -367,11 +416,19 @@ class AppStoreBuildEntry {
   /// so the advice was "wait forever" for the two states where the answer is
   /// "upload a different build".
   ///
-  /// True for a build still processing. False once the answer is settled,
-  /// whether it settled well ([usable] is then true) or badly. **Null for a
-  /// state this version does not name**, because "will waiting help" is
-  /// exactly the question an unrecognized state cannot answer.
-  final bool? mayBecomeUsable;
+  /// **Phrased as the action, and readable on its own.** An earlier draft
+  /// called this `mayBecomeUsable`, which is `false` for a perfectly healthy
+  /// `VALID` build — and `false` there reads as "give up" to anyone who has
+  /// not also read [usable] first. A pair that is only safe in one reading
+  /// order gets read in the other one, which is precisely how the defect above
+  /// happened. This one is correct alone in every state.
+  ///
+  /// False while Apple is still processing and for a usable build, true once
+  /// Apple has refused the binary **and for an expired build, including one
+  /// that processed cleanly** — expiry is terminal reached from a healthy
+  /// state, and the older phrasing gave it the same answer as a healthy build.
+  /// Null for a state this version does not name.
+  final bool? needsNewUpload;
 
   /// The lines `cux_ship appstore builds` prints for this build.
   ///

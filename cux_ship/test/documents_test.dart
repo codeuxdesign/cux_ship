@@ -66,7 +66,7 @@ Map<String, dynamic> _buildsJson({
       'uploadedDate': '2026-09-09T14:02:11-07:00',
       'expired': false,
       'usable': true,
-      'mayBecomeUsable': false,
+      'needsNewUpload': false,
       'display': ['  build 169  VALID  uploaded 2026-09-09T14:02:11-07:00'],
     },
   ],

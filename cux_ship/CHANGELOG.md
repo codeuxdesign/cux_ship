@@ -66,12 +66,18 @@ fields, both `bool?`, and the null is the point:
   `statusUnspecified`. A `bool` would have to report a possibly-healthy rollout
   as reaching nobody, or call an unrecognized state healthy. It is not a
   fraction: a 1% staged rollout and a finished one both read `true`.
-- **`mayBecomeUsable`** — whether waiting could still make a build `usable`.
-  True while Apple is processing, false once the answer is settled, null for a
-  state nobody here names. **`usable` alone hides this**, and that cost a
-  consumer a real defect: it read `usable == false` as "wait for VALID", which
-  is right for `PROCESSING` and advice to wait forever for `FAILED` and
-  `INVALID`, where Apple has refused the binary and the fix is a new upload.
+- **`needsNewUpload`** — whether a build can only be fixed by uploading
+  another. False while Apple is processing and for a usable build, true once
+  Apple has refused the binary **and for an expired build, including one that
+  processed cleanly**, null for a state nobody here names. **`usable` alone
+  hides this**, and that cost a consumer a real defect: it read
+  `usable == false` as "wait for VALID", which is right for `PROCESSING` and
+  advice to wait forever for `FAILED` and `INVALID`, where Apple has refused
+  the binary and the fix is a new upload.
+
+  Phrased as the action, and readable on its own in every state. The rule is
+  `ProcessingState.needsNewUpload`, so it has one definition rather than
+  joining the copies of it already in the App Store client.
 
 Both are emitted as fields rather than offered as Dart getters, so a shell
 caller gets them too. `usable` and `editable` stay plain `bool` and fail

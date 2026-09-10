@@ -337,7 +337,7 @@ void main() {
           'uploadedDate',
           'expired',
           'usable',
-          'mayBecomeUsable',
+          'needsNewUpload',
           'display',
         },
       );
@@ -503,12 +503,20 @@ void main() {
       expect(servingFor(null), isNull);
     });
 
-    test('and `mayBecomeUsable` separates waiting from giving up', () {
+    test('and `needsNewUpload` reads correctly in every state, alone', () {
       // **The axis `usable` hides.** A consumer built its Apple advice on
       // `usable == false` and told an operator to wait for `VALID` in every
       // case — right for PROCESSING, and "wait forever" for FAILED and
       // INVALID, which are Apple refusing the binary and never change again.
-      bool? mayBecomeUsableFor(String? state, {bool expired = false}) =>
+      //
+      // **Alone is the requirement, and it is what named this field.** An
+      // earlier draft called it `mayBecomeUsable`, which is false for a
+      // healthy `VALID` build — and false there reads as "give up" to anyone
+      // who has not also read `usable` first. A pair that is only safe in one
+      // reading order gets read in the other one, which is how the defect
+      // above happened. So each row below is asserted for what it says on its
+      // own, not for what it says next to `usable`.
+      bool? needsNewUploadFor(String? state, {bool expired = false}) =>
           ((appStoreBuildsJson(
                             buildsOf([
                               _build('169', state: state, expired: expired),
@@ -517,18 +525,25 @@ void main() {
                           )['builds']
                           as List)
                       .single
-                  as Map)['mayBecomeUsable']
+                  as Map)['needsNewUpload']
               as bool?;
 
-      expect(mayBecomeUsableFor('PROCESSING'), isTrue);
-      expect(mayBecomeUsableFor('FAILED'), isFalse, reason: 'terminal');
-      expect(mayBecomeUsableFor('INVALID'), isFalse, reason: 'terminal');
-      expect(mayBecomeUsableFor('VALID'), isFalse, reason: 'already settled');
-      // Expiry settles it whatever processing said.
-      expect(mayBecomeUsableFor('PROCESSING', expired: true), isFalse);
-      // And the question an unrecognized state most plainly cannot answer.
-      expect(mayBecomeUsableFor('SOMETHING_APPLE_ADDED'), isNull);
-      expect(mayBecomeUsableFor(null), isNull);
+      expect(needsNewUploadFor('VALID'), isFalse, reason: 'nothing to fix');
+      expect(needsNewUploadFor('PROCESSING'), isFalse, reason: 'wait, do not');
+      expect(needsNewUploadFor('FAILED'), isTrue, reason: 'Apple refused it');
+      expect(needsNewUploadFor('INVALID'), isTrue);
+
+      // **The row that decided the rename.** Expiry is terminal reached from a
+      // healthy state, and the older phrasing gave it the same answer as a
+      // healthy build — `mayBecomeUsable` was false for both `VALID` and
+      // `VALID`-but-expired, flattening the one case where the operator has
+      // work to do into the one where they do not.
+      expect(needsNewUploadFor('VALID', expired: true), isTrue);
+      expect(needsNewUploadFor('PROCESSING', expired: true), isTrue);
+
+      // And the question an unrecognized state cannot answer.
+      expect(needsNewUploadFor('SOMETHING_APPLE_ADDED'), isNull);
+      expect(needsNewUploadFor(null), isNull);
     });
 
     test('nor on the Play side, where a trailing line belongs to no track', () {

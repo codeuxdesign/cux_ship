@@ -19,7 +19,7 @@ AppStoreBuildEntry _$AppStoreBuildEntryFromJson(Map<String, dynamic> json) =>
       uploadedDate: json['uploadedDate'] as String?,
       expired: json['expired'] as bool,
       usable: json['usable'] as bool,
-      mayBecomeUsable: json['mayBecomeUsable'] as bool?,
+      needsNewUpload: json['needsNewUpload'] as bool?,
       display: (json['display'] as List<dynamic>)
           .map((e) => e as String)
           .toList(),
@@ -34,7 +34,7 @@ Map<String, dynamic> _$AppStoreBuildEntryToJson(AppStoreBuildEntry instance) =>
       'uploadedDate': instance.uploadedDate,
       'expired': instance.expired,
       'usable': instance.usable,
-      'mayBecomeUsable': instance.mayBecomeUsable,
+      'needsNewUpload': instance.needsNewUpload,
       'display': instance.display,
     };
 
@@ -118,6 +118,7 @@ const _$AppStoreStateEnumMap = {
   AppStoreState.prepareForSubmission: 'prepareForSubmission',
   AppStoreState.readyForReview: 'readyForReview',
   AppStoreState.waitingForReview: 'waitingForReview',
+  AppStoreState.accepted: 'accepted',
   AppStoreState.rejected: 'rejected',
   AppStoreState.developerRejected: 'developerRejected',
   AppStoreState.metadataRejected: 'metadataRejected',

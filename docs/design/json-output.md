@@ -517,9 +517,27 @@ precisely the two states where the answer is "upload a different build".
 
 **The one bit `usable` exposes is what made treating all four states alike
 natural**, so adding `serving` without learning from it would have propagated
-the shape. `AppStoreBuildEntry.mayBecomeUsable` is the missing axis: true while
-processing, false once settled either way, null for a state nobody names, and
-false for an expired build whatever its processing said.
+the shape. `AppStoreBuildEntry.needsNewUpload` is the missing axis.
+
+**It was called `mayBecomeUsable` first, and the review that renamed it made
+the sharper point.** The rule to aim for is not "expose the second axis" — it
+is that **every derived field reads correctly in isolation, in every state**. A
+pair that is only safe when read in the right order gets read in the other
+order, which is exactly how the defect above happened: `usable` was sitting
+there, correct, and a caller reasoned from one boolean anyway.
+
+`mayBecomeUsable` fails that test at `VALID`, where it must answer `false` and
+`false` reads as "give up" precisely where everything is fine. And the case
+that settled it is expiry: `mayBecomeUsable` is `false` for a healthy `VALID`
+build *and* for a `VALID` build that has expired, flattening the one state
+where the operator has work to do into the one where they do not.
+`needsNewUpload` separates them — `false` and `true` — and every row reads
+correctly with nothing beside it.
+
+The rule lives on `ProcessingState.needsNewUpload` rather than inside the
+encoder, so that the three copies of it already in the App Store client have
+somewhere to move to: the next change deletes them rather than reconciling
+with a fourth.
 
 `usable` and `editable` stay plain `bool` and fail closed, deliberately. **A
 boolean that gates an action should fail closed; one that reports a state

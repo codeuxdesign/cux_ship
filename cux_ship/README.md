@@ -692,12 +692,15 @@ completed rollout and one in progress, false for a halted one and an unsent
 draft, and **null when Play sent a status this version does not name** — a
 `bool` would have to report a possibly-healthy rollout as reaching nobody, or
 call an unrecognized state healthy, and both are claims nobody can stand
-behind. `mayBecomeUsable` answers *"is it worth waiting"*: true while Apple is
-processing, false once the answer is settled — `FAILED` and `INVALID` are Apple
-refusing the binary and never change — and null for a state nobody here names.
-That distinction is not academic: `usable` alone reads as "wait for VALID" for
-every state, which is advice to wait forever for the two where the fix is to
-upload a different build.
+behind. `needsNewUpload` answers *"can this only be fixed by uploading
+another"*: false while Apple is processing and for a usable build, true once
+Apple has refused the binary or the build has expired, null for a state nobody
+here names. That distinction is not academic: `usable` alone reads as "wait for
+VALID" for every state, which is advice to wait forever for the two where the
+fix is to upload a different build.
+
+Each of those reads correctly **on its own**, in every state — deliberately, so
+that no pair has to be read in a particular order to be safe.
 
 `usable` and `editable` stay plain `bool` and fail closed, so `usable == false`
 means "not known to be usable" rather than "not usable" — the right default for
