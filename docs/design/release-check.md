@@ -1,7 +1,7 @@
 # `release check` — has this version already gone out, asked of the repository
 
-Status: **draft, third pass — one adversarial and two consumer reviews folded
-in**, 21 August 2026. Not built.
+Status: **proposed**, third pass, with one adversarial and two consumer reviews
+folded in, 21 August 2026. Not built.
 
 Two repositories answer this question in shell, the answers have drifted, and one
 of the two was wrong until this afternoon — it read an upload tag as a release

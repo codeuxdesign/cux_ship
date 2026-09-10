@@ -1,7 +1,8 @@
 # Review: the `begin`/`seal` split rests on an inverted premise
 
-Status: **review of the superseded `begin`/`seal` design**, which occupied
-`build-lifecycle.md` and is now at `ec62f18` in this repository's history.
+Status: **decided**, and acted on. This is the review of the `begin`/`seal`
+design, which occupied `build-lifecycle.md` and is now at `ec62f18` in this
+repository's history.
 Written against that document, `build_manifest.dart`, `manifest_cli.dart`,
 `play/cli.dart`, `runner.dart`, and the one migrated consumer's `tool/build.sh`,
 `tool/upload.sh` and `tool/_common.sh`.

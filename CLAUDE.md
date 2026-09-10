@@ -39,3 +39,23 @@ being maintained in two places, which is how it came to be three of five.
 
 `version_test.dart` asserts `cuxShipVersion` and `pubspec.yaml` agree, so run
 this *after* the last edit rather than before it.
+
+**`tool/status.sh` says what is still open**, derived from the `Status:` line
+every document in `docs/design/` carries:
+
+```bash
+tool/status.sh             # everything, grouped
+tool/status.sh open        # one state
+```
+
+Four words — `open`, `proposed`, `decided`, `built` — and
+`design_status_test.dart` reads them out of the script and fails a document
+that uses a fifth, because a status the index does not recognize does not
+error: it disappears from the report, and a short list of open questions is
+believed.
+
+**Open questions live in the design document that argues them, not in a
+tracker.** GitHub issues are for defects and anything reported from outside;
+`issue_tracker:` in all three pubspecs points there. And this repository has no
+`TODO` comments anywhere, on purpose — a tag records that somebody once had a
+thought, where a comment records what the thought was.

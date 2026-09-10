@@ -167,12 +167,12 @@ caller of that callback. Existing behaviour is unchanged because
 
 ## Was a library the right answer, or would `--json` have been?
 
-Status: **answered in part**, 10 September 2026. Raised by the consumer this
-API was built for, after living with it, and recorded a day before it was acted
-on. The transport half is decided and specified in
-[json-output.md](json-output.md) — `--json`, carrying the rendered lines. What
-stays open is whether `read.dart` should have existed at all, and the sections
-below are unchanged because nothing about that was settled.
+Status: **open**, 10 September 2026. Raised by the consumer this API was built
+for, after living with it, and recorded a day before it was acted on. The
+transport half is decided and specified in [json-output.md](json-output.md) —
+`--json`, carrying the rendered lines. What this status names is the half that
+stays open: whether `read.dart` should have existed at all. The sections below
+are unchanged, because nothing about that was settled.
 
 ### The gap in the decision above
 

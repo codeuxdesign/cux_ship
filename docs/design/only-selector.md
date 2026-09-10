@@ -320,7 +320,7 @@ covered only because it never passes through sops.
 
 ## `secrets exec` strips it too, since 4.2.0
 
-Status: **decided and built**, 9 September 2026. Found by a consumer's review,
+Status: **built**, 9 September 2026. Found by a consumer's review,
 verified here, and shipped once the cost had been measured rather than guessed.
 
 ### The finding

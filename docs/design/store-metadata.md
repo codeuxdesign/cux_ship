@@ -1,7 +1,7 @@
 # Store metadata and changelogs: what to build
 
-Status: **decisions pending**. The analysis is settled; three decisions below
-need a yes or a no, and two questions raised at 23 locales are undecided.
+Status: **open**. The analysis is settled; three decisions below need a yes or
+a no, and two questions raised at 23 locales are undecided.
 Nothing here is implemented, with one amendment: the TestFlight-group section
 is built as of 25 August 2026 — see the note that closes it, including where
 the implementation diverged from the sketch.

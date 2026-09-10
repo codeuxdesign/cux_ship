@@ -1,6 +1,6 @@
 # Store image rules: what is refused, and on whose authority
 
-Status: **implemented**, in `cux_ship_verify/lib/store_image.dart`. This is the
+Status: **built**, in `cux_ship_verify/lib/store_image.dart`. This is the
 research and the decisions behind `imageEncodingProblem`, which both store trees
 and the Play uploader call.
 
