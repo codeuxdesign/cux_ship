@@ -643,10 +643,24 @@ means two things:
 | **3** | upload collision | Apple or Play already holds this build number |
 | **4** | previews still ingesting | `appstore wait-previews` reached its deadline |
 | **5** | no such version | Apple holds no version by the name that was asked for |
-| **64** | usage | the arguments were wrong; nothing ran |
+| **64** | the parser refused | an unknown option, a missing value, an unknown command |
 | **255** | a crash | an exception nothing named — the stack trace is the report |
 
-**Two exceptions to the table, and both matter more than the rows.**
+**64 is the argument *parser*, and not every wrong argument reaches it.** A
+flag the parser accepts and the command then refuses — `--json` without
+`--dry-run`, `--metadata` with `--no-metadata`, a missing `--version-name` —
+exits **1**, because it is refused after parsing by the command itself. The two
+are worth telling apart when writing a caller: 64 means the command line did
+not parse, 1 means it parsed and the command declined it.
+
+Whether those semantic refusals *should* be 64 is a fair question and the
+answer here is "not yet": `fail()` is one function used for genuine failures as
+well — an unreadable tree, an uncommitted changelog — and moving all of it
+would change the status of things that are not usage errors at all. Splitting
+it is a change with consumer impact rather than a tidy-up. Recorded because a
+caller enumerating codes needs the present truth, not the intended one.
+
+**Two more exceptions to the table, and both matter more than the rows.**
 
 **255 is a crash, not a code.** `main` catches three types and rethrows the
 rest, deliberately: a `SocketException` mid-promote or a response shaped
@@ -668,8 +682,9 @@ the child's.
 **2, 3, 4 and 5 are not failures**, in the sense that the command did what it
 could and the answer is the exit status — but *that property is not what any of
 the numbers means*, and a caller must not treat "non-1 and non-0" as a category.
-255 and the `exec` pass-through below are the proof of that: both are non-zero,
-neither is one of these conditions.
+255 and the `exec` pass-through above are the proof of that: both are non-zero,
+and neither is one of these conditions.
+
 Each code names **one condition**, deliberately: a wrapper branching on 2 must
 not have to know which subcommand produced it, which is why
 `uploadCollisionExit` took 3 rather than reusing "there is work to do", the
@@ -697,17 +712,16 @@ for it in those words.
 
 The consequence for a caller is worth stating plainly: **enumerate the codes you
 accept, per command.** A general "this one is re-runnable" predicate written
-against 4 will silently swallow an unrelated condition the day a fifth code
-arrives. That is more tedious than a generic code and it is the honest shape —
-the alternative is a number whose meaning widens without anyone deciding it
-should.
+against 4 silently swallows an unrelated condition the day another one
+arrives — which has already happened once, to 5. That is more tedious than a
+generic code and it is the honest shape: the alternative is a number whose
+meaning widens without anyone deciding it should.
 
 ### Reading the stores as JSON
 
 **`appstore builds`, `appstore versions`, `appstore previews` and `play tracks`
-take `--json`.** For
-a caller that is not a Dart program — a shell `status`, `jq` at a terminal, a
-CI step reading one number:
+take `--json`.** For a caller that is not a Dart program — a shell `status`,
+`jq` at a terminal, a CI step reading one number:
 
 ```bash
 cux_ship appstore builds --platform ios --json | jq -r '.newestBuildNumberAsInt'

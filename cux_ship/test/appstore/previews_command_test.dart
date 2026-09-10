@@ -248,6 +248,34 @@ void main() {
     },
   );
 
+  test('--json on a version that does not exist writes no document', () async {
+    // **A consumer's error handling is built on this and nothing asserted
+    // it.** Their document reader throws before parsing whenever the status is
+    // non-zero, deliberately, *because a failure leaves stdout empty* — so a
+    // partial or stray write here would be read as a document by something
+    // that had already decided not to look.
+    //
+    // It is the pairing that matters rather than either half: exit 5 with a
+    // half-written document is worse than exit 1, because the code says
+    // "ordinary state, carry on" while the bytes say "here is an answer".
+    //
+    // The case above covers the same state without `--json`; this is the one
+    // the consumer actually runs, and it was the untested one.
+    final said = await _previews(
+      _FakeClient(versionName: null),
+      extra: ['--version-name', '1.1.6', '--json'],
+    );
+
+    expect(exitCode, noSuchVersionExit);
+    expect(
+      said.out,
+      isEmpty,
+      reason: 'nothing to decode, and a decoder is told so by the status',
+    );
+    // The reason is still readable by a person, on the stream for it.
+    expect(said.err, contains('no App Store version 1.1.6'));
+  });
+
   test('a version with no previews says so', () async {
     final said = await _previews(_FakeClient());
 
