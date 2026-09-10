@@ -288,7 +288,15 @@ enum ReleaseType {
 /// other never started. Reach for the status when the next action differs.
 @JsonEnum(valueField: 'wire')
 enum PlayReleaseStatus {
-  /// Fully rolled out to the track's audience.
+  /// The rollout is finished — no staged fraction is still climbing.
+  ///
+  /// **Not "everybody has it", and Google's own sentence is where that
+  /// misreading comes from.** The Android Publisher documentation says a
+  /// `completed` release's *"APKs are being served to all users"*, which is
+  /// false while Google still has the release in review: the Play Console shows
+  /// **In review** and no user on that track can install it. The status field
+  /// describes the *rollout* the developer configured, and Play's API carries
+  /// no app-review state anywhere — [serving] says the rest.
   completed('completed', 'completed'),
 
   /// A staged rollout is under way — some of the audience has it. The
@@ -334,7 +342,13 @@ enum PlayReleaseStatus {
           orElse: () => unknown,
         );
 
-  /// Whether a release in [status] is in front of any of the track's audience.
+  /// Whether a release in [status] is *configured* to reach the track's
+  /// audience.
+  ///
+  /// **It says nothing about whether Google has approved it.** The Play
+  /// Developer API carries no app-review state on any of its resources, so a
+  /// `completed` production release can sit **In review** for days with this
+  /// answering true and nobody able to install it. See [completed].
   ///
   /// **The definition of [PlayReleaseEntry.serving], reachable.** It was a
   /// private function in the encoder while its twin,
@@ -813,13 +827,28 @@ class PlayReleaseEntry {
   /// The highest of [versionCodes], or null when the release serves none.
   final int? newestVersionCode;
 
-  /// Whether Play is still handing this release to new users, or null when
-  /// that cannot be said.
+  /// Whether the rollout is still configured to hand this release to new
+  /// users, or null when that cannot be said.
   ///
   /// **The question, rather than the vocabulary**: true for a completed
   /// rollout and for one still in progress, false for a halted one and for an
   /// unsent draft. A caller asking this never has to learn Play's status
   /// strings.
+  ///
+  /// **It is not "the release is live", and the gap is Google's review.** The
+  /// Play Developer API carries no app-review state on any resource, so a
+  /// `completed` production release that Google has not yet approved answers
+  /// `true` here while the Play Console says **In review** and no user can
+  /// install it. A caller rendering a store-status column must not print this
+  /// as *live*; print the rollout, and say nothing the API did not.
+  ///
+  /// This is the second correction to this sentence of the same shape as the
+  /// paragraph below, and the two together are the argument for the wording:
+  /// **the field is about the rollout the developer configured, and every
+  /// reading of it as availability has so far been wrong.** The first was found
+  /// by a field arriving beside it; the second by a person opening the Play
+  /// Console after this package's own consumer reported a release live that was
+  /// not. See [PlayReleaseStatus.completed].
   ///
   /// **"Still being handed out" and not "in front of anybody", and the
   /// difference is [PlayReleaseStatus.halted].** This field said the second

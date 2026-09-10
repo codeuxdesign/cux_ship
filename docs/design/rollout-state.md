@@ -381,6 +381,53 @@ This is `docs/CONTRIBUTING.md` §"A claim about both stores is checked against
 both", one level down — a sentence written about a shared verb that is true of
 some of its cases.
 
+### The same sentence was wrong a second time, and Google wrote the trap
+
+Status: **decided**, 10 September 2026 — reported from a production release, and
+again the wording rather than the switch.
+
+The corrected sentence above still claimed availability: *"still handing this
+release to new users"*. A consumer promoted 1.1.6 to Play production, this
+package's document answered `serving: true`, their status grid printed **LIVE**,
+and the Play Console said **In review · Full rollout**. Nobody could install it.
+The developer had configured a full rollout; Google had not approved the
+release.
+
+**The review state is genuinely unavailable, not merely unread.** The consumer
+checked all thirty-two resources in `androidpublisher/v3` and nothing exposes
+app-review state — `ReviewsResource` is *user* reviews. `TrackRelease.status` is
+the only status there is, and its four values are about the rollout.
+
+**Google's own documentation is what makes this easy to get wrong**, which is
+worth recording because it will catch the next reader too:
+
+> The release will have no further changes. Its APKs **are being served to all
+> users**, unless they are eligible to APKs of a more recent release.
+
+That sentence is false while the release is in review, and it is the sentence a
+reader of the API builds their model from. This package's wording came out of
+it, and so did the consumer's.
+
+**Two corrections of the same shape is the finding, not one bug twice.** Both
+times the boolean was right and the sentence overreached, in the same direction:
+toward availability, away from configuration. So the wording now names what the
+field *is* — the rollout the developer configured — rather than a better
+approximation of what it is not, and [PlayReleaseStatus.completed] carries the
+caveat too, because that is where Google's misleading sentence would otherwise
+be paraphrased.
+
+**The asymmetry with the App Store is entirely Play's, and it is not fixable
+here.** `READY_FOR_SALE` comes from Apple and does mean available;
+`WAITING_FOR_REVIEW` is a state Apple names and this package carries. Play names
+no such thing. §"`IN_REVIEW` is not in the vocabulary" above is about a state
+Apple *has* that this package failed to carry — the opposite problem, and worth
+not confusing with this one.
+
+**And it took a human with a browser.** Every automated signal agreed with
+itself: Play's API, this package's document, the consumer's grid. That is the
+shape in which a status tool is most dangerous, because its whole purpose is to
+save somebody opening the console.
+
 ### What the number is not
 
 Three refusals, in the doc comment rather than here, because a number carried
