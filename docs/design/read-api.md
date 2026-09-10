@@ -171,8 +171,12 @@ Status: **open**, 10 September 2026. Raised by the consumer this API was built
 for, after living with it, and recorded a day before it was acted on. The
 transport half is decided and specified in [json-output.md](json-output.md) —
 `--json`, carrying the rendered lines. What this status names is the half that
-stays open: whether `read.dart` should have existed at all. The sections below
-are unchanged, because nothing about that was settled.
+stays open: whether `read.dart` should have existed at all.
+
+The sections that follow were written before that transport existed and are
+kept as they were, because the argument is the useful part. Two later
+additions say so where they sit: §Sequencing, whose constraint has since been
+discharged, and the closing section, which is what the discharge left behind.
 
 ### The gap in the decision above
 
@@ -285,38 +289,62 @@ which is a gap on its side and not a request on this one. Worth recording
 because "what does a consumer need" and "what does a consumer use" came back as
 different lists, and only the first one would have been guessed.
 
-### What has to be true before this is removed, and how
+### What is left of the surface once `--json` exists
 
-Status: **open**, 10 September 2026, and it is the half of this question that
-is still live. `--json` and
-[`package:cux_ship/documents.dart`](json-output.md) shipped in 4.3.0-dev.1, so
-the sequencing constraint above is discharged: a consumer reverting to
-spawn-and-parse now gets typed documents rather than prose.
+Status: **open**, 10 September 2026. `--json` and
+`package:cux_ship/documents.dart` shipped in 4.3.0-dev.1
+([json-output.md](json-output.md) is the format; the classes' own dartdoc is
+the specification), and the consumer ported: its `status` reads through the
+command, its second entrypoint is deleted, and the output is byte-identical to
+what the library produced.
 
-**The condition is not "the consumer ported".** It is that nothing needs an
-*in-process* read. That is the one thing this library does which `--json`
-cannot: everything else it offers is now available to a caller that spawns, and
-better, because the spawn keeps the printed command line and per-step
-`secrets exec --only` that §"Reads only" argues for. What survives is a caller
-that will not spawn and accepts credentials in its own process — and the
-consumer this was built for structurally cannot be that caller, because its
-release train spawns Gradle, Xcode and `flutter build`.
+So §Sequencing's constraint is discharged **for the three reads**. That
+qualifier is the whole of what this section is for.
 
-So the trigger is: the port lands, and no second consumer has appeared that
-wants the in-process shape.
+**Three exported things have no route through `--json`, and each is a
+different case.**
 
-**And it is a deprecation before a removal**, not a removal. `read.dart` has
-been on pub.dev since 4.1.0 — days, so the population is very probably one, and
-"very probably one" is exactly the number pub.dev cannot confirm. `@Deprecated`
-on the exports in a minor, removal in the major after it, gives a consumer
-nobody can see a warning instead of a broken build. The cost of being wrong in
-that direction is somebody's release tooling failing to compile on a day they
-were shipping.
+- **`awaitBuild`, with `BuildProcessingProgress` and `ProcessingTimeout`.**
+  `--json` is registered on `builds`, `versions` and `tracks` and on nothing
+  else; `appstore wait` has no document, deliberately, and `cli.dart` gives the
+  reason where the flag is declared. So a spawning caller gets prose lines and
+  an exit code where a library caller gets a typed event per poll and a typed
+  terminal exception. **This is not covered, and it is not wanted**: the
+  consumer decodes not one field of that stream, measured at its call site —
+  see §"`appstore wait` needs no event schema". Unused is a weaker claim than
+  unavailable, and it is the true one.
+- **`AppStoreReads.appId` and `.appName`.** In no document. The only spawned
+  route to them is the `==> Example (bundle) is app 123` banner, which under
+  `--json` is written to stderr as prose. Nobody has asked for them; nothing
+  says they are unwanted either, which makes this the thinnest of the three.
+- **In-process reading itself**, which is the one that decides the question.
 
-**One thing makes this cheaper the longer it waits, which is unusual.** Release
-and rollout state — the task that would otherwise have grown this surface — is
-already argued into `--json` rather than into `read.dart`
-([json-output.md](json-output.md)). So the export list does not grow while the
-question is open, and every month of delay costs nothing rather than adding a
-name that has to be deprecated too. That is the opposite of the pressure
-§"Why this is recorded now" describes, and it is the reason there is no hurry.
+**And the last one is not settled by "the consumer ported".** Their *release
+train* cannot hold credentials — it spawns Gradle, Xcode and `flutter build`,
+and 3.0.0 was cut to stop exactly that inheritance. But the same consumer
+**built an in-process reader anyway**, in a second entrypoint that spawns
+nothing, wrapped in `secrets exec`; §"And the precondition it states is false"
+above is the record of it, defect included. A caller that will not spawn and
+accepts credentials in its own process is therefore a shape that has existed
+in practice, not a hypothetical — it is just a shape that consumer no longer
+needs, having deleted that entrypoint in the port.
+
+So the condition is: **nothing wants an in-process read**, and that is a claim
+about the future rather than about the port. What the port establishes is that
+the one known consumer does not.
+
+**Removal, when it comes, is a deletion rather than a deprecation.** There is
+no `@Deprecated` anywhere in these three packages, and the one removal this
+changelog records went the other way — 2.0.0's
+`GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` is *"gone — not deprecated, not exported
+alongside"*. [only-selector.md](only-selector.md) states the general position:
+*"backward compatibility is not a constraint"*, because the consuming projects
+sit in adjacent directories under the same maintainers. A warning wants an
+audience.
+
+**And it rides a major that happens anyway**, rather than being the reason to
+cut one. Removing an export is a major version — `read.dart`'s own header says
+so — but the ongoing cost of keeping it is narrower than "stability on the
+whole internals" suggests: the models it exports are what `documents.dart` is
+built from and stay regardless. What `read.dart` uniquely pins is the two
+session classes and their methods.

@@ -219,9 +219,13 @@ Not the schema — the schema is a convention already in use. The engineering is
 that `lib/src/` writes to stdout in 132 places across nine files against 48 to
 stderr, and `fail()` calls `exit()`.
 
-- Under `--json`, **stdout carries the document and nothing else.** Every
-  `==>` line, every progress report, every rendered listing moves to stderr for
-  that invocation.
+- Under `--json`, **stdout carries the document and nothing else.** The `==>`
+  line naming the app moves to stderr for that invocation.
+  **The listing is not redirected — it is not printed at all**, because it is
+  already in the document under `display`: `printBuilds`, `printVersions` and
+  `_listTracks` return the moment they have written the document. An earlier
+  draft of this bullet said every rendered listing "moves to stderr", which is
+  not what the code does and would have had the lines arriving twice.
 - **The document is built whole and written once, at the end.** Not streamed as
   it is assembled, because a `fail()` partway through would leave half a
   document on stdout and an exit code saying to trust it. This is the manifest
