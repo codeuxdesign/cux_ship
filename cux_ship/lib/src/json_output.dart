@@ -24,6 +24,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'appstore/app_store.dart';
+import 'appstore/cli.dart';
 import 'appstore/reads.dart';
 import 'documents.dart';
 import 'play/reads.dart';
@@ -53,6 +54,10 @@ const playTracksSchema = 1;
 /// The schema `verify` declares. See [appStoreBuildsSchema].
 const verifySchema = 1;
 
+/// The schema `appstore upload --dry-run --json` declares. See
+/// [appStoreBuildsSchema].
+const appStoreListingDiffSchema = 1;
+
 /// Writes [document] to stdout, whole, once.
 ///
 /// **Once and at the end, because `fail()` calls `exit()`.** A document
@@ -72,6 +77,59 @@ const verifySchema = 1;
 void writeJsonDocument(Object document) {
   stdout.writeln(const JsonEncoder.withIndent('  ').convert(document));
 }
+
+/// `cux_ship appstore upload --metadata … --dry-run --json`.
+///
+/// **[AppStoreListingDiffDocument.matches] is computed here**, from the same
+/// change sets the fields are rendered from, so the answer and the detail
+/// cannot disagree. A caller passing it in would eventually pass `true` beside
+/// a non-empty `version.localizations`, and the document would say two things.
+///
+/// **`appleOnlyLocales` is deliberately not an input to it.** Those are
+/// locales this repository declares nothing about — counting them as
+/// differences would report a permanent mismatch for every project whose tree
+/// is partial on purpose, which is most of them.
+AppStoreListingDiffDocument appStoreListingDiffDocument(
+  ListingOutcome outcome, {
+  required AscPlatform platform,
+  required String bundleId,
+  required String? versionName,
+  required List<String> display,
+}) => AppStoreListingDiffDocument(
+  schema: appStoreListingDiffSchema,
+  kind: DocumentKind.appStoreListingDiff,
+  platform: platform,
+  bundleId: bundleId,
+  versionName: versionName,
+  matches: outcome.matches,
+  version: ListingChangeSet(
+    fields: <String>[
+      if (outcome.versionLevel?.copyright != null) 'copyright',
+      if (outcome.versionLevel?.reviewDetails != null) 'reviewDetails',
+    ],
+    localizations: <String, List<String>>{
+      for (final entry
+          in outcome.versionLevel?.localizations.entries ??
+              const <MapEntry<String, Map<String, String>>>[])
+        entry.key: entry.value.keys.toList()..sort(),
+    },
+  ),
+  app: ListingChangeSet(
+    fields: <String>[
+      if (outcome.app?.categories.isNotEmpty ?? false) 'categories',
+      if (outcome.app?.ageRating != null) 'ageRating',
+      if (outcome.app?.contentRights != null) 'contentRights',
+    ],
+    localizations: <String, List<String>>{
+      for (final entry
+          in outcome.app?.localizations.entries ??
+              const <MapEntry<String, Map<String, String>>>[])
+        entry.key: entry.value.keys.toList()..sort(),
+    },
+  ),
+  appleOnlyLocales: outcome.appleOnlyLocales,
+  display: display,
+);
 
 /// `cux_ship verify --json`.
 ///

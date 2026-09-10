@@ -49,6 +49,25 @@ to choose. The document uses Apple's own field names, `videoDeliveryState`,
 Apple's reference without a translation table; `done` is this package's own
 opinion over both states and says so in a field of its own.
 
+**`appstore upload --metadata … --dry-run --json`.** One document saying
+whether the App Store still shows what the repository declares, and where it
+does not: `matches`, plus the changed field names per locale, split into
+`version` and `app` because Apple files the listing text across two resources.
+The comparison is not new — `versionLevelChanges` and `appLevelChanges` have
+always computed it, field by field, and a run flattened it into prose that a
+readiness check then had to match with a regular expression.
+
+**`matches: true` is not "the store page is correct"**, and the difference is
+carried in the document rather than left in a doc comment. It means every field
+this repository *declares* agrees with Apple; a locale the tree never mentions
+is nobody's claim, so it does not make the answer false — and `appleOnlyLocales`
+names those, because unclaimed and invisible are not the same thing.
+
+**`--json` is refused without `--dry-run`** rather than accepted and ignored: a
+flag that does nothing is a promise a caller cannot check. A difference exits
+**0**, because it is an answer rather than a failure — the opposite call from
+`verify --json`, which exits 1 because it exists to fail a build.
+
 **`verify --json`.** One document on stdout carrying `ok`, `problems`, and —
 the reason it has the shape it does — both `checked` and `skipped`. `checked`
 names every artifact inspected and where; `skipped` names every one that was

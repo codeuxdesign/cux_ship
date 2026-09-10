@@ -329,6 +329,20 @@ ArgParser buildAscParser(AscCommand cmd) {
     )
     ..addFlag('dry-run', negatable: false, help: 'Every read, no writes.');
 
+  if (cmd == AscCommand.upload) {
+    parser.addFlag(
+      'json',
+      negatable: false,
+      help:
+          'With --dry-run, print what would change as one JSON document on '
+          'stdout instead of the report: which locales and which fields, and '
+          '"matches" when nothing would. Refused without --dry-run — a '
+          'document describing writes that already happened would have to '
+          'describe partial ones, which an intention never does. See '
+          'docs/design/dry-run-json.md.',
+    );
+  }
+
   switch (cmd) {
     case AscCommand.upload:
       parser
@@ -829,6 +843,81 @@ Future<void> publishReleaseNotes(
   }, existing: await store.versionLocalizations(version));
 }
 
+/// What a listing publish wrote, or under `--dry-run` would have written.
+///
+/// **The comparisons are the product, not a by-product.** `appLevelChanges`
+/// and `versionLevelChanges` already decide, field by field, what differs
+/// between the tree and what Apple holds — a run flattens that into prose and
+/// throws the structure away. Carrying it out lets `--dry-run --json` answer
+/// *"does the store still show the repository's listing?"* from a computation
+/// this package already performs, rather than from a caller matching
+/// `would update: en-US: description` with a regular expression.
+class ListingOutcome {
+  const ListingOutcome({
+    required this.version,
+    required this.app,
+    required this.versionLevel,
+    required this.appleOnlyLocales,
+  });
+
+  /// The `appStoreVersions` record written against, or null when the tree
+  /// needed none.
+  final Map<String, dynamic>? version;
+
+  /// What differed at the app level — categories, age rating, content rights,
+  /// app-info localizations. Null when nothing read them.
+  final AppLevelChanges? app;
+
+  /// What differed at the version level — copyright, review details, and the
+  /// per-locale listing text. Null when nothing read them.
+  final VersionLevelChanges? versionLevel;
+
+  /// Locales Apple holds that the tree never mentions.
+  ///
+  /// **Not a difference, and deliberately not counted as one.** "Present means
+  /// owned" is the tree's rule: a locale it does not declare is one this
+  /// repository makes no claim about, so finding one is not a mismatch and
+  /// must not make the answer false.
+  ///
+  /// It is carried because *"every field we declare agrees"* is a narrower
+  /// claim than the sentence a reader hears, and the gap has to be visible
+  /// rather than merely unclaimed — a `de-DE` somebody added in App Store
+  /// Connect is exactly the thing an operator wants to know about while being
+  /// told the listing matches.
+  final List<String> appleOnlyLocales;
+
+  /// Whether anything at all would change.
+  bool get matches => (app?.isEmpty ?? true) && (versionLevel?.isEmpty ?? true);
+
+  /// Locale to the field names differing in it, both scopes merged.
+  ///
+  /// **Merged, because a locale is one thing to a reader.** Apple splits the
+  /// listing text across `appStoreVersionLocalizations` and
+  /// `appInfoLocalizations` — the description is version-scoped, the localized
+  /// name is app-scoped — and that split is Apple's filing system rather than
+  /// anything an operator asked about. `en-US: description, name` is the
+  /// sentence somebody acts on; two lists to reconcile is not.
+  ///
+  /// The document keeps them apart under `version` and `app`, because a
+  /// program may care which resource a write would land on. This is for the
+  /// prose beside it.
+  Map<String, List<String>> get changedByLocale {
+    const none = <MapEntry<String, Map<String, String>>>[];
+    final merged = <String, Set<String>>{};
+    for (final source in [app?.localizations, versionLevel?.localizations]) {
+      for (final entry in source?.entries ?? none) {
+        merged
+            .putIfAbsent(entry.key, () => <String>{})
+            .addAll(entry.value.keys);
+      }
+    }
+    return {
+      for (final entry in merged.entries)
+        entry.key: entry.value.toList()..sort(),
+    };
+  }
+}
+
 /// Publishes the App Store listing from a metadata tree.
 ///
 /// **Its own function because two commands need it, for opposite reasons.** A
@@ -838,10 +927,11 @@ Future<void> publishReleaseNotes(
 /// `appStoreVersionLocalizations` through `ensureVersion`, which *creates* the
 /// version record, so publishing beside a TestFlight build would bring an App
 /// Store version into existence for a release nobody had decided to make.
-/// Returns the `appStoreVersions` record it wrote against, or null when the
-/// tree needed none — so a caller can write the release notes against the same
-/// version rather than resolving it a second time.
-Future<Map<String, dynamic>?> _publishAscListing(
+/// Returns what it did, or under a dry run what it would have done — see
+/// [ListingOutcome]. The `appStoreVersions` record is in there so a caller can
+/// write the release notes against the same version rather than resolving it a
+/// second time.
+Future<ListingOutcome> _publishAscListing(
   AppStore store,
   App app,
   AppStoreMetadata metadata,
@@ -855,7 +945,20 @@ Future<Map<String, dynamic>?> _publishAscListing(
   /// Upload the previews and stop, leaving the ingestion wait and the
   /// poster-frame assertion to `appstore wait-previews`.
   bool skipPreviewWait = false,
+
+  /// Where this function's report goes, or null for [stdout].
+  ///
+  /// **`--dry-run --json` passes [stderr].** Thirteen lines here announce what
+  /// is being compared and written, and every one of them would land in front
+  /// of the document — which is not a hypothetical: the first run of the tests
+  /// for that flag failed on `==> en-US: description` at character 1, having
+  /// already been fixed once for the dry-run banner two hundred lines up.
+  /// Routing the function rather than its lines is what stops the next line
+  /// added here from reintroducing it.
+  IOSink? out,
 }) async {
+  void say(String line) => (out ?? stdout).writeln(line);
+
   // **Decide what needs writing before demanding something to write to.**
   //
   // The app-level half used to open with `editableAppInfo`, which threw when
@@ -894,7 +997,7 @@ Future<Map<String, dynamic>?> _publishAscListing(
   if (changes.unverifiable.isNotEmpty) {
     // Said out loud: these are being written because they could not be shown
     // to already match, which is not the same as knowing they differ.
-    stdout.writeln(
+    say(
       '==> could not read the current ${changes.unverifiable.join(", ")}, '
       'so ${changes.unverifiable.length == 1 ? 'it is' : 'they are'} '
       'written rather than assumed unchanged',
@@ -912,7 +1015,7 @@ Future<Map<String, dynamic>?> _publishAscListing(
     // Only when the tree actually declares app-level fields. Saying "already
     // matches" about fields nobody asked for would report a comparison that
     // never happened.
-    stdout.writeln('==> app-level listing: already matches, nothing written');
+    say('==> app-level listing: already matches, nothing written');
   }
 
   if (metadata.ageRating != null &&
@@ -973,6 +1076,13 @@ Future<Map<String, dynamic>?> _publishAscListing(
       'Apple scopes them to a version rather than to the app',
     );
   }
+  // **Hoisted so the return can carry them**, not because anything here reads
+  // them twice. The version-level comparison happens inside a nested block and
+  // was consumed on the spot; `--dry-run --json` needs it after the fact, and
+  // a second computation would be a second thing to disagree.
+  VersionLevelChanges? versionLevel;
+  var appleOnlyLocales = const <String>[];
+
   final version = needsVersion
       ? await store.ensureVersion(app, versionName!, create: true)
       : null;
@@ -997,13 +1107,13 @@ Future<Map<String, dynamic>?> _publishAscListing(
 
   final contentRights = changes.contentRights;
   if (contentRights != null) {
-    stdout.writeln('==> content rights');
+    say('==> content rights');
     await store.writeContentRights(app, contentRights);
   }
 
   if (appInfo != null) {
     if (changes.categories.isNotEmpty) {
-      stdout.writeln('==> categories');
+      say('==> categories');
       // Read every relationship first, including the four subcategory slots
       // this tool never writes — the check has to cover what the PATCH omits,
       // because omission is the thing in question. Skipped on a dry run,
@@ -1023,12 +1133,12 @@ Future<Map<String, dynamic>?> _publishAscListing(
     }
     final ageRating = changes.ageRating;
     if (ageRating != null) {
-      stdout.writeln('==> age rating');
+      say('==> age rating');
       await store.writeAgeRating(ageRating);
     }
 
     for (final entry in changes.localizations.entries) {
-      stdout.writeln('==> ${entry.key}: ${entry.value.keys.join(", ")}');
+      say('==> ${entry.key}: ${entry.value.keys.join(", ")}');
       await store.writeAppInfoLocalization(
         appInfo,
         entry.key,
@@ -1046,9 +1156,7 @@ Future<Map<String, dynamic>?> _publishAscListing(
   // than one fetched here — see the invariant beside that acquisition.
   if (needsVersion) {
     if (version == null) {
-      stdout.writeln(
-        '    (dry run created no version, so the fields below are skipped)',
-      );
+      say('    (dry run created no version, so the fields below are skipped)');
     } else {
       // **Compared before writing, the same as the app-level half above.**
       // These fields used to be rewritten with identical values on every run:
@@ -1069,20 +1177,35 @@ Future<Map<String, dynamic>?> _publishAscListing(
         // notes to send it with — see there.
         contact: reviewContact,
       );
+      versionLevel = versionChanges;
+
+      // **What Apple holds and the tree does not mention.** Not a difference —
+      // "present means owned" means an undeclared locale is one this
+      // repository makes no claim about — but the gap has to be visible rather
+      // than merely unclaimed, so a reader told "every field we declare
+      // agrees" can see what that sentence excluded.
+      final declared = {for (final l in metadata.locales) l.locale};
+      appleOnlyLocales = <String>[
+        for (final l in localizations) ...[
+          if ((l['attributes'] as Map<String, dynamic>?)?['locale']
+              case final String locale)
+            if (!declared.contains(locale)) ...[locale],
+        ],
+      ]..sort();
 
       if (versionChanges.isEmpty && declaresVersionText(metadata)) {
-        stdout.writeln('==> version text: already matches, nothing written');
+        say('==> version text: already matches, nothing written');
       }
 
       final copyright = versionChanges.copyright;
       if (copyright != null) {
-        stdout.writeln('==> copyright');
+        say('==> copyright');
         await store.writeVersionAttributes(version, {'copyright': copyright});
       }
 
       final reviewDetails = versionChanges.reviewDetails;
       if (reviewDetails != null) {
-        stdout.writeln('==> review notes');
+        say('==> review notes');
         await store.writeReviewDetails(
           version,
           reviewDetails.notes,
@@ -1094,9 +1217,7 @@ Future<Map<String, dynamic>?> _publishAscListing(
       for (final localeMetadata in metadata.locales) {
         final changedText = versionChanges.localizations[localeMetadata.locale];
         if (changedText != null) {
-          stdout.writeln(
-            '==> ${localeMetadata.locale}: ${changedText.keys.join(", ")}',
-          );
+          say('==> ${localeMetadata.locale}: ${changedText.keys.join(", ")}');
           await store.writeVersionLocalization(
             version,
             localeMetadata.locale,
@@ -1115,14 +1236,14 @@ Future<Map<String, dynamic>?> _publishAscListing(
             known: localizations,
           );
           if (localization == null) {
-            stdout.writeln(
+            say(
               '    (no ${localeMetadata.locale} localization yet, so its '
               'screenshots and previews are skipped)',
             );
             continue;
           }
           for (final entry in localeMetadata.screenshots.entries) {
-            stdout.writeln('==> ${localeMetadata.locale}: ${entry.key}');
+            say('==> ${localeMetadata.locale}: ${entry.key}');
             await store.replaceScreenshots(
               localization,
               entry.key,
@@ -1134,9 +1255,7 @@ Future<Map<String, dynamic>?> _publishAscListing(
           // already landed by the time this run starts waiting — and if the
           // wait times out, the screenshots are not left unwritten behind it.
           for (final entry in localeMetadata.previews.entries) {
-            stdout.writeln(
-              '==> ${localeMetadata.locale}: ${entry.key} (preview)',
-            );
+            say('==> ${localeMetadata.locale}: ${entry.key} (preview)');
             await store.replacePreviews(
               localization,
               entry.key,
@@ -1148,7 +1267,12 @@ Future<Map<String, dynamic>?> _publishAscListing(
       }
     }
   }
-  return version;
+  return ListingOutcome(
+    version: version,
+    app: changes,
+    versionLevel: versionLevel,
+    appleOnlyLocales: appleOnlyLocales,
+  );
 }
 
 /// Runs [cmd] against App Store Connect.
@@ -1273,6 +1397,26 @@ Future<void> runAsc(
   final noMetadata = cmd == AscCommand.upload && flag('no-metadata');
   if (noMetadata && opt('metadata') != null) {
     fail('--metadata and --no-metadata ask for opposite things');
+  }
+
+  // **Refused rather than ignored, and that is the whole decision.** The
+  // alternative was to accept `--json` on a real upload and let it do nothing,
+  // which is worse than it sounds: a flag that is neither honoured nor refused
+  // is a promise the caller cannot check, and people build a theory around it.
+  // The consumer who asked for this command has that scar from the other side
+  // — a build tool's flag ignored since a version bump, believed for a long
+  // time to be the difference between a passing and a failing run.
+  //
+  // This repository already answers it the same way: `--data-safety` is gone
+  // from `play upload` and gone *loudly*, still declared and hidden so that
+  // passing it names the command that took over.
+  if (cmd == AscCommand.upload && flag('json') && !flag('dry-run')) {
+    fail(
+      '--json needs --dry-run. Every other --json here is a read, and this '
+      'one describes what a run *would* write — a document about writes that '
+      'already happened would have to describe partial ones, which an '
+      'intention never does. Add --dry-run, or drop --json.',
+    );
   }
   final betaGroup = opt('beta-group');
   // A promotion to a group publishes no listing — which is `--beta-group`'s
@@ -1917,7 +2061,12 @@ Future<void> runAsc(
   started = store;
 
   if (dryRun) {
-    stdout.writeln(
+    // stderr under `--json`, on the rule this file states everywhere: stdout
+    // carries the document and nothing else. `--json` implies `--dry-run`
+    // here, so this is the one banner every document-producing run of this
+    // command reaches — which makes it the first thing a consumer's decoder
+    // would have hit.
+    (jsonOutput ? stderr : stdout).writeln(
       '==> dry run: every read happens, no write does. App Store Connect has\n'
       '    no edit transaction, so this cannot rehearse Apple\'s validation of\n'
       '    a write the way the Play uploader can.',
@@ -2485,6 +2634,7 @@ Future<void> runAsc(
         // command that publishes a preview never consulted it — an escape
         // hatch that existed, was spelled correctly, and was unreachable.
         skipPreviewWait: flag('skip-waiting'),
+        out: jsonOutput ? stderr : null,
       );
       // **The "What's New" a listing-only publish used to drop on the floor.**
       // `--changelog` is accepted by this command and was read only for the
@@ -2521,7 +2671,7 @@ Future<void> runAsc(
           '        --metadata ${metadataPath ?? '<tree>'}',
         );
       }
-      if (published == null &&
+      if (published.version == null &&
           (opt('changelog') != null || notesPath != null)) {
         // **The narrowed remains of the defect this change closes.** A tree
         // declaring only app-level fields — categories, age rating, content
@@ -2538,11 +2688,11 @@ Future<void> runAsc(
           '    or publish the notes with `appstore promote --changelog`.',
         );
       }
-      if (published != null) {
+      if (published.version case final versionRecord?) {
         await publishReleaseNotes(
           store,
           app,
-          published,
+          versionRecord,
           locale,
           listingReleaseNotes,
           versionName,
@@ -2550,6 +2700,41 @@ Future<void> runAsc(
             for (final l in metadata.locales) ...{l.locale},
           },
         );
+      }
+
+      // **The document, and the run stops here.** Under `--dry-run --json`
+      // nothing after this point would write anything either — the promote
+      // block is gated on `promote` and an artifact upload on having one — but
+      // returning is what keeps stdout to a single document rather than
+      // relying on the rest of this function staying quiet.
+      //
+      // Exit 0 whatever `matches` says. It is an answer, not a failure: a
+      // caller reading the document has the fact, and putting it in the status
+      // as well would be two sources for one thing, free to disagree, with
+      // somebody later having to decide which wins.
+      if (jsonOutput) {
+        writeJsonDocument(
+          appStoreListingDiffDocument(
+            published,
+            platform: platform,
+            bundleId: bundleId,
+            versionName: published.version == null ? null : versionName,
+            display: <String>[
+              if (published.matches)
+                'every field this tree declares already matches the App Store'
+              else ...[
+                for (final entry in published.changedByLocale.entries) ...[
+                  '${entry.key}: ${entry.value.join(", ")}',
+                ],
+              ],
+              for (final locale in published.appleOnlyLocales) ...[
+                'note: Apple also holds $locale, which this tree does not '
+                    'declare',
+              ],
+            ],
+          ),
+        );
+        return;
       }
     }
 

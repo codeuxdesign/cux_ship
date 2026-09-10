@@ -319,6 +319,7 @@ void main() {
         AppStorePreviewsDocument,
         PlayTracksDocument,
         VerifyDocument,
+        AppStoreListingDiffDocument,
       ];
       // The repeated element type each document carries. `verify`'s
       // [VerifyCheck] fills two fields rather than one — this asserts it is
@@ -329,6 +330,7 @@ void main() {
         AppStorePreviewEntry,
         PlayTrackEntry,
         VerifyCheck,
+        ListingChangeSet,
       ];
 
       // **The assertion that keeps this honest, and it has already earned its

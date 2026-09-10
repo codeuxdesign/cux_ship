@@ -77,6 +77,12 @@ enum DocumentKind {
   appStorePreviews('appstore.previews'),
   playTracks('play.tracks'),
 
+  /// **Named for what it describes, not for the flag that produced it.**
+  /// `appstore.dry-run` was the first name and named the *mode*, which would
+  /// have spent the word on this document and left the next command to grow a
+  /// dry run without it.
+  appStoreListingDiff('appstore.listing-diff'),
+
   /// **The one kind that describes no store.** `verify` is offline and reads
   /// the repository, so there is no platform and no bundle id — which is why
   /// it is not `appstore.verify`.
@@ -1270,4 +1276,104 @@ class VerifyDocument {
   final List<String> display;
 
   Map<String, dynamic> toJson() => _$VerifyDocumentToJson(this);
+}
+
+/// What one scope of a listing would have written.
+///
+/// **Field names, not values.** A document carrying both copies of every
+/// string is one nobody reads, and the tree is on disk while the store is one
+/// read away — so naming `en-US` and `description, keywords` is enough for a
+/// reader to act, which means opening the command. Values are an addition
+/// later rather than a removal.
+@JsonSerializable(explicitToJson: true)
+class ListingChangeSet {
+  const ListingChangeSet({required this.fields, required this.localizations});
+
+  factory ListingChangeSet.fromJson(Map<String, dynamic> json) =>
+      _$ListingChangeSetFromJson(json);
+
+  /// Scope-wide fields that differ, e.g. `copyright`, `contentRights`,
+  /// `ageRating`, `categories`, `reviewDetails`.
+  final List<String> fields;
+
+  /// Locale to the attribute names that differ in it.
+  final Map<String, List<String>> localizations;
+
+  Map<String, dynamic> toJson() => _$ListingChangeSetToJson(this);
+}
+
+/// `cux_ship appstore upload --metadata … --dry-run --json`.
+///
+/// **[matches] is the answer and the reason this exists.** A readiness check
+/// asking *"is the store still showing the repository's listing?"* had to run
+/// the dry run and match its prose with a regular expression, which is the
+/// thing this package exists to stop people doing.
+///
+/// **It is not a claim that the store page is correct**, and the difference is
+/// load-bearing. It means every field this repository *declares* agrees with
+/// Apple. A field the tree does not name is not compared, because "present
+/// means owned" is the tree's rule everywhere — so a description edited in App
+/// Store Connect, in a locale the tree does not carry, is invisible to it.
+///
+/// [appleOnlyLocales] is that exclusion made visible rather than merely
+/// unclaimed. Without it, `matches: true` beside a `de-DE` nobody here declares
+/// is a true statement whose reader draws a stronger conclusion — the same
+/// shape as a rollout status reading as "live" when the store had not approved
+/// it.
+@JsonSerializable(explicitToJson: true)
+class AppStoreListingDiffDocument {
+  const AppStoreListingDiffDocument({
+    required this.schema,
+    required this.kind,
+    required this.platform,
+    required this.bundleId,
+    required this.versionName,
+    required this.matches,
+    required this.version,
+    required this.app,
+    required this.appleOnlyLocales,
+    required this.display,
+  });
+
+  factory AppStoreListingDiffDocument.fromJson(Map<String, dynamic> json) =>
+      _$AppStoreListingDiffDocumentFromJson(json);
+
+  /// This kind's schema number. Refuse one you do not recognize.
+  final int schema;
+
+  final DocumentKind kind;
+
+  @JsonKey(toJson: _platformToJson, fromJson: _platformFromJson)
+  final AscPlatform platform;
+
+  final String bundleId;
+
+  /// The version the listing was compared against, or null when the tree
+  /// declares nothing Apple scopes to a version.
+  final String? versionName;
+
+  /// **The answer**: true when nothing this repository declares would change.
+  ///
+  /// Read [appleOnlyLocales] beside it before saying the listing matches.
+  final bool matches;
+
+  /// Version-scoped differences — the listing text, copyright, review details.
+  final ListingChangeSet version;
+
+  /// App-scoped differences — categories, age rating, content rights, and the
+  /// app-info localizations.
+  final ListingChangeSet app;
+
+  /// Locales Apple holds that the tree never mentions.
+  ///
+  /// Empty is the ordinary answer. Non-empty does **not** make [matches]
+  /// false: these are locales this repository makes no claim about, and
+  /// treating them as differences would report a permanent mismatch for every
+  /// project whose tree is deliberately partial.
+  final List<String> appleOnlyLocales;
+
+  /// What the command prints. Display text.
+  final List<String> display;
+
+  Map<String, dynamic> toJson() => _$AppStoreListingDiffDocumentToJson(this);
 }

@@ -79,6 +79,7 @@ const _$DocumentKindEnumMap = {
   DocumentKind.appStoreVersions: 'appstore.versions',
   DocumentKind.appStorePreviews: 'appstore.previews',
   DocumentKind.playTracks: 'play.tracks',
+  DocumentKind.appStoreListingDiff: 'appstore.listing-diff',
   DocumentKind.verify: 'verify',
 };
 
@@ -355,3 +356,52 @@ Map<String, dynamic> _$VerifyDocumentToJson(VerifyDocument instance) =>
       'problems': instance.problems,
       'display': instance.display,
     };
+
+ListingChangeSet _$ListingChangeSetFromJson(Map<String, dynamic> json) =>
+    ListingChangeSet(
+      fields: (json['fields'] as List<dynamic>)
+          .map((e) => e as String)
+          .toList(),
+      localizations: (json['localizations'] as Map<String, dynamic>).map(
+        (k, e) =>
+            MapEntry(k, (e as List<dynamic>).map((e) => e as String).toList()),
+      ),
+    );
+
+Map<String, dynamic> _$ListingChangeSetToJson(ListingChangeSet instance) =>
+    <String, dynamic>{
+      'fields': instance.fields,
+      'localizations': instance.localizations,
+    };
+
+AppStoreListingDiffDocument _$AppStoreListingDiffDocumentFromJson(
+  Map<String, dynamic> json,
+) => AppStoreListingDiffDocument(
+  schema: (json['schema'] as num).toInt(),
+  kind: $enumDecode(_$DocumentKindEnumMap, json['kind']),
+  platform: _platformFromJson(json['platform'] as String),
+  bundleId: json['bundleId'] as String,
+  versionName: json['versionName'] as String?,
+  matches: json['matches'] as bool,
+  version: ListingChangeSet.fromJson(json['version'] as Map<String, dynamic>),
+  app: ListingChangeSet.fromJson(json['app'] as Map<String, dynamic>),
+  appleOnlyLocales: (json['appleOnlyLocales'] as List<dynamic>)
+      .map((e) => e as String)
+      .toList(),
+  display: (json['display'] as List<dynamic>).map((e) => e as String).toList(),
+);
+
+Map<String, dynamic> _$AppStoreListingDiffDocumentToJson(
+  AppStoreListingDiffDocument instance,
+) => <String, dynamic>{
+  'schema': instance.schema,
+  'kind': _$DocumentKindEnumMap[instance.kind]!,
+  'platform': _platformToJson(instance.platform),
+  'bundleId': instance.bundleId,
+  'versionName': instance.versionName,
+  'matches': instance.matches,
+  'version': instance.version.toJson(),
+  'app': instance.app.toJson(),
+  'appleOnlyLocales': instance.appleOnlyLocales,
+  'display': instance.display,
+};

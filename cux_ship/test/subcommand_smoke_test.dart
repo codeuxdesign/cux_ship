@@ -219,6 +219,80 @@ void main() {
     );
   });
 
+  test('upload --json without --dry-run is refused, not ignored', () {
+    // **Refused rather than inert, which is the decision this pins.** A flag
+    // accepted and doing nothing is a promise the caller cannot check, and the
+    // consumer who asked for this has the scar from the other side: a build
+    // tool's flag ignored since a version bump, believed for a long time to be
+    // the difference between a passing and a failing run.
+    //
+    // The refusal is offline — it fires with the other incompatible-flag
+    // checks, long before credentials — so this reaches it with none.
+    final result = Process.runSync(
+      Platform.resolvedExecutable,
+      [
+        '--enable-asserts',
+        cliSnapshot,
+        'appstore',
+        'upload',
+        '--bundle-id',
+        'design.codeux.consumer',
+        '--version-name',
+        '1.1.6',
+        '--json',
+      ],
+      workingDirectory: repo.path,
+      environment: {'APPLE_API_KEY_ID': '', 'APPLE_API_PRIVATE_KEY_PATH': ''},
+    );
+    final said = '${result.stdout}${result.stderr}';
+
+    expect(result.exitCode, isNot(0), reason: said);
+    expect(said, contains('--json needs --dry-run'));
+    // **The discriminator.** Without the refusal the run carries on and dies
+    // at the credential check instead, so asserting only "non-zero" would pass
+    // against the inert version this exists to forbid.
+    expect(
+      said,
+      isNot(contains('no App Store Connect credentials')),
+      reason: 'a run that reached credentials never refused the flag',
+    );
+  });
+
+  test('upload --json with --dry-run is accepted', () {
+    // The other half: the refusal must be about the pairing, not about the
+    // flag. Without this, a command that always refused `--json` would satisfy
+    // the case above.
+    final result = Process.runSync(
+      Platform.resolvedExecutable,
+      [
+        '--enable-asserts',
+        cliSnapshot,
+        'appstore',
+        'upload',
+        '--bundle-id',
+        'design.codeux.consumer',
+        '--version-name',
+        '1.1.6',
+        '--json',
+        '--dry-run',
+      ],
+      workingDirectory: repo.path,
+      environment: {'APPLE_API_KEY_ID': '', 'APPLE_API_PRIVATE_KEY_PATH': ''},
+    );
+    final said = '${result.stdout}${result.stderr}';
+
+    expect(said, isNot(contains('--json needs --dry-run')));
+    // **It gets *past* the pairing check and refuses further on**, for having
+    // nothing to publish — this fixture is a bare repository. That is the
+    // assertion worth making: naming a later refusal proves the earlier one
+    // did not fire, where "exit non-zero" would be satisfied by either.
+    expect(
+      said,
+      contains('nothing to do'),
+      reason: 'the pairing is accepted, so the run reaches a later refusal',
+    );
+  });
+
   test('wait-previews without --metadata does not invent a tree', () {
     // The other half: the option is optional, and a run that omits it must
     // reach the credential check rather than refuse offline. Without this, the
