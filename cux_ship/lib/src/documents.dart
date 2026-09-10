@@ -512,9 +512,9 @@ class AppStoreBuildEntry {
   /// means "not known to be usable".** A state this version does not name
   /// lands here as `false`, which is the right default for a flag that gates
   /// an *action*: refusing to release a build whose state is not understood is
-  /// the safe direction. [serving] is nullable rather than false-by-default
-  /// precisely because it gates a *report*, where false is a claim rather than
-  /// a refusal. Two booleans, two consequences, two shapes.
+  /// the safe direction. [PlayReleaseEntry.serving] is nullable rather than
+  /// false-by-default precisely because it gates a *report*, where false is a
+  /// claim rather than a refusal. Two booleans, two consequences, two shapes.
   final bool usable;
 
   /// Whether this build can only be fixed by uploading another one, or null
@@ -818,8 +818,8 @@ class PlayReleaseEntry {
   ///
   /// **And it is not sufficient alone.** [PlayReleaseStatus.halted] and
   /// [PlayReleaseStatus.draft] are both `false` and call for different advice:
-  /// one was stopped by a person, the other never started. Read [statusKnown]
-  /// when the next action differs.
+  /// one was stopped by a person, the other never started. Read [status] when
+  /// the next action differs.
   final bool? serving;
 
   /// **Play's `userFraction`, exactly as sent — the authoritative value.**

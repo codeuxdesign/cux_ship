@@ -161,7 +161,8 @@ class UploadRecordRequest {
   final bool dryRun;
 }
 
-/// Whether [command] is an invocation that records an upload, and what of.
+/// Whether the invocation [commandName] names is one that records an upload,
+/// and what of.
 ///
 /// Three things disqualify a run, and each was learned rather than designed:
 ///

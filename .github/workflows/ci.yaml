@@ -124,6 +124,29 @@ jobs:
         run: dart pub publish --dry-run
         working-directory: ${{ matrix.package }}
 
+      # **Every `[reference]` in the dartdoc resolves to something.**
+      # `documents.dart`'s dartdoc *is* the published statement of the `--json`
+      # format — pub.dev renders it per version and it is the only place a
+      # consumer can read the format without reading an encoder — so a link
+      # that resolves to nothing is a specification pointing at a name the
+      # reader cannot follow. `dart analyze` cannot see it; a doc comment is a
+      # comment. Second occurrence: the first was an orphaned `///` block found
+      # by a consumer reading the published dev.2, and the test that came out
+      # of it catches a block attached to nothing, not a link that dangles.
+      #
+      # **The command lives in tool/check.sh, and this invokes it.** Not
+      # because the step is long, but because restating it here is the
+      # two-places drift that script exists to remove, and because a guard has
+      # to be watched failing (docs/CONTRIBUTING.md) — which needs a command a
+      # contributor can run, not a yaml step that only exists after a push.
+      #
+      # The asymmetry is *when* rather than *where*: `dart doc` costs about
+      # ninety-five seconds on cux_ship against ninety for the whole five-step
+      # suite, so a default local run skips it and this never does. Locally it
+      # is `tool/check.sh --docs`, or this line verbatim.
+      - name: Doc references resolve
+        run: tool/check.sh --docs-only ${{ matrix.package }}
+
   # The check a consumer actually depends on: that this repository can be
   # resolved as a git dependency, from a clean checkout, with no credentials.
   # It is public precisely so that this needs no token.
