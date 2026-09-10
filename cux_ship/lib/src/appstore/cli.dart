@@ -329,6 +329,31 @@ ArgParser buildAscParser(AscCommand cmd) {
     )
     ..addFlag('dry-run', negatable: false, help: 'Every read, no writes.');
 
+  // **Both commands that can create an App Store version take it**, because
+  // both decide what a version does once Apple approves — which was one
+  // command's decision until a consumer showed the other needed it.
+  //
+  // `promote --release-type` was the only way to set it, and a `--prepare`
+  // step that publishes the listing and stops — no artifact, no promote, so a
+  // human can read the finished page before submitting — creates the version
+  // through `upload --metadata` and could not say anything about it. It was
+  // left MANUAL by the create default with no command available to that flow
+  // able to change it.
+  if (cmd == AscCommand.upload || cmd == AscCommand.promote) {
+    parser.addOption(
+      'release-type',
+      // Deliberately no `allowed:`. The args package would reject SCHEDULED
+      // with one generic line, and SCHEDULED is the value that most needs a
+      // sentence explaining what is missing.
+      help:
+          'What starts the public release once Apple approves: MANUAL, or '
+          'AFTER_APPROVAL to go out on approval. A different axis from '
+          '--phased, which is how fast it rolls out once started. Unset '
+          'leaves whatever App Store Connect holds — a new version is created '
+          'MANUAL, an existing one is not touched.',
+    );
+  }
+
   if (cmd == AscCommand.upload) {
     parser.addFlag(
       'json',
@@ -447,18 +472,6 @@ ArgParser buildAscParser(AscCommand cmd) {
           help:
               "Release over Apple's seven-day phased schedule once approved. "
               'Not a fraction — Apple runs the schedule itself.',
-        )
-        ..addOption(
-          'release-type',
-          // Deliberately no `allowed:`. The args package would reject
-          // SCHEDULED with one generic line, and SCHEDULED is the value that
-          // most needs a sentence explaining what is missing.
-          help:
-              'What starts the public release once Apple approves: MANUAL, or '
-              'AFTER_APPROVAL to go out on approval. A different axis from '
-              '--phased, which is how fast it rolls out once started. Unset '
-              'leaves whatever App Store Connect holds — a new version is '
-              'created MANUAL, an existing one is not touched.',
         );
     case AscCommand.whatToTest:
       // Only the build. The notes themselves come from the shared options
@@ -946,6 +959,15 @@ Future<ListingOutcome> _publishAscListing(
   /// poster-frame assertion to `appstore wait-previews`.
   bool skipPreviewWait = false,
 
+  /// What the version should do once Apple approves, or null to leave it.
+  ///
+  /// **Passed here because this function creates the version.** A `--prepare`
+  /// flow — publish the listing, stop, let a human read the page before
+  /// submitting — reaches App Store Connect through exactly this path and
+  /// through no promote, so without it the version is created MANUAL by the
+  /// default and nothing that flow can run is able to say otherwise.
+  String? releaseType,
+
   /// Where this function's report goes, or null for [stdout].
   ///
   /// **`--dry-run --json` passes [stderr].** Thirteen lines here announce what
@@ -1084,8 +1106,35 @@ Future<ListingOutcome> _publishAscListing(
   var appleOnlyLocales = const <String>[];
 
   final version = needsVersion
-      ? await store.ensureVersion(app, versionName!, create: true)
+      ? await store.ensureVersion(
+          app,
+          versionName!,
+          create: true,
+          releaseType: releaseType,
+        )
       : null;
+
+  // **Effective, not intended**, the same rule the promote path states: read
+  // off the record Apple acknowledged rather than off the flag, because the
+  // interesting case is the run where nobody passed one. A `--prepare` step
+  // that leaves a version MANUAL and says nothing is how somebody discovers
+  // after approval that the release is waiting on a button they did not know
+  // about.
+  //
+  // Printed whenever a version exists rather than only when the flag was
+  // passed, for that reason exactly. Suppressed on a dry run, where nothing
+  // was written and the record's current value would be a claim a real run
+  // falsifies.
+  if (version != null && !store.writer.dryRun) {
+    final effective =
+        (version['attributes'] as Map<String, dynamic>?)?['releaseType'];
+    if (effective is String) {
+      say(
+        '==> release type: $effective'
+        '${effective == 'MANUAL' ? ' — release it yourself once approved' : ''}',
+      );
+    }
+  }
 
   // **The review contact is an acquisition too, and it refuses.**
   // `fromEnvironment` rejects a half-set contact and a malformed phone
@@ -2650,6 +2699,7 @@ Future<void> runAsc(
         // command that publishes a preview never consulted it — an escape
         // hatch that existed, was spelled correctly, and was unreachable.
         skipPreviewWait: flag('skip-waiting'),
+        releaseType: releaseType,
         out: jsonOutput ? stderr : null,
       );
       // **The "What's New" a listing-only publish used to drop on the floor.**
@@ -2850,9 +2900,13 @@ Future<void> runAsc(
         // release went out MANUAL after somebody had decided otherwise, and
         // no line anywhere said so.
         //
-        // Promote only. A listing publish also creates a version, but it is
-        // not deciding how a release starts — the promote that later adopts
-        // that version is, and this is where the decision lands.
+        // **This used to say "promote only", on the reasoning that a listing
+        // publish creates a version but does not decide how a release
+        // starts.** That was wrong about a flow it did not know: a `--prepare`
+        // step publishes the listing and stops, so the version it creates is
+        // the one that gets submitted by hand, and its release type is decided
+        // there and nowhere else. `_publishAscListing` prints the same line
+        // for the same reason.
         //
         // Suppressed on a dry run, where nothing was written: printing the
         // record's current value beside a flag asking for a different one

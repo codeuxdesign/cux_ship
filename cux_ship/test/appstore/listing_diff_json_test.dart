@@ -81,12 +81,33 @@ class _FakeClient implements AscClient {
     Map<String, String>? query,
   }) async => const {};
 
+  /// Bodies of every `POST`, so a case can assert what was *asked for* as
+  /// well as what came back.
+  final postedBodies = <Map<String, dynamic>>[];
+
   @override
   Future<Map<String, dynamic>> post(
     String path,
     Map<String, dynamic> body,
   ) async {
     posted.add(path);
+    postedBodies.add(body);
+    if (path == '/v1/appStoreVersions') {
+      // **Apple echoes the attributes it accepted**, and the release-type line
+      // is read off that record rather than off the flag — so a fake that
+      // returned an empty `attributes` could not tell a run that set the type
+      // from one that asked and was ignored.
+      final attributes =
+          (body['data'] as Map<String, dynamic>)['attributes']
+              as Map<String, dynamic>;
+      return {
+        'data': {
+          'type': 'appStoreVersions',
+          'id': 'version-new',
+          'attributes': attributes,
+        },
+      };
+    }
     return {
       'data': {'type': 'x', 'id': 'x', 'attributes': <String, dynamic>{}},
     };

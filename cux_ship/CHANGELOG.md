@@ -49,6 +49,20 @@ to choose. The document uses Apple's own field names, `videoDeliveryState`,
 Apple's reference without a translation table; `done` is this package's own
 opinion over both states and says so in a field of its own.
 
+**`appstore upload` takes `--release-type`.** It was declared on `promote`
+alone, so a flow that publishes the listing and stops — no artifact, no
+promote, so a human can read the finished page before submitting — created the
+App Store version through `upload --metadata`, got the `MANUAL` create default,
+and had no command available to it that could say otherwise. The release type
+of the version somebody then submits by hand was decided by a default nobody
+chose.
+
+The listing path also reports the effective value now, as the promote path
+does: read back from the record Apple acknowledged rather than echoed from the
+flag, and printed whether or not one was passed — because the case worth
+naming is the run where nobody did. Reported by a consumer running exactly that
+flow.
+
 **`appstore upload --metadata … --dry-run --json`.** One document saying
 whether the App Store still shows what the repository declares, and where it
 does not: `matches`, plus the changed field names per locale, split into
