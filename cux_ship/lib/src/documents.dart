@@ -510,22 +510,6 @@ class AppStoreBuildsDocument {
   /// Newest first, by [AppStoreBuildEntry.buildNumberAsInt].
   final List<AppStoreBuildEntry> builds;
 
-  /// The newest build Apple holds, whatever state it is in, or null when it
-  /// holds none.
-  ///
-  /// **[newestBuildNumber] answers "which number"; this answers "which
-  /// build".** A caller wanting any other field of it — [needsNewUpload],
-  /// [expired], [processingStateRaw] — had to find the entry itself, and the
-  /// consumer that asked for this wrote a loop matching on the build number
-  /// rather than take `builds.first`, which is the ordering assumption this
-  /// package has been wrong about twice.
-  ///
-  /// `builds.first` is in fact correct: the order above is promised and
-  /// [newestBuildNumber] is derived from the same element. But a promise a
-  /// reader has to go and find is not the same as an accessor a test can hold,
-  /// and re-deriving "which one is newest" is precisely what the model's own
-  /// `newest` exists to stop a caller doing.
-
   /// What `cux_ship appstore builds` prints.
   ///
   /// **Not the concatenation of the builds' `display`, in either direction.**
@@ -535,9 +519,25 @@ class AppStoreBuildsDocument {
   /// the output said nothing about reads as a store with nothing wrong.
   final List<String> display;
 
-  /// See the note on [builds]. A getter rather than a field, deliberately:
-  /// emitting the entry would put one build in the document twice, under two
-  /// keys, free to disagree — and a shell caller already has the ordering.
+  /// The newest build Apple holds, whatever state it is in, or null when it
+  /// holds none.
+  ///
+  /// **[newestBuildNumber] answers "which number"; this answers "which
+  /// build".** A caller wanting any other field of it — `needsNewUpload`,
+  /// `expired`, `processingStateRaw` — had to find the entry itself, and the
+  /// consumer that asked for this wrote a loop matching on the build number
+  /// rather than take `builds.first`, which is the ordering assumption this
+  /// package has been wrong about twice.
+  ///
+  /// `builds.first` is in fact correct: [builds] is ordered newest-first and
+  /// [newestBuildNumber] is derived from that same element, so the two cannot
+  /// disagree. But a promise a reader has to go and find is not the same as an
+  /// accessor a test can hold, and re-deriving "which one is newest" is
+  /// precisely what the model's own `newest` exists to stop a caller doing.
+  ///
+  /// **A getter rather than a field, deliberately**: emitting the entry would
+  /// put one build in the document twice, under two keys, free to disagree —
+  /// and a shell caller already has the ordering.
   AppStoreBuildEntry? get newest => builds.isEmpty ? null : builds.first;
 
   Map<String, dynamic> toJson() => _$AppStoreBuildsDocumentToJson(this);
