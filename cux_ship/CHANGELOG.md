@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 4.3.0-dev.1
+
+**A pre-release, so the consumer this was designed with can port against it
+before the shape is fixed.** `pub` will not select it without an explicit
+`^4.3.0-dev.1`, so nothing picks it up by accident. Everything below is
+intended for 4.3.0; what changes between here and there is whatever porting
+finds.
 
 **`appstore builds`, `appstore versions` and `play tracks` take `--json`.** The
 listings become documents a caller decodes instead of prose a caller greps —
