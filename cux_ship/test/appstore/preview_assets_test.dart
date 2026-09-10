@@ -1140,7 +1140,13 @@ void main() {
       expect(seen.first.done, isFalse);
       // A caller that took the callback gets the report *instead of* the
       // default line, not as well as it.
-      expect(said, isNot(contains('at 0s:')));
+      //
+      // **Matched on the filename, not on the elapsed seconds.** `at 0s:` is
+      // only the default line's text while both zero-delay polls land inside
+      // the same second; on a loaded machine it prints `at 1s:` and the
+      // assertion passes with the default output still there, so deleting the
+      // `onProgress` branch would have survived.
+      expect(said, isNot(contains('promo.mp4 at')));
     });
 
     test('a dry run waits for nothing', () async {

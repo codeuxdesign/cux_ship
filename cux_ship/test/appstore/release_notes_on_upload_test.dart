@@ -60,11 +60,12 @@ class _FakeClient implements AscClient {
       ];
     }
     if (path.endsWith('/appStoreVersions')) {
+      final all = [...versions, ..._created];
       final wanted = query?['filter[versionString]'];
       if (wanted == null) {
-        return versions;
+        return all;
       }
-      return versions
+      return all
           .where(
             (v) =>
                 (v['attributes'] as Map<String, dynamic>)['versionString'] ==
@@ -105,14 +106,35 @@ class _FakeClient implements AscClient {
       ], request: 'POST $path');
     }
     posted.add((path: path, body: body));
-    return {
-      'data': {
+    if (path == '/v1/appStoreVersions') {
+      // **A created version joins the collection, because Apple's does.**
+      // Without this, `isFirstVersion` evaluates `[].every(...)` — vacuously
+      // true — so the first-version branch was reached for a reason the real
+      // API never produces, and mutating the predicate to `all.isEmpty` left
+      // this suite green while breaking every real first release. The
+      // CONTRIBUTING rule about a fake carrying what the tested branch depends
+      // on, and this branch depends on the new version being counted.
+      _created.add({
         'type': 'appStoreVersions',
         'id': 'version-1',
-        'attributes': {'versionString': '1.1.6'},
+        'attributes': {
+          'versionString': '1.1.6',
+          'appStoreState': 'PREPARE_FOR_SUBMISSION',
+        },
+      });
+      return {'data': _created.last};
+    }
+    return {
+      'data': {
+        'type': 'appStoreVersionLocalizations',
+        'id': 'loc-1',
+        'attributes': <String, dynamic>{},
       },
     };
   }
+
+  /// Versions this run created, which Apple would list beside the rest.
+  final _created = <Map<String, dynamic>>[];
 
   @override
   Future<Map<String, dynamic>> patch(
@@ -318,9 +340,14 @@ void main() {
 
       final said = await _upload(client);
 
+      // Apple's own line, unaltered — it stays in `details`, which is
+      // documented as one entry per Apple `errors[]` element.
       expect(said, contains('cannot be edited at this time'));
+      // And cux_ship's explanation, which now arrives through
+      // `AscApiException.guidanceFor` rather than by being appended to
+      // Apple's words.
       expect(said, contains('locked by review'));
-      expect(said, contains('The listing itself published'));
+      expect(said, contains('already published'));
       expect(said, contains('promote --changelog'));
       // The half that matters: Apple's own line alone would say nothing about
       // which of its causes applied, or that the rest of the publish landed.
@@ -368,6 +395,40 @@ void main() {
   // that builds the client, so there is no store to have written anything with
   // by the time it can refuse. The old call site sat after
   // `_publishAscListing` had written the entire listing.
+
+  test(
+    'a dry run over an editable version reports the notes it would write',
+    () async {
+      // **`--dry-run` has two shapes and the test below only reaches one.**
+      // `ensureVersion` returns null on a dry run *only when it would have had
+      // to create* the version; when an editable one already exists it returns
+      // the real record, so `published != null` and the notes path runs. The
+      // other test's fixtures carry no `appStoreState`, so `editable` is empty
+      // and the create branch is taken — it would pass identically if
+      // `publishReleaseNotes` ran on every dry run, because `Writer` suppresses
+      // the write either way. It asserted the right thing for the wrong reason.
+      final client = _FakeClient(
+        versions: [
+          {
+            'type': 'appStoreVersions',
+            'id': 'existing',
+            'attributes': {
+              'versionString': '1.1.6',
+              'appStoreState': 'PREPARE_FOR_SUBMISSION',
+            },
+          },
+          _version('old', '1.1.5'),
+        ],
+      );
+
+      final said = await _upload(client, extra: ['--dry-run']);
+
+      expect(said, contains('release notes'));
+      expect(said, contains('would'));
+      expect(client.posted, isEmpty);
+      expect(client.patched, isEmpty);
+    },
+  );
 
   test('a dry run writes nothing at all', () async {
     final client = _FakeClient(versions: [_version('old', '1.1.5')]);

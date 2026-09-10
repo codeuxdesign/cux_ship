@@ -109,6 +109,34 @@ class AscApiException implements Exception {
           '  read what you declared or warn you that it is incomplete.';
     }
 
+    // "Attribute 'whatsNew' cannot be edited at this time." — Apple's answer
+    // when a version will not take release notes. It names the attribute and
+    // not the condition, which is the whole reason this entry exists.
+    //
+    // **Here rather than appended to `details` by the caller**, which is where
+    // it started: `details` is documented above as one entry per Apple
+    // `errors[]` element, it is publicly exported through `read.dart`, and a
+    // consumer reading it would have been told Apple said three sentences
+    // Apple did not say. This is the seam for "an error whose own text does
+    // not say what to do", and using it keeps Apple's words Apple's.
+    if (text.contains("attribute 'whatsnew' cannot be edited")) {
+      return 'Apple will not take release notes for this version right now.\n'
+          '  Two states produce this, and the error names neither:\n'
+          '    - the version is locked by review, so nothing on it is '
+          'editable;\n'
+          '    - it is the app\'s first version, which has no "What\'s New" '
+          'to be\n'
+          '      new against. cux_ship checks for that one and skips the '
+          'write, so\n'
+          '      reaching this message means the first.\n'
+          '\n'
+          '  Anything written before this is already published and re-running '
+          'is safe:\n'
+          '  the notes are written again once the version is editable, and '
+          '`appstore\n'
+          '  promote --changelog` writes them at submission time in any case.';
+    }
+
     // "Beta App Description is missing." — a 422 from submitting a build for
     // beta review while TestFlight's Test Information holds no description.
     // The backstop behind the preflight in beta_release.dart, which checks

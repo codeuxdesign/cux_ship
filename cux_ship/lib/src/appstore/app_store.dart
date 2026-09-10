@@ -658,6 +658,7 @@ class PreviewProcessingProgress {
     required this.frameState,
     required this.waited,
     required this.timeout,
+    this.frameStateAbandoned = false,
   });
 
   final String previewId;
@@ -681,6 +682,15 @@ class PreviewProcessingProgress {
 
   final Duration waited;
   final Duration timeout;
+
+  /// Whether the wait has stopped expecting a poster-frame state for this
+  /// asset and is taking the video's verdict as the whole verdict.
+  ///
+  /// **A decision, not a state Apple reported**, and the one thing a caller
+  /// could not reconstruct from the two states alone: `COMPLETE` beside a null
+  /// frame reads identically whether the grace period has run out or is still
+  /// counting. See [AppStore.awaitPreviewProcessing].
+  final bool frameStateAbandoned;
 
   /// Whether Apple has finished with both assets.
   bool get done => videoState == 'COMPLETE' && frameState == 'COMPLETE';
@@ -3321,28 +3331,39 @@ class AppStore {
         // whether the second wait is dead weight, was unanswerable from
         // outside. It costs one line per transition and it is the only
         // instrument anybody has on a queue Apple documents in hours.
+        // **Reported every poll, printed only on a change.** The callback was
+        // gated on the transition too, which made it the opposite of the
+        // heartbeat its own doc promises: on a queue measured in hours, a
+        // preview sitting at PROCESSING fired once and then nothing, and a
+        // consumer using it for liveness would conclude the process had hung.
+        // Printing stays on the transition, because a line every fifteen
+        // seconds saying the same thing is not a log anybody reads.
+        //
+        // `fileName` is read without an `as String?`: that cast was the only
+        // new unchecked one in this change, and a non-string there would throw
+        // out of the wait where the line it replaced merely printed oddly.
+        final reported = _attributes(data)['fileName'];
+        final progress = PreviewProcessingProgress(
+          previewId: id,
+          fileName: reported is String ? reported : null,
+          videoState: video,
+          frameState: frame,
+          waited: DateTime.now().difference(started),
+          timeout: timeout,
+        );
+        latest[id] = progress;
         final seen = '${video ?? '-'}/${frame ?? '-'}';
-        if (lastSeen[id] != seen) {
-          lastSeen[id] = seen;
-          final progress = PreviewProcessingProgress(
-            previewId: id,
-            fileName: _attributes(data)['fileName'] as String?,
-            videoState: video,
-            frameState: frame,
-            waited: DateTime.now().difference(started),
-            timeout: timeout,
+        final changed = lastSeen[id] != seen;
+        lastSeen[id] = seen;
+        if (onProgress != null) {
+          onProgress(progress);
+        } else if (changed) {
+          stdout.writeln(
+            '      ${progress.fileName ?? id} at '
+            '${progress.waited.inSeconds}s: '
+            'video ${video ?? 'not reported'}, '
+            'poster frame ${frame ?? 'not reported'}',
           );
-          latest[id] = progress;
-          if (onProgress != null) {
-            onProgress(progress);
-          } else {
-            stdout.writeln(
-              '      ${progress.fileName ?? id} at '
-              '${progress.waited.inSeconds}s: '
-              'video ${video ?? 'not reported'}, '
-              'poster frame ${frame ?? 'not reported'}',
-            );
-          }
         }
         if (video == 'FAILED' || frame == 'FAILED') {
           final why = previewDeliveryErrors(data);
@@ -3387,10 +3408,31 @@ class AppStore {
           final waited = (frameGrace[id] ?? 0) + 1;
           frameGrace[id] = waited;
           if (waited >= framePolls) {
-            stdout.writeln(
-              '      ${_attributes(data)['fileName'] ?? id}: Apple reports no '
-              'poster-frame state; taking the video\'s COMPLETE as final',
+            // **Through the callback, not past it.** This and the "waiting
+            // for Apple" line below wrote to stdout unconditionally, so a
+            // caller that had taken over reporting got its transitions
+            // redirected and these two anyway — which for the planned
+            // `wait-previews --json` means prose in the document stream, on
+            // exactly the interesting runs. `cli.dart` states the invariant:
+            // under `--json`, stdout carries the document and nothing else.
+            final abandoned = PreviewProcessingProgress(
+              previewId: id,
+              fileName: progress.fileName,
+              videoState: video,
+              frameState: frame,
+              waited: DateTime.now().difference(started),
+              timeout: timeout,
+              frameStateAbandoned: true,
             );
+            latest[id] = abandoned;
+            if (onProgress != null) {
+              onProgress(abandoned);
+            } else {
+              stdout.writeln(
+                '      ${abandoned.fileName ?? id}: Apple reports no '
+                'poster-frame state; taking the video\'s COMPLETE as final',
+              );
+            }
             continue;
           }
         }
@@ -3427,7 +3469,7 @@ class AppStore {
           ],
         );
       }
-      if (!announced) {
+      if (!announced && onProgress == null) {
         stdout.writeln(
           '      waiting for Apple to process ${pending.length} preview(s) — '
           'this is slower than a screenshot, and can take hours',

@@ -676,8 +676,13 @@ Future<void> publishReleaseNotes(
   Map<String, dynamic> version,
   String locale,
   String? notes,
-  String? versionName,
-) async {
+  String? versionName, {
+
+  /// The locales the metadata tree carries, when there is a tree. Empty means
+  /// "do not check" — `promote --changelog` with no `--metadata` publishes
+  /// notes against a listing this run never read.
+  Set<String> declaredLocales = const {},
+}) async {
   if (notes == null) {
     return;
   }
@@ -690,6 +695,25 @@ Future<void> publishReleaseNotes(
     );
     return;
   }
+  // **Only for a locale the listing actually has.** The notes go to the CLI's
+  // `--locale`, which defaults to en-US, while the tree declares its own — so
+  // a `listings/de-DE/`-only tree published without `--locale de-DE` would
+  // POST a *new* en-US version localization carrying release notes and no
+  // description. `writeVersionLocalization` creates the record when none
+  // exists, and that record is one nothing else in the tree owns.
+  //
+  // Skipped loudly rather than quietly: this is a listing that will not carry
+  // its notes, which is the thing this whole function exists to stop happening
+  // in silence.
+  if (declaredLocales.isNotEmpty && !declaredLocales.contains(locale)) {
+    stdout.writeln(
+      '==> release notes skipped: this tree declares '
+      '${declaredLocales.join(", ")} and the notes would go to $locale.\n'
+      '    Pass --locale ${declaredLocales.first} to publish them there.',
+    );
+    return;
+  }
+
   stdout.writeln('==> release notes');
   var releaseNotes = notes;
   if (needsStrippingForApple(notes)) {
@@ -706,46 +730,26 @@ Future<void> publishReleaseNotes(
   // come from CHANGELOG.md, so "unchanged since last time" is not a state a
   // release is expected to be in. The read is still passed in, so this write
   // decides POST or PATCH from a reading rather than making its own.
-  try {
-    await store.writeVersionLocalization(version, locale, {
-      'whatsNew': releaseNotes,
-    }, existing: await store.versionLocalizations(version));
-  } on AscApiException catch (e) {
-    // **A backstop for a version locked by review, and measured to be only
-    // that.**
-    //
-    // `Attribute 'whatsNew' cannot be edited at this time` is a *state*
-    // refusal. [AppStore.isFirstVersion] removes one cause of it. The open
-    // question was whether a version with **no build attached** was another —
-    // a state only this caller can reach, because the promote path always has
-    // a build by the time it writes, and one that would have made writing the
-    // notes here wrong in principle.
-    //
-    // **It is not.** Measured against a live App Store version in
-    // `PREPARE_FOR_SUBMISSION` with no build: the write lands, exit 0, no
-    // refusal of any kind. So this branch is for the locked case rather than
-    // for the ordinary one, and publishing the notes from a listing-only run
-    // is sound rather than merely convenient.
-    //
-    // Rethrown rather than swallowed, and with the causes named. The listing
-    // itself is already published and re-running is safe, so failing here
-    // costs a repeat rather than a half-written listing — and the alternative,
-    // continuing quietly, is the exact silence this whole change exists to
-    // remove. A consumer whose acceptance criterion is "the changelog lands"
-    // has to be told when it did not.
-    if (!e.details.join(' ').contains('cannot be edited at this time')) {
-      rethrow;
-    }
-    throw AscApiException(e.status, [
-      ...e.details,
-      'Apple refused the "What\'s New" write for this version\'s state.',
-      'Known causes: the version is locked by review, or Apple is not '
-          'accepting release notes for it yet.',
-      'The listing itself published. Re-running once the version is editable '
-          'writes the notes; `appstore promote --changelog` writes them at '
-          'submission time in any case.',
-    ], request: e.request);
-  }
+  // **Not wrapped, and the explanation lives in
+  // `AscApiException.guidanceFor`.** Apple's answer to a version that will not
+  // take notes is `Attribute 'whatsNew' cannot be edited at this time`, which
+  // names the attribute and not the condition — so it needs an explanation,
+  // and this used to append one to `e.details`. That list is documented as one
+  // entry per Apple `errors[]` element and is publicly exported through
+  // `read.dart`, so appending told a consumer Apple had said three sentences
+  // it had not. The guidance seam exists for precisely this kind of error and
+  // keeps Apple's words Apple's.
+  //
+  // **Measured, and worth keeping beside the write:** whether a version with
+  // *no build attached* refuses this was the open question that decided
+  // whether publishing notes from a listing-only run was sound at all — that
+  // state is reachable only from this caller. Against a live version in
+  // `PREPARE_FOR_SUBMISSION` with no build, the write lands, exit 0, no
+  // refusal. So the remaining cause is a version locked by review, which
+  // `ensureVersion` usually refuses first.
+  await store.writeVersionLocalization(version, locale, {
+    'whatsNew': releaseNotes,
+  }, existing: await store.versionLocalizations(version));
 }
 
 /// Publishes the App Store listing from a metadata tree.
@@ -2112,6 +2116,22 @@ Future<void> runAsc(
       //
       // Skipped when the tree needed no version: there is then nothing to hang
       // release notes off, and `--version-name` was not required.
+      if (published == null && listingReleaseNotes != null) {
+        // **The narrowed remains of the defect this change closes.** A tree
+        // declaring only app-level fields — categories, age rating, content
+        // rights, a localized name — needs no version, so there is no record
+        // to hang release notes off and none was created. The notes are
+        // genuinely not publishable here, but saying nothing is what the
+        // original bug did, and the whole point is that a flag taken and
+        // dropped must not look like a command that did what was asked.
+        stdout.writeln(
+          '==> release notes skipped: this tree declares nothing Apple scopes '
+          'to a version,\n'
+          '    so no version was created to carry them. Add version-scoped '
+          'listing text,\n'
+          '    or publish the notes with `appstore promote --changelog`.',
+        );
+      }
       if (published != null) {
         await publishReleaseNotes(
           store,
@@ -2120,6 +2140,9 @@ Future<void> runAsc(
           locale,
           listingReleaseNotes,
           versionName,
+          declaredLocales: {
+            for (final l in metadata.locales) ...{l.locale},
+          },
         );
       }
     }
