@@ -22,8 +22,32 @@ Passing no callback prints exactly what it printed before.
 distinct type for a distinct outcome: `ProcessingTimeout` means a build that
 never appeared, which has usually been refused. Nothing is wrong here — Apple
 is not done — and it carries each preview's two states rather than a count.
-`previewsPendingExit` is reserved at 4 for the command that will read it; see
-`docs/design/preview-wait-split.md`.
+`previewsPendingExit` is 4, and `appstore wait-previews` is the command that
+exits it; see `docs/design/preview-wait-split.md`.
+
+**`appstore wait-previews` waits on previews already uploaded**, the sibling
+`appstore wait` has had since builds needed one. Previews had the longest
+documented tail of any asset here — Apple says twenty-four hours — and the
+fewest ways to manage it: no `--timeout`, no `--poll`, no command that only
+waits, and a `--skip-waiting` that a metadata-only run never consulted. All
+four are fixed. Three outcomes, three exit codes, so a caller that branches on
+status never has to match prose: 0 ready, 4 still ingesting, 1 refused.
+
+**`appstore previews` lists what Apple holds**, without waiting for anything.
+It sits beside `builds` and `versions`, and it prints the one input nobody can
+change after approval and no other output shows: the poster frame each preview
+is posed at. A frame Apple has not cut yet reads `(not set)` rather than as a
+blank column — it comes back as an empty string, not as an absent field.
+
+**`--json` on both.** On the read it is the usual document on stdout; on the
+wait it splits by *stream* rather than by flag — progress on stderr always, the
+document on stdout under `--json` — because a wait is progress and then an
+answer, and one document at the end cannot be rendered as progress. A person
+gets the live report and a program gets a clean document without either having
+to choose. The document uses Apple's own field names, `videoDeliveryState`,
+`previewFrameImageState` and `previewFrameTimeCode`, so it can be read beside
+Apple's reference without a translation table; `done` is this package's own
+opinion over both states and says so in a field of its own.
 
 ## 4.5.0-dev.2
 

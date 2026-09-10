@@ -1,8 +1,12 @@
 # Unwelding the preview wait, the way the build wait is already unwelded
 
-Status: **proposed**. Nothing here is built. `store-preview-rules.md` is the
-document for previews generally; this one exists because the change has an
-interface, and an interface is worth arguing before it is typed.
+Status: **built**. Everything proposed below shipped, in the shape argued for
+except where *What shipped, and where it differed* says otherwise. The sizing of
+the default timeout is still open and is argued in `store-preview-rules.md`,
+not here.
+`store-preview-rules.md` is the document for previews generally; this one exists
+because the change has an interface, and an interface is worth arguing before it
+is typed.
 
 Asked for by the first consumer's owner, in the form *"not sure if waiting for
 30 minutes is the right choice — maybe there should be another status/wait
@@ -211,16 +215,61 @@ sentence was true when written and is now false for previews, which is the
 ordinary way a rule like that expires. `docs/design/json-output.md` governs the
 document's shape.
 
-## What is still deliberately not proposed
+## What shipped, and where it differed
 
-**Changing the 30-minute default.** It is sized against nothing and one
-measurement is not a distribution. `--timeout` makes it a caller's problem
-rather than a guess baked into a release, which is the useful half.
+Four differences, none of them large, all of them found by writing the thing
+rather than by arguing about it — which is the usual ratio and the reason this
+section exists instead of a claim that the proposal was right.
+
+**`--json` splits by stream, not by flag.** Proposed as "a document instead of
+the report"; built as *progress on stderr always, document on stdout under
+`--json`*. The consumer suggested it and it is better: a read has one answer, but
+a wait has progress **and then** an answer, and one document at the end cannot be
+rendered as progress. Splitting by stream gives a person the live report and a
+program a clean document without either having to choose, and it sidesteps
+NDJSON — streaming progress as data later becomes a compatible addition rather
+than a redesign.
+
+**The document carries Apple's field names.** `videoDeliveryState`,
+`previewFrameImageState`, `previewFrameTimeCode` — asked for explicitly, and
+right: a reader can hold the document beside the App Store Connect reference
+without a translation table. Where this package has an opinion — `done`, meaning
+both assets finished — it says so in a field of its own rather than by renaming
+Apple's, which is the split the build documents already make between
+`processingState` and `processingStateRaw`.
+
+**There is no "no such version" message, in either command.** Both were written
+with one, and neither could ever print it: `ensureVersion(create: false)` throws
+a 404 naming the version, and returns null only on the create path. The refusal
+was always Apple's; the branches were dead and are gone.
+
+**The `--version-name` refusals have no tests.** `fail` calls `exit(1)` by
+design, so an in-process test takes the whole run down rather than failing one
+case, and a subprocess cannot reach the check without credentials. Recorded in
+the test file too, because it is a property of every `fail` in `cli.dart` and
+not of these two.
+
+## What is still deliberately not built
 
 **`PreviewProcessingProgress` as a public Dart API.** The consumer's answer to
 "do you want this programmatically" was *yes, via `--json`* — which is a
 different thing, and the cheaper one. The class stays internal to shape the
 callback and the document; nothing needs to import it.
+
+## The timeout question is not here
+
+**Thirty minutes is still a guess, and this document is not where that is
+argued.** `store-preview-rules.md` §*Open: thirty minutes is a guess* holds it,
+including the measurement the first consumer has undertaken to take and the
+reason the third finding — which of the two assets Apple finishes first — matters
+more than either duration. Restating it here would be a second copy of an open
+question, which is the specific way an index of open questions goes stale.
+
+What this change did was make the guess cheap rather than correct: `--timeout`
+makes the number a caller's, `wait-previews` makes the wait re-enterable from
+anywhere, and `previewsPendingExit` makes running out of time distinguishable
+from failing without reading a word. That is why the number was not worth
+blocking on, and it is recorded over there too.
 
 ## Answered by the consumer, and what each answer changed
 

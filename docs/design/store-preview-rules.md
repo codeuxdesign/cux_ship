@@ -325,6 +325,15 @@ did not block the work: the timeout is a parameter, and reaching it is
 recoverable by re-running — the unchanged-asset skip means a second run uploads
 nothing and only re-checks.
 
+**Three more since, from `preview-wait-split.md`, which is built.** `--timeout`
+and `--poll` are now the caller's to set rather than constants; `wait-previews`
+makes the wait re-enterable from any machine, so a deadline reached is a wait to
+resume rather than an upload to redo; and `previewsPendingExit` makes running
+out of time distinguishable from failing *by exit status*, which is what a
+caller that never reads prose actually needs. None of that makes thirty minutes
+right. It makes being wrong about it recoverable in every direction, which is
+why the measurement is still worth taking and still not urgent.
+
 ### Open: nothing requires a preview
 
 Status: **open**.
