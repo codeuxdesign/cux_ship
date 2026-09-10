@@ -69,6 +69,13 @@ for state in "${STATES[@]}"; do
   # The heading a status sits under, so a document with two of them says which
   # is which. read-api.md is `decided` at the top and `open` two hundred lines
   # down, and a report naming only the file cannot tell those apart.
+  # **A document's own status is the state of its subject, and a section may
+  # carry its own.** read-api.md is `decided` at the top and `open` two hundred
+  # lines down — the library shipped, and whether it should have existed did
+  # not stop being a question when it did. So a heading is printed beside every
+  # hit rather than the filename alone: without it a report saying
+  # `read-api.md` twice, under two states, is unreadable, and a header that
+  # says `built` reads as a claim that nothing inside it is open.
   body="$(
     for file in docs/design/*.md; do
       awk -v file="$file" -v want="$state" '
