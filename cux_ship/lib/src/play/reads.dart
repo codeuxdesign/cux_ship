@@ -1,16 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// The Play reads as objects, for a Dart caller that would otherwise be
-// matching regular expressions against this command's stdout.
+// The Play reads as objects — the model `play tracks` prints from, and that
+// `--json` is encoded from.
+//
+// **No longer a public API.** This was reached through
+// `package:cux_ship/read.dart`, for a Dart caller that would otherwise match
+// regular expressions against this command's stdout. That library is gone;
+// read-api.md records why `--json` answered the same question better. Nothing
+// here is exported now.
 //
 // **The printed lines are derived from these objects, not the other way
-// round.** `play tracks` renders [PlayTracks.lines]; there is one description
-// of what a track listing looks like and both the CLI and a library caller get
-// it. That matters more than it sounds: a consumer that prints this command's
-// output verbatim — because a `status` that renders the same model its own way
-// reports something different from what this command reports, silently — needs
-// those lines to be the same lines, and a second formatter beside the first is
-// a second thing to drift.
+// round.** `play tracks` renders [PlayTracks.lines] and `json_output.dart`
+// builds the document from the same objects; there is one description of what
+// a track listing looks like and every renderer gets it. That matters more
+// than it sounds: a consumer that prints this command's output verbatim —
+// because a `status` that renders the same model its own way reports something
+// different from what this command reports, silently — needs those lines to be
+// the same lines, and a second formatter beside the first is a second thing to
+// drift.
 //
 // Reads only, and on the Play side that is worth spelling out: reading tracks
 // opens an *edit*, because Play has no way to list them otherwise. The edit is
@@ -241,11 +248,17 @@ PlayTrack playTrackFrom(Track track) => PlayTrack(
 /// exchange. The upload path abandons its own edit the same way and for the
 /// same reason, in cli.dart.
 ///
-/// This used to be safe here by accident rather than by design: the deletion
+/// **This used to be safe by accident rather than by design**, and the accident
+/// is worth recording because it is gone rather than fixed. The deletion once
 /// sat in the same function as the `catch`, and a `catch` runs before its
-/// `finally`, so the real error had already been printed by the time a
-/// cleanup could fail. Splitting the read out for [PlayReads] moved the
-/// `catch` to the caller and took that ordering away with it.
+/// `finally`, so the real error had already been printed by the time a cleanup
+/// could fail. Splitting this read out into its own function moved the `catch`
+/// to the caller and took that ordering away with it — which is why the
+/// discard here is written as best-effort rather than relying on it.
+///
+/// The split was made for the in-process session that `read.dart` published.
+/// That library is removed and the session with it; the split, and this
+/// consequence of it, are not.
 Future<PlayTracks> readTracks(
   AndroidPublisherApi api,
   String packageName,

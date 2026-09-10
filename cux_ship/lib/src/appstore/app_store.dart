@@ -781,10 +781,11 @@ const noSuchVersionExit = 5;
 /// existed for.
 ///
 /// So the route for a consumer is the exit code, which is what this was minted
-/// for and what `package:cux_ship/exit_codes.dart` exports. Adding the type to
-/// a public library to make this comment true would be API surface reachable
-/// only by somebody who had already spawned the binary and could read its
-/// status instead.
+/// for and what `package:cux_ship/exit_codes.dart` exports. That holds for an
+/// in-process caller too: `runner.dart` is public and runs the command tree
+/// without spawning anything, but `runAsc` catches this and sets `exitCode`
+/// rather than letting it out — so the status is the answer either way, and
+/// exporting the type would publish a name with nothing to catch.
 class NoSuchVersion extends AscApiException {
   NoSuchVersion(this.versionString, this.platform)
     : super(404, [

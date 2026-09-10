@@ -1,6 +1,6 @@
 # Changelog
 
-## 4.5.0-dev.3
+## Unreleased
 
 ### Breaking
 
@@ -16,20 +16,36 @@ regular expressions against printed prose, and every word of that argument
 applies equally to a JSON schema. The decision was *library over the status
 quo*, not *library over JSON*, because `--json` was not on the table yet.
 
-**Nothing `--json` needs went with it.** The value types those sessions
-returned — `AppStoreBuilds`, `AppStoreVersions`, `PlayTracks` and their entries
-— stay, because the documents are built from them; they were never the read
-API, only also exported through it. What went is the in-process *session*:
-opening a client and holding credentials in the calling process. A spawned
-`--json` read keeps the per-step `secrets exec --only` narrowing that an
-in-process read gives up by construction, which is the trade `read-api.md`
-states and the one that settled it.
+**Ten names leave the public API, not two.** `read.dart` was the only library
+publishing them, so `AppStoreBuilds`, `AppStoreVersions`, `PlayTracks`,
+`AppStoreBuild`, `AppStoreVersion`, `PlayTrack`, `PlayTrackRelease`,
+`AscApiException`, `BuildProcessingProgress` and `ProcessingTimeout` are no
+longer importable. **`AscPlatform` keeps a route**, through `documents.dart`.
+
+The value types stay **in `src/`**, because the `--json` documents are built
+from them — but "stay" means the encoder keeps using them, not that a consumer
+can still name them. They were never the read API; they were also exported
+through it, and the export is what went.
+
+**`AscApiException` is the one worth calling out**, because it was on the 4.1.0
+promise list and nothing else publishes it. A caller that caught it by type has
+no replacement, by design rather than by oversight: with no in-process API there
+is nothing left to throw it, and a spawning caller reads the exit code —
+`package:cux_ship/exit_codes.dart` names them, and 5 exists precisely so
+"Apple holds no such version" is not an exception to inspect.
+
+What went, in one sentence, is the in-process *session*: opening a client and
+holding credentials in the calling process. A spawned `--json` read keeps the
+per-step `secrets exec --only` narrowing that an in-process read gives up by
+construction, which is the trade `read-api.md` states and the one that settled
+it.
 
 The design document is kept rather than deleted. It was right about the problem
 and wrong about the answer for a reason nobody could see at the time, and the
 next person who wants an in-process API should be able to read why this one did
 not survive.
 
+## 4.5.0-dev.3
 
 **A listing-only upload publishes the release notes.** `upload --metadata
 --changelog CHANGELOG.md` accepted the flag and wrote no "What's New in This

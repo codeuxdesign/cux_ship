@@ -1,21 +1,33 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// The App Store reads as objects, for a Dart caller that would otherwise be
-// matching regular expressions against this command's stdout.
+// The App Store reads as objects — the model `appstore builds` and `appstore
+// versions` print from, and that `--json` is encoded from.
+//
+// **No longer a public API.** This was reached through
+// `package:cux_ship/read.dart`, for a Dart caller that would otherwise match
+// regular expressions against this command's stdout. That library is gone:
+// `--json` answers the same question without moving credentials into the
+// calling process, and read-api.md records why the library did not survive it.
+// Nothing here is exported now.
 //
 // **The printed lines are derived from these objects, not the other way
 // round.** [printBuilds] and [printVersions] render [AppStoreBuilds.lines] and
-// [AppStoreVersions.lines]; there is one
-// description of what a build listing looks like and both the CLI and a
-// library caller get it. That matters more than it sounds: a consumer that
-// prints this command's output verbatim — because a `status` that renders the
-// same model its own way reports something different from what this command
-// reports, silently — needs those lines to be the same lines, and a second
-// formatter beside the first is a second thing to drift.
+// [AppStoreVersions.lines], and `json_output.dart` builds the documents from
+// the same objects — so there is one description of what a build listing looks
+// like and every renderer gets it. That matters more than it sounds: a
+// consumer that prints this command's output verbatim — because a `status`
+// that renders the same model its own way reports something different from
+// what this command reports, silently — needs those lines to be the same
+// lines, and a second formatter beside the first is a second thing to drift.
 //
-// Reads only. Nothing here can write, and that is structural rather than a
-// promise: the [Writer] an [AppStoreReads] session builds is a dry-run writer,
-// so the write path is refused at the one place every write goes through.
+// **Reads only, and that is now a convention rather than a structure.** It
+// used to be structural: an `AppStoreReads` session built a dry-run [Writer],
+// so the write path was refused at the one place every write goes through.
+// That session is deleted, and nothing in this file constructs a [Writer] any
+// more — [printBuilds] and [printVersions] take an [AppStore] from their
+// caller and can only do with it what that caller could. Said plainly because
+// the sentence it replaces claimed a guarantee, and somebody reading
+// "structural" would go looking for a refusal that is no longer anywhere.
 import 'dart:io';
 
 import '../json_output.dart';

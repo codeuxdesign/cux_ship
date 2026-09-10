@@ -73,9 +73,9 @@ error: it disappears from the report, and a short list of open questions is
 believed.
 
 **A document's own status is the state of its subject, and a section may carry
-its own.** `read-api.md` is `decided` at the top and `open` two hundred lines
-down: the library shipped, and whether it should have existed did not stop
-being a question when it did. So a header that says `built` is not a claim that
+its own.** `store-preview-rules.md` is `built` at the top and carries three
+`open` sections: preview videos ship, and how long an ingestion normally takes
+is still unmeasured. So a header that says `built` is not a claim that
 nothing inside is open — it is a claim about the thing the document is *for*,
 and the honest place for the rest is a section with a status of its own. That
 is why the index prints the heading beside every hit rather than the filename

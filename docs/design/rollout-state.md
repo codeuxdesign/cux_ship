@@ -867,14 +867,17 @@ it.
 
 ## What this does not decide
 
-**Whether any of it goes into `read.dart`.** It should not, and
-[read-api.md](read-api.md) §"What is left of the surface" is why: `--json` won
-for the three reads, the consumer ported, its second entrypoint is deleted.
-Adding rollout state to the library would spend a permanent API promise on a
-surface whose own open question is whether it should have existed —
-json-output.md §"What this does not decide" states exactly this consequence, in
-advance, as the reason to do `--json` first. It was done first. The consequence
-holds.
+**Whether any of it goes into `read.dart`.** ~~It should not~~ — **it cannot;
+that library is removed.** [read-api.md](read-api.md) records the decision, and
+this paragraph is kept because it reached the right answer before the question
+was settled, which is the more interesting fact about it.
+
+What it said: `--json` won for the three reads, the consumer ported, its second
+entrypoint was deleted, and adding rollout state to the library would spend a
+permanent API promise on a surface whose own open question was whether it
+should have existed. json-output.md §"What this does not decide" stated exactly
+that consequence in advance, as the reason to do `--json` first. It was done
+first, the consequence held, and the surface is now gone.
 
 **Whether `schema` bumps.** It does not: every field proposed here is optional
 and additive, which is [build-manifest.md](build-manifest.md) §Compatibility and
