@@ -14,6 +14,11 @@
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+// **Imported through the public library as well as from `src/`**, so a name
+// missing from `lib/exit_codes.dart` is a compile error here rather than only
+// a failed assertion — the strongest form this check has, and the one a source
+// scan cannot reach.
+import 'package:cux_ship/exit_codes.dart' as public;
 import 'package:cux_ship/src/appstore/app_store.dart'
     show noSuchVersionExit, previewsPendingExit;
 import 'package:cux_ship/src/appstore/flatten_cli.dart'
@@ -83,6 +88,38 @@ String _repoWithCollidingRecord() {
   return root.path;
 }
 
+/// Every Dart source under `lib/`, from wherever the suite is run.
+///
+/// Throwing rather than skipping, for `documents_test.dart`'s reason: a rule
+/// about what the sources contain is worth nothing from a test that cannot
+/// find them.
+List<File> _libSources() {
+  for (final root in ['lib', 'cux_ship/lib']) {
+    final directory = Directory(root);
+    if (directory.existsSync()) {
+      return directory
+          .listSync(recursive: true)
+          .whereType<File>()
+          .where((f) => f.path.endsWith('.dart'))
+          .toList();
+    }
+  }
+  throw StateError(
+    'cannot find lib/ from ${Directory.current.path} — and a rule about its '
+    'contents would pass by default',
+  );
+}
+
+File _exitCodesLibrary() {
+  for (final path in ['lib/exit_codes.dart', 'cux_ship/lib/exit_codes.dart']) {
+    final file = File(path);
+    if (file.existsSync()) {
+      return file;
+    }
+  }
+  throw StateError('cannot find lib/exit_codes.dart');
+}
+
 void main() {
   test('a collision exits with the collision code, not 1', () {
     // **The half that was missing.** `uploadCollisionExit` existed, and the
@@ -130,6 +167,55 @@ void main() {
     expect(uploadCollisionExit, isNot(64), reason: 'EX_USAGE, a usage error');
   });
 
+  test('every exit code is exported, so a caller can name it', () {
+    // **The class, not the instance.** A consumer reported writing `5` with a
+    // comment where `noSuchVersionExit` belonged, because the constants lived
+    // in `src/` and nothing exported them. That is safe — the forward rule
+    // means an existing code never changes meaning, so a hard-coded digit
+    // stays right — but it is the same omission as the document types that
+    // were unexported until somebody outside tried to name one.
+    //
+    // So this reads the source for every `…Exit` constant rather than listing
+    // them, and fails when one is missing from `lib/exit_codes.dart`. A sixth
+    // code added without being exported fails here rather than in a
+    // consumer's package a release later.
+    final declared = <String>{};
+    for (final file in _libSources()) {
+      for (final match in RegExp(
+        r'^const (\w*Exit) = ',
+        multiLine: true,
+      ).allMatches(file.readAsStringSync())) {
+        declared.add(match.group(1)!);
+      }
+    }
+    expect(
+      declared,
+      isNotEmpty,
+      reason: 'a rule about the constants is worth nothing if none were found',
+    );
+
+    // **The `show` clauses, not the file's text.** A first version searched
+    // the whole source and passed against a real regression, because that
+    // library's header names every constant in prose — so dropping one from a
+    // `show` list left the word on the page and the export gone. Reading only
+    // what is actually exported is the difference between checking the
+    // documentation and checking the API.
+    final exported = <String>{
+      for (final clause in RegExp(
+        r'export [^;]*? show ([^;]*);',
+        dotAll: true,
+      ).allMatches(_exitCodesLibrary().readAsStringSync()))
+        ...clause.group(1)!.split(',').map((n) => n.trim()),
+    };
+    for (final name in declared) {
+      expect(
+        exported,
+        contains(name),
+        reason: '$name is not exported from lib/exit_codes.dart',
+      );
+    }
+  });
+
   test('the whole vocabulary is distinct, and pinned to its numbers', () {
     // **Literals, not the constants.** The per-code tests assert
     // `exitCode == theConstant`, which moves with the constant — so setting
@@ -140,6 +226,12 @@ void main() {
     // It is also what keeps README.md's exit-code table honest, since that
     // table is the published contract and nothing else compares it to the
     // source.
+    // Through the public library, which is how a consumer names them.
+    expect(public.needsFlatteningExit, needsFlatteningExit);
+    expect(public.uploadCollisionExit, uploadCollisionExit);
+    expect(public.previewsPendingExit, previewsPendingExit);
+    expect(public.noSuchVersionExit, noSuchVersionExit);
+
     expect(needsFlatteningExit, 2);
     expect(uploadCollisionExit, 3);
     expect(previewsPendingExit, 4);

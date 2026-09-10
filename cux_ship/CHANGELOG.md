@@ -49,6 +49,15 @@ to choose. The document uses Apple's own field names, `videoDeliveryState`,
 Apple's reference without a translation table; `done` is this package's own
 opinion over both states and says so in a field of its own.
 
+**`package:cux_ship/exit_codes.dart`** exports the four exit-code constants, so
+a caller spawning the binary can name `noSuchVersionExit` instead of writing
+`5` with a comment beside it. Its own library rather than a corner of
+`documents.dart`, whose rule about field names and JSON keys a handful of
+integers does not fit, and not `read.dart`, which is for callers that spawn
+nothing. Reported by a consumer, ranked below everything else and right that it
+is readability rather than correctness — an existing code never changes
+meaning, so a hard-coded digit stays correct.
+
 **`appstore upload` takes `--release-type`.** It was declared on `promote`
 alone, so a flow that publishes the listing and stops — no artifact, no
 promote, so a human can read the finished page before submitting — created the
