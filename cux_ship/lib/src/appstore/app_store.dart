@@ -639,6 +639,108 @@ List<String> _stateErrors(Object? state) {
   ].where((message) => message.isNotEmpty).toList();
 }
 
+/// One poll of one preview, as the wait saw it.
+///
+/// **The preview analogue of [BuildProcessingProgress], and it carries two
+/// states rather than one.** That is the whole structural difference: Apple
+/// ingests the video and then cuts the poster frame out of it, reports them
+/// separately, and a preview is not finished until both say `COMPLETE`.
+///
+/// It exists for the reason the build one does — *"a consumer streaming that to
+/// a log wants a heartbeat with its own timestamps and its own destination"* —
+/// and a queue Apple documents in hours makes that argument stronger rather
+/// than weaker.
+class PreviewProcessingProgress {
+  const PreviewProcessingProgress({
+    required this.previewId,
+    required this.fileName,
+    required this.videoState,
+    required this.frameState,
+    required this.waited,
+    required this.timeout,
+  });
+
+  final String previewId;
+
+  /// What the tree called this video, when Apple reported a name for it.
+  final String? fileName;
+
+  /// Apple's `videoDeliveryState.state`, or null when it reported none.
+  ///
+  /// **Null is a fact about the response, not a stage.** See
+  /// [previewVideoState]: Apple deprecated `assetDeliveryState` here, and a
+  /// reader consulting the wrong field reports null for every preview.
+  final String? videoState;
+
+  /// Apple's `previewFrameImage.state.state`, or null when it reported none.
+  ///
+  /// Null is ordinary early on — the frame is cut after the video — and, on at
+  /// least one real upload, is what Apple reports for several minutes while the
+  /// video is already `COMPLETE`.
+  final String? frameState;
+
+  final Duration waited;
+  final Duration timeout;
+
+  /// Whether Apple has finished with both assets.
+  bool get done => videoState == 'COMPLETE' && frameState == 'COMPLETE';
+
+  /// Whether either asset was rejected.
+  bool get failed => videoState == 'FAILED' || frameState == 'FAILED';
+}
+
+/// What `cux_ship` exits with when a preview wait reaches its deadline with
+/// assets still processing.
+///
+/// **Not a failure, and not zero either.** Apple documents ingestion as taking
+/// up to twenty-four hours, so a deadline says "not yet" rather than "wrong" —
+/// but a caller that branches on exit status, and never on text, cannot tell
+/// "not yet" from "finished" if both are 0. The first consumer branches that
+/// way deliberately, after a status escaped from four regular expressions
+/// matched against stdout.
+///
+/// 4 rather than 2, which `screenshots flatten --check` uses for "there is work
+/// to do", and rather than 3, which [uploadCollisionExit] holds. The meanings
+/// are close enough that reusing 2 is tempting, and that is the argument
+/// against it: a wrapper branching on 2 would conflate a tree that needs
+/// flattening with an asset Apple has not finished, and the codes here are one
+/// vocabulary rather than one per command.
+const previewsPendingExit = 4;
+
+/// Raised when a preview wait reached its deadline with work outstanding.
+///
+/// **A distinct type because it is a distinct outcome**, not a failure with a
+/// friendlier message. [ProcessingTimeout] is the build equivalent and means
+/// something else: a build that never appears has usually been *refused*, and
+/// Apple says so only by e-mail. Nothing is wrong here; Apple is simply not
+/// done.
+class PreviewsPending implements Exception {
+  PreviewsPending({required this.pending, required this.waited});
+
+  /// The previews still in flight, most-informative field first.
+  final List<PreviewProcessingProgress> pending;
+
+  final Duration waited;
+
+  @override
+  String toString() {
+    final lines = [
+      'Apple has not finished processing ${pending.length} preview(s) after '
+          '${waited.inMinutes} minutes.',
+      for (final preview in pending) ...{
+        '  ${preview.fileName ?? preview.previewId}: video '
+            '${preview.videoState ?? "not reported"}, poster frame '
+            '${preview.frameState ?? "not reported"}',
+      },
+      'This is not a failure. Apple documents preview ingestion as taking up '
+          'to 24 hours,',
+      'and the assets are uploaded — this run stopped waiting rather than '
+          'block.',
+    ];
+    return lines.join('\n');
+  }
+}
+
 /// What a run has to do to make Apple's previews match the tree's.
 ///
 /// Three answers rather than the screenshots' two, and the third is the reason
@@ -3166,6 +3268,7 @@ class AppStore {
     Duration timeout = const Duration(minutes: 30),
     Duration poll = const Duration(seconds: 15),
     int framePolls = 4,
+    void Function(PreviewProcessingProgress)? onProgress,
   }) async {
     if (previewIds.isEmpty || writer.dryRun) {
       return;
@@ -3179,6 +3282,9 @@ class AppStore {
     // The last `video/frame` pair printed for each asset, so the log carries
     // one line per transition rather than one per poll.
     final lastSeen = <String, String>{};
+    // The most recent poll of each asset, so a deadline can report what each
+    // one was actually doing rather than only how many there were.
+    final latest = <String, PreviewProcessingProgress>{};
     final started = DateTime.now();
     var announced = false;
 
@@ -3205,12 +3311,25 @@ class AppStore {
         final seen = '${video ?? '-'}/${frame ?? '-'}';
         if (lastSeen[id] != seen) {
           lastSeen[id] = seen;
-          final elapsed = DateTime.now().difference(started).inSeconds;
-          stdout.writeln(
-            '      ${_attributes(data)['fileName'] ?? id} at ${elapsed}s: '
-            'video ${video ?? 'not reported'}, '
-            'poster frame ${frame ?? 'not reported'}',
+          final progress = PreviewProcessingProgress(
+            previewId: id,
+            fileName: _attributes(data)['fileName'] as String?,
+            videoState: video,
+            frameState: frame,
+            waited: DateTime.now().difference(started),
+            timeout: timeout,
           );
+          latest[id] = progress;
+          if (onProgress != null) {
+            onProgress(progress);
+          } else {
+            stdout.writeln(
+              '      ${progress.fileName ?? id} at '
+              '${progress.waited.inSeconds}s: '
+              'video ${video ?? 'not reported'}, '
+              'poster frame ${frame ?? 'not reported'}',
+            );
+          }
         }
         if (video == 'FAILED' || frame == 'FAILED') {
           final why = previewDeliveryErrors(data);
@@ -3271,19 +3390,29 @@ class AppStore {
         return;
       }
       if (DateTime.now().isAfter(deadline)) {
-        // Ours, not Apple's — every poll was answered.
-        throw AscApiException(504, [
-          'Apple has not finished processing ${pending.length} preview(s) '
-              'after ${timeout.inMinutes} minutes.',
-          'That is not a failure: Apple\'s own guidance is that a preview can '
-              'take up to 24 hours to process, and this run stopped waiting '
-              'rather than submit a version whose assets are still in flight, '
-              'which Apple refuses with an error naming the version instead '
-              'of the previews.',
-          'The videos are uploaded. Re-running publishes the listing again '
-              'and skips them once Apple reports them COMPLETE; the '
-              'submission is what has to wait.',
-        ], request: 'GET /v1/appPreviews');
+        // **Ours, not Apple's — every poll was answered**, which is why this
+        // is [PreviewsPending] rather than an API error. What the caller does
+        // with it differs: an inline `upload --metadata` cannot safely proceed
+        // to a submission and treats it as fatal, while `appstore
+        // wait-previews` reports it and exits [previewsPendingExit]. Same
+        // condition, two callers, two right answers — the argument for the
+        // wait being a command rather than a step.
+        throw PreviewsPending(
+          waited: DateTime.now().difference(started),
+          pending: [
+            for (final id in pending) ...{
+              latest[id] ??
+                  PreviewProcessingProgress(
+                    previewId: id,
+                    fileName: null,
+                    videoState: null,
+                    frameState: null,
+                    waited: DateTime.now().difference(started),
+                    timeout: timeout,
+                  ),
+            },
+          ],
+        );
       }
       if (!announced) {
         stdout.writeln(

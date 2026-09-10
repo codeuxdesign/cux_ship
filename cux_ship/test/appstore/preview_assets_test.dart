@@ -1044,17 +1044,92 @@ void main() {
           ),
         ),
         throwsA(
-          isA<AscApiException>().having(
+          isA<PreviewsPending>().having(
             (e) => e.toString(),
             'message',
             allOf(
               contains('24 hours'),
               contains('not a failure'),
               contains('uploaded'),
+              // **Each asset's own state, not just a count.** A caller told
+              // "1 preview(s) still processing" cannot tell a video still
+              // uploading from a poster frame Apple has not cut, and those
+              // want different things done about them.
+              contains('video PROCESSING'),
             ),
           ),
         ),
       );
+    });
+
+    test(
+      'the pending outcome carries each preview, not just a count',
+      () async {
+        // `PreviewsPending` is a distinct type from `ProcessingTimeout` because
+        // it is a distinct outcome: a build that never appears has usually been
+        // refused, and Apple says so only by e-mail. Nothing is wrong here —
+        // Apple is simply not done, which is why it carries the states rather
+        // than an apology.
+        final client = _FakeClient()
+          ..polls = [_preview(fileName: 'promo.mp4', videoState: 'PROCESSING')];
+
+        await expectLater(
+          _printed(
+            () => storeOf(client).awaitPreviewProcessing(
+              ['preview-1'],
+              timeout: Duration.zero,
+              poll: Duration.zero,
+            ),
+          ),
+          throwsA(
+            isA<PreviewsPending>()
+                .having((e) => e.pending, 'pending', hasLength(1))
+                .having(
+                  (e) => e.pending.single.fileName,
+                  'fileName',
+                  'promo.mp4',
+                )
+                .having(
+                  (e) => e.pending.single.videoState,
+                  'videoState',
+                  'PROCESSING',
+                )
+                .having((e) => e.pending.single.done, 'done', isFalse),
+          ),
+        );
+      },
+    );
+
+    test('a caller can report the wait its own way', () async {
+      // The reason `BuildProcessingProgress` exists, one asset along: a
+      // consumer streaming a wait Apple documents in hours wants a heartbeat
+      // with its own timestamps and its own destination, which it cannot have
+      // if the only report is a line on this process's stdout.
+      final client = _FakeClient()
+        ..polls = [
+          _preview(fileName: 'promo.mp4', videoState: 'PROCESSING'),
+          _preview(
+            fileName: 'promo.mp4',
+            videoState: 'COMPLETE',
+            frameState: 'COMPLETE',
+          ),
+        ];
+
+      final seen = <PreviewProcessingProgress>[];
+      final said = await _printed(
+        () => storeOf(client).awaitPreviewProcessing(
+          ['preview-1'],
+          poll: Duration.zero,
+          onProgress: seen.add,
+        ),
+      );
+
+      expect(seen.map((p) => p.videoState), ['PROCESSING', 'COMPLETE']);
+      expect(seen.last.done, isTrue);
+      expect(seen.first.done, isFalse);
+      // A caller that took the callback gets the report *instead of* the
+      // default line, not as well as it.
+      expect(said, isNot(contains('at 0s:')));
     });
 
     test('a dry run waits for nothing', () async {
