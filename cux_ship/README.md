@@ -1282,6 +1282,8 @@ console. A project that would rather that state were unreachable says so in its
 own test suite:
 
 ```dart
+// The same metadata root the CLI is given — `store/appstore/ios` in a project
+// whose Mac build has a tree of its own.
 checkAppStoreTree('store/appstore', requirePreviewFrames: true)
 ```
 

@@ -124,13 +124,24 @@ class VideoRules {
 /// are the lower 422 variants and `ap4h` is 4444, and Apple's page says "HQ
 /// only", so naming the one is the accurate reading of it rather than an
 /// oversight.
+///
+/// **The file size is the decimal reading of an ambiguous number, on purpose.**
+/// Apple's page says "500MB" and states no units, so 500,000,000 and
+/// 524,288,000 are both defensible. Decimal is taken for two reasons: Apple has
+/// written user-facing storage sizes in decimal MB since 2009, so it is the
+/// likelier reading; and the two errors are not symmetric. Refusing a file in
+/// the 24 MB band between the readings costs a re-encode of something that
+/// would probably have been accepted. Accepting one Apple then refuses costs a
+/// day in the ingestion queue and a resubmission, which is the whole thing this
+/// check exists to avoid. See [_megabytes], which has to use the same base or
+/// the message compares two numbers in different units.
 const appStorePreviewRules = VideoRules(
   store: 'the App Store',
   codecs: {'avc1': 'H.264', 'avc3': 'H.264', 'apch': 'ProRes 422 HQ'},
   maxFrameRate: 30,
   minDuration: Duration(seconds: 15),
   maxDuration: Duration(seconds: 30),
-  maxFileSize: 500 * 1024 * 1024,
+  maxFileSize: 500 * 1000 * 1000,
 );
 
 /// Why [video] is not something [rules] accepts, or null when it is.
@@ -159,8 +170,20 @@ String? videoEncodingProblem(VideoInfo video, VideoRules rules) {
         '${_rate(rules.maxFrameRate)}';
   }
   if (video.fileSize > rules.maxFileSize) {
+    // The band between the two readings of "500MB" is named rather than
+    // silently refused, because in it this is *our* rule and not Apple's — and
+    // somebody staring at a 505 MB file that Apple might well have taken
+    // deserves to know that shrinking it is a precaution rather than a
+    // requirement.
+    // The same nominal number read as MiB: 500 decimal MB -> 500 MiB.
+    final binary = rules.maxFileSize / 1000000 * 1024 * 1024;
+    final ambiguous = video.fileSize <= binary;
     return 'is ${_megabytes(video.fileSize)}; ${rules.store} takes at most '
-        '${_megabytes(rules.maxFileSize)}';
+        '${_megabytes(rules.maxFileSize)}'
+        '${ambiguous ? ' — Apple writes "500MB" without units, and this is '
+                  'the decimal reading. Your file is under the other one, so it '
+                  'may well be accepted; refusing it here is the cheap error and '
+                  'a 24-hour rejection is not.' : ''}';
   }
   return null;
 }
@@ -195,8 +218,12 @@ String _rate(double rate) => rate == rate.roundToDouble()
     ? rate.round().toString()
     : rate.toStringAsFixed(2);
 
-String _megabytes(int bytes) =>
-    '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+/// **Decimal, to match [appStorePreviewRules]'s reading of Apple's "500MB".**
+/// The two have to share a base: dividing by 1024*1024 beside a decimal limit
+/// renders the cap as "476.8 MB", so the message would refuse a file for
+/// exceeding a number that is not the one anybody was told.
+String _megabytes(num bytes) =>
+    '${(bytes / (1000 * 1000)).toStringAsFixed(1)} MB';
 
 /// Dimensions, duration, frame rate and codec of an MP4 or QuickTime file, or
 /// null if [bytes] is neither.

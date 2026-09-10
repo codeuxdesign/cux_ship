@@ -12,6 +12,22 @@ import 'package:test/test.dart';
 
 import 'video_fixture.dart';
 
+/// A valid preview of a stated size.
+///
+/// Constructed rather than parsed, unlike everything else here: half a
+/// gigabyte of fixture is half a gigabyte of memory to assert on one integer,
+/// and `fileSize` is the one field the parser copies straight from the length
+/// of what it was handed — so a built file would be testing `List.length`.
+VideoInfo _sized(int bytes) => VideoInfo(
+  width: 886,
+  height: 1920,
+  duration: const Duration(seconds: 20),
+  frameRate: 30,
+  codec: 'avc1',
+  container: VideoContainer.mp4,
+  fileSize: bytes,
+);
+
 void main() {
   group('reading the container', () {
     test('a well-formed preview reads back what was written', () {
@@ -144,18 +160,51 @@ void main() {
       // single integer, and `fileSize` is the one field the parser copies
       // straight from the length of what it was handed — so a built file
       // would be testing `List.length`.
-      const huge = VideoInfo(
-        width: 886,
-        height: 1920,
-        duration: Duration(seconds: 20),
-        frameRate: 30,
-        codec: 'avc1',
-        container: VideoContainer.mp4,
-        fileSize: 501 * 1024 * 1024,
-      );
-      final problem = videoEncodingProblem(huge, appStorePreviewRules)!;
-      expect(problem, contains('501.0 MB'));
+      final problem = videoEncodingProblem(
+        _sized(600 * 1000 * 1000),
+        appStorePreviewRules,
+      )!;
+      expect(problem, contains('600.0 MB'));
       expect(problem, contains('500.0 MB'));
+    });
+
+    test('the limit and the message are read in the same base', () {
+      // Apple writes "500MB" and states no units. Whichever reading is taken,
+      // the cap in the message has to be rendered in it — a decimal limit
+      // divided by 1024*1024 renders as "476.8 MB", so the file is refused for
+      // exceeding a number nobody was ever told.
+      expect(
+        videoEncodingProblem(_sized(600 * 1000 * 1000), appStorePreviewRules),
+        contains('at most 500.0 MB'),
+      );
+    });
+
+    test('a file between the two readings of "500MB" says so', () {
+      // 510 MB decimal is over 500,000,000 and under 500 MiB (524,288,000).
+      // The decimal reading is taken because the errors are not symmetric —
+      // a needless re-encode against a day in the ingestion queue — but in
+      // this band the rule is ours rather than Apple's, and saying so is the
+      // difference between a precaution and a requirement.
+      //
+      // Constructed rather than built: no fixture discriminates here without
+      // half a gigabyte on disk, which is why the consumer's real 473 MB
+      // ProRes could not settle it either.
+      final problem = videoEncodingProblem(
+        _sized(510 * 1000 * 1000),
+        appStorePreviewRules,
+      )!;
+      expect(problem, contains('without units'));
+      expect(problem, contains('may well be accepted'));
+    });
+
+    test('a file over both readings does not hedge', () {
+      // 600 MB is over 524,288,000 too, so there is nothing uncertain about
+      // it and the message should not offer false hope.
+      final problem = videoEncodingProblem(
+        _sized(600 * 1000 * 1000),
+        appStorePreviewRules,
+      )!;
+      expect(problem, isNot(contains('may well be accepted')));
     });
 
     test('the codec is checked before the duration', () {
