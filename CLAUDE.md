@@ -37,6 +37,24 @@ This used to be three commands written out here — `pub get`, `analyze
 steps that bracket it. A script rather than a longer line because the list was
 being maintained in two places, which is how it came to be three of five.
 
+**CI runs a sixth, and a default run here does not — deliberately, and it is
+still one definition.** `dart doc` is asked whether the dartdoc's own
+`[references]` resolve, because `documents.dart`'s dartdoc *is* the published
+statement of the `--json` format and a link that resolves to nothing renders on
+pub.dev as bare square brackets, invisibly to `dart analyze`. It costs about
+ninety-five seconds on `cux_ship` alone against roughly ninety for the whole
+five-step suite over all three members, so it is opt-in for the loop and always
+on in CI. Ask for it when you have touched a doc comment:
+
+```bash
+tool/check.sh --docs cux_ship        # the five, and then this one
+tool/check.sh --docs-only cux_ship   # only this one — the CI step, verbatim
+```
+
+`ci.yaml` invokes that second line rather than restating the command, so the
+asymmetry is *when* it runs and not *where* it is written — which is what keeps
+the heading above true.
+
 `version_test.dart` asserts `cuxShipVersion` and `pubspec.yaml` agree, so run
 this *after* the last edit rather than before it.
 

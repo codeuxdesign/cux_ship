@@ -147,6 +147,44 @@ a percentage, and the day-to-percent table is in Apple's support documentation
 rather than in the API. The two stores are not symmetric here and the document
 should not pretend they are.
 
+**Four dangling `[references]` in the published dartdoc now resolve, and CI
+checks that they do.** `documents.dart`'s dartdoc is the statement of the
+`--json` format — pub.dev renders it per version, and it is the only place a
+consumer can read the format without reading an encoder. A reference that
+resolves to nothing renders there as bare text in square brackets, so the
+specification pointed at a name the reader could not follow.
+
+- `AppStoreBuildEntry.usable` linked `[serving]`, which is on
+  `PlayReleaseEntry`; the paragraph contrasts the two, so it is now
+  `[PlayReleaseEntry.serving]`.
+- `PlayReleaseEntry.serving` linked `[statusKnown]`, which does not exist. The
+  paragraph tells a caller to read the status when `halted` and `draft` need
+  different advice, so it is `[status]` — the field it already names one
+  paragraph up.
+- `AppStoreBuild.uploadedDate` linked `[lines]`, which is on `AppStoreBuilds`.
+  It is `AppStoreBuild.line` that renders the field.
+- `uploadRecordFor` opened with "Whether `[command]` is an invocation that
+  records an upload". It stopped taking a `Command` when it was split out to be
+  testable — the last paragraph of that same comment explains why — and the
+  first line was left behind. It now names `[commandName]`.
+
+**The check is `tool/check.sh --docs`, and CI runs it as
+`tool/check.sh --docs-only <member>`.** `dart analyze` cannot see any of this,
+because a doc comment is a comment; this is the second such defect, after the
+orphaned `///` block a consumer found in the published `4.3.0-dev.2`. It fails
+on `unresolved doc reference` specifically rather than on any warning, because
+`AscPlatform` is exported from both `documents.dart` and `read.dart` and
+dartdoc calls that ambiguous on every run. Opt-in locally because `dart doc`
+costs about ninety-five seconds on this package against ninety for the entire
+existing suite.
+
+**A fifth was created the same afternoon, by the change above.** `serving`'s
+corrected wording linked `[halted]` bare, and `halted` is a member of
+`PlayReleaseStatus` — caught by running this check against that branch before
+either had landed. That is what the check is for, and it is better evidence
+for it than the mutation it was written with: the defect class is still being
+produced by people who have spent the day reading about it.
+
 ## 4.3.0
 
 **The store reads become documents, and the format becomes classes.**

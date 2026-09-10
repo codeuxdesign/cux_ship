@@ -50,7 +50,7 @@ class AppStoreBuild {
 
   /// Apple's `uploadedDate` exactly as sent.
   ///
-  /// Kept beside [uploadedAt] because [lines] renders this one: Apple's
+  /// Kept beside [uploadedAt] because [line] renders this one: Apple's
   /// offset-bearing spelling and `DateTime.toIso8601String` are not the same
   /// string, and the printed output is something a consumer shows verbatim.
   final String? uploadedDate;

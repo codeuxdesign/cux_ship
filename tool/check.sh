@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Runs everything CI runs, so a green local check means a green push.
 #
-#   tool/check.sh              every workspace member
-#   tool/check.sh cux_ship     one of them
+#   tool/check.sh                       every workspace member
+#   tool/check.sh cux_ship              one of them
+#   tool/check.sh --docs cux_ship       ...and the doc-reference check
+#   tool/check.sh --docs-only cux_ship  only that check — the CI step, verbatim
 #
 # **Why this exists.** CI runs five steps per member; CLAUDE.md documented
 # three:
@@ -27,6 +29,23 @@
 # run, and this repository is strange on exactly that axis: it carries a
 # `resolution: workspace` key whose whole documented history is publishing
 # behaving differently from everything local. `format` is the one a habit hides.
+#
+# **`--docs` is the one step CI runs that a default run here does not, and it
+# is behind a flag for time rather than for doubt.** `dart doc` spends about
+# ninety-five seconds on `cux_ship` — it precaches 1.35 million elements,
+# because googleapis is in the dependency tree — against roughly ninety seconds
+# for the entire five-step suite over all three members. Doubling the loop to
+# ask a question that only moves when a doc comment is edited is a bad trade
+# for the loop; skipping the question entirely is a bad trade for the docs. So
+# CI always asks it and a contributor asks it when they have touched dartdoc.
+#
+# **It is written here rather than in the workflow so that the asymmetry is
+# *when* it runs and not *where* it is written.** ci.yaml calls
+# `tool/check.sh --docs-only <member>`; that is the whole CI step, and it runs
+# here unchanged. Restating the command in yaml would rebuild the two-places
+# drift the rest of this file exists to remove — and it would be worse than the
+# original, because a workflow step cannot be watched failing the way
+# docs/CONTRIBUTING.md requires without pushing a branch to find out.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -51,10 +70,32 @@ done < <(
   die "no workspace members found in pubspec.yaml — a check that runs nothing
     passes, which is the failure this script exists to close"
 
-if [ $# -gt 0 ]; then
-  printf '%s\n' "${MEMBERS[@]}" | grep -qx "$1" ||
-    die "$1 is not a workspace member. Members: ${MEMBERS[*]}"
-  MEMBERS=("$1")
+DOCS=0
+DOCS_ONLY=0
+SELECTED=
+
+for arg in "$@"; do
+  case "$arg" in
+    --docs) DOCS=1 ;;
+    --docs-only)
+      DOCS=1
+      DOCS_ONLY=1
+      ;;
+    -*) die "unknown option $arg. Options: --docs, --docs-only" ;;
+    *)
+      # Rejected rather than ignored: `tool/check.sh cux_ship cux_buildnumber`
+      # silently checking only the first is the shape of failure this whole
+      # script is about.
+      [ -z "$SELECTED" ] || die "name one member, not two: $SELECTED and $arg"
+      SELECTED=$arg
+      ;;
+  esac
+done
+
+if [ -n "$SELECTED" ]; then
+  printf '%s\n' "${MEMBERS[@]}" | grep -qx "$SELECTED" ||
+    die "$SELECTED is not a workspace member. Members: ${MEMBERS[*]}"
+  MEMBERS=("$SELECTED")
 fi
 
 # **Warned about, not enforced.** CI pins the SDK to what Flutter stable
@@ -82,7 +123,9 @@ dart pub get
 for package in "${MEMBERS[@]}"; do
   echo
   echo "==> $package"
-  (
+  # Two subshells rather than one, so `--docs-only` is a step this loop skips
+  # rather than a branch wrapped around forty lines of it.
+  [ "$DOCS_ONLY" = 1 ] || (
     cd "$package"
     # **A stale `.g.dart` analyzes clean, which is the whole problem.** The
     # generated code is committed so that neither a consumer nor
@@ -133,7 +176,67 @@ for package in "${MEMBERS[@]}"; do
     echo "--> would publish"
     dart pub publish --dry-run
   )
+
+  # **The dartdoc is asked whether its own cross-references resolve.**
+  # `documents.dart` says in its header, and docs/design/json-output.md says at
+  # length, that this package's dartdoc *is* the published statement of the
+  # `--json` format: pub.dev renders it per version and it is the only place a
+  # consumer can read the format without reading an encoder. A `[reference]`
+  # that resolves to nothing renders there as bare text with square brackets —
+  # so the specification points at a name the reader cannot follow, and
+  # `dart analyze` says nothing, because a doc comment is a comment.
+  #
+  # Second occurrence with the analyzer silent both times. The first was an
+  # orphaned `///` block found by a consumer reading the published dev.2 (see
+  # `documents_test.dart`, "no doc comment is orphaned from the thing it
+  # documents"); that check catches a block attached to nothing and cannot see
+  # a link that dangles. Four of these were live when this was written.
+  [ "$DOCS" = 0 ] || (
+    cd "$package"
+    echo "--> doc references"
+    docs=$(mktemp -d)
+    trap 'rm -rf "$docs"' EXIT
+    # **`dart doc` exits 0 having warned, so the exit code is not the answer
+    # and the output is.** A non-zero exit is dartdoc itself failing, which is
+    # a different thing and is reported as one. Warnings go to stdout; stderr
+    # is folded in so a crash cannot be lost alongside them.
+    if ! dart doc --output "$docs/api" >"$docs/log" 2>&1; then
+      cat "$docs/log" >&2
+      die "dart doc failed in $package"
+    fi
+    # **This warning, not any warning.** `AscPlatform` is exported from both
+    # `documents.dart` and `read.dart`, and dartdoc calls that an ambiguous
+    # reexport on every single run. A check that counted warnings would have
+    # been red on the day it was written, and the only way to get it green
+    # would be to silence it — which is how a guard stops being read.
+    # To stderr with the explanation under it, so the two halves of one
+    # failure do not land on different streams.
+    if grep -F -A 1 'unresolved doc reference' "$docs/log" >&2; then
+      echo "check: a doc reference above resolves to nothing, so it renders" >&2
+      echo "  on pub.dev as plain text in square brackets. Qualify it" >&2
+      echo "  ([Class.member]) if it is on another class, or fix the name." >&2
+      die "unresolved doc references in $package"
+    fi
+  )
 done
 
 echo
-echo "==> all checks passed for ${MEMBERS[*]}"
+# **The closing line says what actually ran, because `--docs-only` runs one
+# thing.** It said "all checks passed" unconditionally, so that mode — and a
+# contributor running the CI step verbatim, which CLAUDE.md invites — got
+# `all checks passed for cux_ship` having skipped format, analyze, test,
+# `publish --dry-run` and the generated-code check.
+#
+# **That is this script's own subject, one level up.** The header is about a
+# documented loop that could not go red on the two steps bracketing it, and the
+# `die` for an empty member list says in as many words that a check which runs
+# nothing passes. A success message overstating its own coverage is the same
+# defect in the same file, and it is worse in CI, where the line outlives the
+# terminal that printed it and is read by somebody who did not choose the flag.
+if [ "$DOCS_ONLY" = 1 ]; then
+  echo "==> doc references resolve in ${MEMBERS[*]} — nothing else ran"
+elif [ "$DOCS" = 1 ]; then
+  echo "==> all checks passed, doc references included, for ${MEMBERS[*]}"
+else
+  echo "==> all checks passed for ${MEMBERS[*]}"
+fi
