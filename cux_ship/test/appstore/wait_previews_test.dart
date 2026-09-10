@@ -291,6 +291,8 @@ void main() {
       stdout: () => out,
       stderr: () => err,
     );
+    await out.close();
+    await err.close();
 
     // stdout is exactly one document and nothing else.
     final document = jsonDecode(out.buffer.toString()) as Map<String, dynamic>;

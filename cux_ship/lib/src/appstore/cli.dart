@@ -1905,14 +1905,18 @@ Future<void> runAsc(
           'answer.',
         );
       }
-      final version = await store.ensureVersion(app, wanted, create: false);
-      final on = version == null
-          ? const <PreviewOnVersion>[]
-          : await store.previewsOn(version);
+      // **There is no "no such version" line here, because that answer never
+      // arrives as one.** `ensureVersion(create: false)` throws a 404 naming
+      // the version and the request when Apple holds none; it returns null
+      // only on the *create* path, where a dry-run has no version to report,
+      // and that path cannot be reached from a read. A branch for null here
+      // would be dead code claiming an API this method does not have — and it
+      // was one, until a test written against the real behaviour found it
+      // printing nothing at all where it promised a diagnosis.
+      final version = (await store.ensureVersion(app, wanted, create: false))!;
+      final on = await store.previewsOn(version);
       final lines = <String>[
-        if (version == null)
-          'no ${platform.name} version $wanted'
-        else if (on.isEmpty)
+        if (on.isEmpty)
           '$wanted carries no previews'
         else
           for (final entry in on) ...[
@@ -1952,13 +1956,10 @@ Future<void> runAsc(
           "else's.",
         );
       }
-      final version = await store.ensureVersion(app, wanted, create: false);
-      if (version == null) {
-        fail(
-          'Apple holds no ${platform.name} version $wanted for $bundleId, so '
-          'there are no previews to wait for.',
-        );
-      }
+      // Null is unreachable with `create: false` — see the note in the
+      // `previews` branch above. Apple holding no such version arrives as a
+      // 404 that already names it.
+      final version = (await store.ensureVersion(app, wanted, create: false))!;
       final on = await store.previewsOn(version);
       if (on.isEmpty) {
         stdout.writeln('==> $wanted carries no previews — nothing to wait for');
