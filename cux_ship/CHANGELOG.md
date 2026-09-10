@@ -1,36 +1,16 @@
 # Changelog
 
-## 4.3.0-dev.2
+## 4.3.0
 
-**Two accessors the port asked for**, both additions and neither a rename. The
-document format is unchanged: one is a getter, one is a static, and no key
-moved — so a document written by 4.3.0-dev.1 is a document this reads.
+**The store reads become documents, and the format becomes classes.**
+`appstore builds`, `appstore versions` and `play tracks` take `--json`, and
+`package:cux_ship/documents.dart` is what a Dart caller decodes them into.
 
-- **`AppStoreBuildsDocument.newest`** returns the newest `AppStoreBuildEntry`,
-  not just its number. `newestBuildNumber` answers *which number*; this answers
-  *which build*, so a caller wanting `needsNewUpload`, `expired` or
-  `processingStateRaw` of it no longer has to find the entry. `builds` is
-  ordered newest-first and `newestBuildNumber` is that element's, so
-  `builds.first` was already correct — but a promise a reader has to go and
-  find is not an accessor a test can hold, and re-deriving "which one is
-  newest" is the ordering this package has been wrong about twice.
-- **`PlayReleaseStatus.serving(status)`** is now public, matching
-  `ProcessingState.needsNewUpload`. It was a private function in the encoder
-  while its twin was reachable, so a consumer's test fixtures could *call* one
-  derived rule and had to **restate** the other — a second copy of a rule this
-  package owns, in a tree it cannot see, which is the drift the derived field
-  exists to prevent.
-
-Both came out of the consumer's port rather than from review, which is what the
-pre-release was published for.
-
-## 4.3.0-dev.1
-
-**A pre-release, so the consumer this was designed with can port against it
-before the shape is fixed.** `pub` will not select it without an explicit
-`^4.3.0-dev.1`, so nothing picks it up by accident. Everything below is
-intended for 4.3.0; what changes between here and there is whatever porting
-finds.
+Shipped first as `4.3.0-dev.1` and `4.3.0-dev.2`, so the consumer this was
+designed with could port against it before the shape froze. That port is
+merged. **It found two API gaps and no format problems** — no key moved between
+the two pre-releases, and moving from one to the other deleted two workarounds
+rather than requiring a re-port. Both gaps are the two accessors below.
 
 **`appstore builds`, `appstore versions` and `play tracks` take `--json`.** The
 listings become documents a caller decodes instead of prose a caller greps —
@@ -148,6 +128,38 @@ unquoted `versionName: 1.10` parses as the double `1.1`.
 `read.dart`, both `reads.dart` headers, two `lines` doc comments and the
 README. They are composed from parsed fields, so what they buy is one formatter
 and not fidelity to a store's format.
+
+### Two accessors the port asked for
+
+Additions, neither a rename, and the document format is unchanged: one is a
+getter and one is a static, so no key moved.
+
+- **`AppStoreBuildsDocument.newest`** returns the newest `AppStoreBuildEntry`,
+  not just its number. `newestBuildNumber` answers *which number*; this answers
+  *which build*, so a caller wanting `needsNewUpload`, `expired` or
+  `processingStateRaw` of it no longer has to find the entry. `builds` is
+  ordered newest-first and `newestBuildNumber` is that element's, so
+  `builds.first` was already correct — but a promise a reader has to go and
+  find is not an accessor a test can hold, and re-deriving "which one is
+  newest" is the ordering this package has been wrong about twice.
+- **`PlayReleaseStatus.serving(status)`** is now public, matching
+  `ProcessingState.needsNewUpload`. It was a private function in the encoder
+  while its twin was reachable, so a consumer's test fixtures could *call* one
+  derived rule and had to **restate** the other — a second copy of a rule this
+  package owns, in a tree it cannot see, which is the drift the derived field
+  exists to prevent.
+
+Both came out of the port rather than from review, which is what publishing a
+pre-release ahead of it was for.
+
+A third thing came from the same direction after dev.2 and changed no code:
+the doc comment written for `AppStoreBuildsDocument.newest` was orphaned
+between two members, so the paragraph explaining why that member is a getter
+rendered under nothing at all. Found by the consumer reading the published
+dartdoc — which is the document this format is specified by, so a hole in it is
+a hole in the spec. `dart analyze` is silent on a dangling `///` block; a test
+is not, now.
+
 
 ## 4.2.0
 
