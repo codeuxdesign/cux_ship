@@ -32,6 +32,13 @@ something Apple accepts quietly and gets wrong later:
   capture is routinely stored as a landscape frame with a quarter turn beside
   it, and reading `tkhd` alone would refuse a file that was already correct.
 
+**`checkAppStoreTree(requirePreviewFrames: true)`** refuses a preview that names
+no poster frame. Off by default, because the tree's rule is *present means
+owned* and a missing sidecar means "leave the poster Apple holds" — which is
+right for a project that set one in the console. On, it is the project saying
+the store permits something it does not, which is what `requireScreenshotTypes`
+already is.
+
 `previewSpecs` is a separate table from `screenshotSpecs` rather than the same
 one with different numbers: Apple's two enumerations are spelled differently
 (`IPHONE_67` against `APP_IPHONE_67`), the sizes are not device resolutions,

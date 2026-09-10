@@ -1266,6 +1266,15 @@ default that arrives silently is the one mistake here that cannot be corrected
 in place. `--dry-run` prints the same lines and uploads nothing, which is the
 cheapest way to see the answer before it is permanent.
 
+A missing sidecar leaves whatever Apple holds alone, which is *present means
+owned* applied to an attribute — right for a project that set its poster in the
+console. A project that would rather that state were unreachable says so in its
+own test suite:
+
+```dart
+checkAppStoreTree('store/appstore', requirePreviewFrames: true)
+```
+
 **The four rules Apple enforces after ingestion are checked before it.**
 Dimensions, duration (15–30s), frame rate (30 max) and codec are read out of
 the container by `cux_ship_verify`, which names the one that is wrong. Apple's

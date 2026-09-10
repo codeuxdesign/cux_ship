@@ -130,6 +130,31 @@ Two checks the shape makes possible, and both are silent failures otherwise:
 resetting it to the default — "present means owned" applied to an attribute. The
 run still says which of the two happened, which is the next section.
 
+### Decided: the frame is required by the consumer, not by the loader
+
+Status: **decided**.
+
+The one consumer asked for the timecode to be a *required* input rather than an
+optional one with a default, on the argument that "an argument that must be
+passed is the cheap way to make that state unreachable". The argument is right
+about the danger and it was not adopted where it was proposed.
+
+Making the sidecar mandatory in `loadMetadata` would break *present means owned*
+for the one field where the rule is doing real work: a project that set its
+poster in the console and does not want it reasserted has no way to say so, and
+would have to duplicate a value it already chose elsewhere. That is a policy
+some consumers have being imposed on all of them.
+
+So it is `checkAppStoreTree(requirePreviewFrames: true)` — the shape this
+package already uses for exactly this, and which `requireScreenshotTypes`
+exists as the precedent for: *the store permits it and this project does not*.
+It fails in the consumer's own test suite, on the push that introduces it,
+which is earlier than a required argument would fail anyway — a required
+argument fails at the release, and a test fails at the commit.
+
+The guarantee the consumer wanted is intact; what changed is which layer holds
+it and who can opt out.
+
 ## Saying what was uploaded and what it was told
 
 The consuming project's convention is that a tool prints effective
