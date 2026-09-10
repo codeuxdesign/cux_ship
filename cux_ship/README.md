@@ -1238,14 +1238,24 @@ one committed and reviewed.
 ## App preview videos
 
 A locale's `previews/` directory publishes to `appPreviewSets` and
-`appPreviews`, beside the `screenshots/` that publish to the screenshot ones:
+`appPreviews`, beside the `screenshots/` that publish to the screenshot ones.
+Everything below is **relative to the metadata root** — whatever path was passed
+to `--metadata` or `--appstore`, which is a per-platform directory in a project
+that ships more than one:
 
 ```
-store/appstore/listings/en-US/
+<metadata root>/listings/en-US/
   screenshots/APP_IPHONE_67/01-ride.png
   previews/IPHONE_67/01-tour.mp4
   previews/IPHONE_67/01-tour.mp4.timecode     # 00:00:02:06
 ```
+
+So `store/appstore/listings/…` for a project with one App Store tree, and
+`store/appstore/ios/listings/…` for one whose Mac build has its own beside it.
+Written as a root rather than a literal path because the absolute form was
+misread once already: a reader who invokes `--appstore store/appstore/ios`
+created `store/appstore/listings/` from a version of this that spelled the
+prefix out.
 
 **The directory names are `PreviewType`, and they are not the screenshot
 names.** Apple keeps two enumerations and the preview one has no prefix: a

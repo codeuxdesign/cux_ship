@@ -2847,11 +2847,18 @@ class AppStore {
         .where((s) => _attributes(s)['previewType'] == previewType)
         .toList();
 
-    final local = previews.map(localPreview).toList();
     String? setId;
     if (existing.isNotEmpty) {
       setId = _id(existing.first);
 
+      // **Inside the branch, because hashing a preview is not free.** Every
+      // entry here is a whole video read off disk and MD5'd, and Apple's
+      // ceiling is 500 MB apiece — so computing this before knowing whether
+      // there is anything to compare against spends a gigabyte of I/O on a
+      // first publish, which is exactly the run that cannot use the answer.
+      // Measured on a real 473 MB ProRes preview, which is what made it
+      // visible; at screenshot sizes the same mistake is invisible.
+      final local = previews.map(localPreview).toList();
       final published = await client.getAll(
         '/v1/appPreviewSets/$setId/appPreviews',
       );
