@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 4.5.0-dev.1
+
+**Needs `cux_ship_verify` 1.11.0-dev.1**, which carries the tree and the
+offline checks this reads. Both are pre-releases, so a `^4.5.0` or `^1.11.0`
+constraint will not match either — name them exactly.
 
 **App preview videos publish.** A locale's `previews/<PreviewType>/` directory
 uploads to `appPreviewSets` and `appPreviews` through the same three-step
