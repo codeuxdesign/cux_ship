@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 4.5.0-dev.3
 
 **A listing-only upload publishes the release notes.** `upload --metadata
 --changelog CHANGELOG.md` accepted the flag and wrote no "What's New in This
