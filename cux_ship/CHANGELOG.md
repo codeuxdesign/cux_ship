@@ -1,5 +1,29 @@
 # Changelog
 
+## 4.3.0-dev.2
+
+**Two accessors the port asked for**, both additions and neither a rename. The
+document format is unchanged: one is a getter, one is a static, and no key
+moved — so a document written by 4.3.0-dev.1 is a document this reads.
+
+- **`AppStoreBuildsDocument.newest`** returns the newest `AppStoreBuildEntry`,
+  not just its number. `newestBuildNumber` answers *which number*; this answers
+  *which build*, so a caller wanting `needsNewUpload`, `expired` or
+  `processingStateRaw` of it no longer has to find the entry. `builds` is
+  ordered newest-first and `newestBuildNumber` is that element's, so
+  `builds.first` was already correct — but a promise a reader has to go and
+  find is not an accessor a test can hold, and re-deriving "which one is
+  newest" is the ordering this package has been wrong about twice.
+- **`PlayReleaseStatus.serving(status)`** is now public, matching
+  `ProcessingState.needsNewUpload`. It was a private function in the encoder
+  while its twin was reachable, so a consumer's test fixtures could *call* one
+  derived rule and had to **restate** the other — a second copy of a rule this
+  package owns, in a tree it cannot see, which is the drift the derived field
+  exists to prevent.
+
+Both came out of the consumer's port rather than from review, which is what the
+pre-release was published for.
+
 ## 4.3.0-dev.1
 
 **A pre-release, so the consumer this was designed with can port against it
