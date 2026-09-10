@@ -10,6 +10,8 @@ import 'dart:typed_data';
 import 'package:cux_ship_verify/metadata.dart';
 import 'package:test/test.dart';
 
+import 'video_fixture.dart';
+
 /// A PNG header good enough for [readImageInfo]: signature, a complete IHDR,
 /// then the chunks the caller asked for and IEND.
 ///
@@ -354,6 +356,239 @@ void main() {
         4,
       ]);
       expect(load, throwsMetadata(contains('not a readable PNG or JPEG')));
+    });
+  });
+
+  // Everything in this group is a rejection Apple delivers *after* the video
+  // has been uploaded, from an ingestion queue it documents as taking up to
+  // twenty-four hours — during which the version cannot be submitted. That
+  // asymmetry is why a preview is worth checking harder than a screenshot: a
+  // refused screenshot costs a re-upload, a refused preview costs a day.
+  group('previews', () {
+    void writePreview(
+      String path, {
+      int width = 886,
+      int height = 1920,
+      double frameRate = 30,
+      double seconds = 20,
+      String codec = 'avc1',
+    }) => writeBytes(
+      path,
+      mp4(
+        width: width,
+        height: height,
+        frameRate: frameRate,
+        seconds: seconds,
+        codec: codec,
+      ),
+    );
+
+    test('a preview and its poster frame load together', () {
+      writeValidTree();
+      writePreview('listings/en-US/previews/IPHONE_67/01-tour.mp4');
+      write(
+        'listings/en-US/previews/IPHONE_67/01-tour.mp4$previewTimeCodeSuffix',
+        '00:00:02:06',
+      );
+
+      final previews = load().locales.single.previews['IPHONE_67']!;
+      expect(previews, hasLength(1));
+      expect(previews.single.frameTimeCode, '00:00:02:06');
+    });
+
+    test('a preview with no sidecar carries a null, not a default', () {
+      // The null is the whole point: the uploader says "defaulting to
+      // 00:00:05:00" for this and names the chosen frame for the other, and a
+      // model that filled it in here would make those indistinguishable at the
+      // one place the difference is worth saying out loud.
+      writeValidTree();
+      writePreview('listings/en-US/previews/IPHONE_67/01-tour.mp4');
+      expect(
+        load().locales.single.previews['IPHONE_67']!.single.frameTimeCode,
+        isNull,
+      );
+    });
+
+    test('a screenshot slot name is refused with the difference named', () {
+      // `APP_IPHONE_67` is the *screenshot* enum. Apple keeps two separate
+      // enumerations and the preview one has no prefix, so this is the typo
+      // somebody makes once and cannot see.
+      writeValidTree();
+      writePreview('listings/en-US/previews/APP_IPHONE_67/01-tour.mp4');
+      expect(
+        load,
+        throwsMetadata(
+          allOf(
+            contains('not a PreviewType'),
+            contains('IPHONE_67, not APP_IPHONE_67'),
+          ),
+        ),
+      );
+    });
+
+    test('a device-resolution capture is refused with the real size', () {
+      // 1290x2796 is a real iPhone screen and a valid *screenshot* size, and
+      // it is not a preview size — Apple's preview sizes are not device
+      // resolutions at all. Capturing at the device's own size is the
+      // ordinary way to get this wrong, so the error says the number.
+      writeValidTree();
+      writePreview(
+        'listings/en-US/previews/IPHONE_67/01-tour.mp4',
+        width: 1290,
+        height: 2796,
+      );
+      expect(
+        load,
+        throwsMetadata(allOf(contains('1290x2796'), contains('886x1920'))),
+      );
+    });
+
+    test(
+      'a Mac preview in portrait is refused, where an iPhone one is not',
+      () {
+        // The transpose is legal for a phone and not for a Mac, which is the
+        // one rule a shared spec with the screenshot loader would have lost.
+        writeValidTree();
+        writePreview(
+          'listings/en-US/previews/DESKTOP/01-tour.mp4',
+          width: 1080,
+          height: 1920,
+        );
+        expect(load, throwsMetadata(contains('landscape only')));
+      },
+    );
+
+    test('a Mac preview in landscape loads', () {
+      writeValidTree();
+      writePreview(
+        'listings/en-US/previews/DESKTOP/01-tour.mp4',
+        width: 1920,
+        height: 1080,
+      );
+      expect(load, returnsNormally);
+    });
+
+    test('the codec, duration and frame rate each say which one is wrong', () {
+      for (final broken in [
+        (
+          'listings/en-US/previews/IPHONE_67/01-tour.mp4',
+          {'codec': 'hvc1'},
+          'HEVC',
+        ),
+        (
+          'listings/en-US/previews/IPHONE_67/01-tour.mp4',
+          {'seconds': 8.0},
+          '15s to 30s',
+        ),
+        (
+          'listings/en-US/previews/IPHONE_67/01-tour.mp4',
+          {'frameRate': 60.0},
+          'fps',
+        ),
+      ]) {
+        _root.deleteSync(recursive: true);
+        _root = Directory.systemTemp.createTempSync('asc_metadata_test');
+        writeValidTree();
+        final options = broken.$2;
+        writePreview(
+          broken.$1,
+          codec: options['codec'] as String? ?? 'avc1',
+          seconds: options['seconds'] as double? ?? 20,
+          frameRate: options['frameRate'] as double? ?? 30,
+        );
+        expect(
+          load,
+          throwsMetadata(contains(broken.$3)),
+          reason: 'the message has to name ${broken.$3}',
+        );
+      }
+    });
+
+    test('a fourth preview is refused, where a fourth screenshot is not', () {
+      // Ten screenshots per slot and three previews. Apple refuses the fourth
+      // at reservation — after the first three have already gone up.
+      writeValidTree();
+      for (final name in ['01', '02', '03', '04']) {
+        writePreview('listings/en-US/previews/IPHONE_67/$name.mp4');
+      }
+      expect(load, throwsMetadata(contains('1 to 3')));
+    });
+
+    test('previews sort into the order Apple will show them', () {
+      writeValidTree();
+      for (final name in ['03-finish', '01-start', '02-climb']) {
+        writePreview('listings/en-US/previews/IPHONE_67/$name.mp4');
+      }
+      final previews = load().locales.single.previews['IPHONE_67']!;
+      expect(previews.map((p) => p.file.uri.pathSegments.last), [
+        '01-start.mp4',
+        '02-climb.mp4',
+        '03-finish.mp4',
+      ]);
+    });
+
+    test('a malformed timecode says what the shape is', () {
+      writeValidTree();
+      writePreview('listings/en-US/previews/IPHONE_67/01-tour.mp4');
+      write(
+        'listings/en-US/previews/IPHONE_67/01-tour.mp4$previewTimeCodeSuffix',
+        '2.2',
+      );
+      expect(load, throwsMetadata(contains('HH:MM:SS:FF')));
+    });
+
+    test('a poster frame past the end of the video is refused', () {
+      // Apple takes the string and the poster silently falls back, so this
+      // surfaces as a product page posing on the wrong frame — after
+      // approval, when it can no longer be changed without a new submission.
+      writeValidTree();
+      writePreview(
+        'listings/en-US/previews/IPHONE_67/01-tour.mp4',
+        seconds: 20,
+      );
+      write(
+        'listings/en-US/previews/IPHONE_67/01-tour.mp4$previewTimeCodeSuffix',
+        '00:00:25:00',
+      );
+      expect(load, throwsMetadata(contains('past the end')));
+    });
+
+    test('an orphaned poster frame is refused rather than ignored', () {
+      // Somebody renamed the video. The sidecar is not an unused file: it is
+      // a deliberate choice of frame now applying to nothing, and the preview
+      // it was meant for would go up posed at Apple's five-second default
+      // with nothing said.
+      writeValidTree();
+      writePreview('listings/en-US/previews/IPHONE_67/01-tour.mp4');
+      write(
+        'listings/en-US/previews/IPHONE_67/01-old.mp4$previewTimeCodeSuffix',
+        '00:00:02:06',
+      );
+      expect(load, throwsMetadata(contains('names no video here')));
+    });
+
+    test('an empty sidecar names the default it would silently accept', () {
+      writeValidTree();
+      writePreview('listings/en-US/previews/IPHONE_67/01-tour.mp4');
+      write(
+        'listings/en-US/previews/IPHONE_67/01-tour.mp4$previewTimeCodeSuffix',
+        '   ',
+      );
+      expect(load, throwsMetadata(contains(defaultPreviewFrameTimeCode)));
+    });
+
+    test('something that is not a video is refused', () {
+      writeValidTree();
+      writeBytes('listings/en-US/previews/IPHONE_67/01-tour.mp4', [1, 2, 3, 4]);
+      expect(load, throwsMetadata(contains('not a readable MP4 or QuickTime')));
+    });
+
+    test('a tree of previews alone is still a locale worth publishing', () {
+      // [LocaleMetadata.isEmpty] decides whether a directory becomes a locale
+      // at all, and a preview-only locale that reported itself empty would be
+      // dropped before anything looked at it.
+      writePreview('listings/en-US/previews/IPHONE_67/01-tour.mp4');
+      expect(load().locales, hasLength(1));
     });
   });
 

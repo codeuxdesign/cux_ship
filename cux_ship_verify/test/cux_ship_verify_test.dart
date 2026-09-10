@@ -10,6 +10,8 @@ import 'dart:typed_data';
 import 'package:cux_ship_verify/cux_ship_verify.dart';
 import 'package:test/test.dart';
 
+import 'video_fixture.dart';
+
 /// A PNG header good enough for the metadata loader: signature, a complete
 /// IHDR, then IEND. Deliberately not a real image — nothing decodes pixels.
 Uint8List png({
@@ -205,6 +207,47 @@ void main() {
       );
       expect(problems, hasLength(1));
       expect(problems.single.message, contains('de-DE'));
+    });
+
+    test(
+      'a preview with no poster frame is named when frames are required',
+      () {
+        // Off by default because the tree's rule is "present means owned" — a
+        // missing sidecar means leave the poster Apple holds. On, it is the
+        // project saying the store permits something it does not: Apple's
+        // five-second default is invisible everywhere except a search result,
+        // and a preview freezes with the version.
+        writeValidTree();
+        writeBytes('listings/en-US/previews/IPHONE_67/01-tour.mp4', mp4());
+
+        expect(
+          checkAppStoreTree(_root.path),
+          isEmpty,
+          reason: 'the default is unchanged for every other consumer',
+        );
+
+        final problems = checkAppStoreTree(
+          _root.path,
+          requirePreviewFrames: true,
+        );
+        expect(problems, hasLength(1));
+        expect(problems.single.message, contains('01-tour.mp4.timecode'));
+        expect(problems.single.message, contains('00:00:05:00'));
+        expect(problems.single.where, contains('en-US'));
+      },
+    );
+
+    test('a preview that names its poster frame is accepted', () {
+      writeValidTree();
+      writeBytes('listings/en-US/previews/IPHONE_67/01-tour.mp4', mp4());
+      write(
+        'listings/en-US/previews/IPHONE_67/01-tour.mp4.timecode',
+        '00:00:02:06',
+      );
+      expect(
+        checkAppStoreTree(_root.path, requirePreviewFrames: true),
+        isEmpty,
+      );
     });
 
     test('screenshot requirements apply only to the required locales', () {

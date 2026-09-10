@@ -910,7 +910,8 @@ Future<void> _publishAscListing(
             existing: localizations,
           );
         }
-        if (localeMetadata.screenshots.isNotEmpty) {
+        if (localeMetadata.screenshots.isNotEmpty ||
+            localeMetadata.previews.isNotEmpty) {
           // Found in the reading already taken above when it is there, and
           // re-read when it is not — because the write a few lines up may
           // have just created it. See [localizationForUpload].
@@ -922,7 +923,7 @@ Future<void> _publishAscListing(
           if (localization == null) {
             stdout.writeln(
               '    (no ${localeMetadata.locale} localization yet, so its '
-              'screenshots are skipped)',
+              'screenshots and previews are skipped)',
             );
             continue;
           }
@@ -933,6 +934,16 @@ Future<void> _publishAscListing(
               entry.key,
               entry.value,
             );
+          }
+          // **After the screenshots, not before.** A preview is the slowest
+          // asset Apple ingests, so putting it last means everything cheap has
+          // already landed by the time this run starts waiting — and if the
+          // wait times out, the screenshots are not left unwritten behind it.
+          for (final entry in localeMetadata.previews.entries) {
+            stdout.writeln(
+              '==> ${localeMetadata.locale}: ${entry.key} (preview)',
+            );
+            await store.replacePreviews(localization, entry.key, entry.value);
           }
         }
       }

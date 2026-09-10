@@ -38,6 +38,12 @@ export 'release_problem.dart';
 // re-derive them — the last time an image check was written twice, one of the
 // two copies never got the alpha rule.
 export 'store_image.dart';
+// And the video header beside it, for the same reason one level along: the
+// App Store preview uploader in cux_ship reads previews out of this package
+// and reports what Apple would refuse, and a rule reachable from only one of
+// the two callers is how the alpha check came to exist in one tree and not the
+// other.
+export 'store_video.dart';
 
 /// The platforms a release note is filtered for, and the cap each one carries.
 ///
@@ -148,10 +154,32 @@ List<ReleaseProblem> checkChangelogFile(
 /// iPad set as well as an iPhone one, and Apple refuses the submission if it
 /// does not. Which types are required is a property of the app, so the consumer
 /// names them.
+///
+/// [requirePreviewFrames] is the same kind of requirement about a different
+/// field: every preview must name its poster frame rather than inheriting
+/// Apple's five-second default.
+///
+/// **Here rather than in the loader, and that is the whole design decision.**
+/// The tree's standing rule is *present means owned* — a file that exists
+/// replaces what App Store Connect holds, one that does not is left alone — so
+/// a missing `.timecode` means "leave the poster Apple has", which is the right
+/// answer for a project that set one in the console and does not want it
+/// reasserted. Making the sidecar mandatory in `loadMetadata` would make that
+/// state unreachable for *every* consumer, to serve a policy only some of them
+/// have.
+///
+/// But the policy is a good one and the argument for it is strong: Apple's
+/// default is invisible everywhere except a search result, and a preview
+/// freezes with the version, so a poster that quietly shipped wrong cannot be
+/// corrected without a new submission. A flag here is how this package already
+/// says "the store permits it and this project does not" — it is what
+/// [requireScreenshotTypes] is — and it puts the requirement in the consumer's
+/// test suite, where it fails on the push that introduces it.
 List<ReleaseProblem> checkAppStoreTree(
   String path, {
   Set<String> requireScreenshotTypes = const {},
   Set<String> requireLocales = const {},
+  bool requirePreviewFrames = false,
 }) {
   final AppStoreMetadata metadata;
   try {
@@ -188,6 +216,28 @@ List<ReleaseProblem> checkAppStoreTree(
             'no $type screenshots, which this app is required to carry',
           ),
         );
+      }
+    }
+
+    if (requirePreviewFrames) {
+      for (final type in locale.previews.entries) {
+        for (final preview in type.value) {
+          if (preview.frameTimeCode != null) {
+            continue;
+          }
+          final name = preview.file.uri.pathSegments.last;
+          problems.add(
+            ReleaseProblem(
+              '$path → ${locale.locale}',
+              'previews/${type.key}/$name names no poster frame, so Apple '
+                  'would pose it at $defaultPreviewFrameTimeCode.\n'
+                  '  Write the frame to '
+                  'previews/${type.key}/$name$previewTimeCodeSuffix — a '
+                  'preview freezes with the version, so a default that ships '
+                  'by accident needs a new submission to correct.',
+            ),
+          );
+        }
       }
     }
   }

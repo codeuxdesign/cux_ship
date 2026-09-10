@@ -495,6 +495,209 @@ List<String> screenshotDeliveryErrors(Map<String, dynamic> screenshot) {
   ].where((message) => message.isNotEmpty).toList();
 }
 
+/// One preview as Apple reports it, reduced to what identifies its bytes and
+/// what it was told about them.
+///
+/// **The same shape as [PublishedScreenshot] and two fields wider**, and the
+/// two extra fields are the whole difference between the asset kinds.
+///
+/// [videoState] rather than a delivery state, because Apple *deprecated*
+/// `assetDeliveryState` on `appPreviews` and replaced it with
+/// `videoDeliveryState` — a screenshot still reports the old field and a
+/// preview reports both, with the deprecated one not guaranteed to stay. So
+/// this reads the current field and falls back, rather than reusing the
+/// screenshot reader and silently comparing against null for ever. See
+/// [previewVideoState].
+///
+/// [frameTimeCode] because the poster frame is an attribute of the published
+/// asset rather than of its bytes: the same video with a different poster is a
+/// different listing, and — since Apple accepts a `PATCH` of it alone — a
+/// difference worth telling apart from a byte difference, which is what
+/// [previewPlan] does with it.
+typedef PublishedPreview = ({
+  String? id,
+  String? fileName,
+  String? checksum,
+  String? videoState,
+  String? frameTimeCode,
+});
+
+/// One preview as the metadata tree has it, reduced the same way.
+typedef LocalPreviewAsset = ({
+  String fileName,
+  String checksum,
+  String? frameTimeCode,
+});
+
+/// [preview] reduced to what identifies it to Apple.
+LocalPreviewAsset localPreview(LocalPreview preview) => (
+  fileName: preview.file.uri.pathSegments.last,
+  checksum: checksumOf(preview.file.readAsBytesSync()),
+  frameTimeCode: preview.frameTimeCode,
+);
+
+/// The identity, state and poster frame of [preview].
+PublishedPreview readPublishedPreview(Map<String, dynamic> preview) {
+  final attributes = _attributes(preview);
+  return (
+    id: _id(preview),
+    fileName: attributes['fileName'] as String?,
+    checksum: attributes['sourceFileChecksum'] as String?,
+    videoState: previewVideoState(preview),
+    frameTimeCode: attributes['previewFrameTimeCode'] as String?,
+  );
+}
+
+/// Apple's ingestion verdict on a preview's *video*, or null if it reported
+/// none.
+///
+/// **Not [screenshotDeliveryState] against a different resource.** Apple's
+/// `AppPreview` marks `assetDeliveryState` deprecated in favour of
+/// `videoDeliveryState`, and the failure mode of reading the deprecated one is
+/// the one this package has already paid for once with screenshots: every
+/// asset reports a null state, nothing ever equals `COMPLETE`, and the skip
+/// silently never fires while looking entirely correct. The fallback is there
+/// because the deprecated field is still populated today and dropping it would
+/// be trusting a deprecation notice to describe the present.
+String? previewVideoState(Map<String, dynamic> preview) {
+  final attributes = _attributes(preview);
+  final video = attributes['videoDeliveryState'];
+  if (video is Map<String, dynamic>) {
+    return video['state'] as String?;
+  }
+  return screenshotDeliveryState(preview);
+}
+
+/// Apple's verdict on the *poster frame*, which is generated separately.
+///
+/// **A second state because it is a second asset.** Apple cuts the poster out
+/// of the video after ingesting it, so a preview can report a `COMPLETE` video
+/// and a failed frame — which is the failure this whole feature exists to
+/// avoid, arriving through the one field a video-only check would not read.
+String? previewFrameState(Map<String, dynamic> preview) {
+  final frame = _attributes(preview)['previewFrameImage'];
+  if (frame is! Map<String, dynamic>) {
+    return null;
+  }
+  final state = frame['state'];
+  return state is Map<String, dynamic> ? state['state'] as String? : null;
+}
+
+/// Why Apple rejected a preview, in its own words — video and poster frame.
+///
+/// Both are read because both can fail and they fail for different reasons: a
+/// video is refused for its codec, dimensions, duration or frame rate, and a
+/// poster frame for a timecode that names no frame. Reporting only the first
+/// would say nothing at all about the second.
+List<String> previewDeliveryErrors(Map<String, dynamic> preview) {
+  final attributes = _attributes(preview);
+  return [
+    ..._stateErrors(attributes['videoDeliveryState']),
+    ..._stateErrors(attributes['assetDeliveryState']),
+    ...() {
+      final frame = attributes['previewFrameImage'];
+      return frame is Map<String, dynamic>
+          ? _stateErrors(frame['state']).map((e) => 'poster frame: $e')
+          : const <String>[];
+    }(),
+  ];
+}
+
+/// `errors[]` out of any of Apple's `AppMedia*State` shapes, which are one
+/// shape under three names: `{state, errors[], warnings[]}` with each error a
+/// `code` and a `description`.
+List<String> _stateErrors(Object? state) {
+  if (state is! Map<String, dynamic>) {
+    return const [];
+  }
+  final errors = state['errors'];
+  if (errors is! List) {
+    return const [];
+  }
+  return [
+    for (final error in errors.whereType<Map<String, dynamic>>()) ...{
+      [error['code'], error['description']].whereType<String>().join(' - '),
+    },
+  ].where((message) => message.isNotEmpty).toList();
+}
+
+/// What a run has to do to make Apple's previews match the tree's.
+///
+/// Three answers rather than the screenshots' two, and the third is the reason
+/// this is not [screenshotsAlreadyPublished] with a wider comparison.
+enum PreviewPlan {
+  /// Apple holds exactly these videos, posed exactly this way.
+  unchanged,
+
+  /// The same bytes in the same order, and at least one poster frame differs.
+  ///
+  /// **Worth telling apart because Apple takes a `PATCH` of
+  /// `previewFrameTimeCode` alone.** Re-uploading to change a poster frame
+  /// would send up to 500 MB per video and put the version back into an
+  /// ingestion queue Apple documents as taking twenty-four hours — to change a
+  /// string. Merging this into [replace] would be correct and would cost a day
+  /// every time somebody moved a poster frame by six frames.
+  retime,
+
+  /// Something about the bytes differs, so the set is rebuilt.
+  replace,
+}
+
+/// Which of [PreviewPlan] applies, comparing what Apple holds with the tree.
+///
+/// Order is part of the comparison for the same reason it is for screenshots:
+/// Apple shows previews in upload order, so the same videos in a different
+/// order are a different listing.
+///
+/// Conservative in the same direction, too. Any doubt — a length that differs,
+/// a name or checksum Apple did not report, a video that is not `COMPLETE` —
+/// is [PreviewPlan.replace], which costs an upload that was not needed. The
+/// opposite mistake leaves the published listing showing something the tree
+/// does not.
+///
+/// **A tree that names no timecode does not force a change**, which is "present
+/// means owned" applied to an attribute rather than a file: a preview with no
+/// sidecar leaves whatever Apple holds alone rather than resetting it to the
+/// five-second default. The uploader still says which of the two happened.
+PreviewPlan previewPlan({
+  required List<PublishedPreview> published,
+  required List<LocalPreviewAsset> local,
+}) {
+  if (published.length != local.length || local.isEmpty) {
+    return PreviewPlan.replace;
+  }
+  var retime = false;
+  for (var i = 0; i < local.length; i++) {
+    // Only COMPLETE is evidence Apple kept the bytes — the checksum is
+    // committed before ingestion finishes, so name and checksum alone match an
+    // asset Apple went on to reject. Exactly [screenshotsAlreadyPublished]'s
+    // reasoning, against the field `appPreviews` actually reports it in.
+    if (published[i].fileName != local[i].fileName ||
+        published[i].checksum != local[i].checksum ||
+        published[i].videoState != 'COMPLETE') {
+      return PreviewPlan.replace;
+    }
+    final wanted = local[i].frameTimeCode;
+    if (wanted != null && published[i].frameTimeCode != wanted) {
+      retime = true;
+    }
+  }
+  return retime ? PreviewPlan.retime : PreviewPlan.unchanged;
+}
+
+/// What the uploader says a preview will be posed at, and why.
+///
+/// **A tool prints effective configuration, not intent.** A poster frame that
+/// silently defaults to five seconds is the exact failure that convention
+/// exists to prevent — and it is worse here than anywhere else in this
+/// package, because after approval the poster cannot be changed without a new
+/// version submission. So the run says the value either way, and says which of
+/// the two it is.
+String describePreviewFrame(String? frameTimeCode) => frameTimeCode == null
+    ? 'poster frame $defaultPreviewFrameTimeCode (Apple\'s default — no '
+          '$previewTimeCodeSuffix file beside the video)'
+    : 'poster frame $frameTimeCode';
+
 /// The `releaseType` values `--release-type` will send.
 ///
 /// `SCHEDULED` is Apple's third and is deliberately absent: it is meaningless
@@ -848,24 +1051,32 @@ bool declaresVersionText(AppStoreMetadata metadata) =>
     metadata.locales.any((locale) => locale.version.isNotEmpty);
 
 /// Whether [metadata] carries anything Apple scopes to a version rather than
-/// to the app — copyright, review notes, listing text, screenshots.
+/// to the app — copyright, review notes, listing text, screenshots, previews.
 ///
 /// One function because two places ask it: the offline argument check, which
 /// is where a missing `--version-name` should be caught, and the publish
 /// itself, which must not discover it after writing the app-level half.
 /// **Every field the version-scoped half writes, and the count is the check.**
-/// That half writes four things — copyright, review notes, per-locale listing
-/// text, screenshots — and this predicate named three. A tree carrying only
-/// `info/copyright.txt` therefore reported that it needed no version, so no
-/// version was created, the copyright was never written, and nothing said so.
-/// Long-standing, and exactly the silent skip the rest of this file argues
-/// against; it survived because the predicate was written inline beside the
-/// three fields somebody was thinking about at the time.
+/// That half writes five things — copyright, review notes, per-locale listing
+/// text, screenshots, preview videos — and this predicate named three. A tree
+/// carrying only `info/copyright.txt` therefore reported that it needed no
+/// version, so no version was created, the copyright was never written, and
+/// nothing said so. Long-standing, and exactly the silent skip the rest of
+/// this file argues against; it survived because the predicate was written
+/// inline beside the three fields somebody was thinking about at the time.
+///
+/// Previews are the fifth, and were added with the count in the sentence above
+/// deliberately: the defect being guarded against is a field that publishes
+/// without being named here, and the only thing that catches the *next* one is
+/// somebody noticing the number does not match the list.
 bool listingNeedsVersion(AppStoreMetadata metadata) =>
     metadata.copyright != null ||
     metadata.reviewNotes != null ||
     metadata.locales.any(
-      (locale) => locale.version.isNotEmpty || locale.screenshots.isNotEmpty,
+      (locale) =>
+          locale.version.isNotEmpty ||
+          locale.screenshots.isNotEmpty ||
+          locale.previews.isNotEmpty,
     );
 
 /// Whether [metadata] declares anything that lives on the app rather than on
@@ -2607,6 +2818,334 @@ class AppStore {
     }
     stdout.writeln('      sent $name');
     return screenshotId;
+  }
+
+  // ---------------------------------------------------------------- previews
+
+  /// Replaces one preview type's videos with [previews].
+  ///
+  /// **Deliberately the same shape as [replaceScreenshots]**, because the
+  /// resources are the same shape: `appPreviewSets` hangs off the localization
+  /// keyed by `previewType`, `appPreviews` reserve, upload in parts and commit.
+  /// Where it differs, it differs for a stated reason.
+  ///
+  /// The first is [PreviewPlan.retime]: a poster frame moves with a `PATCH`
+  /// rather than a re-upload, because a preview is up to 500 MB and re-sending
+  /// one puts the version back into an ingestion queue for a day.
+  ///
+  /// The second is what a run says. Every preview reports the frame it will be
+  /// posed at, including when nothing named one — see [describePreviewFrame].
+  Future<void> replacePreviews(
+    Map<String, dynamic> localization,
+    String previewType,
+    List<LocalPreview> previews,
+  ) async {
+    final sets = await client.getAll(
+      '/v1/appStoreVersionLocalizations/${_id(localization)}/appPreviewSets',
+    );
+    final existing = sets
+        .where((s) => _attributes(s)['previewType'] == previewType)
+        .toList();
+
+    String? setId;
+    if (existing.isNotEmpty) {
+      setId = _id(existing.first);
+
+      // **Inside the branch, because hashing a preview is not free.** Every
+      // entry here is a whole video read off disk and MD5'd, and Apple's
+      // ceiling is 500 MB apiece — so computing this before knowing whether
+      // there is anything to compare against spends a gigabyte of I/O on a
+      // first publish, which is exactly the run that cannot use the answer.
+      // Measured on a real 473 MB ProRes preview, which is what made it
+      // visible; at screenshot sizes the same mistake is invisible.
+      final local = previews.map(localPreview).toList();
+      final published = await client.getAll(
+        '/v1/appPreviewSets/$setId/appPreviews',
+      );
+      final held = published.map(readPublishedPreview).toList();
+      final plan = previewPlan(published: held, local: local);
+
+      if (plan == PreviewPlan.unchanged) {
+        stdout.writeln(
+          '    $previewType: ${previews.length} preview(s) already published, '
+          'unchanged',
+        );
+        for (var i = 0; i < held.length; i++) {
+          stdout.writeln(
+            '      ${held[i].fileName}: '
+            '${describePreviewFrame(held[i].frameTimeCode)}',
+          );
+        }
+        return;
+      }
+
+      if (plan == PreviewPlan.retime) {
+        await _retimePreviews(previewType, held, local);
+        return;
+      }
+
+      await writer.delete(
+        '/v1/appPreviewSets/$setId',
+        describe: 'cleared $previewType',
+      );
+      setId = null;
+    }
+
+    final created = await writer.post('/v1/appPreviewSets', {
+      'data': {
+        'type': 'appPreviewSets',
+        'attributes': {'previewType': previewType},
+        'relationships': {
+          'appStoreVersionLocalization': relation(
+            'appStoreVersionLocalizations',
+            _id(localization)!,
+          ),
+        },
+      },
+    }, describe: '$previewType: ${previews.length} preview(s)');
+
+    final data = created?['data'];
+    if (data is! Map<String, dynamic>) {
+      // Dry run, or a create that returned nothing useful. Say what would have
+      // been sent anyway — for a preview that is the whole point of the dry
+      // run, since the poster frame is the input nobody can see afterwards.
+      for (final preview in previews) {
+        stdout.writeln(
+          '      would send ${preview.file.uri.pathSegments.last}, '
+          '${describePreviewFrame(preview.frameTimeCode)}',
+        );
+      }
+      return;
+    }
+    setId = _id(data);
+
+    final uploaded = <String>[];
+    for (final preview in previews) {
+      final previewId = await _uploadPreview(setId!, preview);
+      if (previewId != null) {
+        uploaded.add(previewId);
+      }
+    }
+    await awaitPreviewProcessing(uploaded);
+  }
+
+  /// Moves the poster frames of previews Apple already holds.
+  ///
+  /// No upload, no delete and no wait: `previewFrameTimeCode` is a string on an
+  /// asset that is already `COMPLETE`, so Apple re-cuts the poster from bytes
+  /// it has. The whole reason [PreviewPlan.retime] exists.
+  Future<void> _retimePreviews(
+    String previewType,
+    List<PublishedPreview> published,
+    List<LocalPreviewAsset> local,
+  ) async {
+    for (var i = 0; i < local.length; i++) {
+      final wanted = local[i].frameTimeCode;
+      final id = published[i].id;
+      if (wanted == null ||
+          published[i].frameTimeCode == wanted ||
+          id == null) {
+        continue;
+      }
+      await writer.patch(
+        '/v1/appPreviews/$id',
+        {
+          'data': {
+            'type': 'appPreviews',
+            'id': id,
+            'attributes': {'previewFrameTimeCode': wanted},
+          },
+        },
+        describe:
+            '$previewType: ${local[i].fileName} moved from '
+            '${published[i].frameTimeCode ?? defaultPreviewFrameTimeCode} to '
+            '$wanted',
+      );
+    }
+  }
+
+  /// Waits until Apple has finished ingesting [previewIds], or says why it will
+  /// not.
+  ///
+  /// **The screenshot wait, against a resource Apple takes far longer over.**
+  /// The reason for waiting is identical and is the one
+  /// [awaitScreenshotProcessing] documents: a version whose assets are still in
+  /// flight is refused for review with an error naming the version rather than
+  /// the assets. What differs is the scale — Apple's own guidance is that a
+  /// preview can take up to twenty-four hours — so the timeout is longer and,
+  /// more importantly, its message says that reaching it is *ordinary* rather
+  /// than a failure. A caller told "processing failed" after twenty minutes
+  /// would go looking for a broken upload that is not broken.
+  ///
+  /// Both states are checked, because Apple generates two assets from one
+  /// upload: the video, and the poster frame cut out of it. A run that watched
+  /// only the video would report success for a preview whose poster failed.
+  Future<void> awaitPreviewProcessing(
+    List<String> previewIds, {
+    Duration timeout = const Duration(minutes: 30),
+    Duration poll = const Duration(seconds: 15),
+  }) async {
+    if (previewIds.isEmpty || writer.dryRun) {
+      return;
+    }
+    final deadline = DateTime.now().add(timeout);
+    final pending = [...previewIds];
+    var announced = false;
+
+    while (pending.isNotEmpty) {
+      final stillPending = <String>[];
+      for (final id in pending) {
+        final preview = await client.get('/v1/appPreviews/$id');
+        final data = preview['data'];
+        if (data is! Map<String, dynamic>) {
+          // Apple answered without a resource. Not evidence either way — keep
+          // asking, exactly as the screenshot wait does.
+          stillPending.add(id);
+          continue;
+        }
+        final video = previewVideoState(data);
+        final frame = previewFrameState(data);
+        if (video == 'FAILED' || frame == 'FAILED') {
+          final why = previewDeliveryErrors(data);
+          throw AscApiException(422, [
+            'Apple rejected the preview '
+                '${_attributes(data)['fileName'] ?? id}.',
+            ...why,
+            if (why.isEmpty) ...[
+              if (frame == 'FAILED')
+                'It reported no reason, and it was the poster frame that '
+                    'failed — which usually means previewFrameTimeCode '
+                    '(${_attributes(data)['previewFrameTimeCode']}) names no '
+                    'frame in the video.'
+              else
+                'It reported no reason, which usually means the dimensions, '
+                    'duration, frame rate or codec. `--metadata --dry-run` '
+                    'checks all four offline.',
+            ],
+          ], request: 'GET /v1/appPreviews');
+        }
+        // The poster frame is generated after the video, so a COMPLETE video
+        // beside a null frame state is still in flight rather than done.
+        if (video == 'COMPLETE' && frame == 'COMPLETE') {
+          continue;
+        }
+        stillPending.add(id);
+      }
+      pending
+        ..clear()
+        ..addAll(stillPending);
+      if (pending.isEmpty) {
+        return;
+      }
+      if (DateTime.now().isAfter(deadline)) {
+        // Ours, not Apple's — every poll was answered.
+        throw AscApiException(504, [
+          'Apple has not finished processing ${pending.length} preview(s) '
+              'after ${timeout.inMinutes} minutes.',
+          'That is not a failure: Apple\'s own guidance is that a preview can '
+              'take up to 24 hours to process, and this run stopped waiting '
+              'rather than submit a version whose assets are still in flight, '
+              'which Apple refuses with an error naming the version instead '
+              'of the previews.',
+          'The videos are uploaded. Re-running publishes the listing again '
+              'and skips them once Apple reports them COMPLETE; the '
+              'submission is what has to wait.',
+        ], request: 'GET /v1/appPreviews');
+      }
+      if (!announced) {
+        stdout.writeln(
+          '      waiting for Apple to process ${pending.length} preview(s) — '
+          'this is slower than a screenshot, and can take hours',
+        );
+        announced = true;
+      }
+      await Future<void>.delayed(poll);
+    }
+  }
+
+  /// Reserve, PUT, commit — and the poster frame, which is sent at reservation.
+  ///
+  /// **`previewFrameTimeCode` goes in the create rather than the commit**, and
+  /// that is the one ordering decision here. Apple accepts it in both, but
+  /// sending it with the reservation means the asset never exists, even
+  /// briefly, without the frame it was meant to have — so a run that dies
+  /// between the PUTs and the commit leaves something Apple will discard
+  /// rather than something posed at five seconds. It is also what makes the
+  /// value part of the reservation the log line describes.
+  Future<String?> _uploadPreview(String setId, LocalPreview preview) async {
+    final file = preview.file;
+    final bytes = file.readAsBytesSync();
+    final name = file.uri.pathSegments.last;
+
+    final reserved = await client.post('/v1/appPreviews', {
+      'data': {
+        'type': 'appPreviews',
+        'attributes': {
+          'fileSize': bytes.length,
+          'fileName': name,
+          if (preview.frameTimeCode != null) ...{
+            'previewFrameTimeCode': preview.frameTimeCode,
+          },
+        },
+        'relationships': {'appPreviewSet': relation('appPreviewSets', setId)},
+      },
+    });
+
+    final data = reserved['data'];
+    if (data is! Map<String, dynamic>) {
+      throw StateError('reserving $name returned no resource');
+    }
+    final previewId = _id(data)!;
+    final operations = _attributes(data)['uploadOperations'];
+    if (operations is! List) {
+      throw StateError('reserving $name returned no uploadOperations');
+    }
+
+    for (final operation in operations.whereType<Map<String, dynamic>>()) {
+      final offset = operation['offset'];
+      final length = operation['length'];
+      if (offset is! int || length is! int) {
+        throw StateError('upload operation for $name has no offset/length');
+      }
+      await client.uploadOperation(
+        operation,
+        bytes.sublist(offset, offset + length),
+      );
+    }
+
+    // The same MD5 the screenshot path commits, via the same function for the
+    // same reason: the value committed and the value compared on the next run
+    // have to be one value, or nothing is ever skipped.
+    final committed = await client.patch('/v1/appPreviews/$previewId', {
+      'data': {
+        'type': 'appPreviews',
+        'id': previewId,
+        'attributes': {
+          'uploaded': true,
+          'sourceFileChecksum': checksumOf(bytes),
+        },
+      },
+    });
+
+    final verdict = committed['data'];
+    if (verdict is Map<String, dynamic> &&
+        previewVideoState(verdict) == 'FAILED') {
+      throw AscApiException(422, [
+        'Apple rejected the preview $name.',
+        ...previewDeliveryErrors(verdict),
+      ], request: 'PATCH /v1/appPreviews');
+    }
+
+    // **The effective poster frame, printed as sent.** Apple reports back what
+    // it stored, so the readback is preferred over what was asked for — the
+    // two differing is exactly the thing worth seeing.
+    final stored = verdict is Map<String, dynamic>
+        ? _attributes(verdict)['previewFrameTimeCode'] as String?
+        : preview.frameTimeCode;
+    stdout.writeln(
+      '      sent $name, ${describePreviewFrame(stored ?? preview.frameTimeCode)}',
+    );
+    return previewId;
   }
 
   // -------------------------------------------------------------- submission
