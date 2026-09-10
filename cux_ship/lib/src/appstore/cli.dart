@@ -816,8 +816,12 @@ Future<Map<String, dynamic>?> _publishAscListing(
   // Passed rather than reached for: the caller's closure names the subcommand
   // in its message, and a listing failure should say whether it came from an
   // upload or a promote.
-  Never Function(String) fail,
-) async {
+  Never Function(String) fail, {
+
+  /// Upload the previews and stop, leaving the ingestion wait and the
+  /// poster-frame assertion to `appstore wait-previews`.
+  bool skipPreviewWait = false,
+}) async {
   // **Decide what needs writing before demanding something to write to.**
   //
   // The app-level half used to open with `editableAppInfo`, which threw when
@@ -1099,7 +1103,12 @@ Future<Map<String, dynamic>?> _publishAscListing(
             stdout.writeln(
               '==> ${localeMetadata.locale}: ${entry.key} (preview)',
             );
-            await store.replacePreviews(localization, entry.key, entry.value);
+            await store.replacePreviews(
+              localization,
+              entry.key,
+              entry.value,
+              skipWaiting: skipPreviewWait,
+            );
           }
         }
       }
@@ -2226,6 +2235,11 @@ Future<void> runAsc(
         locale,
         versionName,
         fail,
+        // **The flag reaches the metadata path at last.** It is declared on
+        // `upload` and was read only inside the artifact branch, so the one
+        // command that publishes a preview never consulted it — an escape
+        // hatch that existed, was spelled correctly, and was unreachable.
+        skipPreviewWait: flag('skip-waiting'),
       );
       // **The "What's New" a listing-only publish used to drop on the floor.**
       // `--changelog` is accepted by this command and was read only for the
@@ -2242,6 +2256,26 @@ Future<void> runAsc(
       // needs a version, so on an app-level-only tree `listingReleaseNotes`
       // is always null and the message could never fire — a skip notice that
       // was itself silent.
+      // **A skipped wait leaves the poster frame unset, and that has to be
+      // the loudest line of the run.** `--skip-waiting` already defers the
+      // TestFlight notes and says so; this is worse, because Apple discards
+      // the timecode sent at reservation — so a preview left un-asserted poses
+      // at Apple's default, which is invisible rather than absent and cannot
+      // be changed after approval. The follow-up is not advice.
+      if (store.previewsLeftIngesting.isNotEmpty) {
+        final on = platform == AscPlatform.ios
+            ? ''
+            : ' --platform ${platform.name}';
+        stdout.writeln(
+          '==> ${store.previewsLeftIngesting.length} preview set(s) are '
+          'uploaded and still ingesting, and their poster frames are NOT set '
+          'yet.\n'
+          '    Finish with:\n'
+          '      cux_ship appstore wait-previews$on --bundle-id $bundleId '
+          '--version-name $versionName \\\n'
+          '        --metadata ${metadataPath ?? '<tree>'}',
+        );
+      }
       if (published == null &&
           (opt('changelog') != null || notesPath != null)) {
         // **The narrowed remains of the defect this change closes.** A tree
@@ -2415,6 +2449,12 @@ Future<void> runAsc(
         // it possible at all. Before the submission, so a review sees the copy
         // that was meant to accompany it rather than the previous release's.
         if (publish == ListingPublish.afterVersion) {
+          // No `skipPreviewWait`: `--skip-waiting` is declared on `upload`
+          // alone, so `promote --skip-waiting` does not parse and the refusal
+          // the design document proposed would guard a combination nobody can
+          // type. A promotion submits for review, and Apple refuses a
+          // submission whose assets are in flight — so a promote must wait,
+          // and here it cannot do otherwise by construction.
           await _publishAscListing(
             store,
             app,

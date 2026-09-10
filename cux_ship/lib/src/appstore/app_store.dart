@@ -2986,6 +2986,16 @@ class AppStore {
 
   // ---------------------------------------------------------------- previews
 
+  /// What this run uploaded and deliberately did not wait for, as
+  /// `locale/previewType` — empty unless `--skip-waiting` was passed.
+  ///
+  /// **A field rather than a return value**, on the precedent of
+  /// [Writer.skippedACreate]: the caller that has to print the follow-up
+  /// command knows the bundle id and version name, and this method knows
+  /// neither. Threading a result back through `_publishAscListing` for one
+  /// line of output would widen a signature two callers share.
+  final previewsLeftIngesting = <String>[];
+
   /// Replaces one preview type's videos with [previews].
   ///
   /// **Deliberately the same shape as [replaceScreenshots]**, because the
@@ -3002,8 +3012,19 @@ class AppStore {
   Future<void> replacePreviews(
     Map<String, dynamic> localization,
     String previewType,
-    List<LocalPreview> previews,
-  ) async {
+    List<LocalPreview> previews, {
+
+    /// Upload and stop, leaving the wait and the poster-frame assertion to
+    /// `appstore wait-previews`.
+    ///
+    /// **Skipping the wait skips the poster frame with it**, and that is
+    /// louder here than the TestFlight notes `--skip-waiting` already defers:
+    /// Apple discards the timecode sent at reservation, so a preview left
+    /// un-asserted poses at Apple's default — invisible rather than merely
+    /// absent, and unchangeable after approval. The caller prints the command
+    /// that finishes the job; see [previewsLeftIngesting].
+    bool skipWaiting = false,
+  }) async {
     final sets = await client.getAll(
       '/v1/appStoreVersionLocalizations/${_id(localization)}/appPreviewSets',
     );
@@ -3089,6 +3110,15 @@ class AppStore {
       if (previewId != null) {
         uploaded.add(previewId);
       }
+    }
+    if (skipWaiting) {
+      final locale = _attributes(localization)['locale'] as String?;
+      previewsLeftIngesting.add('${locale ?? '?'}/$previewType');
+      stdout.writeln(
+        '      not waiting for Apple to process these, as asked — and the '
+        'poster frame is not set yet',
+      );
+      return;
     }
     await awaitPreviewProcessing(uploaded);
     await _assertPosterFrames(setId!, previewType, previews);

@@ -827,6 +827,56 @@ void main() {
       );
     });
 
+    test(
+      '--skip-waiting uploads, does not wait, and says the frame is unset',
+      () async {
+        // **The flag reached the metadata path for the first time here.** It is
+        // declared on `upload` and was read only inside the artifact branch, so
+        // the one command that publishes a preview never consulted it.
+        //
+        // Skipping the wait skips the poster-frame assertion with it, which is
+        // louder than the TestFlight notes the flag already defers: Apple
+        // discards the timecode sent at reservation, so an un-asserted preview
+        // poses at Apple's default — invisible rather than absent, and
+        // unchangeable after approval.
+        final client = _FakeClient();
+
+        final said = await _printed(
+          () => storeOf(client).replacePreviews(_localization, 'IPHONE_67', [
+            _video('promo.mp4', 'bytes', timeCode: '00:00:02:06'),
+          ], skipWaiting: true),
+        );
+
+        // Uploaded and committed — the transfer is the part that was asked for.
+        expect(client.uploads, hasLength(1));
+        expect(said, contains('sent promo.mp4'));
+        // But not waited on, and not asserted.
+        expect(
+          client.requests.where((r) => r.startsWith('GET /v1/appPreviews/')),
+          isEmpty,
+          reason: 'the wait polls that path, and there was to be no wait',
+        );
+        expect(_framePatches(client), isEmpty);
+        expect(said, contains('poster frame is not set yet'));
+      },
+    );
+
+    test('a skipped wait records what the caller must finish', () async {
+      // The caller prints the follow-up command, and it knows the bundle id
+      // and version name that `replacePreviews` does not — so what crosses
+      // between them is this list.
+      final client = _FakeClient();
+      final store = storeOf(client);
+
+      await _printed(
+        () => store.replacePreviews(_localization, 'IPHONE_67', [
+          _video('promo.mp4', 'bytes'),
+        ], skipWaiting: true),
+      );
+
+      expect(store.previewsLeftIngesting, ['en-US/IPHONE_67']);
+    });
+
     test('the matching set is the one replaced, and only it', () async {
       // The fake answers the collection read with every type it holds,
       // because the real one does — `replacePreviews` filters client-side.
