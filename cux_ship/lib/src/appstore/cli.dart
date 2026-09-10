@@ -105,6 +105,7 @@ enum AscCommand {
   screenshotTypes('screenshot-types'),
   buildNumber('build-number'),
   awaitBuild('wait'),
+  awaitPreviews('wait-previews'),
   signing('signing');
 
   const AscCommand(this.name);
@@ -120,6 +121,14 @@ enum AscCommand {
     AscCommand.screenshotTypes,
     AscCommand.buildNumber,
     AscCommand.awaitBuild,
+    // **A read that can also assert a poster frame**, which is the one place
+    // this set is doing double duty. `wait-previews` polls, and with a
+    // `--metadata` tree it finishes the job `upload --skip-waiting` deferred
+    // by moving the timecode Apple ignored at reservation. Listed here because
+    // what `isRead` actually gates is the confirmation prompt and the offline
+    // argument checks, and neither is wanted for a command that mostly waits;
+    // the write it can make is one the tree already asked for.
+    AscCommand.awaitPreviews,
     AscCommand.signing,
   }.contains(this);
 }
@@ -190,6 +199,39 @@ ArgParser buildAscParser(AscCommand cmd) {
         'timeout',
         defaultsTo: '45m',
         help: 'How long to wait before giving up, e.g. 45m or 90s.',
+      )
+      ..addOption('poll', defaultsTo: '30s', help: 'How often to ask.');
+    return parser;
+  }
+
+  if (cmd == AscCommand.awaitPreviews) {
+    parser
+      ..addOption(
+        'version-name',
+        help:
+            'The App Store version whose previews to wait for. Required, and '
+            'deliberately not defaulted to the newest — the same reason '
+            '`wait` gives about build numbers: the point of waiting from '
+            'another machine is to wait for a *specific* version, and '
+            '"newest" would succeed on somebody else\'s.',
+      )
+      ..addOption(
+        'metadata',
+        help:
+            'The tree the previews came from. Optional: without it this only '
+            'waits, and with it the poster frames are asserted once Apple has '
+            'finished — which is the phase `upload --skip-waiting` defers, '
+            'and which needs the tree because Apple discards the timecode '
+            'sent at reservation.',
+      )
+      ..addOption(
+        'timeout',
+        defaultsTo: '30m',
+        help:
+            'How long to wait before reporting what is still pending, e.g. '
+            '2h or 90s. Reaching it is not a failure — Apple documents '
+            'preview ingestion as taking up to 24 hours — so the exit code '
+            'for it is distinct from both success and error.',
       )
       ..addOption('poll', defaultsTo: '30s', help: 'How often to ask.');
     return parser;
@@ -390,6 +432,7 @@ ArgParser buildAscParser(AscCommand cmd) {
     case AscCommand.screenshotTypes:
     case AscCommand.buildNumber:
     case AscCommand.awaitBuild:
+    case AscCommand.awaitPreviews:
     case AscCommand.signing:
       throw StateError('unreachable: handled by cmd.isRead or above');
   }
@@ -1129,6 +1172,16 @@ Future<void> runAsc(
   // is reported only after the network has already been touched.
   Duration? awaitTimeout;
   Duration? awaitPoll;
+  if (cmd == AscCommand.awaitPreviews) {
+    final timeoutText = args.option('timeout')!;
+    final pollText = args.option('poll')!;
+    awaitTimeout =
+        _duration(timeoutText) ??
+        fail('--timeout is "$timeoutText" — write it as 2h or 90s.');
+    awaitPoll =
+        _duration(pollText) ?? fail('--poll is "$pollText" — write it as 30s.');
+  }
+
   if (cmd == AscCommand.awaitBuild) {
     final timeoutText = args.option('timeout')!;
     final pollText = args.option('poll')!;
@@ -1800,6 +1853,74 @@ Future<void> runAsc(
       await store.printBuildNumber(app);
       return;
     }
+    if (cmd == AscCommand.awaitPreviews) {
+      final wanted = args.option('version-name');
+      if (wanted == null || wanted.isEmpty) {
+        fail(
+          'which version? Pass `appstore wait-previews --version-name 1.2.0`. '
+          'Deliberately not defaulted to the newest, for the reason `wait` '
+          'gives about build numbers: waiting from another machine is waiting '
+          'for a *specific* version, and "newest" would succeed on somebody '
+          "else's.",
+        );
+      }
+      final version = await store.ensureVersion(app, wanted, create: false);
+      if (version == null) {
+        fail(
+          'Apple holds no ${platform.name} version $wanted for $bundleId, so '
+          'there are no previews to wait for.',
+        );
+      }
+      final on = await store.previewsOn(version);
+      if (on.isEmpty) {
+        stdout.writeln('==> $wanted carries no previews — nothing to wait for');
+        return;
+      }
+      for (final entry in on) {
+        stdout.writeln(
+          '==> ${entry.locale ?? '?'} ${entry.previewType ?? '?'}: '
+          '${entry.preview.fileName ?? entry.preview.id}',
+        );
+      }
+      await store.awaitPreviewProcessing(
+        [
+          for (final entry in on) ...{?entry.preview.id},
+        ],
+        timeout: awaitTimeout ?? const Duration(minutes: 30),
+        poll: awaitPoll ?? const Duration(seconds: 30),
+      );
+      // **With a tree, the wait finishes the job rather than only reporting
+      // it.** Apple discards `previewFrameTimeCode` sent at reservation, so
+      // the frame has to be asserted after ingestion — which is exactly the
+      // phase `upload --skip-waiting` defers, and the reason this command
+      // takes a `--metadata` the plan originally said it would not.
+      if (metadata != null) {
+        final localizations = await store.versionLocalizations(version);
+        for (final locale in metadata.locales) {
+          // Read once for this version and handed to every locale, rather
+          // than re-read per locale: nothing in this command writes a
+          // localization, so one reading cannot go stale under it.
+          final localization = await store.localizationForUpload(
+            version,
+            locale.locale,
+            known: localizations,
+          );
+          if (localization == null) {
+            continue;
+          }
+          for (final entry in locale.previews.entries) {
+            await store.assertPosterFramesOn(
+              localization,
+              entry.key,
+              entry.value,
+            );
+          }
+        }
+      }
+      stdout.writeln('==> previews are ready');
+      return;
+    }
+
     if (cmd == AscCommand.awaitBuild) {
       // Positional, because it is required anyway and `wait 2132` is what the
       // command is for. `--build-number` still works: the composition this
@@ -2326,6 +2447,25 @@ Future<void> runAsc(
     _reportStateLeftBehind(store);
     exitCode = 1;
   } on PreviewsPending catch (e) {
+    // **Two callers, two right answers, which is the argument for the wait
+    // being a command.** For `wait-previews` the deadline is the outcome, not
+    // a failure: Apple documents ingestion in hours, the assets are uploaded,
+    // and nothing is wrong. It exits [previewsPendingExit] so a script can
+    // branch on three states — done, still going, broken — without reading a
+    // word, which is what the one consumer asked for after a status of theirs
+    // escaped from four regular expressions matched against stdout.
+    //
+    // Everywhere else the same condition means "I cannot safely proceed to a
+    // submission", and stays exit 1.
+    if (cmd == AscCommand.awaitPreviews) {
+      stderr.writeln('asc_upload: $e');
+      stderr.writeln(
+        '  Re-run `cux_ship appstore wait-previews` to keep waiting; nothing '
+        'is re-uploaded.',
+      );
+      exitCode = previewsPendingExit;
+      return;
+    }
     // **The clause the sibling above exists to justify, missing for one
     // release.** Replacing the wait's `AscApiException(504)` with a type that
     // says more took its catch clause away with it: the deadline exited 255

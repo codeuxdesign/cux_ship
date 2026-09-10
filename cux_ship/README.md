@@ -41,8 +41,8 @@ cux_ship appstore upload            play upload            release finish
          appstore screenshot-types                         secrets remove
          appstore build-number                             secrets exec
          appstore wait                                     secrets place
-         appstore signing                                  secrets clean
-                                                           secrets pack
+         appstore wait-previews                            secrets clean
+         appstore signing                                  secrets pack
                                                            keychain exec
                                                            deps install
                                                            deps check

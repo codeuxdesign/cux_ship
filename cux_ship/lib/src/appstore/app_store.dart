@@ -523,6 +523,17 @@ typedef PublishedPreview = ({
   String? frameTimeCode,
 });
 
+/// One published preview, with the two things that name it to a person.
+///
+/// Apple identifies a preview by an opaque id; a caller waiting on a version
+/// wants "the en-US IPHONE_67 one", which lives two collections up.
+typedef PreviewOnVersion = ({
+  String? locale,
+  String? previewType,
+  String? setId,
+  PublishedPreview preview,
+});
+
 /// One preview as the metadata tree has it, reduced the same way.
 typedef LocalPreviewAsset = ({
   String fileName,
@@ -3081,6 +3092,72 @@ class AppStore {
     }
     await awaitPreviewProcessing(uploaded);
     await _assertPosterFrames(setId!, previewType, previews);
+  }
+
+  /// Every `appPreviews` record on [version], across every localization and
+  /// preview type.
+  ///
+  /// **Three collection reads, because Apple nests them that way**: a version
+  /// has localizations, a localization has preview sets, a set has previews.
+  /// There is no filter that flattens it, and `include` does not reach two
+  /// levels down.
+  ///
+  /// Returned with the locale and type beside each record, because a caller
+  /// waiting on a version wants to say *which* preview is still ingesting and
+  /// those two are the only things that identify it to a person.
+  Future<List<PreviewOnVersion>> previewsOn(
+    Map<String, dynamic> version,
+  ) async {
+    final found = <PreviewOnVersion>[];
+    for (final localization in await versionLocalizations(version)) {
+      final locale = _attributes(localization)['locale'] as String?;
+      final sets = await client.getAll(
+        '/v1/appStoreVersionLocalizations/${_id(localization)}/appPreviewSets',
+      );
+      for (final set in sets) {
+        final type = _attributes(set)['previewType'] as String?;
+        final previews = await client.getAll(
+          '/v1/appPreviewSets/${_id(set)}/appPreviews',
+        );
+        for (final preview in previews) {
+          found.add((
+            locale: locale,
+            previewType: type,
+            setId: _id(set),
+            preview: readPublishedPreview(preview),
+          ));
+        }
+      }
+    }
+    return found;
+  }
+
+  /// Asserts the poster frames of an already-published preview set.
+  ///
+  /// **The half of `replacePreviews` that has to happen after ingestion**,
+  /// reachable on its own so that `appstore wait-previews` can finish what
+  /// `upload --skip-waiting` deferred. It uploads nothing and deletes nothing:
+  /// if Apple does not hold the set, there is nothing here to correct and the
+  /// caller is told rather than having a set created underneath it.
+  Future<void> assertPosterFramesOn(
+    Map<String, dynamic> localization,
+    String previewType,
+    List<LocalPreview> previews,
+  ) async {
+    final sets = await client.getAll(
+      '/v1/appStoreVersionLocalizations/${_id(localization)}/appPreviewSets',
+    );
+    final existing = sets
+        .where((s) => _attributes(s)['previewType'] == previewType)
+        .toList();
+    if (existing.isEmpty) {
+      stdout.writeln(
+        '    $previewType: Apple holds no previews of this type, so there is '
+        'no poster frame to assert — publish them first',
+      );
+      return;
+    }
+    await _assertPosterFrames(_id(existing.first)!, previewType, previews);
   }
 
   /// Sets each preview's poster frame *after* Apple has finished ingesting it,
