@@ -28,9 +28,13 @@ separating. At the time of writing that consumer rendered *"testers are being
 given the release before it"* for a halted release, and it is **false for one
 tester in five** at a 20% halt — they have the build and they keep it, because
 the rollout stopped rather than rolled back. A real defect, and one fixable
-without any new field, by saying *some* testers have it; its fix was already in
-flight there, independently of this. `audienceFraction` makes that sentence
-exact rather than making it correct.
+without any new field, by saying *some* testers have it — which that consumer
+has since done. **It was found while answering a question from this work, and
+fixed without needing anything from it**, and the two halves of that are worth
+keeping apart: a defect somebody finds on their own is weak evidence for a
+change, and one a question surfaced is stronger evidence for the *question*
+rather than for the field. `audienceFraction` makes the sentence exact rather
+than making it correct.
 
 **Two fields, because Play omits its own number exactly when it means one.**
 Google sets `userFraction` only for `inProgress` and `halted`, so a completed

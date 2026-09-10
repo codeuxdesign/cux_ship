@@ -158,11 +158,21 @@ needs no new field at all —
 > the rollout stopped, so some testers have it and the rest are on the release
 > before it
 
-— which is true at 5% and at 95%, and is landing on `main` ahead of anything
-here. **What `audienceFraction` buys that sentence is exactness, not
-correctness.** A defect this package can fix and a defect this package's
-consumer can fix without it are different arguments for building something, and
-the second is the weaker one.
+— which is true at 5% and at 95%, and which landed on that consumer's `main`
+ahead of anything here. **What `audienceFraction` buys that sentence is
+exactness, not correctness.** A defect this package can fix and a defect this
+package's consumer can fix without it are different arguments for building
+something, and the second is the weaker one.
+
+**The discovery is a separate fact from the fix, and only one of them is
+independent.** The fix needed nothing from this work. The *finding* did: that
+sentence was not spotted by its author reading their own code, it surfaced
+while they answered a question asked from here — *is `halted` with a fraction
+interesting to you, or is `serving == false` enough?* — and answering it
+honestly meant going and reading what the caveat actually said. Which makes it
+evidence for **the question** rather than for the field, and that is a
+distinction this section needs, because its whole job is to say that this
+defect is not a reason to build one.
 
 **The distinction is worth keeping because the two are different kinds of
 evidence.** §12 is a sentence its author chose to write; the halted defect is a
