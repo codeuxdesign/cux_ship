@@ -173,10 +173,11 @@ transport half is decided and specified in [json-output.md](json-output.md) —
 `--json`, carrying the rendered lines. What this status names is the half that
 stays open: whether `read.dart` should have existed at all.
 
-The sections that follow were written before that transport existed and are
-kept as they were, because the argument is the useful part. Two later
-additions say so where they sit: §Sequencing, whose constraint has since been
-discharged, and the closing section, which is what the discharge left behind.
+The sections that follow were written before that transport existed. Two have
+since been touched and say so where they sit: §Sequencing, whose bullet was
+**rewritten** once its constraint was discharged, and the closing section,
+which is what the discharge left behind. Everything else is as it was, because
+the argument is the useful part even where the conclusion moved.
 
 ### The gap in the decision above
 
@@ -308,23 +309,42 @@ published so the shape could still move, and the shape moved twice.
 So §Sequencing's constraint is discharged **for the three reads**. That
 qualifier is the whole of what this section is for.
 
-**Three exported things have no route through `--json`, and each is a
-different case.**
+**Exported names with no route through `--json`, and none of them is "nobody
+wants this" — only "nobody has asked".** The distinction is the one §"No field
+is missing" already draws: what a consumer *uses* and what a consumer *needs*
+came back as different lists once, and guessing which is which is how that
+happened.
 
-- **`awaitBuild`, with `BuildProcessingProgress` and `ProcessingTimeout`.**
-  `--json` is registered on `builds`, `versions` and `tracks` and on nothing
-  else; `appstore wait` has no document, deliberately, and `cli.dart` gives the
-  reason where the flag is declared. So a spawning caller gets prose lines and
-  an exit code where a library caller gets a typed event per poll and a typed
-  terminal exception. **This is not covered, and it is not wanted**: the
-  consumer decodes not one field of that stream, measured at its call site —
-  see §"`appstore wait` needs no event schema". Unused is a weaker claim than
-  unavailable, and it is the true one.
+- **`BuildProcessingProgress` and `ProcessingTimeout`**, reached through
+  `awaitBuild`. `--json` is registered on `builds`, `versions` and `tracks` and
+  nothing else; `appstore wait` has no document, deliberately, and `cli.dart`
+  gives the reason where the flag is declared. So a spawning caller gets prose
+  lines and an exit code where a library caller gets a typed event per poll and
+  a typed terminal exception. **Unused rather than unavailable-and-unwanted**:
+  the consumer decodes not one field of that stream, measured at its call site
+  — see §"`appstore wait` needs no event schema".
+- **`AscApiException`.** A typed status, the flattened details and the request,
+  where a `--json` caller gets an exit code and prose on stderr — and that is
+  not an oversight but a recorded decision, argued in
+  [json-output.md](json-output.md) §"stdout is the document". It is the
+  sharpest of these, because the 401 it carries is the same one
+  §"the precondition it states is false" is built around.
 - **`AppStoreReads.appId` and `.appName`.** In no document. The only spawned
   route to them is the `==> Example (bundle) is app 123` banner, which under
-  `--json` is written to stderr as prose. Nobody has asked for them; nothing
-  says they are unwanted either, which makes this the thinnest of the three.
-- **In-process reading itself**, which is the one that decides the question.
+  `--json` goes to stderr as prose.
+- Smaller, and listed so the count is not quietly short:
+  `AppStoreBuild.uploadedAt` — the document carries Apple's string and not the
+  parsed `DateTime` — and `AppStoreBuilds.newestUsable`, derivable from the
+  per-entry `usable` field but only by re-deriving "which one is newest", which
+  `AppStoreBuildsDocument.newest` exists to stop a caller doing.
+
+**And then in-process reading itself**, which is not an exported name but is
+the thing that decides the question.
+
+**An earlier draft of this list said "three", twice, and was wrong both
+times.** The count is recorded here as a caution rather than a fact: it is easy
+to enumerate what a replacement covers and hard to enumerate what it does not,
+and the second is the list that matters when the question is removal.
 
 **And the last one is not settled by "the consumer ported".** Their *release
 train* cannot hold credentials — it spawns Gradle, Xcode and `flutter build`,
@@ -340,14 +360,29 @@ So the condition is: **nothing wants an in-process read**, and that is a claim
 about the future rather than about the port. What the port establishes is that
 the one known consumer does not.
 
-**Removal, when it comes, is a deletion rather than a deprecation.** There is
-no `@Deprecated` anywhere in these three packages, and the one removal this
-changelog records went the other way — 2.0.0's
-`GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` is *"gone — not deprecated, not exported
-alongside"*. [only-selector.md](only-selector.md) states the general position:
-*"backward compatibility is not a constraint"*, because the consuming projects
-sit in adjacent directories under the same maintainers. A warning wants an
-audience.
+**Whether removal is a deletion or a signpost is open, and the precedents
+disagree.** There is no `@Deprecated` anywhere in these three packages, and
+2.0.0 removed `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` outright — *"gone — not
+deprecated, not exported alongside"* — though that one was forced by a
+credential leak rather than chosen.
+
+**4.0.0 went the other way, and it is the closer precedent.** It retired
+`--data-safety` and `--send-data-safety` and kept them **declared and hidden,
+solely so the refusal could name the replacement**, because *"to a parser a
+deleted option and a typo are the same event… which reads as a broken tool
+rather than a moved one. The first consumer to upgrade said exactly that."*
+That stub is live in `play/cli.dart`. The analogue holds: deleting this file
+makes `import 'package:cux_ship/read.dart'` fail as a missing URI, which reads
+the same way — and for a library the signpost is a deprecated export.
+
+Against that sits the audience question. `only-selector.md` says *"backward
+compatibility is not a constraint"* — but it scopes itself in the next
+sentence, is a proposal about one flag's shape, and reasons about CLI
+invocations in three directories under the same maintainers. This is a
+published library, and its consumers are not enumerable the same way.
+
+Not settled here, deliberately: it is a decision for the day the removal is
+made, and the 4.0.0 comment is the thing to read first.
 
 **And it rides a major that happens anyway**, rather than being the reason to
 cut one. Removing an export is a major version — `read.dart`'s own header says
