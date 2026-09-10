@@ -644,10 +644,32 @@ means two things:
 | **4** | previews still ingesting | `appstore wait-previews` reached its deadline |
 | **5** | no such version | Apple holds no version by the name that was asked for |
 | **64** | usage | the arguments were wrong; nothing ran |
+| **255** | a crash | an exception nothing named — the stack trace is the report |
+
+**Two exceptions to the table, and both matter more than the rows.**
+
+**255 is a crash, not a code.** `main` catches three types and rethrows the
+rest, deliberately: a `SocketException` mid-promote or a response shaped
+unexpectedly exits 255 with a stack trace, because a stack trace is the right
+report for something nobody anticipated. A caller should treat it as a failure
+and read the trace, never as a condition.
+
+**`secrets exec` and `keychain exec` return the child's exit status, whatever it
+is.** `cux_ship secrets exec -- flutter test` exits what `flutter test` exited.
+So under those two commands a 2, 3, 4 or 5 means *the child's* 2, 3, 4 or 5 and
+nothing in this table applies. They are a shell, and a shell that rewrote its
+child's status would be lying about the thing it was asked to run.
+
+That is the one place "the same number never means two things" does not hold,
+and it holds *by command*: within `appstore`, `play`, `screenshots` and
+`release`, the table is exact. Anything wrapping `exec` must read the status as
+the child's.
 
 **2, 3, 4 and 5 are not failures**, in the sense that the command did what it
 could and the answer is the exit status — but *that property is not what any of
 the numbers means*, and a caller must not treat "non-1 and non-0" as a category.
+255 and the `exec` pass-through below are the proof of that: both are non-zero,
+neither is one of these conditions.
 Each code names **one condition**, deliberately: a wrapper branching on 2 must
 not have to know which subcommand produced it, which is why
 `uploadCollisionExit` took 3 rather than reusing "there is work to do", the

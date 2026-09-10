@@ -48,6 +48,14 @@ to choose. The document uses Apple's own field names, `videoDeliveryState`,
 `previewFrameImageState` and `previewFrameTimeCode`, so it can be read beside
 Apple's reference without a translation table; `done` is this package's own
 opinion over both states and says so in a field of its own.
+
+**`AppStorePreviewsDocument` and `AppStorePreviewEntry` are exported.** They
+were missing from `lib/documents.dart`'s `show` list, so the feature shipped
+with a working flag, an emitted document and a `kind` a caller could name — and
+no way to type the thing it decodes into. Found by a consumer writing
+`Future<AppStorePreviewsDocument>` in another package, which is the only place
+it was visible.
+
 **A version Apple does not hold exits 5, not 1.** *"Apple has no 1.1.8 yet"* is
 an ordinary state on the way to a release — every run before the version is
 created looks like that — and exit 1 put it beside wrong credentials, an

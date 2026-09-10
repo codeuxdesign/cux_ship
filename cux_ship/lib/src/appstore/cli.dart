@@ -1321,13 +1321,36 @@ Future<void> runAsc(
   // prints. That is the same defect this branch exists to fix, reproduced
   // inside the fix for it, so the gate names every command that reads a tree
   // rather than the two that write a listing.
+  // **And `awaitPreviews` takes the flag only, never the inferred tree**, which
+  // is the half the first fix got wrong. `defaults.metadata` is
+  // `project.appStoreTreeFor(platform)` — non-null in every repository that has
+  // a `store/appstore` directory, which is all of them — so widening the gate
+  // without narrowing the source made a bare `wait-previews --version-name X`
+  // load a tree nobody named. It then validated the listing, refused runs whose
+  // CHANGELOG.md had uncommitted changes, applied the editability check with
+  // advice to "drop --metadata" that could not be followed because none was
+  // passed, and **PATCHed poster frames from a tree the caller had not
+  // mentioned** — with no confirmation prompt, because the command is a read,
+  // and no `--dry-run` to rehearse it.
+  //
+  // `--no-metadata` could not switch it off either: that flag is `upload`'s and
+  // this parser does not declare it. So the escape hatch was absent for a
+  // behaviour that should never have been on.
+  //
+  // Inference is right for `upload` and `promote`, which exist to publish a
+  // tree and are asked to find it. It is wrong here, where the tree is an
+  // *option* on a command whose job is to wait.
+  final wantsTree =
+      cmd == AscCommand.upload ||
+      cmd == AscCommand.promote ||
+      cmd == AscCommand.awaitPreviews;
   final metadataPath =
-      (cmd == AscCommand.upload ||
-              cmd == AscCommand.promote ||
-              cmd == AscCommand.awaitPreviews) &&
+      wantsTree &&
           !noMetadata &&
           !(cmd == AscCommand.promote && betaGroup != null)
-      ? (opt('metadata') ?? defaults.metadata)
+      ? (cmd == AscCommand.awaitPreviews
+            ? opt('metadata')
+            : opt('metadata') ?? defaults.metadata)
       : null;
   // The tree the beta app description lives in — deliberately not the gated
   // [metadataPath]. `--no-metadata` declines the App Store listing publish,
@@ -1567,7 +1590,13 @@ Future<void> runAsc(
       }
     }
 
-    stdout.writeln(
+    // **stderr under `--json`, like every other line this file writes.** This
+    // block was unconditionally safe until `wait-previews` — the only
+    // `--json`-capable command that loads a tree — could reach it: `upload` and
+    // `promote` declare no `--json`, so nothing here had ever run in a document
+    // producer. It printed in front of the document, two hundred lines upstream
+    // of the branch that exists to stop exactly that.
+    (jsonOutput ? stderr : stdout).writeln(
       '==> ${metadata.locales.length} locale(s), '
       '${metadata.categories.length} categor(y|ies)'
       '${metadata.ageRating == null ? '' : ', age rating'}'
@@ -1597,7 +1626,7 @@ Future<void> runAsc(
           if (locale.version[field] != null) field: locale.version[field]!,
       };
       for (final problem in await unreachableUrls(urls)) {
-        stdout.writeln(
+        (jsonOutput ? stderr : stdout).writeln(
           '==> note: ${locale.locale} ${problem.field} '
           '${problem.url} ${problem.detail}',
         );
@@ -1898,10 +1927,16 @@ Future<void> runAsc(
   try {
     final app = await store.resolveApp(bundleId);
     if (cmd != AscCommand.buildNumber) {
-      // **Under `--json`, stdout carries the document and nothing else.** This
-      // is the only line that reaches stdout before a listing does, and it is
-      // the whole of what stdout purity costs on this path — `resolveApp`
-      // prints nothing, and the listings are the last thing to run.
+      // **Under `--json`, stdout carries the document and nothing else.**
+      //
+      // This used to say it was *the only* line reaching stdout before a
+      // listing does, which stopped being true when `wait-previews` gained a
+      // `--metadata` tree: the offline validation block above prints two of its
+      // own, and it had never run under a `--json`-capable command before —
+      // `upload` and `promote` declare no `--json`. The claim is not repaired
+      // by counting again, because the next command to reach that block would
+      // falsify it once more; what is true is the rule, and each writer honours
+      // it where it writes.
       //
       // Written out as a branch rather than as `jsonOutput ? stderr : stdout`
       // because `close_sinks` reads a local holding either one as a sink this
