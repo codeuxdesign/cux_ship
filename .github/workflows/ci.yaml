@@ -75,6 +75,35 @@ jobs:
       # than resolving something subtly different, which is the right failure.
       - run: dart pub get
 
+      # **A stale `.g.dart` analyzes clean, which is the whole problem.** The
+      # generated code is committed so that neither a consumer nor
+      # `dart pub publish` ever runs a generator; the cost is that editing an
+      # annotated class and forgetting to regenerate leaves valid Dart that
+      # describes the class as it used to be. So it is regenerated here and the
+      # tree is asked whether anything moved.
+      #
+      # Conditioned on the member declaring build_runner rather than on its
+      # name, so a second member that starts generating is covered from the
+      # moment it does.
+      # Asked the same way tool/check.sh asks it — whether regenerating changes
+      # anything, rather than whether the tree differs from git. The tree is
+      # clean here and both would work; they agree so that a green local run
+      # predicts a green one here, which is the whole point of that script.
+      - name: Generated code is current
+        run: |
+          set -euo pipefail
+          if grep -q '^  build_runner:' pubspec.yaml; then
+            generated() { find lib -name '*.g.dart' -exec shasum {} \; | sort; }
+            before=$(generated)
+            dart run build_runner build > /dev/null
+            [ "$before" = "$(generated)" ] || {
+              echo "generated code is not what the sources produce" >&2
+              git --no-pager diff -- lib
+              exit 1
+            }
+          fi
+        working-directory: ${{ matrix.package }}
+
       - run: dart format --output=none --set-exit-if-changed .
         working-directory: ${{ matrix.package }}
       - run: dart analyze --fatal-infos

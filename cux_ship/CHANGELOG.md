@@ -46,6 +46,36 @@ route no shell caller has. Note that a build manifest's `buildNumber` is a JSON
 integer and refuses anything else: both are right for their own document, and a
 consumer reading both has two types under one key.
 
+**`package:cux_ship/documents.dart` is the format, as classes.** A Dart caller
+decodes the output with `AppStoreBuildsDocument.fromJson`,
+`AppStoreVersionsDocument.fromJson` and `PlayTracksDocument.fromJson` instead
+of hand-writing a reader — and the API docs pub.dev renders for those classes
+are the published statement of the format, which is where to look for the keys,
+their types and their possible values. The commands stay commands: nothing here
+talks to a store, so a caller keeps spawning and keeps both the printed command
+line and per-step `secrets exec --only`.
+
+**Ask the question, not the vocabulary.** `usable`, `editable` and `expired`
+already meant an App Store caller never had to learn Apple's states. The Play
+side answered nothing, so **`serving` is new** — true for a completed rollout
+and for one in progress, false for a halted one and for an unsent draft. It is
+emitted as a field rather than offered as a Dart getter, so a shell caller gets
+it too. It is not a fraction; how far a staged rollout has reached is not in
+this document.
+
+**Store vocabularies degrade and ours do not.** `processingState`,
+`appStoreState` and Play's `status` belong to Apple and Google, so their enums
+carry a permanent `unknown` and the raw string travels beside them — a state a
+store adds tomorrow still parses, and members are *not* added when it does,
+because a Dart switch expression must be exhaustive and adding one would break
+a consumer on a store's schedule rather than on ours. `kind` and `platform` are
+this package's own, are closed, and an unrecognized one is refused. A null
+field means the store sent nothing, which stays a different fact from `unknown`.
+
+`uploadedDate` is Apple's string rather than a `DateTime`, deliberately: the
+rendered docs are read by people who are not in Dart, and
+`DateTime.toIso8601String` is not the spelling Apple sends.
+
 **Not `appstore wait`, and not on a guess.** The consumer this was built for
 spawns it, logs its stdout for a human, and consumes only the exit code —
 nothing decodes a line, so line-delimited progress events would have been built

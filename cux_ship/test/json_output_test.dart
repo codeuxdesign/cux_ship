@@ -229,6 +229,25 @@ Future<({String out, String err})> _streams(
 }
 
 void main() {
+  // **The documents as JSON, which is what this file is about.** The builders
+  // return the typed classes in `documents.dart` now; the claims here are
+  // about the *document* — its keys, its nesting, what survives an encode —
+  // so each one goes through `toJson` rather than reading a field back off the
+  // object that just set it. `documents_test.dart` is the other half, and
+  // tests the classes as a caller meets them.
+  Map<String, dynamic> appStoreBuildsJson(
+    AppStoreBuilds listing, {
+    required String bundleId,
+  }) => appStoreBuildsDocument(listing, bundleId: bundleId).toJson();
+
+  Map<String, dynamic> appStoreVersionsJson(
+    AppStoreVersions listing, {
+    required String bundleId,
+  }) => appStoreVersionsDocument(listing, bundleId: bundleId).toJson();
+
+  Map<String, dynamic> playTracksJson(PlayTracks tracks) =>
+      playTracksDocument(tracks).toJson();
+
   AppStoreBuilds buildsOf(List<Map<String, dynamic>> payload) =>
       appStoreBuildsFrom(payload, AscPlatform.ios);
 
@@ -259,7 +278,7 @@ void main() {
 
   group('the envelope', () {
     test('declares a schema and a kind, and the kind names the counter', () {
-      final document = appStoreBuildsDocument(
+      final document = appStoreBuildsJson(
         buildsOf([_build('169')]),
         bundleId: 'design.codeux.example',
       );
@@ -272,12 +291,12 @@ void main() {
       // Not that the numbers differ — they are all 1 today — but that there
       // are three of them. One shared constant is the arrangement where a
       // change to tracks bumps the number builds declares.
-      final builds = appStoreBuildsDocument(buildsOf(const []), bundleId: 'x');
-      final versions = appStoreVersionsDocument(
+      final builds = appStoreBuildsJson(buildsOf(const []), bundleId: 'x');
+      final versions = appStoreVersionsJson(
         versionsOf(const []),
         bundleId: 'x',
       );
-      final tracks = playTracksDocument(tracksOf());
+      final tracks = playTracksJson(tracksOf());
 
       expect(builds['kind'], isNot(versions['kind']));
       expect(versions['kind'], isNot(tracks['kind']));
@@ -288,7 +307,7 @@ void main() {
       // holds the export names: a document nobody decided to widen should not
       // widen.
       expect(
-        appStoreBuildsDocument(
+        appStoreBuildsJson(
           buildsOf([_build('169')]),
           bundleId: 'x',
         ).keys.toSet(),
@@ -304,10 +323,7 @@ void main() {
         },
       );
       expect(
-        ((appStoreBuildsDocument(
-                          buildsOf([_build('169')]),
-                          bundleId: 'x',
-                        )['builds']
+        ((appStoreBuildsJson(buildsOf([_build('169')]), bundleId: 'x')['builds']
                         as List)
                     .single
                 as Map)
@@ -329,12 +345,9 @@ void main() {
   group('display', () {
     test('is a list of strings at both levels, for every kind', () {
       final documents = <Map<String, Object?>>[
-        appStoreBuildsDocument(buildsOf([_build('169')]), bundleId: 'x'),
-        appStoreVersionsDocument(
-          versionsOf([_version('1.4.0')]),
-          bundleId: 'x',
-        ),
-        playTracksDocument(tracksOf()),
+        appStoreBuildsJson(buildsOf([_build('169')]), bundleId: 'x'),
+        appStoreVersionsJson(versionsOf([_version('1.4.0')]), bundleId: 'x'),
+        playTracksJson(tracksOf()),
       ];
 
       for (final document in documents) {
@@ -356,7 +369,7 @@ void main() {
       // is the case that makes the uniform array load-bearing rather than
       // tidy: collapsing it to a string forces a join here and a split in the
       // caller, which is parsing `display`.
-      final document = appStoreVersionsDocument(
+      final document = appStoreVersionsJson(
         versionsOf([_version('1.4.0')]),
         bundleId: 'x',
       );
@@ -369,7 +382,7 @@ void main() {
     });
 
     test('is one entry per release, so a halted rollout is its own line', () {
-      final document = playTracksDocument(tracksOf());
+      final document = playTracksJson(tracksOf());
 
       final track = (document['tracks'] as List).single as Map;
       expect(track['display'], hasLength(2));
@@ -383,7 +396,7 @@ void main() {
       // `AppStoreBuilds.lines` renders twenty at most and `builds` carries
       // everything. A consumer deriving one from the other is wrong here in
       // one direction and wrong on the Play side in the other.
-      final document = appStoreBuildsDocument(
+      final document = appStoreBuildsJson(
         buildsOf([
           for (var i = 0; i < 21; i++) ...[_build('${100 + i}')],
         ]),
@@ -405,12 +418,12 @@ void main() {
       //
       // Raised by the consumer, which routes its empty case through `lines`
       // for exactly this reason and has two branches instead of one.
-      final builds = appStoreBuildsDocument(buildsOf(const []), bundleId: 'x');
-      final versions = appStoreVersionsDocument(
+      final builds = appStoreBuildsJson(buildsOf(const []), bundleId: 'x');
+      final versions = appStoreVersionsJson(
         versionsOf(const []),
         bundleId: 'x',
       );
-      final tracks = playTracksDocument(
+      final tracks = playTracksJson(
         const PlayTracks(
           packageName: 'design.codeux.example',
           tracks: [],
@@ -436,8 +449,53 @@ void main() {
       expect(tracks['display'], isNotEmpty);
     });
 
+    test('and `serving` answers the question Play only spells', () {
+      // **The derivation, driven from real statuses.** This is the one place
+      // it can be tested: `documents_test.dart`'s fixtures supply the field,
+      // so a check there would assert the decoder read what the fixture wrote.
+      //
+      // It is computed by the encoder rather than offered as a Dart getter so
+      // a shell caller gets it too, which is the argument the App Store side's
+      // `usable` and `editable` already carry.
+      PlayTracks trackWith(String? status) => PlayTracks(
+        packageName: 'design.codeux.example',
+        tracks: [
+          PlayTrack(
+            name: 'internal',
+            releases: [
+              PlayTrackRelease(
+                name: '1.4.0',
+                versionCodes: const [152],
+                status: status,
+              ),
+            ],
+          ),
+        ],
+        uploadedVersionCodes: const [152],
+      );
+
+      bool servingFor(String? status) =>
+          ((((playTracksJson(trackWith(status))['tracks'] as List).single
+                              as Map)['releases']
+                          as List)
+                      .single
+                  as Map)['serving']
+              as bool;
+
+      expect(servingFor('completed'), isTrue);
+      expect(servingFor('inProgress'), isTrue, reason: 'some of the audience');
+      expect(servingFor('halted'), isFalse);
+      expect(servingFor('draft'), isFalse);
+      expect(servingFor('statusUnspecified'), isFalse);
+      // A status Play adds later is not serving until somebody decides it is —
+      // the safe direction, because the alternative reports a build as live on
+      // the strength of a word nobody here has read.
+      expect(servingFor('somethingGoogleAdded'), isFalse);
+      expect(servingFor(null), isFalse);
+    });
+
     test('nor on the Play side, where a trailing line belongs to no track', () {
-      final document = playTracksDocument(tracksOf());
+      final document = playTracksJson(tracksOf());
 
       final tracks = (document['tracks'] as List)
           .expand((t) => (t as Map)['display'] as List)
@@ -454,10 +512,7 @@ void main() {
       final document =
           jsonDecode(
                 jsonEncode(
-                  appStoreBuildsDocument(
-                    buildsOf([_build('169')]),
-                    bundleId: 'x',
-                  ),
+                  appStoreBuildsJson(buildsOf([_build('169')]), bundleId: 'x'),
                 ),
               )
               as Map<String, dynamic>;
@@ -471,7 +526,7 @@ void main() {
     test('and a dotted CFBundleVersion gives null rather than a guess', () {
       // Apple accepts `1.2.3`. Zero would sort it below every real build and
       // say something false about it; null says the question does not apply.
-      final document = appStoreBuildsDocument(
+      final document = appStoreBuildsJson(
         buildsOf([_build('1.2.3')]),
         bundleId: 'x',
       );
@@ -487,7 +542,7 @@ void main() {
       // `buildNumberAsInt` — a route only a caller holding the objects has. A
       // document carrying the string alone hands a shell caller the string
       // comparison that comment forbids.
-      final document = appStoreBuildsDocument(
+      final document = appStoreBuildsJson(
         buildsOf([_build('9'), _build('100'), _build('10')]),
         bundleId: 'x',
       );

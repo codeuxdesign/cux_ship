@@ -660,6 +660,46 @@ with, `null` rather than zero when the version is not a single integer.
 The whole contract, and why it is JSON rather than YAML, is
 [docs/design/json-output.md](https://github.com/codeuxdesign/cux_ship/blob/main/docs/design/json-output.md).
 
+**From Dart, decode it into our classes rather than writing a reader.**
+`package:cux_ship/documents.dart` is the format — every key, its type, its
+nullability and its vocabulary, with `fromJson` for each document. The API docs
+pub.dev renders for it are the published statement of the format, so there is
+no second description to drift.
+
+```dart
+import 'dart:convert';
+import 'package:cux_ship/documents.dart';
+
+final result = await Process.run('cux_ship', [
+  'appstore', 'builds', '--platform', 'ios', '--json',
+]);
+if (result.exitCode != 0) {
+  throw StateError(result.stderr as String);   // stdout is empty; stderr says why
+}
+final builds = AppStoreBuildsDocument.fromJson(
+  jsonDecode(result.stdout as String) as Map<String, dynamic>,
+);
+print(builds.newestBuildNumberAsInt);          // compare this against a git tag
+print(builds.builds.first.usable);             // not processingState == 'VALID'
+```
+
+**Ask the question, not the vocabulary.** `usable`, `editable`, `expired` and
+`serving` are there so a caller never opens Apple's or Google's documentation —
+`serving` is true for a completed rollout and one in progress, false for a
+halted one and an unsent draft.
+
+**Store vocabularies degrade; ours do not.** `processingState`,
+`appStoreState` and Play's `status` are Apple's and Google's, so their enums
+carry a permanent `unknown` and the raw string sits beside them — a state a
+store adds tomorrow still parses. `kind` and `platform` are ours, are closed,
+and an unrecognized one is refused. A null field means the store sent nothing,
+which is not the same as `unknown`.
+
+This adds nothing to what the command does: these are value types over what it
+printed. Reads that happen *in your process* — giving up the printed command
+line and per-step `--only` — are
+[`package:cux_ship/read.dart`](#reading-the-stores-from-dart) instead.
+
 ### Reading the stores from Dart
 
 **`package:cux_ship/read.dart` answers what the stores hold, as objects.** For a

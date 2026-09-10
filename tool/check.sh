@@ -84,6 +84,38 @@ for package in "${MEMBERS[@]}"; do
   echo "==> $package"
   (
     cd "$package"
+    # **A stale `.g.dart` analyzes clean, which is the whole problem.** The
+    # generated code is committed so that neither a consumer nor
+    # `dart pub publish` ever runs a generator — and the cost of committing it
+    # is that editing an annotated class and forgetting to regenerate leaves a
+    # file that is valid Dart, passes every other step here, and describes the
+    # class as it used to be. So it is regenerated and the tree is asked
+    # whether anything moved.
+    #
+    # The condition is `build_runner` in the member's own dev_dependencies
+    # rather than a list of names, so a second member that starts generating is
+    # covered from the moment it does.
+    # **Compared against itself before and after, not against git.** The first
+    # version of this asked `git diff --quiet -- lib`, which is wrong in the
+    # ordinary case rather than the exotic one: any uncommitted source edit
+    # fails it, so the check went red for every local run with work in
+    # progress — which is every run this script exists for. What is being
+    # asked is whether *regenerating changes anything*, and that question has
+    # nothing to do with what is committed.
+    if grep -q '^  build_runner:' pubspec.yaml; then
+      echo "--> generated code is current"
+      generated() {
+        find lib -name '*.g.dart' -exec shasum {} \; | sort
+      }
+      before=$(generated)
+      dart run build_runner build >/dev/null
+      if [ "$before" != "$(generated)" ]; then
+        echo "check: generated code in $package/lib is not what the sources" >&2
+        echo "  produce — regenerating just changed it. It has been rewritten;" >&2
+        echo "  review the diff and commit it." >&2
+        exit 1
+      fi
+    fi
     echo "--> format"
     dart format --output=none --set-exit-if-changed .
     echo "--> analyze"
