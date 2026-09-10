@@ -4,6 +4,12 @@ Status: **proposed**. Nothing here is built. Two commands, argued in one
 document because they answer halves of a single question a consumer is asking
 today and cannot get an answer to.
 
+**Reviewed by that consumer before any of it was typed**, which is the process
+`preview-wait-split.md` established and which paid again: they took three
+proposals unchanged, improved the reasoning behind two of those, added two
+fields this document did not have, and renamed the kind. Their additions are
+marked where they land.
+
 Asked for by the first consumer, ranked by their owner ahead of the preview
 work that had already been written: *"those two are what let `ready` stop
 declining to judge whether the published listing still matches the tree, which
@@ -67,6 +73,18 @@ partially. `--dry-run` makes the command a read in effect: it writes nothing,
 and the document describes an intention. Pairing them keeps the invariant that
 `--json` means "stdout is a document about state I did not change".
 
+**Refused, not inert, and this repository already has the precedent.**
+`--data-safety` is gone from `play upload` and gone *loudly* — still declared,
+hidden, so passing it is refused with a message naming the command that took
+over rather than a parser's "no such option". The consumer put the case for
+that better than the alternative deserves: a flag that is accepted and does
+nothing is a promise the caller cannot check. They have the scar from the other
+direction — `--delete-conflicting-outputs` has been ignored by build_runner
+since 2.7.0, and because it neither errors nor acts, people on that project
+believed for a long time that it was the difference between a passing and a
+failing run. **That is the real cost of an inert flag: not that it does nothing,
+but that a theory grows around it.**
+
 The refusal is offline and cheap, and it belongs beside the existing
 `--skip-waiting` + `--beta-group` one.
 
@@ -77,14 +95,22 @@ cux_ship appstore upload --bundle-id … --version-name … \
 
 ### The document
 
-`kind: appstore.dry-run`, and the shape follows the comparison rather than the
-command:
+`kind: appstore.listing-diff`, and the shape follows the comparison rather than
+the command.
+
+**Not `appstore.dry-run`, which was the first name and names the *mode*.** Every
+other kind here — `appstore.builds`, `appstore.versions`, `appstore.previews`,
+`play.tracks` — names the thing being described. Spending `dry-run` on this one
+would leave the next command to grow a dry run without it, and a `kind` is
+permanent in a way a flag is not: it accrues a schema counter with history.
+Raised by the consumer, and cheap now in a way it would not have been later.
 
 | | |
 |---|---|
 | `matches` | **the answer**: true when nothing would change |
 | `version` | the version name, and whether it would be created |
 | `changes` | per scope — `version`, `app`, `assets` — what differs |
+| `apple_only` | locales and fields Apple holds that the tree never mentions |
 | `display` | the prose the command prints, for a renderer |
 
 `matches` is the field `ready` reads and the reason the document exists. It is
@@ -99,7 +125,7 @@ hand. Names, not values: the tree is on disk and the store is one read away,
 and a document carrying both copies of every string is a document nobody will
 read.
 
-### What it must not claim
+### What it must not claim, and how `apple_only` stops it
 
 **`matches: true` is not "the store page is correct".** It means every field
 this repository *declares* agrees with Apple. A field the tree does not name is
@@ -107,6 +133,33 @@ not compared, because "present means owned" is the tree's rule everywhere else
 — so a description edited in App Store Connect, in a locale the tree does not
 carry, is invisible to this and correctly so. The doc comment has to say it,
 for the reason `serving`'s did not and was wrong twice.
+
+**And a doc comment is not enough, which is the consumer's correction.**
+`matches: true` while Apple holds a `de-DE` localization the tree never mentions
+is *true*, and reads as *the store page is what we think it is*. That is
+`LIVE (173)` in a new place: a correct statement whose reader draws a stronger
+conclusion, with nothing in the document to stop them.
+
+`apple_only` is that thing made visible rather than merely unclaimed — the
+locales, and any app-level field, that Apple holds and the tree does not
+mention. **It deliberately does not make `matches` false**: "present means
+owned" is right and weakening it would make every consumer of a partial tree
+report a permanent mismatch. The narrow claim stays narrow, and what it excludes
+is in the document beside it.
+
+The alternative was a sentence in the consumer's own output naming the gap, and
+it is worse for a reason worth recording: **the sentence is there whether or not
+the case is live**, so it is either always printed and therefore ignored, or
+conditional on a check the consumer would have to write against data this
+document declined to give it.
+
+**This is the fourth instance of one shape.** `ROLLED OUT` rather than `LIVE`,
+because Play's API describes the rollout and cannot see the review. `serving`'s
+wording, twice. The consumer's `--prepare` note labelling *Pending Developer
+Release* as an inference nobody has watched. And now `matches`. Each time the
+tool can assert something narrower than the reader wants to hear, and each time
+the fix is the same: say the narrow thing in the tool's own voice, and make the
+excluded part visible rather than leaving the reader to assume it away.
 
 ## Proposed: `verify --json`
 
@@ -118,13 +171,25 @@ silently skipped"* — which is exactly the property a document must preserve
 rather than flatten to a boolean.
 
 `kind: verify`, carrying `ok`, `checked` (what was inspected, by kind and
-path), `problems` (each as a string, since they are written for a person), and
-`display`.
+path), **`skipped`** (`{what, why}` per entry), `problems` (each as a string,
+since they are written for a person), and `display`.
 
 **`checked` is not decoration.** A caller that reads `ok: true` without it has
 learned nothing about *coverage*, which is the failure the prose version was
 changed to close. A document that dropped it would reintroduce the defect in a
 format that makes it harder to notice.
+
+**`skipped` is the consumer's addition, and it closes the half `checked` leaves
+open.** With `checked` alone, a reader notices an omission only by already
+knowing the full expected set — so a check that silently did not run is
+invisible unless somebody is holding the list in their head. That is the
+data-safety failure `checked` was built to prevent, moved one level up. Their
+sentence for it is the one to keep: *absence stops being inferred from what is
+not in a list, which is a thing nobody does reliably.*
+
+So the two fields are not a list and its complement for symmetry's sake. One
+says what was covered; the other says what was not, and why, without the reader
+having to derive it.
 
 ## Open: are the two problems lists the same list
 
@@ -152,3 +217,20 @@ the same reason 4 was not allowed to be reused: `matches: false` is not a
 failure and not "work to do this command can perform" — it is an answer. The
 caller decides what it means. Exit 0 with `matches: false` is the honest shape,
 and `README.md`'s exit-code table now says why a new number is not free.
+
+**The consumer's reason is better than that one and is the one to keep: it is
+about where truth lives.** If the exit code also carried the answer, a caller
+would have two sources for one fact, free to disagree, and would have to decide
+which wins. One source is worth more than the convenience of branching without
+parsing — and that argument survives contact with a maintainer who later wants
+to be helpful by adding the code.
+
+The cost is concrete rather than theoretical, in their runner: it throws on any
+non-zero unless the call site opts out, and its document reader throws *before*
+parsing, deliberately, because a failure leaves stdout empty. A non-zero
+`matches: false` would send the **ordinary** case down the failure path, and be
+unwound at the one place designed to stop exactly that.
+
+**And `flatten --check` is genuinely different, which is worth stating so the
+precedent is not misread.** That command has no document, so its exit code is
+the only channel it has. This one has a document. The answer goes in it.
