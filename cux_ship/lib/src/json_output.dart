@@ -98,8 +98,30 @@ AppStoreBuildEntry _build(AppStoreBuild build) => AppStoreBuildEntry(
   uploadedDate: build.uploadedDate,
   expired: build.expired,
   usable: build.usable,
+  // **The axis `usable` hides, and the one an operator's next action turns
+  // on.** A consumer built its Apple advice on `usable == false` and told the
+  // operator to wait for `VALID` in every case — right for `PROCESSING`, wrong
+  // for `FAILED` and `INVALID`, which are Apple refusing the binary and never
+  // change again. "Wait forever" was the advice for exactly the two states
+  // where the answer is "upload a different build".
+  //
+  // Null rather than false for a state nobody here names, because whether
+  // waiting helps is the question an unrecognized state most plainly cannot
+  // answer. An expired build is settled whatever its processing said.
+  mayBecomeUsable: _mayBecomeUsable(build),
   display: <String>[build.line],
 );
+
+bool? _mayBecomeUsable(AppStoreBuild build) {
+  if (build.expired) {
+    return false;
+  }
+  return switch (build.processingState) {
+    'PROCESSING' => true,
+    'VALID' || 'FAILED' || 'INVALID' => false,
+    _ => null,
+  };
+}
 
 /// `cux_ship appstore versions --json`.
 AppStoreVersionsDocument appStoreVersionsDocument(
@@ -171,14 +193,30 @@ PlayReleaseEntry _release(PlayTrackRelease release, String track) =>
       // documentation this document exists to end. A shell caller gets it too,
       // which a Dart getter could not give them.
       //
+      // **Three-valued, because the vocabulary it reads is open.** A `bool`
+      // would have to answer a status nobody here names, and both answers are
+      // wrong: `false` reports a possibly-healthy rollout as reaching nobody,
+      // `true` calls an unrecognized state healthy. Null is the same honesty
+      // the enum's `unknown` carries, and a derived field that threw it away
+      // would be a worse answer than the field it is derived from.
+      //
+      // `statusUnspecified` is null too. Play saying "unspecified" and Play
+      // saying nothing are the same amount of information.
+      //
       // **Deliberately not a fraction.** `inProgress` means some of the
       // audience has it; how much is not in this document, and belongs to the
       // release-and-rollout task rather than here.
-      serving:
-          release.status == PlayReleaseStatus.completed.wire ||
-          release.status == PlayReleaseStatus.inProgress.wire,
+      serving: _serving(release.status),
       // The track name is not a field of a release — Play nests releases under
       // tracks and the rendering says which track it is on, so the line needs
       // an argument the object does not carry.
       display: <String>[release.lineOn(track)],
     );
+
+bool? _serving(String? status) => switch (status) {
+  'completed' || 'inProgress' => true,
+  'halted' || 'draft' => false,
+  // `statusUnspecified`, a value nobody here names, and an absent field all
+  // land together: three ways of not being told.
+  _ => null,
+};

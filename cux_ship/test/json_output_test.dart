@@ -336,6 +336,7 @@ void main() {
           'uploadedDate',
           'expired',
           'usable',
+          'mayBecomeUsable',
           'display',
         },
       );
@@ -474,24 +475,59 @@ void main() {
         uploadedVersionCodes: const [152],
       );
 
-      bool servingFor(String? status) =>
+      bool? servingFor(String? status) =>
           ((((playTracksJson(trackWith(status))['tracks'] as List).single
                               as Map)['releases']
                           as List)
                       .single
                   as Map)['serving']
-              as bool;
+              as bool?;
 
       expect(servingFor('completed'), isTrue);
       expect(servingFor('inProgress'), isTrue, reason: 'some of the audience');
       expect(servingFor('halted'), isFalse);
       expect(servingFor('draft'), isFalse);
-      expect(servingFor('statusUnspecified'), isFalse);
-      // A status Play adds later is not serving until somebody decides it is —
-      // the safe direction, because the alternative reports a build as live on
-      // the strength of a word nobody here has read.
-      expect(servingFor('somethingGoogleAdded'), isFalse);
-      expect(servingFor(null), isFalse);
+
+      // **Null, not false, for the three ways of not being told.** A `bool`
+      // would have to answer, and both answers are wrong: false reports a
+      // possibly-healthy rollout as reaching nobody, true calls a state nobody
+      // here names healthy. The field this is derived from is three-valued and
+      // so is this one — a derived field that flattened it would be a worse
+      // answer than its own input.
+      //
+      // `statusUnspecified` sits with the other two because Play saying
+      // "unspecified" and Play saying nothing carry the same information.
+      expect(servingFor('statusUnspecified'), isNull);
+      expect(servingFor('somethingGoogleAdded'), isNull);
+      expect(servingFor(null), isNull);
+    });
+
+    test('and `mayBecomeUsable` separates waiting from giving up', () {
+      // **The axis `usable` hides.** A consumer built its Apple advice on
+      // `usable == false` and told an operator to wait for `VALID` in every
+      // case — right for PROCESSING, and "wait forever" for FAILED and
+      // INVALID, which are Apple refusing the binary and never change again.
+      bool? mayBecomeUsableFor(String? state, {bool expired = false}) =>
+          ((appStoreBuildsJson(
+                            buildsOf([
+                              _build('169', state: state, expired: expired),
+                            ]),
+                            bundleId: 'x',
+                          )['builds']
+                          as List)
+                      .single
+                  as Map)['mayBecomeUsable']
+              as bool?;
+
+      expect(mayBecomeUsableFor('PROCESSING'), isTrue);
+      expect(mayBecomeUsableFor('FAILED'), isFalse, reason: 'terminal');
+      expect(mayBecomeUsableFor('INVALID'), isFalse, reason: 'terminal');
+      expect(mayBecomeUsableFor('VALID'), isFalse, reason: 'already settled');
+      // Expiry settles it whatever processing said.
+      expect(mayBecomeUsableFor('PROCESSING', expired: true), isFalse);
+      // And the question an unrecognized state most plainly cannot answer.
+      expect(mayBecomeUsableFor('SOMETHING_APPLE_ADDED'), isNull);
+      expect(mayBecomeUsableFor(null), isNull);
     });
 
     test('nor on the Play side, where a trailing line belongs to no track', () {

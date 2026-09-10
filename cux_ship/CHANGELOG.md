@@ -56,12 +56,27 @@ talks to a store, so a caller keeps spawning and keeps both the printed command
 line and per-step `secrets exec --only`.
 
 **Ask the question, not the vocabulary.** `usable`, `editable` and `expired`
-already meant an App Store caller never had to learn Apple's states. The Play
-side answered nothing, so **`serving` is new** — true for a completed rollout
-and for one in progress, false for a halted one and for an unsent draft. It is
-emitted as a field rather than offered as a Dart getter, so a shell caller gets
-it too. It is not a fraction; how far a staged rollout has reached is not in
-this document.
+already meant an App Store caller never had to learn Apple's states. Two new
+fields, both `bool?`, and the null is the point:
+
+- **`serving`** — the Play side answered nothing, so asking "is this rollout
+  stopped" meant comparing Google's status strings. True for a completed
+  rollout and one in progress, false for a halted one and an unsent draft, and
+  **null for a status this version does not name**, or for Play's own
+  `statusUnspecified`. A `bool` would have to report a possibly-healthy rollout
+  as reaching nobody, or call an unrecognized state healthy. It is not a
+  fraction: a 1% staged rollout and a finished one both read `true`.
+- **`mayBecomeUsable`** — whether waiting could still make a build `usable`.
+  True while Apple is processing, false once the answer is settled, null for a
+  state nobody here names. **`usable` alone hides this**, and that cost a
+  consumer a real defect: it read `usable == false` as "wait for VALID", which
+  is right for `PROCESSING` and advice to wait forever for `FAILED` and
+  `INVALID`, where Apple has refused the binary and the fix is a new upload.
+
+Both are emitted as fields rather than offered as Dart getters, so a shell
+caller gets them too. `usable` and `editable` stay plain `bool` and fail
+closed — `usable == false` means "not known to be usable", which is the right
+default for a flag gating an action rather than a report.
 
 **Store vocabularies degrade and ours do not.** `processingState`,
 `appStoreState` and Play's `status` belong to Apple and Google, so their enums

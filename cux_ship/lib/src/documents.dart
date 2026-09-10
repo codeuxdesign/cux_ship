@@ -10,6 +10,12 @@
 // name differ this dartdoc stops describing the JSON and starts merely
 // resembling it — and a reader has no way to tell which.
 //
+// **The consequence, so nobody meets it during a tidy-up: a field here cannot
+// be renamed for clarity.** A rename is a wire-format change and costs a
+// `schema` bump, which is a strange thing to discover halfway through making
+// a name nicer. That is the price of the dartdoc being the specification, and
+// it is the right one — but it is a price.
+//
 // **Enums over store vocabularies carry a permanent [unknown], and the raw
 // string travels beside them.** Dart 3 switch expressions must be exhaustive,
 // so adding a member is a breaking change for a consumer that switched over
@@ -51,24 +57,40 @@ enum DocumentKind {
 /// The members are what this package names, not what Apple has. See the note
 /// at the top of this file for why that distinction is deliberate and why
 /// [unknown] is permanent.
-@JsonEnum(valueField: 'wire')
+///
+/// **These enums are not what travels.** The document carries the store's
+/// string; this is the typed reading of it, and there is no `@JsonEnum` here
+/// because nothing serializes it.
 enum ProcessingState {
-  /// Apple is still processing the upload. Not releasable.
+  /// Apple is still processing the upload. Not releasable *yet* — see
+  /// [AppStoreBuildEntry.mayBecomeUsable], which is the difference between
+  /// this and [failed].
   processing('PROCESSING'),
 
   /// Processed and usable, subject to expiry — see [AppStoreBuildEntry.usable].
   valid('VALID'),
 
+  /// Apple refused the binary during processing. **Terminal**: it will not
+  /// become [valid] by waiting.
   failed('FAILED'),
+
+  /// As [failed], and equally terminal.
   invalid('INVALID'),
 
   /// A state this version does not name. The raw value is in
   /// [AppStoreBuildEntry.processingState].
-  unknown('');
+  unknown(null);
 
   const ProcessingState(this.wire);
 
-  final String wire;
+  /// Apple's spelling, or **null for [unknown]** — which is the one member for
+  /// which there is no such thing.
+  ///
+  /// An earlier draft spelled it `''`, and that was a lie in the single case
+  /// where the truth matters: a caller reaching for the raw value of a state
+  /// nobody named would have been handed a plausible-looking empty string
+  /// instead of being sent to the field that has it.
+  final String? wire;
 }
 
 /// Apple's `appStoreState` for a version record.
@@ -78,7 +100,6 @@ enum ProcessingState {
 /// Anything else is [unknown] and its raw value is in
 /// [AppStoreVersionEntry.appStoreState] — and the question most callers
 /// actually have is answered by [AppStoreVersionEntry.editable] instead.
-@JsonEnum(valueField: 'wire')
 enum AppStoreState {
   prepareForSubmission('PREPARE_FOR_SUBMISSION'),
   readyForReview('READY_FOR_REVIEW'),
@@ -94,37 +115,39 @@ enum AppStoreState {
   removedFromSale('REMOVED_FROM_SALE'),
 
   /// A state this version does not name.
-  unknown('');
+  unknown(null);
 
   const AppStoreState(this.wire);
 
-  final String wire;
+  /// Apple's spelling, or null for [unknown]. See [ProcessingState.wire].
+  final String? wire;
 }
 
 /// How an approved version reaches the store.
 ///
 /// Not a fraction: Apple runs its own phased schedule, so `AFTER_APPROVAL`
 /// and `SCHEDULED` describe *when* rather than *how much*.
-@JsonEnum(valueField: 'wire')
 enum ReleaseType {
   manual('MANUAL'),
   afterApproval('AFTER_APPROVAL'),
   scheduled('SCHEDULED'),
 
   /// A value this version does not name.
-  unknown('');
+  unknown(null);
 
   const ReleaseType(this.wire);
 
-  final String wire;
+  /// Apple's spelling, or null for [unknown]. See [ProcessingState.wire].
+  final String? wire;
 }
 
 /// Play's `status` for one release on a track.
 ///
 /// The question most callers have is [PlayReleaseEntry.serving], which is
-/// derived from this. Reach for the status itself when the difference between
-/// a halted rollout and an unsent draft matters.
-@JsonEnum(valueField: 'wire')
+/// derived from this — but **`serving` is not sufficient on its own**, and the
+/// consumer this was built for needs both. [halted] and [draft] are both "not
+/// serving" and call for different advice: one was stopped by a person, the
+/// other never started. Reach for the status when the next action differs.
 enum PlayReleaseStatus {
   /// Fully rolled out to the track's audience.
   completed('completed'),
@@ -141,14 +164,19 @@ enum PlayReleaseStatus {
   draft('draft'),
 
   /// Play's own "no status", which it sends rather than omitting the field.
+  ///
+  /// Named, and still not an answer: [PlayReleaseEntry.serving] is null here
+  /// for the same reason it is null for [unknown]. Play saying "unspecified"
+  /// and Play saying nothing are the same amount of information.
   statusUnspecified('statusUnspecified'),
 
   /// A value this version does not name.
-  unknown('');
+  unknown(null);
 
   const PlayReleaseStatus(this.wire);
 
-  final String wire;
+  /// Play's spelling, or null for [unknown]. See [ProcessingState.wire].
+  final String? wire;
 }
 
 String _platformToJson(AscPlatform platform) => platform.api;
@@ -176,6 +204,7 @@ class AppStoreBuildEntry {
     required this.uploadedDate,
     required this.expired,
     required this.usable,
+    required this.mayBecomeUsable,
     required this.display,
   });
 
@@ -217,7 +246,32 @@ class AppStoreBuildEntry {
   ///
   /// **The question, rather than the vocabulary.** A caller asking this never
   /// has to know what Apple's states are, which is the point.
+  ///
+  /// **It fails closed, and `false` therefore does not mean "not usable" — it
+  /// means "not known to be usable".** A state this version does not name
+  /// lands here as `false`, which is the right default for a flag that gates
+  /// an *action*: refusing to release a build whose state is not understood is
+  /// the safe direction. [serving] is nullable rather than false-by-default
+  /// precisely because it gates a *report*, where false is a claim rather than
+  /// a refusal. Two booleans, two consequences, two shapes.
   final bool usable;
+
+  /// Whether waiting could still make this build [usable], or null when that
+  /// cannot be said.
+  ///
+  /// **[usable] alone hides the question an operator actually has**, and this
+  /// field exists because that cost a consumer a real defect: it built advice
+  /// on `usable == false` and told an operator to wait for `VALID` in every
+  /// case. That is right for `PROCESSING` and wrong for `FAILED` and
+  /// `INVALID`, which are Apple refusing the binary and never change again —
+  /// so the advice was "wait forever" for the two states where the answer is
+  /// "upload a different build".
+  ///
+  /// True for a build still processing. False once the answer is settled,
+  /// whether it settled well ([usable] is then true) or badly. **Null for a
+  /// state this version does not name**, because "will waiting help" is
+  /// exactly the question an unrecognized state cannot answer.
+  final bool? mayBecomeUsable;
 
   /// The lines `cux_ship appstore builds` prints for this build.
   ///
@@ -423,17 +477,35 @@ class PlayReleaseEntry {
   /// The highest of [versionCodes], or null when the release serves none.
   final int? newestVersionCode;
 
-  /// Whether this release is in front of any of the track's audience.
+  /// Whether this release is in front of any of the track's audience, or null
+  /// when that cannot be said.
   ///
   /// **The question, rather than the vocabulary**: true for a completed
   /// rollout and for one still in progress, false for a halted one and for an
   /// unsent draft. A caller asking this never has to learn Play's status
   /// strings.
   ///
+  /// **Null rather than false for a status this version does not name**, and
+  /// for [PlayReleaseStatus.statusUnspecified], which is Play declining to
+  /// say. A `bool` cannot carry "I don't know", and both of the answers it
+  /// would force are wrong: `false` reports a possibly-healthy rollout as
+  /// reaching nobody, and `true` calls an unrecognized state healthy. That is
+  /// the same three-valued honesty the raw [status] has one line up — a
+  /// derived field that flattened it would be a worse answer than the field it
+  /// is derived from.
+  ///
+  /// A caller wanting the conservative reading writes `serving != true`; one
+  /// that wants to say so writes `serving == null`.
+  ///
   /// **It does not say how much.** A staged rollout's *fraction* is not in
-  /// this document, and `inProgress` therefore means "some of the audience",
-  /// not "all of it".
-  final bool serving;
+  /// this document, so `inProgress` means "some of the audience", not "all of
+  /// it" — and `serving == true` cannot tell a 1% rollout from a finished one.
+  ///
+  /// **And it is not sufficient alone.** [PlayReleaseStatus.halted] and
+  /// [PlayReleaseStatus.draft] are both `false` and call for different advice:
+  /// one was stopped by a person, the other never started. Read [statusKnown]
+  /// when the next action differs.
+  final bool? serving;
 
   /// The line `cux_ship play tracks` prints for this release. Display text.
   final List<String> display;

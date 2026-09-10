@@ -14,6 +14,7 @@ AppStoreBuildEntry _$AppStoreBuildEntryFromJson(Map<String, dynamic> json) =>
       uploadedDate: json['uploadedDate'] as String?,
       expired: json['expired'] as bool,
       usable: json['usable'] as bool,
+      mayBecomeUsable: json['mayBecomeUsable'] as bool?,
       display: (json['display'] as List<dynamic>)
           .map((e) => e as String)
           .toList(),
@@ -27,6 +28,7 @@ Map<String, dynamic> _$AppStoreBuildEntryToJson(AppStoreBuildEntry instance) =>
       'uploadedDate': instance.uploadedDate,
       'expired': instance.expired,
       'usable': instance.usable,
+      'mayBecomeUsable': instance.mayBecomeUsable,
       'display': instance.display,
     };
 
@@ -118,7 +120,7 @@ PlayReleaseEntry _$PlayReleaseEntryFromJson(Map<String, dynamic> json) =>
           .map((e) => (e as num).toInt())
           .toList(),
       newestVersionCode: (json['newestVersionCode'] as num?)?.toInt(),
-      serving: json['serving'] as bool,
+      serving: json['serving'] as bool?,
       display: (json['display'] as List<dynamic>)
           .map((e) => e as String)
           .toList(),

@@ -390,20 +390,77 @@ than the reader does — refusing is the answer, exactly as for an unrecognized
 **And absent stays distinct from unknown.** A null field is a store that sent
 nothing; `unknown` is a store that sent something this version does not name.
 
+**`unknown` carries no wire value at all** — `null`, not `''`. An earlier draft
+gave it the empty string, which is a lie in the single case where the truth
+matters: a caller reaching for the raw value of a state nobody named would have
+been handed a plausible-looking `''` instead of being sent to the sibling field
+that has it. Nothing serializes these enums either — the document carries the
+store's string and the enum is the typed *reading* of it — so there is no
+`@JsonEnum` on them, only on `DocumentKind`, which is the one that travels.
+
 ### The question, not the vocabulary
 
 The point of all of it is that a caller never opens Apple's or Google's
 documentation. `usable`, `editable` and `expired` already did that on the App
 Store side. **The Play side answered nothing** — a caller asking "is this
 rollout stopped" wrote `status == 'halted'`, which is the deferral this is
-meant to end — so `PlayReleaseEntry.serving` is derived and emitted: true for
-`completed` and `inProgress`, false for everything else including a value
-nobody here names.
+meant to end.
 
-Emitted rather than offered as a getter, for the reason this document already
-gives for `usable`: a shell caller gets it too, and a Dart getter structurally
-cannot reach them. **Deliberately not a fraction** — how much of the audience a
-staged rollout has reached is the release-and-rollout task's, not this one's.
+Emitted rather than offered as getters, for the reason this document already
+gives for `usable`: a shell caller gets them too, and a Dart getter
+structurally cannot reach them.
+
+### A derived field cannot be less honest than its input
+
+**`serving` is `bool?`, and the first draft had it as `bool`.** The consumer
+review caught it by turning this document's own rule back on it: absent and
+unknown are two facts and get two representations — and then a plain boolean
+was derived from a vocabulary deliberately left open. A `bool` has no way to
+say "a status nobody here names", and both answers it is forced to give are
+claims nobody can stand behind. `false` reports a possibly-healthy rollout as
+reaching nobody, on every run, until somebody upgrades. `true` calls an
+unrecognized state healthy, which is the failure this repository has a habit
+of paying for.
+
+So: true for `completed` and `inProgress`, false for `halted` and `draft`, null
+for a status this version does not name — and null for
+`statusUnspecified` too, because Play saying "unspecified" and Play saying
+nothing are the same amount of information. A caller wanting the conservative
+reading writes `serving != true`.
+
+**And `serving` is not sufficient alone.** `halted` and `draft` are both false
+and call for different advice — one was stopped by a person, the other never
+started — so both stay reachable as enum members. The boolean answers the
+common question; the status answers the one it cannot.
+
+### `usable` hid a second question, and that cost a consumer a defect
+
+`usable` is `VALID && !expired`. It answers *"can I act now"* and says nothing
+about *"will waiting help"* — and those are different questions with different
+next actions. A consumer built its Apple advice on `usable == false` and told
+an operator to wait for `VALID` in every case. That is right for `PROCESSING`
+and wrong for `FAILED` and `INVALID`, which are Apple refusing the binary
+during processing and never change again: the advice was "wait forever" for
+precisely the two states where the answer is "upload a different build".
+
+**The one bit `usable` exposes is what made treating all four states alike
+natural**, so adding `serving` without learning from it would have propagated
+the shape. `AppStoreBuildEntry.mayBecomeUsable` is the missing axis: true while
+processing, false once settled either way, null for a state nobody names, and
+false for an expired build whatever its processing said.
+
+`usable` and `editable` stay plain `bool` and fail closed, deliberately. **A
+boolean that gates an action should fail closed; one that reports a state
+should admit ignorance.** `usable == false` therefore means "not known to be
+usable" rather than "not usable", and its doc comment says so — refusing to
+release a build whose state is not understood is the safe direction, where
+reporting one as dead is not.
+
+**Deliberately not a fraction** — how much of the audience a staged rollout has
+reached is the release-and-rollout task's, not this one's. That task now has a
+named consumer requirement waiting on it: a consumer documents that a 1%
+rollout reads exactly like a finished one, and names this document as the
+reason.
 
 ### `uploadedDate` stays a string
 

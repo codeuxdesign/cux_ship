@@ -61,6 +61,7 @@ Map<String, dynamic> _buildsJson({
       'uploadedDate': '2026-09-09T14:02:11-07:00',
       'expired': false,
       'usable': true,
+      'mayBecomeUsable': false,
       'display': ['  build 169  VALID  uploaded 2026-09-09T14:02:11-07:00'],
     },
   ],
@@ -184,6 +185,25 @@ void main() {
         contains('unknown'),
         reason: 'the store-owned ones must degrade',
       );
+    });
+
+    test("and unknown's wire is null, because there is no such spelling", () {
+      // **The one case where a caller most needs the raw value is the one an
+      // enum cannot carry.** An earlier draft spelled this `''`, which reads
+      // like a store that sent an empty string — plausible, wrong, and wrong
+      // exactly where the truth matters. Null sends the reader to the sibling
+      // field, which has it.
+      expect(ProcessingState.unknown.wire, isNull);
+      expect(AppStoreState.unknown.wire, isNull);
+      expect(ReleaseType.unknown.wire, isNull);
+      expect(PlayReleaseStatus.unknown.wire, isNull);
+      // And every named member does have one, so the null is a statement
+      // rather than an oversight nobody filled in.
+      for (final state in ProcessingState.values) {
+        if (state != ProcessingState.unknown) {
+          expect(state.wire, isNotNull);
+        }
+      }
     });
 
     test('and a platform nobody names is refused rather than degraded', () {
