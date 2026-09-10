@@ -171,8 +171,13 @@ Status: **open**, 10 September 2026. Raised by the consumer this API was built
 for, after living with it, and recorded a day before it was acted on. The
 transport half is decided and specified in [json-output.md](json-output.md) —
 `--json`, carrying the rendered lines. What this status names is the half that
-stays open: whether `read.dart` should have existed at all. The sections below
-are unchanged, because nothing about that was settled.
+stays open: whether `read.dart` should have existed at all.
+
+The sections that follow were written before that transport existed. Two have
+since been touched and say so where they sit: §Sequencing, whose bullet was
+**rewritten** once its constraint was discharged, and the closing section,
+which is what the discharge left behind. Everything else is as it was, because
+the argument is the useful part even where the conclusion moved.
 
 ### The gap in the decision above
 
@@ -239,10 +244,11 @@ better:
 - **`read.dart` is published, and removing an export is a major version.** The
   live question is whether the surface should have existed, not whether to
   break the consumer using it.
-- **Sequencing.** `--json` does not exist. A consumer reverting to
-  spawn-and-parse today gets prose-parsing, which is the defect this API was
-  built to fix. So `--json` lands first, and reverting onto it is a second
-  decision.
+- **Sequencing.** `--json` did not exist when this was written. A consumer
+  reverting to spawn-and-parse would have got prose-parsing, which is the
+  defect this API was built to fix. So `--json` landed first, and reverting
+  onto it is a second decision — see below, which is where that decision now
+  sits.
 
 ### Why this is recorded now rather than when somebody wants it
 
@@ -283,3 +289,104 @@ the argument, which had reached the same place by reasoning.
 which is a gap on its side and not a request on this one. Worth recording
 because "what does a consumer need" and "what does a consumer use" came back as
 different lists, and only the first one would have been guessed.
+
+### What is left of the surface once `--json` exists
+
+Status: **open**, 10 September 2026. `--json` and
+`package:cux_ship/documents.dart` shipped in 4.3.0-dev.1
+([json-output.md](json-output.md) is the format; the classes' own dartdoc is
+the specification), and the consumer ported: its `status` reads through the
+command, its second entrypoint is deleted, and the output is byte-identical to
+what the library produced.
+
+**The port was not clean, which is the point of having run it before 4.3.0.**
+It found two gaps in the document classes — no accessor for the newest build
+*entry*, and one of the two derived rules reachable while the other was private
+to the encoder, so its fixtures had to restate a rule this package owns. Both
+were additions rather than renames, and both landed. A pre-release was
+published so the shape could still move, and the shape moved twice.
+
+So §Sequencing's constraint is discharged **for the three reads**. That
+qualifier is the whole of what this section is for.
+
+**Exported names with no route through `--json`, and none of them is "nobody
+wants this" — only "nobody has asked".** The distinction is the one §"No field
+is missing" already draws: what a consumer *uses* and what a consumer *needs*
+came back as different lists once, and guessing which is which is how that
+happened.
+
+- **`BuildProcessingProgress` and `ProcessingTimeout`**, reached through
+  `awaitBuild`. `--json` is registered on `builds`, `versions` and `tracks` and
+  nothing else; `appstore wait` has no document, deliberately, and `cli.dart`
+  gives the reason where the flag is declared. So a spawning caller gets prose
+  lines and an exit code where a library caller gets a typed event per poll and
+  a typed terminal exception. **Unused rather than unavailable-and-unwanted**:
+  the consumer decodes not one field of that stream, measured at its call site
+  — see §"`appstore wait` needs no event schema".
+- **`AscApiException`.** A typed status, the flattened details and the request,
+  where a `--json` caller gets an exit code and prose on stderr — and that is
+  not an oversight but a recorded decision, argued in
+  [json-output.md](json-output.md) §"stdout is the document". It is the
+  sharpest of these, because the 401 it carries is the same one
+  §"the precondition it states is false" is built around.
+- **`AppStoreReads.appId` and `.appName`.** In no document. The only spawned
+  route to them is the `==> Example (bundle) is app 123` banner, which under
+  `--json` goes to stderr as prose.
+- Smaller, and listed so the count is not quietly short:
+  `AppStoreBuild.uploadedAt` — the document carries Apple's string and not the
+  parsed `DateTime` — and `AppStoreBuilds.newestUsable`, derivable from the
+  per-entry `usable` field but only by re-deriving "which one is newest", which
+  `AppStoreBuildsDocument.newest` exists to stop a caller doing.
+
+**And then in-process reading itself**, which is not an exported name but is
+the thing that decides the question.
+
+**An earlier draft of this list said "three", twice, and was wrong both
+times.** The count is recorded here as a caution rather than a fact: it is easy
+to enumerate what a replacement covers and hard to enumerate what it does not,
+and the second is the list that matters when the question is removal.
+
+**And the last one is not settled by "the consumer ported".** Their *release
+train* cannot hold credentials — it spawns Gradle, Xcode and `flutter build`,
+and 3.0.0 was cut to stop exactly that inheritance. But the same consumer
+**built an in-process reader anyway**, in a second entrypoint that spawns
+nothing, wrapped in `secrets exec`; §"And the precondition it states is false"
+above is the record of it, defect included. A caller that will not spawn and
+accepts credentials in its own process is therefore a shape that has existed
+in practice, not a hypothetical — it is just a shape that consumer no longer
+needs, having deleted that entrypoint in the port.
+
+So the condition is: **nothing wants an in-process read**, and that is a claim
+about the future rather than about the port. What the port establishes is that
+the one known consumer does not.
+
+**Whether removal is a deletion or a signpost is open, and the precedents
+disagree.** There is no `@Deprecated` anywhere in these three packages, and
+2.0.0 removed `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` outright — *"gone — not
+deprecated, not exported alongside"* — though that one was forced by a
+credential leak rather than chosen.
+
+**4.0.0 went the other way, and it is the closer precedent.** It retired
+`--data-safety` and `--send-data-safety` and kept them **declared and hidden,
+solely so the refusal could name the replacement**, because *"to a parser a
+deleted option and a typo are the same event… which reads as a broken tool
+rather than a moved one. The first consumer to upgrade said exactly that."*
+That stub is live in `play/cli.dart`. The analogue holds: deleting this file
+makes `import 'package:cux_ship/read.dart'` fail as a missing URI, which reads
+the same way — and for a library the signpost is a deprecated export.
+
+Against that sits the audience question. `only-selector.md` says *"backward
+compatibility is not a constraint"* — but it scopes itself in the next
+sentence, is a proposal about one flag's shape, and reasons about CLI
+invocations in three directories under the same maintainers. This is a
+published library, and its consumers are not enumerable the same way.
+
+Not settled here, deliberately: it is a decision for the day the removal is
+made, and the 4.0.0 comment is the thing to read first.
+
+**And it rides a major that happens anyway**, rather than being the reason to
+cut one. Removing an export is a major version — `read.dart`'s own header says
+so — but the ongoing cost of keeping it is narrower than "stability on the
+whole internals" suggests: the models it exports are what `documents.dart` is
+built from and stay regardless. What `read.dart` uniquely pins is the two
+session classes and their methods.

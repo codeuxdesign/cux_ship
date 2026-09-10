@@ -365,6 +365,10 @@ uploaded to the wrong listing, or uploaded a stale artifact all exit zero.
 - **Check the artifact, not the intent.** For signing, that is
   `apksigner verify --print-certs` on the built `.aab` — not a grep of
   `build.gradle.kts`, which is a text match against a Turing-complete script.
+- **Ask the store what it holds** — `appstore builds`, `appstore versions`,
+  `play tracks`. It is the only check here that catches the uploaded-nothing
+  and uploaded-the-wrong-thing cases without waiting for a device. A pipeline
+  that has to *decide* on the answer wants `--json`.
 - **After the first release, install it from the store on a real device and read
   the build number back.** Nothing else distinguishes a working pipeline from a
   plausible one.
