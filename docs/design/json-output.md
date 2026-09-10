@@ -323,6 +323,15 @@ must not be generalized into "no wait ever needs typed progress". Nothing is
 designed for it here; the `schema` convention is what leaves room, and it costs
 nothing because it already exists.
 
+**That task is [rollout-state.md](rollout-state.md), and it went the other way
+on the sentence above.** The rollout fraction, the four `AppStoreState` members
+and a version's build number all landed as *fields*, and the wait was refused —
+because the intermediate state being the answer is an argument against a wait
+rather than for one: block-until-over delivers the terminal state and discards
+every intermediate one. The paragraph above is left as written because it is
+what this document knew at the time, and because the ordering claim it makes is
+still right. No `schema` bumped; the convention did leave the room it promised.
+
 ## What this does not decide
 
 **Whether `read.dart` survives.** It is published, and removing an export is a

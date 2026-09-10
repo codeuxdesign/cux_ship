@@ -98,6 +98,8 @@ AppStoreVersionEntry _$AppStoreVersionEntryFromJson(
   releaseTypeRaw: json['releaseTypeRaw'] as String?,
   copyright: json['copyright'] as String?,
   editable: json['editable'] as bool,
+  buildNumber: json['buildNumber'] as String?,
+  buildNumberAsInt: (json['buildNumberAsInt'] as num?)?.toInt(),
   display: (json['display'] as List<dynamic>).map((e) => e as String).toList(),
 );
 
@@ -111,6 +113,8 @@ Map<String, dynamic> _$AppStoreVersionEntryToJson(
   'releaseTypeRaw': instance.releaseTypeRaw,
   'copyright': instance.copyright,
   'editable': instance.editable,
+  'buildNumber': instance.buildNumber,
+  'buildNumberAsInt': instance.buildNumberAsInt,
   'display': instance.display,
 };
 

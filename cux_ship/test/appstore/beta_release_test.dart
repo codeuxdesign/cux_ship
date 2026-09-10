@@ -45,10 +45,28 @@ class _FakeClient implements AscClient {
   Future<List<Map<String, dynamic>>> getAll(
     String path, {
     Map<String, String>? query,
-  }) async {
+  }) async => (await getAllWithIncluded(path, query: query)).data;
+
+  /// **Delegated the way the real client delegates**, rather than left to
+  /// `noSuchMethod` — which this fake does not declare, so an unimplemented
+  /// member is a compile error rather than a surprise at run time. Nothing in
+  /// `beta-release` reads `included`; carrying the method keeps the fake's
+  /// shape the same as the client's, so a path that starts to read it fails
+  /// here loudly rather than silently seeing an empty map.
+  @override
+  Future<
+    ({
+      List<Map<String, dynamic>> data,
+      Map<String, Map<String, dynamic>> included,
+    })
+  >
+  getAllWithIncluded(String path, {Map<String, String>? query}) async {
     log.add('GET $path');
     queries['GET $path'] = query;
-    return collections[path] ?? const [];
+    return (
+      data: collections[path] ?? const [],
+      included: const <String, Map<String, dynamic>>{},
+    );
   }
 
   @override

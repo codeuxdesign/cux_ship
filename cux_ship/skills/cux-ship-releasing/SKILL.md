@@ -369,9 +369,28 @@ uploaded to the wrong listing, or uploaded a stale artifact all exit zero.
   `play tracks`. It is the only check here that catches the uploaded-nothing
   and uploaded-the-wrong-thing cases without waiting for a device. A pipeline
   that has to *decide* on the answer wants `--json`.
+
+  Three of those answers are worth naming, because each closes a case where the
+  store's own listing reads as fine:
+
+  - **`appstore versions` names the build behind each version.** A marketing
+    version cannot tell you which binary is live — two builds of `1.4.0` are the
+    same version — so *"is what is live the thing I think is live"* used to need
+    a device. `buildNumber` answers it, and is `null` before a version is
+    submitted.
+  - **`play tracks` says how far a staged rollout got.** `audienceFraction` is
+    `1.0` for a completed one, Play's own fraction for one in progress, and —
+    the case that matters — the fraction a *halted* rollout stopped at. A halted
+    release is still on the phones that took it, so "stopped" and "nobody has
+    it" are different sentences.
+  - **`appstore versions` distinguishes queued from in-review.**
+    `WAITING_FOR_REVIEW` and `IN_REVIEW` are different states and Apple's
+    `READY_FOR_REVIEW` is *not submitted at all* despite reading like it is.
+    Match the state, not the substring.
 - **After the first release, install it from the store on a real device and read
-  the build number back.** Nothing else distinguishes a working pipeline from a
-  plausible one.
+  the build number back.** The reads above catch more than they used to — they
+  now answer which build is live rather than only which version — but they ask
+  Apple and Google what they *hold*, and only a device says the binary runs.
 
 ## Store-side work no command can do
 

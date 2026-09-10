@@ -296,8 +296,39 @@ class AscClient {
   Future<List<Map<String, dynamic>>> getAll(
     String path, {
     Map<String, String>? query,
-  }) async {
+  }) async => (await getAllWithIncluded(path, query: query)).data;
+
+  /// [getAll], and the `included` resources beside the collection.
+  ///
+  /// **A second method rather than a wider return type**, because every one of
+  /// [getAll]'s callers wants the list and nothing else, and a caller that also
+  /// wants `included` is a different caller. Changing the shared return type
+  /// would have touched 23 call sites to serve one.
+  ///
+  /// **One pagination loop, not two.** [getAll] delegates here and drops the
+  /// map. The `links.next` walk carries the check that a paginated response
+  /// cannot send the bearer token to another host, and that check existing in
+  /// two copies is how one of them stops being true.
+  ///
+  /// `included` is keyed `type:id`, which is how JSON:API addresses a resource
+  /// and therefore how a `relationships` entry names one. **Merged across
+  /// pages**: Apple repeats an included resource on every page that references
+  /// it, so a per-page map would answer for the newest page only.
+  ///
+  /// **Nothing here asks for an include.** The caller puts `include=` in
+  /// [query]; this only stops throwing away what comes back. A request without
+  /// one gets an empty map, which is a different thing from a relationship
+  /// Apple could not resolve — see [AppStore.appStoreVersions], which is the
+  /// one place that distinction is load-bearing.
+  Future<
+    ({
+      List<Map<String, dynamic>> data,
+      Map<String, Map<String, dynamic>> included,
+    })
+  >
+  getAllWithIncluded(String path, {Map<String, String>? query}) async {
     final results = <Map<String, dynamic>>[];
+    final included = <String, Map<String, dynamic>>{};
     var uri = Uri.parse(
       '$_baseUrl$path',
     ).replace(queryParameters: {'limit': '200', ...?query});
@@ -307,10 +338,20 @@ class AscClient {
       if (data is List) {
         results.addAll(data.whereType<Map<String, dynamic>>());
       }
+      final sideloaded = body['included'];
+      if (sideloaded is List) {
+        for (final resource in sideloaded.whereType<Map<String, dynamic>>()) {
+          final type = resource['type'];
+          final id = resource['id'];
+          if (type is String && id is String) {
+            included['$type:$id'] = resource;
+          }
+        }
+      }
       final links = body['links'];
       final next = links is Map<String, dynamic> ? links['next'] : null;
       if (next is! String || next.isEmpty) {
-        return results;
+        return (data: results, included: included);
       }
       final following = Uri.parse(next);
       // The bearer token goes on whatever this names, so it does not get to

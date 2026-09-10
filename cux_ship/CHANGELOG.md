@@ -2,6 +2,85 @@
 
 ## Unreleased
 
+**Source-breaking for a Dart caller, in a minor version — read this first if
+you import `documents.dart` or `read.dart`.** The number does not carry the
+signal, so it is here instead. **Decoding is unaffected**: the JSON documents
+are additive, both still declare `schema: 1`, and a caller that only reads
+`--json` output can upgrade without changing a line.
+
+What breaks is *constructing* these types, which in practice means a
+hand-written test fixture:
+
+| Type | Change |
+|---|---|
+| `AppStoreState` | four new members — an exhaustive `switch` over it stops compiling |
+| `AppStoreVersionEntry` | `required buildNumber`, `required buildNumberAsInt` |
+| `PlayReleaseEntry` | `required userFraction`, `required audienceFraction` |
+| `AppStoreVersion` | `required buildNumber` |
+| `PlayTrackRelease` | `required userFraction` |
+
+`required` rather than a defaulted parameter is deliberate and was the one
+consumer's stated preference: a fixture that keeps compiling is a fixture
+quietly asserting against a document this package no longer emits. The fix is
+to name the new fields — `null` is the right value for a version Apple has not
+attached a build to, and for a rollout Play sent no fraction for.
+
+**`appstore versions` says which build each version is.**
+`AppStoreVersionEntry` gains `buildNumber` and `buildNumberAsInt`, and the
+printed line grows ` build 169` where Apple named one:
+
+    1.4.0  READY_FOR_SALE  MANUAL  build 169
+
+**The question `versionString` cannot answer.** Two builds of `1.4.0` are the
+same version and different binaries, so *"is what is live the thing I think is
+live"* had no route through this package: Play's tracks carry `versionCodes`
+and Apple's version record carries a build *relationship*, which the listing
+was not asking for.
+
+**One request, not one plus an N+1.** `appstore versions` now sends
+`include=build`, and the sideloaded `builds` resource carries the build number
+in its `version` attribute — Apple's name for `CFBundleVersion`, which reads
+backwards and is the easiest thing here to get wrong. `AscClient` grows
+`getAllWithIncluded` for it; `getAll` delegates to that and drops the map, so
+the pagination walk — and the check that a `next` link cannot send the bearer
+token to another host — has one copy rather than two. `included` is merged
+across pages, because Apple repeats a sideloaded resource on every page that
+references it and a per-page map answers null for everything but the last.
+
+**Measured against a live account, because none of it was checkable from
+here.** Without the include a version's `relationships.build` carries `links`
+and no `data` key at all; with it, `data` names the build. That is the same
+shape this package already recorded for categories on `appInfos`, and its
+generalising to this endpoint was a question rather than an assumption.
+
+**`buildNumber` is null for two reasons and diagnoses neither.** Apple names no
+build for a version in `PREPARE_FOR_SUBMISSION`; a request that did not carry
+the include would answer null too. The second is measured not to happen, and
+the first has never been observed — the account this was measured against held
+six versions and every one was `READY_FOR_SALE` — so the field reports a null
+rather than an explanation. An earlier draft printed "this package asked
+wrongly" when the `data` key was absent, which would have fired on an
+unsubmitted version: a false alarm in the state an operator is most likely to
+be looking at.
+
+**No `schema` bump** — both fields are optional and additive, and
+`appstore.versions` still declares `schema: 1`. **A caller that decodes a
+document is unaffected**, in either direction: an older `documents.dart`
+ignores keys it does not know, and a newer one reads an older document with
+both fields null.
+
+**It is a source-breaking change for a Dart caller that *constructs* an
+`AppStoreVersionEntry`**, which is a different thing and does not live in the
+schema number. Both fields are `required`, so a hand-built entry — a test
+fixture, most likely — stops compiling until it names them. That is
+deliberate: `required` makes the break loud and immediate rather than leaving a
+fixture quietly asserting against a document this package no longer emits. The
+one Dart consumer there is builds exactly such a fixture and expects it.
+
+**And the phased release still is not carried**, though the same request could
+now do it for almost nothing. Nobody passes `--phased`. Cheap is not a reason
+to add a field to a published document.
+
 **A staged rollout says how far along it is.** `play tracks --json` carries
 Play's `userFraction` and a derived `audienceFraction` beside it, and the
 printed release line grows a percentage where there is one to show:

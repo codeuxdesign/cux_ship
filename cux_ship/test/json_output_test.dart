@@ -367,6 +367,8 @@ void main() {
           'releaseTypeRaw',
           'copyright',
           'editable',
+          'buildNumber',
+          'buildNumberAsInt',
           'display',
         },
       );

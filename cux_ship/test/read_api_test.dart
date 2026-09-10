@@ -168,6 +168,9 @@ void main() {
             appStoreState: 'PREPARE_FOR_SUBMISSION',
             releaseType: 'MANUAL',
             copyright: null,
+            // Apple names no build for a version in this state, which is the
+            // case the field's own doc comment says has never been observed.
+            buildNumber: null,
           ),
         ],
       );

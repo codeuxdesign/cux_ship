@@ -657,6 +657,12 @@ Build numbers are strings, because `CFBundleVersion` may be dotted;
 `buildNumberAsInt` and `newestBuildNumberAsInt` are the integers to compare
 with, `null` rather than zero when the version is not a single integer.
 
+**An App Store version names its build.** `buildNumber` is the `CFBundleVersion`
+Apple has attached to it and `buildNumberAsInt` is the form to compare — the
+answer to *"is what is live the thing I think is live"*, which `versionString`
+cannot give because two builds of `1.4.0` are the same version. Both are `null`
+when Apple names no build, which is every version before it is submitted.
+
 **A staged rollout carries two fractions, and the second is the one to read.**
 Play sets `userFraction` only for `inProgress` and `halted`, so it is `null`
 for the release that reached everybody; `audienceFraction` is this package's

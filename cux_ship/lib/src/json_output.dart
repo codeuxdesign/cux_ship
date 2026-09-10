@@ -161,6 +161,12 @@ AppStoreVersionEntry _version(AppStoreVersion version) => AppStoreVersionEntry(
   releaseTypeRaw: version.releaseType,
   copyright: version.copyright,
   editable: version.editable,
+  // **Both, for the reason `buildNumber` and `buildNumberAsInt` are both on a
+  // build entry**: the string is what a listing shows and what Apple sent, the
+  // integer is the only safe comparison, and a shell caller has no second hop
+  // to derive one from the other.
+  buildNumber: version.buildNumber,
+  buildNumberAsInt: version.buildNumberAsInt,
   // Two entries, not one: a version renders its state and its copyright on
   // separate lines. An item whose rendering collapsed to a string is what
   // makes a caller join and then split, which is parsing `display`.

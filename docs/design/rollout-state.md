@@ -1,20 +1,19 @@
 # Release and rollout state: what a publishing tool should answer
 
-Status: **proposed**, 10 September 2026 — **implemented on a branch and not
-merged**, which is a state the index has no word for.
+Status: **built**, 10 September 2026 — the Play rollout fraction, the four
+`AppStoreState` members and a version's build number are on `main`.
 
-`tool/status.sh` has four: `open`, `proposed`, `decided`, `built`, and
-`design_status_test.dart` fails a document that invents a fifth, so this line
-cannot say what is actually true. `built` would claim something that has not
-landed; `proposed` understates a Play half that is written, tested and twice
-reviewed. **`proposed` is the one to be wrong with**, because it understates
-rather than overstates and the correction is a commit away — where a premature
-`built` is a claim `tool/status.sh` exists to keep honest, believed by anyone
-reading the index rather than the file. Move it to `built` when this merges.
+**Two sections below carry their own status and one of them is still open**, so
+this word is a claim about the document's subject rather than about every
+argument in it: `tool/status.sh open` is the list, not the top of each file.
 
-Recorded rather than fixed: whether the vocabulary wants a fifth word is a
-question about the index and not about this document, and answering it here
-would be a design changing the tool that reports on it.
+This line said `proposed` while the work sat on a branch, and the note under it
+argued for the lesser of two wrong words — the index has four (`open`,
+`proposed`, `decided`, `built`) and `design_status_test.dart` refuses a fifth,
+so *implemented and not merged* could not be said. Whether the vocabulary wants
+a fifth word is a question about the index rather than about this document, and
+it stopped being urgent the moment this merged. Recorded because the next
+document to sit in that state will meet it again.
 
 Read against 4.3.0 as published, which is the version that settled the shape
 anything new here has to fit into. The
@@ -565,10 +564,23 @@ the table above.
 
 ### Apple's phased release: what it would cost, and the fraction not to invent
 
-Status: **open**, 10 September 2026. The cost is measured below and the
-fraction rule is settled; what is missing is a consumer that reads it.
-`--phased` is a flag on `promote`, and nothing in this repository establishes
-that anyone passes it.
+Status: **open**, 10 September 2026 — **and open on nothing but a caller.** The
+cost is now near zero, the mechanism ships, and the fraction rule is settled.
+`--phased` is a flag on `promote`; nothing in this repository establishes that
+anyone passes it, and the consumer confirmed it does not and has no plan to.
+
+**Everything the cost argument below was about has been built for something
+else.** `AscClient.getAllWithIncluded` exists, `appStoreVersions` already sends
+an `include`, and adding the phased release is
+`include=build,appStoreVersionPhasedRelease` plus a second resolver beside the
+build's. The section is kept as written because the *reasoning* about the
+fraction is the durable part and because the cost estimates in it were wrong
+three times in three different directions — which is the more useful record.
+
+**Cheap is not why a field gets added.** That is the whole argument for leaving
+this open now: read-api.md §"No field is missing" says what a consumer *uses*
+is the evidence and what it might need is not, and a field costing nothing does
+not change which list this is on.
 
 `cux_ship appstore promote --phased` **writes**
 `/v1/appStoreVersionPhasedReleases` and nothing in this package ever reads it
@@ -576,9 +588,11 @@ back. So the Apple analogue of a staged rollout is a thing this tool can start
 and cannot observe — which is a sharper gap than Play's, and a more expensive
 one to close.
 
-**Cost, measured rather than guessed.** `AscClient.getAll` follows `links.next`
-and accumulates `body['data']`; it discards `body['included']` entirely.
-`appStoreVersions` is a `getAll`. So carrying the phased release means either
+**Cost, measured rather than guessed — and stale, kept for the record.** When
+this was written `AscClient.getAll` followed `links.next`, accumulated
+`body['data']` and discarded `body['included']` entirely, and
+`appStoreVersions` was a plain `getAll`. Neither is true now. As it stood, then,
+carrying the phased release meant either
 
 - teaching `getAll` to collect `included` across pages — a change to the one
   client every read in this package goes through, for one caller; or
@@ -588,6 +602,131 @@ and accumulates `body['data']`; it discards `body['included']` entirely.
 Neither is large and neither is free, and the second is an N+1 over an unbounded
 listing, which is the shape `listScreenshotTypes` already caps at three for the
 same reason.
+
+#### The first bullet's cost is one line in one test file, and "measured" above was not
+
+Written when this section was, and wrong — it says *"a change to the one client
+every read in this package goes through"*, which sounds like 23 call sites and
+ten fakes and is none of them. Corrected by running it rather than by re-reading
+it:
+
+- **The 23 existing `getAll` call sites are untouched**, because the shape that
+  carries `included` is a *new method* rather than a changed return type.
+  `getAll` returns `List<Map<String, dynamic>>` and every caller wants exactly
+  that; a caller that also wants `included` is a different caller.
+- **Seven of the eight fakes are untouched too**, because they declare
+  `noSuchMethod` and Dart therefore permits a member they do not implement.
+- **The eighth is `beta_release_test.dart`'s, which does not**, and fails with
+  `Missing concrete implementation`. One line.
+
+**And the prediction that produced that list was also wrong, which is the part
+worth keeping.** The guess going in was *zero* — `noSuchMethod` everywhere, no
+fake affected. Probing it found the one that has no escape hatch. So the
+sentence above is not "cheaper than recorded" reasoning replacing "more
+expensive than recorded" reasoning; it is the third estimate, and the only one
+that came from running the compiler.
+
+**What is left is not cost.** The real work is a fake that carries `include`
+semantics *across pages*, which `docs/CONTRIBUTING.md` §"A fake must carry the
+semantics the tested branch selects on" requires and which a single-page fake
+cannot express. That is real and it is ordinary.
+
+#### Decided: the build ships, the phased release does not
+
+Status: **decided**, 10 September 2026 — and the two halves went different ways
+for the reason this section was written to force, which is that they were
+priced together and only one of them has a caller.
+
+**The build number ships.** `AppStoreVersionEntry` carries `buildNumber` and
+`buildNumberAsInt`, `appstore versions` asks for `include=build`, and the
+rendered line gains ` build 169` where Apple named one.
+
+**The consumer's summary grid is the call site**, and the shape of why is worth
+keeping. It printed a bare `LIVE` and explained that in its own source as a
+fact only Apple held. Apple does hold it — and hands it over in the same
+request, which is the half that sentence missed. *"Only Apple holds it"* is
+true and reads as *unobtainable*, and a limitation written that way is one
+nobody goes back and tests. That consumer has since corrected its own wording;
+the correction is recorded here rather than the original quoted, because the
+sentence is being deleted from the tree it describes and a quotation would
+outlive it.
+
+**The phased release does not.** Same request could carry it, at
+`include=build,appStoreVersionPhasedRelease` and a second resolver. Nobody
+passes `--phased` and the consumer confirmed it has no plan to, so it stays
+what read-api.md §"No field is missing" calls unproven — and *cheap* is not an
+argument for adding a field to a published document.
+
+**What the measurement changed, and it is not the cost.** Asked to run one
+request against a live account, the consumer answered the three questions below
+and a fourth nobody had asked: **the included `builds` resource carries the
+build number itself**, in its `version` attribute, rather than only an id. So
+this was never one request plus an N+1 — it is one request, and the "expensive"
+half of the pricing above never existed. `expired`, `expirationDate` and
+`processingState` ride along in the same payload; none is carried, because
+`AppStoreBuildEntry` already answers for those from the builds listing and two
+sources for one fact is the collision this format avoids on purpose.
+
+**And one question came back unanswerable, which constrains the design rather
+than delaying it.** Every version on that account is `READY_FOR_SALE` with a
+build attached, so nothing exhibits a version Apple names *no* build for. The
+un-included shape is measured — `relationships.build` with `links` and no
+`data` key — but whether a genuinely buildless version says `"data": null` or
+also omits the key is not. So `buildNumber` reports a null rather than
+diagnosing one: an earlier draft would have printed *"this package asked
+wrongly"* on stderr when the key was absent, and that would fire on an
+unsubmitted version — a false alarm in the state an operator is most likely to
+be looking at. It becomes answerable for free at this repository's next
+release, the moment a `PREPARE_FOR_SUBMISSION` version exists.
+
+**A `containsKey` branch to tell those two apart was written and deleted**, and
+by the rule rather than by taste: the mutation that removed it passed every
+test, because both arms produced null. Expressive code that guards nothing is
+not a guard, and the distinction is now a comment in `reads.dart` beside the
+line that does not act on it.
+
+#### What blocked this until it was measured, and it was one sentence about Apple
+
+`include=` demonstrably works in this package's hands — `appInfos` uses it for
+categories and the age-rating declaration — and the `build` relationship
+demonstrably exists, because `app_store.dart` `PATCH`es it on submit. What
+nobody here can check is whether `build` is an *includable* relationship on the
+`appStoreVersions` listing specifically. There is no live account behind this
+repository and no recorded payload to read it out of.
+
+**That matters more than it sounds, because of how it would fail.** A version
+with no build attached and a query Apple silently ignored both produce
+`buildNumber: null` — so a dead field would look exactly like a working field
+answering honestly, in a document a consumer decodes. *"A store the output said
+nothing about reads as a store with nothing wrong"*, one resource over.
+
+**There is a way to tell them apart, and it is already measured here.**
+`app_store.dart` records, against a live account, that a bare read returns **no
+`data` key for a relationship at all**, and that adding `?include=` is what puts
+one there. So an un-included read is *detectable*: `relationships.build` without
+a `data` key is this package having asked wrongly, and `"data": null` is Apple
+saying there is no build. Given that, `appstore versions` can say so on stderr
+rather than emit a null — which converts the dangerous silent failure into a
+loud one and makes the field safe to build.
+
+**Whether that idiom generalises from `appInfos` to `appStoreVersions` was the
+question**, and it took one request against a real account:
+
+```
+GET /v1/apps/{appId}/appStoreVersions?filter[platform]=IOS&include=build&limit=5
+```
+
+Run by the consumer, read-only. It does not 400; `included` comes back carrying
+`builds`; and the two shapes are exactly the ones `appInfos` showed —
+`relationships.build` with `links` and **no `data` key** without the include,
+and `"data": {"type": "builds", "id": …}` with it. The idiom generalises.
+
+**Recorded because the shape of the answer matters more than the answer.** The
+blocker was never the cost, which this section had overstated twice; it was a
+sentence about a third party that nobody here could check, in a package with no
+live account behind it. That is a class of blocker this repository will meet
+again, and the way through it was not more reasoning — it was asking somebody
+who could run the request.
 
 **And that cost is shared, which is the finding that should move this section
 when somebody picks it up.** A second ask arrived while this was being written:

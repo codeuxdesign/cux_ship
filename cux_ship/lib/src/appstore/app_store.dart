@@ -2694,7 +2694,8 @@ class AppStore {
 
   // ------------------------------------------------------------------- reads
 
-  /// Every App Store version record for [app] on this platform.
+  /// Every App Store version record for [app] on this platform, and the builds
+  /// they name.
   ///
   /// What App Store Connect actually holds, as opposed to what a previous run
   /// reported having sent — the same reason `play tracks` exists: a push
@@ -2704,9 +2705,29 @@ class AppStore {
   /// model this feeds. Reading and rendering are separated because a consumer
   /// wants both and a second formatter beside the first is a second thing to
   /// drift.
-  Future<List<Map<String, dynamic>>> appStoreVersions(App app) => client.getAll(
+  ///
+  /// **The `include` is what carries the build number, and it costs no second
+  /// request.** Apple's `appStoreVersions` attributes have no build in them —
+  /// the build is a relationship — and the included `builds` resource carries
+  /// `version`, which is Apple's name for `CFBundleVersion`. So one request
+  /// answers both "which version" and "which build", where the alternative was
+  /// a GET per version against a listing with no cap.
+  ///
+  /// **Measured against a live account, because none of it was checkable from
+  /// here.** Without `include=build` a version's `relationships.build` carries
+  /// `links` and no `data` key at all; with it, `data` names the build. That is
+  /// the same shape [appLevelChanges] records for categories on `appInfos`,
+  /// and it generalising to this endpoint was a question rather than an
+  /// assumption — see docs/design/rollout-state.md.
+  Future<
+    ({
+      List<Map<String, dynamic>> data,
+      Map<String, Map<String, dynamic>> included,
+    })
+  >
+  appStoreVersions(App app) => client.getAllWithIncluded(
     '/v1/apps/${app.id}/appStoreVersions',
-    query: {'filter[platform]': platform.api},
+    query: {'filter[platform]': platform.api, 'include': 'build'},
   );
 
   /// The display types this app's current localizations already carry.
