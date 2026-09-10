@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased
+
+**App preview videos are part of the tree, and are checked offline.**
+`listings/<locale>/previews/<PreviewType>/` loads into
+`LocaleMetadata.previews`, with `<video>.timecode` beside each video carrying
+the poster frame.
+
+`store_video.dart` is new and reads an MP4 or QuickTime container the way
+`store_image.dart` reads a PNG: a hand-rolled walk to a dozen integers, no
+dependency, no frame decoded. It answers the four things Apple enforces —
+dimensions, duration, frame rate, codec — plus the file size, and
+`videoEncodingProblem` names the one that is wrong rather than reporting an
+invalid file.
+
+That matters more here than for an image. Apple validates a preview *after* it
+has been uploaded, from a queue it documents as taking up to 24 hours, and the
+version the preview hangs off cannot be submitted while it is in flight. A
+refused screenshot costs a re-upload; a refused preview costs a day.
+
+Three checks are specific to previews and are worth naming, because each is
+something Apple accepts quietly and gets wrong later:
+
+- **A poster frame past the end of the video** is taken without complaint and
+  then silently falls back, surfacing as a product page posing on the wrong
+  frame — after approval, when it can no longer be changed in place.
+- **An orphaned `.timecode`** — one whose video was renamed — is refused rather
+  than ignored. It is somebody's deliberate choice of frame now applying to
+  nothing, and the preview it was meant for would go up at Apple's default.
+- **A rotation matrix is applied before the dimensions are judged.** A portrait
+  capture is routinely stored as a landscape frame with a quarter turn beside
+  it, and reading `tkhd` alone would refuse a file that was already correct.
+
+`previewSpecs` is a separate table from `screenshotSpecs` rather than the same
+one with different numbers: Apple's two enumerations are spelled differently
+(`IPHONE_67` against `APP_IPHONE_67`), the sizes are not device resolutions,
+and the transpose is not always legal — Mac and Apple TV are landscape only.
+
 ## 1.10.0
 
 **The Play tree is checked for the alpha channel it was already measuring.**

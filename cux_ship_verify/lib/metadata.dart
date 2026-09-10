@@ -17,12 +17,18 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'store_image.dart';
+import 'store_video.dart';
 
 // [ImageInfo] and [readImageInfo] used to be declared here, and moved out when
 // the Play tree turned out to be reading them and consulting only the
 // dimensions. Re-exported rather than left behind an import, because that is
 // exactly the header this file's callers already reach for them through.
 export 'store_image.dart';
+// The video header and the preview rules over it, on the same terms: the
+// uploader in cux_ship reads a [LocalPreview] out of this file and then has to
+// name what Apple refused, and reaching that through a second import would be
+// the one difference between the two asset kinds that is not a real one.
+export 'store_video.dart';
 
 /// Thrown for anything wrong with the tree. Always actionable: it names the
 /// file and says what would have to be true instead.
@@ -129,6 +135,166 @@ const screenshotSpecs = <String, ScreenshotSpec>{
 const minScreenshots = 1;
 const maxScreenshots = 10;
 
+/// The pixel sizes Apple accepts for one `PreviewType`.
+///
+/// **Not [ScreenshotSpec] with different numbers, and the differences are the
+/// reason it is a second class.** Apple's preview sizes are not device
+/// resolutions at all — every current iPhone publishes a 886x1920 preview,
+/// which is no iPhone's screen — so the "capture it and it fits" intuition
+/// that holds for screenshots is false here and the error has to say the
+/// number. And the transpose is not always legal: a Mac or Apple TV preview is
+/// landscape only, so accepting a 1080x1920 file for a [landscapeOnly] slot
+/// would wave through the one video Apple is certain to refuse.
+///
+/// **The enum values are spelled differently from the screenshot ones**, which
+/// is the trap this type exists to make unmissable: a screenshot slot is
+/// `APP_IPHONE_67` and the preview slot for the same device is `IPHONE_67`,
+/// with no prefix. Verified against Apple's `PreviewType` and
+/// `ScreenshotDisplayType`, which are two separate enumerations.
+///
+/// **Apple is the authority, not this table**, exactly as for [ScreenshotSpec]:
+/// https://developer.apple.com/help/app-store-connect/reference/app-preview-specifications/
+class PreviewSpec {
+  const PreviewSpec(
+    this.label,
+    this.portraitSizes, {
+    this.landscapeOnly = false,
+  });
+
+  /// How Apple names this slot in the console, for error messages.
+  final String label;
+
+  /// Stated portrait-first even for a [landscapeOnly] slot, so the table reads
+  /// one way; [accepts] is what applies the orientation rule.
+  final List<({int width, int height})> portraitSizes;
+
+  /// Apple takes this slot in landscape only — Mac and Apple TV.
+  final bool landscapeOnly;
+
+  bool accepts(int width, int height) => portraitSizes.any((s) {
+    final portrait = width == s.width && height == s.height;
+    final landscape = width == s.height && height == s.width;
+    return landscapeOnly ? landscape : portrait || landscape;
+  });
+
+  String get sizesDescription {
+    final sizes = portraitSizes.map(
+      (s) =>
+          landscapeOnly ? '${s.height}x${s.width}' : '${s.width}x${s.height}',
+    );
+    return sizes.join(' or ');
+  }
+
+  String get orientationDescription =>
+      landscapeOnly ? 'landscape only' : 'in either orientation';
+}
+
+/// Keyed by `PreviewType` as the API spells it, because these are also the
+/// directory names in the tree — so a typo fails this lookup rather than
+/// uploading into the wrong slot.
+///
+/// Only the types this tooling has a caller for are listed, the same rule
+/// [screenshotSpecs] follows. Apple's enumeration is longer and includes
+/// `IPHONE_58`, `IPHONE_55`, `IPHONE_47`, `IPHONE_40`, `IPHONE_35`,
+/// `IPAD_105`, `IPAD_97` and `APPLE_VISION_PRO`; add one when something needs
+/// it, with its size read off Apple's page rather than guessed from the slot
+/// next to it.
+const previewSpecs = <String, PreviewSpec>{
+  // One size across every current iPhone slot, which is not a mistake: Apple
+  // publishes 886x1920 for 6.9", 6.5", 6.3" and 6.1" alike.
+  'IPHONE_67': PreviewSpec('iPhone 6.9" / 6.7"', [(width: 886, height: 1920)]),
+  'IPHONE_65': PreviewSpec('iPhone 6.5"', [(width: 886, height: 1920)]),
+  'IPHONE_61': PreviewSpec('iPhone 6.1"', [(width: 886, height: 1920)]),
+  'IPAD_PRO_3GEN_129': PreviewSpec('iPad 13" / 12.9"', [
+    (width: 1200, height: 1600),
+  ]),
+  'IPAD_PRO_3GEN_11': PreviewSpec('iPad 11"', [(width: 1200, height: 1600)]),
+  'IPAD_PRO_129': PreviewSpec('iPad Pro 12.9" (2nd gen)', [
+    (width: 1200, height: 1600),
+  ]),
+  'DESKTOP': PreviewSpec('Mac', [
+    (width: 1080, height: 1920),
+  ], landscapeOnly: true),
+  'APPLE_TV': PreviewSpec('Apple TV', [
+    (width: 1080, height: 1920),
+  ], landscapeOnly: true),
+};
+
+/// Apple takes up to three previews per `PreviewType` per locale.
+///
+/// Three, where a screenshot slot takes ten — stated in Apple's own sample
+/// code for uploading previews ("Each set includes up to three previews") and
+/// on the specifications page. A fourth is refused at reservation, after the
+/// first three have already been uploaded.
+const maxPreviews = 3;
+
+/// The extensions Apple accepts for a preview, lowercased.
+const previewExtensions = {'.mp4', '.mov', '.m4v'};
+
+/// What a preview's poster-frame sidecar file is called, appended to the video's
+/// own name — `01-ride.mp4` is posed by `01-ride.mp4.timecode`.
+///
+/// **A sidecar rather than a flag, because the poster frame is per video.** A
+/// set holds up to three previews and there is no reason they share a frame,
+/// so a single `--preview-frame` would be wrong for two of them. Appended
+/// rather than replacing the extension so that it sorts against its own video
+/// and cannot collide with a second preview of the same name in another
+/// container.
+const previewTimeCodeSuffix = '.timecode';
+
+/// Apple's default poster frame when a preview names none.
+///
+/// **Recorded because it is the failure the tree exists to prevent**, not
+/// because anything here sends it: a preview uploaded without a
+/// `previewFrameTimeCode` silently poses on whatever is five seconds in, and
+/// after approval that cannot be changed without a new version submission. So
+/// the uploader prints the effective value either way, and this is what it
+/// prints when a video carries no sidecar.
+const defaultPreviewFrameTimeCode = '00:00:05:00';
+
+/// `HH:MM:SS:FF` — hours, minutes, seconds, then a frame within that second.
+final _timeCode = RegExp(r'^(\d{2}):(\d{2}):(\d{2}):(\d{2})$');
+
+/// Why [value] is not a poster-frame timecode, or null when it is.
+///
+/// Shape and ranges only. Whether the frame is inside the video is a question
+/// about a particular file and is asked where both are in hand, in
+/// [_loadPreviews].
+String? previewFrameTimeCodeProblem(String value) {
+  final match = _timeCode.firstMatch(value);
+  if (match == null) {
+    return 'is "$value"; Apple wants a HH:MM:SS:FF timecode, e.g. '
+        '00:00:02:06 for two seconds and six frames in';
+  }
+  final minutes = int.parse(match.group(2)!);
+  final seconds = int.parse(match.group(3)!);
+  if (minutes > 59 || seconds > 59) {
+    return 'is "$value"; the minutes and seconds fields go up to 59';
+  }
+  return null;
+}
+
+/// [value] as a position in the video, given the rate its frames run at.
+Duration previewFrameOffset(String value, double frameRate) {
+  final match = _timeCode.firstMatch(value)!;
+  final frames = int.parse(match.group(4)!);
+  return Duration(
+        hours: int.parse(match.group(1)!),
+        minutes: int.parse(match.group(2)!),
+        seconds: int.parse(match.group(3)!),
+      ) +
+      Duration(microseconds: (frames * 1000000 / frameRate).round());
+}
+
+/// One preview video and the poster frame it was told to use.
+///
+/// `frameTimeCode` is null when the tree named none, and the null is carried
+/// rather than resolved to [defaultPreviewFrameTimeCode] here: the uploader
+/// prints "defaulting to" for one and the chosen value for the other, and a
+/// model that filled it in would make those two cases indistinguishable at the
+/// point where the difference is worth saying out loud.
+typedef LocalPreview = ({File file, String? frameTimeCode});
+
 /// One locale's listing.
 ///
 /// Apple splits it across two resources that are updated separately and have
@@ -156,7 +322,22 @@ class LocaleMetadata {
   /// show them. Only types with a directory present appear at all.
   final Map<String, List<File>> screenshots = {};
 
-  bool get isEmpty => appInfo.isEmpty && version.isEmpty && screenshots.isEmpty;
+  /// `PreviewType` -> the preview videos to publish, in the order Apple should
+  /// show them. Only types with a directory present appear at all.
+  ///
+  /// Separate from [screenshots] rather than a fourth kind of entry in it,
+  /// because Apple keeps them in separate resources with separate enumerations
+  /// — `appPreviewSets` keyed by `PreviewType`, `appScreenshotSets` keyed by
+  /// `ScreenshotDisplayType` — and merging them here would mean a caller
+  /// deciding which endpoint a directory name belongs to, which is the guess
+  /// this whole model exists to remove.
+  final Map<String, List<LocalPreview>> previews = {};
+
+  bool get isEmpty =>
+      appInfo.isEmpty &&
+      version.isEmpty &&
+      screenshots.isEmpty &&
+      previews.isEmpty;
 }
 
 /// The two answers Apple accepts for "does this app contain, show or access
@@ -470,6 +651,25 @@ LocaleMetadata _loadLocale(Directory dir) {
     }
   }
 
+  final previews = Directory('${dir.path}${Platform.pathSeparator}previews');
+  if (previews.existsSync()) {
+    final typeDirs = previews.listSync().whereType<Directory>().toList()
+      ..sort((a, b) => a.path.compareTo(b.path));
+    for (final typeDir in typeDirs) {
+      final type = _basename(typeDir.path);
+      final spec = previewSpecs[type];
+      if (spec == null) {
+        throw MetadataException(
+          '$locale/previews/$type is not a PreviewType this tool knows.\n'
+          '  Known names: ${previewSpecs.keys.join(", ")}\n'
+          '  Note these are *not* the screenshot names: a preview slot is '
+          'IPHONE_67, not APP_IPHONE_67.',
+        );
+      }
+      metadata.previews[type] = _loadPreviews(locale, type, typeDir, spec);
+    }
+  }
+
   return metadata;
 }
 
@@ -529,6 +729,124 @@ List<File> _loadScreenshots(
     }
   }
   return files;
+}
+
+/// Loads and checks one `PreviewType` directory.
+///
+/// **Every check here is one Apple performs after the upload**, which is the
+/// whole reason it is worth doing twice. A screenshot Apple refuses is a
+/// re-upload; a preview Apple refuses is a video that went up, sat in an
+/// ingestion queue Apple documents as taking up to twenty-four hours, came
+/// back FAILED, and blocked the version's submission the entire time.
+List<LocalPreview> _loadPreviews(
+  String locale,
+  String type,
+  Directory dir,
+  PreviewSpec spec,
+) {
+  // Same convention as screenshots, and load bearing for the same reason:
+  // Apple shows previews in upload order, so filename order is listing order.
+  final files = dir.listSync().whereType<File>().where((f) {
+    final name = f.path.toLowerCase();
+    return previewExtensions.any(name.endsWith);
+  }).toList()..sort((a, b) => a.path.compareTo(b.path));
+
+  if (files.isEmpty || files.length > maxPreviews) {
+    throw MetadataException(
+      '$locale/previews/$type holds ${files.length} video(s); Apple takes 1 '
+      'to $maxPreviews per preview type.\n'
+      '  Accepted extensions: ${previewExtensions.join(", ")}',
+    );
+  }
+
+  // **An orphaned sidecar is the silent half of this feature.** A poster frame
+  // named for a video that was renamed or removed is not an unused file: it is
+  // somebody's deliberate choice of frame, now applying to nothing, and the
+  // preview it was meant for goes up posed at Apple's five-second default with
+  // nothing said. The tree is asked about it here because this is the only
+  // place that knows both which sidecars exist and which videos claimed one.
+  final claimed = {
+    for (final file in files) ...{'${file.path}$previewTimeCodeSuffix'},
+  };
+  for (final file in dir.listSync().whereType<File>()) {
+    if (file.path.endsWith(previewTimeCodeSuffix) &&
+        !claimed.contains(file.path)) {
+      throw MetadataException(
+        '$locale/previews/$type/${_basename(file.path)} names no video here.\n'
+        '  A poster frame is named after the whole video filename, so '
+        '01-ride.mp4\n'
+        '  is posed by 01-ride.mp4$previewTimeCodeSuffix.',
+      );
+    }
+  }
+
+  final previews = <LocalPreview>[];
+  for (final file in files) {
+    final name = '$locale/previews/$type/${_basename(file.path)}';
+    final video = readVideoInfo(file.readAsBytesSync());
+    if (video == null) {
+      throw MetadataException('$name is not a readable MP4 or QuickTime video');
+    }
+
+    // Codec, duration, frame rate and file size, from [appStorePreviewRules]
+    // rather than written out here — the same split store_image.dart uses, and
+    // for the same reason: a second store's preview uploader names whose rules
+    // it publishes under instead of re-deriving four numbers.
+    final encoding = videoEncodingProblem(video, appStorePreviewRules);
+    if (encoding != null) {
+      throw MetadataException('$name $encoding');
+    }
+
+    if (!spec.accepts(video.width, video.height)) {
+      throw MetadataException(
+        '$name is ${video.width}x${video.height}; $type (${spec.label}) takes '
+        '${spec.sizesDescription}, ${spec.orientationDescription}.\n'
+        '  Apple\'s preview sizes are not device resolutions — every current '
+        'iPhone\n'
+        '  publishes 886x1920 — so a capture at the device\'s own size is the\n'
+        '  ordinary way to get this wrong.\n'
+        '  If Apple has added a size, add it to previewSpecs in '
+        'lib/metadata.dart.',
+      );
+    }
+
+    previews.add((file: file, frameTimeCode: _loadTimeCode(name, file, video)));
+  }
+  return previews;
+}
+
+/// The poster-frame timecode beside [file], or null when there is none.
+String? _loadTimeCode(String name, File file, VideoInfo video) {
+  final sidecar = File('${file.path}$previewTimeCodeSuffix');
+  if (!sidecar.existsSync()) {
+    return null;
+  }
+  final value = sidecar.readAsStringSync().trim();
+  if (value.isEmpty) {
+    throw MetadataException(
+      '$name$previewTimeCodeSuffix is empty — delete the file rather than '
+      'asking for a blank poster frame, which would silently pose the '
+      'preview at $defaultPreviewFrameTimeCode',
+    );
+  }
+
+  final shape = previewFrameTimeCodeProblem(value);
+  if (shape != null) {
+    throw MetadataException('$name$previewTimeCodeSuffix $shape');
+  }
+
+  // **A frame past the end is the one that reads as working.** Apple takes the
+  // string without complaint and the poster silently falls back, so the
+  // failure shows up as a product page posing on the wrong frame — after
+  // approval, when it can no longer be changed without a new submission.
+  final offset = previewFrameOffset(value, video.frameRate);
+  if (offset >= video.duration) {
+    throw MetadataException(
+      '$name$previewTimeCodeSuffix is "$value", which is past the end of a '
+      '${(video.duration.inMilliseconds / 1000).toStringAsFixed(1)}s video',
+    );
+  }
+  return value;
 }
 
 Map<String, Object?> _loadAgeRating(File file) {

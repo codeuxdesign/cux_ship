@@ -1235,12 +1235,60 @@ It is deliberately a separate step from publishing: both upload paths *refuse*
 an alpha channel rather than silently fixing one, so the corrected file is the
 one committed and reviewed.
 
+## App preview videos
+
+A locale's `previews/` directory publishes to `appPreviewSets` and
+`appPreviews`, beside the `screenshots/` that publish to the screenshot ones:
+
+```
+store/appstore/listings/en-US/
+  screenshots/APP_IPHONE_67/01-ride.png
+  previews/IPHONE_67/01-tour.mp4
+  previews/IPHONE_67/01-tour.mp4.timecode     # 00:00:02:06
+```
+
+**The directory names are `PreviewType`, and they are not the screenshot
+names.** Apple keeps two enumerations and the preview one has no prefix: a
+screenshot slot is `APP_IPHONE_67` and the preview slot for the same device is
+`IPHONE_67`. A name that is neither is refused offline, with both spellings in
+the message, because it is a typo you make once and cannot see.
+
+**`<video>.timecode` is the poster frame**, as Apple's `HH:MM:SS:FF`. It is a
+file per video rather than a flag because a set holds up to three previews and
+there is no reason they share a frame. Two things are checked before anything
+is uploaded — that the shape parses, and that the frame is inside the video,
+which Apple accepts silently and then falls back on.
+
+**Every run says which frame each preview will be posed at, including when
+nothing chose one.** Apple's default is the frame at five seconds, and after
+approval the poster cannot be changed without a new version submission — so a
+default that arrives silently is the one mistake here that cannot be corrected
+in place. `--dry-run` prints the same lines and uploads nothing, which is the
+cheapest way to see the answer before it is permanent.
+
+**The four rules Apple enforces after ingestion are checked before it.**
+Dimensions, duration (15–30s), frame rate (30 max) and codec are read out of
+the container by `cux_ship_verify`, which names the one that is wrong. Apple's
+own answer to any of them arrives from a queue it documents as taking up to
+24 hours, during which the version the preview hangs off cannot be submitted —
+so this is the same offline-lint trade the screenshot checks make, at roughly a
+thousand times the price for getting it wrong.
+
+Two consequences of that slowness are visible in a run. Previews publish
+*after* screenshots, so everything cheap has landed before the wait starts. And
+a preview whose bytes Apple already holds is never re-uploaded to move its
+poster frame — `previewFrameTimeCode` is patched on its own, because re-sending
+up to 500 MB and waiting out the queue again to change a string is not a trade
+worth making.
+
+**Apple's preview sizes are not device resolutions.** Every current iPhone
+publishes an 886×1920 preview, which is no iPhone's screen; iPad is 1200×1600,
+Mac and Apple TV 1920×1080 and landscape only. Capturing at the device's own
+size is the ordinary way to get this wrong, so the refusal says the number
+rather than only that the size is unacceptable.
+
 ## Not implemented
 
-- **App preview videos** — `appPreviewSets` and `appPreviews` in the App Store
-  Connect API. Screenshots are handled; videos are not. They use the same
-  three-step reservation/upload/commit flow as a screenshot asset, so the shape
-  is already here, but nothing has been written or tested.
 - **Resolving a build number to a commit through anything but the upload
   record.** `release finish --build-number 41` finds the released commit through
   `uploaded/v*+41` when `tag.upload` is on, because that tag is this tool's own

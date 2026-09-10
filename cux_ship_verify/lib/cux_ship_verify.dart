@@ -38,6 +38,12 @@ export 'release_problem.dart';
 // re-derive them — the last time an image check was written twice, one of the
 // two copies never got the alpha rule.
 export 'store_image.dart';
+// And the video header beside it, for the same reason one level along: the
+// App Store preview uploader in cux_ship reads previews out of this package
+// and reports what Apple would refuse, and a rule reachable from only one of
+// the two callers is how the alpha check came to exist in one tree and not the
+// other.
+export 'store_video.dart';
 
 /// The platforms a release note is filtered for, and the cap each one carries.
 ///

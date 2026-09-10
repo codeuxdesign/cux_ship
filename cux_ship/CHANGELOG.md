@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased
+
+**App preview videos publish.** A locale's `previews/<PreviewType>/` directory
+uploads to `appPreviewSets` and `appPreviews` through the same three-step
+reservation the screenshots use, and the README's "not implemented" entry for
+them is gone.
+
+**The poster frame is an input, not something dragged in the console
+afterwards.** `<video>.timecode` beside each video carries Apple's
+`previewFrameTimeCode`, and it is sent with the *reservation* rather than the
+commit — so a run that dies mid-upload leaves an asset Apple discards rather
+than one silently posed at its five-second default. Every run says which frame
+each preview will use, including when nothing chose one, because after approval
+the poster cannot be changed without a new version submission.
+
+**A poster frame that moved is patched, not re-uploaded.** Apple takes a
+`PATCH` of `previewFrameTimeCode` alone, so a preview whose bytes are already
+published never goes up again to change a string — which would mean re-sending
+up to 500 MB and waiting out the ingestion queue a second time.
+
+**Refusals name the rule.** Dimensions, duration, frame rate and codec are read
+out of the container offline by `cux_ship_verify` — Apple validates all four
+*after* ingestion, from a queue it documents as taking up to 24 hours, during
+which the version cannot be submitted.
+
+**`videoDeliveryState`, not `assetDeliveryState`.** Apple deprecated the latter
+on `appPreviews`; reading the screenshot field would report a null state for
+every preview, so nothing would ever equal `COMPLETE` and the unchanged-asset
+skip would silently never fire. The deprecated field is still read as a
+fallback. The poster frame carries a second verdict of its own
+(`previewFrameImage.state`) and is waited for separately, because Apple cuts it
+out of the video after ingesting it — a `COMPLETE` video beside a failed frame
+is a real state and used to have no reader.
+
+`listingNeedsVersion` now counts previews as the fifth version-scoped field, so
+a tree carrying previews and nothing else creates the version they hang off.
+
 ## 4.4.0
 
 **Source-breaking for a Dart caller, in a minor version — read this first if
