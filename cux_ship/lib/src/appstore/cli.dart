@@ -642,6 +642,68 @@ ListingPublish listingPublish({
   return promote ? ListingPublish.afterVersion : ListingPublish.shared;
 }
 
+/// Writes the App Store "What's New" for a version, or says why it did not.
+///
+/// **One function because two commands publish it, and for one release only
+/// one of them did.** `promote --changelog` wrote it; `upload --metadata
+/// --changelog` accepted the flag and wrote nothing, so a listing published
+/// without a promotion showed an empty "What's New in This Version" — a flag
+/// taken and silently dropped, on copy a shopper reads. Reported by the
+/// consumer whose whole flow is *publish, look at it, then submit*, which is
+/// precisely the flow that never reaches the promote path.
+///
+/// Two rules travel with it and are the reason this is not two call sites:
+///
+///   - **A first version has no "What's New"** to be new against, and Apple
+///     refuses the write with a message that does not explain itself.
+///   - **The App Store rejects emoji in `whatsNew`** — measured, after this
+///     file spent a release asserting the opposite — so they are stripped, and
+///     the run names the characters because what ships then differs from
+///     CHANGELOG.md.
+///
+/// Both were written inside the promote block. A second copy on the upload
+/// path would have been two chances for the next fix to land on one of them.
+Future<void> publishReleaseNotes(
+  AppStore store,
+  App app,
+  Map<String, dynamic> version,
+  String locale,
+  String? notes,
+  String? versionName,
+) async {
+  if (notes == null) {
+    return;
+  }
+  if (await store.isFirstVersion(app, version)) {
+    stdout.writeln(
+      '==> ${versionName ?? 'this'} is this app\'s first App Store version, '
+      'so it has no\n'
+      '    "What\'s New" — the release notes are skipped and the '
+      'description stands',
+    );
+    return;
+  }
+  stdout.writeln('==> release notes');
+  var releaseNotes = notes;
+  if (needsStrippingForApple(notes)) {
+    releaseNotes = stripForApple(notes);
+    stdout.writeln(
+      '    the App Store rejects emoji in "What\'s New", so these are '
+      'stripped:\n'
+      '      ${_removedCharacters(notes, releaseNotes)}\n'
+      '    what ships here differs from CHANGELOG.md; Play publishes it '
+      'verbatim',
+    );
+  }
+  // Not compared, unlike the listing text: these notes are per-release and
+  // come from CHANGELOG.md, so "unchanged since last time" is not a state a
+  // release is expected to be in. The read is still passed in, so this write
+  // decides POST or PATCH from a reading rather than making its own.
+  await store.writeVersionLocalization(version, locale, {
+    'whatsNew': releaseNotes,
+  }, existing: await store.versionLocalizations(version));
+}
+
 /// Publishes the App Store listing from a metadata tree.
 ///
 /// **Its own function because two commands need it, for opposite reasons.** A
@@ -651,7 +713,10 @@ ListingPublish listingPublish({
 /// `appStoreVersionLocalizations` through `ensureVersion`, which *creates* the
 /// version record, so publishing beside a TestFlight build would bring an App
 /// Store version into existence for a release nobody had decided to make.
-Future<void> _publishAscListing(
+/// Returns the `appStoreVersions` record it wrote against, or null when the
+/// tree needed none — so a caller can write the release notes against the same
+/// version rather than resolving it a second time.
+Future<Map<String, dynamic>?> _publishAscListing(
   AppStore store,
   App app,
   AppStoreMetadata metadata,
@@ -949,6 +1014,7 @@ Future<void> _publishAscListing(
       }
     }
   }
+  return version;
 }
 
 /// Runs [cmd] against App Store Connect.
@@ -1923,7 +1989,7 @@ Future<void> runAsc(
     } else if (publish == ListingPublish.shared) {
       // Non-null by construction: [listingPublish] returns [none] when there
       // is no metadata, and this is the only thing that reads [shared].
-      await _publishAscListing(
+      final published = await _publishAscListing(
         store,
         app,
         metadata!,
@@ -1931,6 +1997,26 @@ Future<void> runAsc(
         versionName,
         fail,
       );
+      // **The "What's New" a listing-only publish used to drop on the floor.**
+      // `--changelog` is accepted by this command and was read only for the
+      // TestFlight notes an artifact upload writes — so a metadata-only run
+      // passed it, said nothing, and left the App Store showing an empty
+      // "What's New in This Version". See [publishReleaseNotes], which carries
+      // the first-version rule and the emoji strip so that both publishers get
+      // them.
+      //
+      // Skipped when the tree needed no version: there is then nothing to hang
+      // release notes off, and `--version-name` was not required.
+      if (published != null) {
+        await publishReleaseNotes(
+          store,
+          app,
+          published,
+          locale,
+          notesFor(versionName!),
+          versionName,
+        );
+      }
     }
 
     // -------------------------------------------------------------- promote
@@ -2046,49 +2132,14 @@ Future<void> runAsc(
         }
         await store.attachBuild(version, chosen);
 
-        final notes = notesFor(versionName);
-        if (notes != null) {
-          // A first release has no "What's New": there is no previous version
-          // for it to be new against, and Apple refuses the write with a
-          // message that does not explain itself. The description carries the
-          // story for a first release, and it is already published from
-          // store/appstore/.
-          if (await store.isFirstVersion(app, version)) {
-            stdout.writeln(
-              '==> $versionName is this app\'s first App Store version, so it '
-              'has no\n'
-              '    "What\'s New" — the release notes are skipped and the '
-              'description stands',
-            );
-          } else {
-            stdout.writeln('==> release notes');
-            // The App Store refuses emoji in `whatsNew` too — measured, after
-            // this file spent a release asserting the opposite. Announced
-            // more loudly than the TestFlight strip above, and with the
-            // characters named: this is copy a shopper reads, and quietly
-            // publishing something other than what the changelog says is the
-            // failure mode worth spending three lines to avoid.
-            var releaseNotes = notes;
-            if (needsStrippingForApple(notes)) {
-              releaseNotes = stripForApple(notes);
-              stdout.writeln(
-                '    the App Store rejects emoji in "What\'s New", so these '
-                'are stripped:\n'
-                '      ${_removedCharacters(notes, releaseNotes)}\n'
-                '    what ships here differs from CHANGELOG.md; Play '
-                'publishes it verbatim',
-              );
-            }
-            // Not compared, unlike the listing text: these notes are
-            // per-release and come from CHANGELOG.md, so "unchanged since
-            // last time" is not a state a release is expected to be in.
-            // The read is still passed in, so this write decides POST or
-            // PATCH from a reading rather than making its own.
-            await store.writeVersionLocalization(version, locale, {
-              'whatsNew': releaseNotes,
-            }, existing: await store.versionLocalizations(version));
-          }
-        }
+        await publishReleaseNotes(
+          store,
+          app,
+          version,
+          locale,
+          notesFor(versionName),
+          versionName,
+        );
         if (flag('phased')) {
           stdout.writeln('==> phased release');
           await store.enablePhasedRelease(version);
