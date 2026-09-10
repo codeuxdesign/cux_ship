@@ -660,6 +660,74 @@ with, `null` rather than zero when the version is not a single integer.
 The whole contract, and why it is JSON rather than YAML, is
 [docs/design/json-output.md](https://github.com/codeuxdesign/cux_ship/blob/main/docs/design/json-output.md).
 
+**From Dart, decode it into our classes rather than writing a reader.**
+`package:cux_ship/documents.dart` is the format — every key, its type, its
+nullability and its vocabulary, with `fromJson` for each document. The API docs
+pub.dev renders for it are the published statement of the format, so there is
+no second description to drift.
+
+```dart
+import 'dart:convert';
+import 'package:cux_ship/documents.dart';
+
+final result = await Process.run('cux_ship', [
+  'appstore', 'builds', '--platform', 'ios', '--json',
+]);
+if (result.exitCode != 0) {
+  throw StateError(result.stderr as String);   // stdout is empty; stderr says why
+}
+final builds = AppStoreBuildsDocument.fromJson(
+  jsonDecode(result.stdout as String) as Map<String, dynamic>,
+);
+print(builds.newestBuildNumberAsInt);          // compare this against a git tag
+print(builds.builds.first.usable);             // not processingState == 'VALID'
+```
+
+**Ask the question, not the vocabulary.** `usable`, `editable`, `expired`,
+`mayBecomeUsable` and `serving` are there so a caller never opens Apple's or
+Google's documentation.
+
+**Two of them are `bool?`, and the null is the point.** `serving` is true for a
+completed rollout and one in progress, false for a halted one and an unsent
+draft, and **null when Play sent a status this version does not name** — a
+`bool` would have to report a possibly-healthy rollout as reaching nobody, or
+call an unrecognized state healthy, and both are claims nobody can stand
+behind. `needsNewUpload` answers *"can this only be fixed by uploading
+another"*: false while Apple is processing and for a usable build, true once
+Apple has refused the binary or the build has expired, null for a state nobody
+here names. That distinction is not academic: `usable` alone reads as "wait for
+VALID" for every state, which is advice to wait forever for the two where the
+fix is to upload a different build.
+
+Each of those reads correctly **on its own**, in every state — deliberately, so
+that no pair has to be read in a particular order to be safe.
+
+`usable` and `editable` stay plain `bool` and fail closed, so `usable == false`
+means "not known to be usable" rather than "not usable" — the right default for
+a flag that gates an action rather than a report.
+
+**A store's vocabulary reaches you twice: as ours, and as theirs.**
+`processingState` is *this package's* closed vocabulary — `processing`,
+`valid`, `failed`, `invalid`, `unknown` — and `processingStateRaw` is Apple's
+own word, exactly as sent. Same for `appStoreState`, `releaseType` and Play's
+`status`. Write against the first; fall back to the second in the one case the
+first cannot cover.
+
+`unknown` is a value of our vocabulary rather than a hole in it, so a state
+Apple ships tomorrow arrives as `"unknown"` with its real name in the `*Raw`
+field, and survives a round trip intact. **Members are never added because a
+store added a value** — a Dart switch expression must be exhaustive, so that
+would break your build on Apple's schedule rather than ours.
+
+`kind` and `platform` are ours and closed, and an unrecognized one is refused
+rather than degraded. A null field means the store sent nothing, which is not
+the same as `unknown`.
+
+This adds nothing to what the command does: these are value types over what it
+printed. Reads that happen *in your process* — giving up the printed command
+line and per-step `--only` — are
+[`package:cux_ship/read.dart`](#reading-the-stores-from-dart) instead.
+
 ### Reading the stores from Dart
 
 **`package:cux_ship/read.dart` answers what the stores hold, as objects.** For a

@@ -5,18 +5,26 @@
 // YAML, why the envelope is the build manifest's rather than a second
 // convention, and why a rendering travels inside a data document on purpose.
 //
-// **Nothing here is exported, and the models do not gain a `toJson`.**
-// `read.dart` hands a Dart caller the objects; this hands everybody else the
-// same values as a document. A `toJson` on an exported class would have made
-// the document shape a semver promise of `read.dart` as well as of its own
-// `schema` field, and two version numbers over one shape is one too many.
+// **This builds the classes in documents.dart and calls `toJson`.** It used to
+// build map literals with string keys, and what changed is that there is now
+// one definition of the format rather than an encoder here and a decoder in
+// every consumer's tree. `documents.dart` is exported, so a caller decodes
+// with `fromJson` against the same classes this writes — and the classes'
+// dartdoc, which pub.dev renders per version, is the published statement of
+// the format.
 //
-// The models are the field list. What is decided here is only what a model
-// cannot say: which keys a document carries, and what each `schema` counts.
+// **What stays hand-written is the mapping, and it is the whole of this
+// file.** Between the models and the documents it renames `line` and `lines`
+// to `display`, drops `uploadedAt`, computes `newestBuildNumberAsInt` through
+// `newest`, adds a `bundleId` that is on no model, and hands a parent's
+// `track.name` to `release.lineOn`. Each is deliberate and each is argued
+// beside the field it produces. Codegen writes `toJson`; none of it writes
+// these.
 import 'dart:convert';
 import 'dart:io';
 
 import 'appstore/reads.dart';
+import 'documents.dart';
 import 'play/reads.dart';
 
 /// The schema `appstore builds` declares.
@@ -43,20 +51,26 @@ const playTracksSchema = 1;
 ///
 /// Indented rather than compact for the same reason the manifest is: these are
 /// small, and the reader is as often a person as a program.
-void writeJsonDocument(Map<String, Object?> document) {
+///
+/// [document] is one of the classes in documents.dart. Typed as [Object]
+/// because there are three of them with no common supertype — and giving them
+/// one would put a name in `documents.dart` that exists for this function's
+/// convenience rather than for a caller's use. `JsonEncoder`'s default
+/// `toEncodable` calls `toJson()`, so this needs nothing else.
+void writeJsonDocument(Object document) {
   stdout.writeln(const JsonEncoder.withIndent('  ').convert(document));
 }
 
 /// `cux_ship appstore builds --json`.
-Map<String, Object?> appStoreBuildsDocument(
+AppStoreBuildsDocument appStoreBuildsDocument(
   AppStoreBuilds listing, {
   required String bundleId,
-}) => <String, Object?>{
-  'schema': appStoreBuildsSchema,
-  'kind': 'appstore.builds',
-  'platform': listing.platform.api,
-  'bundleId': bundleId,
-  'newestBuildNumber': listing.newestBuildNumber,
+}) => AppStoreBuildsDocument(
+  schema: appStoreBuildsSchema,
+  kind: DocumentKind.appStoreBuilds,
+  platform: listing.platform,
+  bundleId: bundleId,
+  newestBuildNumber: listing.newestBuildNumber,
   // **The comparison [AppStoreBuilds.newestBuildNumber]'s own doc comment
   // tells a caller to make.** It says to use [AppStoreBuild.buildNumberAsInt]
   // *via* [AppStoreBuilds.newest] — a route only a caller holding these
@@ -64,38 +78,62 @@ Map<String, Object?> appStoreBuildsDocument(
   // the string comparison that comment forbids, and the way back would be
   // re-finding the newest build and re-implementing an ordering this class
   // has already applied.
-  'newestBuildNumberAsInt': listing.newest?.buildNumberAsInt,
-  'builds': <Map<String, Object?>>[
+  newestBuildNumberAsInt: listing.newest?.buildNumberAsInt,
+  builds: <AppStoreBuildEntry>[
     for (final build in listing.builds) ...[_build(build)],
   ],
   // Not the concatenation of the builds' `display`: this renders twenty at
-  // most, which is the listing's limit and not [AppStoreBuilds.builds]'.
-  'display': listing.lines,
-};
+  // most, which is the listing's limit and not [AppStoreBuilds.builds]', and
+  // it answers an empty listing with a sentence rather than with nothing.
+  display: listing.lines,
+);
 
-Map<String, Object?> _build(AppStoreBuild build) => <String, Object?>{
-  'buildNumber': build.buildNumber,
-  'buildNumberAsInt': build.buildNumberAsInt,
-  'processingState': build.processingState,
-  // Apple's own string, and not [AppStoreBuild.uploadedAt] beside it: they are
-  // the same instant and Apple already spells it ISO-8601, so a second key
-  // would be a second source for one fact and a second thing to be wrong.
-  'uploadedDate': build.uploadedDate,
-  'expired': build.expired,
-  'usable': build.usable,
-  'display': <String>[build.line],
-};
+AppStoreBuildEntry _build(AppStoreBuild build) {
+  // **Read once.** It was read twice — for the field and again inside the
+  // derivation — which was harmless and still invited a reader to wonder
+  // whether the two could disagree. They cannot, and now they visibly cannot.
+  final state = ProcessingState.read(build.processingState);
+
+  return AppStoreBuildEntry(
+    buildNumber: build.buildNumber,
+    buildNumberAsInt: build.buildNumberAsInt,
+    processingState: state,
+    processingStateRaw: build.processingState,
+    // Apple's own string, and not [AppStoreBuild.uploadedAt] beside it: they
+    // are the same instant and Apple already spells it ISO-8601, so a second
+    // key would be a second source for one fact and a second thing to be
+    // wrong.
+    uploadedDate: build.uploadedDate,
+    expired: build.expired,
+    usable: build.usable,
+    // **The axis `usable` hides, and the one an operator's next action turns
+    // on.** A consumer built its Apple advice on `usable == false` and told
+    // the operator to wait for `VALID` in every case — right for
+    // `PROCESSING`, wrong for `FAILED` and `INVALID`, which are Apple
+    // refusing the binary and never change again.
+    //
+    // **The rule itself is on [ProcessingState], not here**, so the three
+    // copies of it already living in `app_store.dart` and `cli.dart` have
+    // somewhere to move to: the next change deletes them rather than
+    // reconciling a fourth.
+    needsNewUpload: ProcessingState.needsNewUpload(
+      state,
+      expired: build.expired,
+    ),
+    display: <String>[build.line],
+  );
+}
 
 /// `cux_ship appstore versions --json`.
-Map<String, Object?> appStoreVersionsDocument(
+AppStoreVersionsDocument appStoreVersionsDocument(
   AppStoreVersions listing, {
   required String bundleId,
-}) => <String, Object?>{
-  'schema': appStoreVersionsSchema,
-  'kind': 'appstore.versions',
-  'platform': listing.platform.api,
-  'bundleId': bundleId,
-  'versions': <Map<String, Object?>>[
+}) => AppStoreVersionsDocument(
+  schema: appStoreVersionsSchema,
+  kind: DocumentKind.appStoreVersions,
+  platform: listing.platform,
+  bundleId: bundleId,
+  versions: <AppStoreVersionEntry>[
     for (final version in listing.versions) ...[_version(version)],
   ],
   // **This one looks like the concatenation of the versions' `display`, and
@@ -105,52 +143,88 @@ Map<String, Object?> appStoreVersionsDocument(
   // concatenation answers with nothing. An account with no versions and a
   // reader that forgot to render would then look the same. The empty case is
   // the only input that can tell these apart, which is why the test uses one.
-  'display': listing.lines,
-};
+  display: listing.lines,
+);
 
-Map<String, Object?> _version(AppStoreVersion version) => <String, Object?>{
-  'versionString': version.versionString,
-  'appStoreState': version.appStoreState,
-  'releaseType': version.releaseType,
-  'copyright': version.copyright,
-  'editable': version.editable,
+AppStoreVersionEntry _version(AppStoreVersion version) => AppStoreVersionEntry(
+  versionString: version.versionString,
+  appStoreState: AppStoreState.read(version.appStoreState),
+  appStoreStateRaw: version.appStoreState,
+  releaseType: ReleaseType.read(version.releaseType),
+  releaseTypeRaw: version.releaseType,
+  copyright: version.copyright,
+  editable: version.editable,
   // Two entries, not one: a version renders its state and its copyright on
   // separate lines. An item whose rendering collapsed to a string is what
   // makes a caller join and then split, which is parsing `display`.
-  'display': version.lines,
-};
+  display: version.lines,
+);
 
 /// `cux_ship play tracks --json`.
-Map<String, Object?> playTracksDocument(PlayTracks tracks) => <String, Object?>{
-  'schema': playTracksSchema,
-  'kind': 'play.tracks',
-  'packageName': tracks.packageName,
-  'tracks': <Map<String, Object?>>[
+PlayTracksDocument playTracksDocument(PlayTracks tracks) => PlayTracksDocument(
+  schema: playTracksSchema,
+  kind: DocumentKind.playTracks,
+  packageName: tracks.packageName,
+  tracks: <PlayTrackEntry>[
     for (final track in tracks.tracks) ...[_track(track)],
   ],
-  'uploadedVersionCodes': tracks.uploadedVersionCodes,
+  uploadedVersionCodes: tracks.uploadedVersionCodes,
   // Not the concatenation of the tracks' `display`: a trailing line reports
   // the uploaded bundles, which belong to no track.
-  'display': tracks.lines,
-};
+  display: tracks.lines,
+);
 
-Map<String, Object?> _track(PlayTrack track) => <String, Object?>{
-  'name': track.name,
-  'newestVersionCode': track.newestVersionCode,
-  'releases': <Map<String, Object?>>[
+PlayTrackEntry _track(PlayTrack track) => PlayTrackEntry(
+  name: track.name,
+  newestVersionCode: track.newestVersionCode,
+  releases: <PlayReleaseEntry>[
     for (final release in track.releases) ...[_release(release, track.name)],
   ],
-  'display': track.lines,
-};
+  display: track.lines,
+);
 
-Map<String, Object?> _release(PlayTrackRelease release, String track) =>
-    <String, Object?>{
-      'name': release.name,
-      'status': release.status,
-      'versionCodes': release.versionCodes,
-      'newestVersionCode': release.newestVersionCode,
+PlayReleaseEntry _release(PlayTrackRelease release, String track) =>
+    PlayReleaseEntry(
+      name: release.name,
+      status: PlayReleaseStatus.read(release.status),
+      statusRaw: release.status,
+      versionCodes: release.versionCodes,
+      newestVersionCode: release.newestVersionCode,
+      // **Computed here rather than left to the caller**, for the reason the
+      // App Store side's `usable` and `editable` already are: the question a
+      // caller has is "is this in front of anyone", and answering it by
+      // comparing Play's status strings is the deferral to Google's
+      // documentation this document exists to end. A shell caller gets it too,
+      // which a Dart getter could not give them.
+      //
+      // **Three-valued, because the vocabulary it reads is open.** A `bool`
+      // would have to answer a status nobody here names, and both answers are
+      // wrong: `false` reports a possibly-healthy rollout as reaching nobody,
+      // `true` calls an unrecognized state healthy. Null is the same honesty
+      // the enum's `unknown` carries, and a derived field that threw it away
+      // would be a worse answer than the field it is derived from.
+      //
+      // `statusUnspecified` is null too. Play saying "unspecified" and Play
+      // saying nothing are the same amount of information.
+      //
+      // **Deliberately not a fraction.** `inProgress` means some of the
+      // audience has it; how much is not in this document, and belongs to the
+      // release-and-rollout task rather than here.
+      serving: _serving(release.status),
       // The track name is not a field of a release — Play nests releases under
       // tracks and the rendering says which track it is on, so the line needs
       // an argument the object does not carry.
-      'display': <String>[release.lineOn(track)],
-    };
+      display: <String>[release.lineOn(track)],
+    );
+
+/// Switched on the enum rather than on Play's strings, for the reason
+/// [_mayBecomeUsable] gives.
+bool? _serving(String? status) => switch (PlayReleaseStatus.read(status)) {
+  PlayReleaseStatus.completed || PlayReleaseStatus.inProgress => true,
+  PlayReleaseStatus.halted || PlayReleaseStatus.draft => false,
+  // Three ways of not being told, and they are the same answer: Play declining
+  // to say, Play saying something nobody here names, and Play saying nothing.
+  PlayReleaseStatus.statusUnspecified ||
+  PlayReleaseStatus.unknown ||
+  null => null,
+};

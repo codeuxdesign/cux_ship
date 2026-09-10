@@ -46,6 +46,65 @@ route no shell caller has. Note that a build manifest's `buildNumber` is a JSON
 integer and refuses anything else: both are right for their own document, and a
 consumer reading both has two types under one key.
 
+**`package:cux_ship/documents.dart` is the format, as classes.** A Dart caller
+decodes the output with `AppStoreBuildsDocument.fromJson`,
+`AppStoreVersionsDocument.fromJson` and `PlayTracksDocument.fromJson` instead
+of hand-writing a reader — and the API docs pub.dev renders for those classes
+are the published statement of the format, which is where to look for the keys,
+their types and their possible values. The commands stay commands: nothing here
+talks to a store, so a caller keeps spawning and keeps both the printed command
+line and per-step `secrets exec --only`.
+
+**Ask the question, not the vocabulary.** `usable`, `editable` and `expired`
+already meant an App Store caller never had to learn Apple's states. Two new
+fields, both `bool?`, and the null is the point:
+
+- **`serving`** — the Play side answered nothing, so asking "is this rollout
+  stopped" meant comparing Google's status strings. True for a completed
+  rollout and one in progress, false for a halted one and an unsent draft, and
+  **null for a status this version does not name**, or for Play's own
+  `statusUnspecified`. A `bool` would have to report a possibly-healthy rollout
+  as reaching nobody, or call an unrecognized state healthy. It is not a
+  fraction: a 1% staged rollout and a finished one both read `true`.
+- **`needsNewUpload`** — whether a build can only be fixed by uploading
+  another. False while Apple is processing and for a usable build, true once
+  Apple has refused the binary **and for an expired build, including one that
+  processed cleanly**, null for a state nobody here names. **`usable` alone
+  hides this**, and that cost a consumer a real defect: it read
+  `usable == false` as "wait for VALID", which is right for `PROCESSING` and
+  advice to wait forever for `FAILED` and `INVALID`, where Apple has refused
+  the binary and the fix is a new upload.
+
+  Phrased as the action, and readable on its own in every state. The rule is
+  `ProcessingState.needsNewUpload`, so it has one definition rather than
+  joining the copies of it already in the App Store client.
+
+Both are emitted as fields rather than offered as Dart getters, so a shell
+caller gets them too. `usable` and `editable` stay plain `bool` and fail
+closed — `usable == false` means "not known to be usable", which is the right
+default for a flag gating an action rather than a report.
+
+**A store's vocabulary arrives twice: as ours, and as theirs.**
+`processingState` carries *this package's* closed vocabulary — `processing`,
+`valid`, `failed`, `invalid`, `unknown` — and the new `processingStateRaw`
+carries Apple's own word, exactly as sent. Same for `appStoreState`,
+`releaseType` and Play's `status`, each with a `*Raw` sibling. Write against
+ours; fall back to theirs in the one case ours cannot cover.
+
+`unknown` is a value of our vocabulary rather than a hole in it: a state Apple
+ships tomorrow arrives as `"unknown"`, keeps its real name in the `*Raw` field,
+and survives a round trip. **Members are never added because a store added a
+value** — a Dart switch expression must be exhaustive, so that would break a
+consumer's build on Apple's release schedule rather than on this package's.
+
+`kind` and `platform` are this package's own, are closed, and an unrecognized
+one is refused rather than degraded. A null field means the store sent nothing,
+which stays a different fact from `unknown`.
+
+`uploadedDate` is Apple's string rather than a `DateTime`, deliberately: the
+rendered docs are read by people who are not in Dart, and
+`DateTime.toIso8601String` is not the spelling Apple sends.
+
 **Not `appstore wait`, and not on a guess.** The consumer this was built for
 spawns it, logs its stdout for a human, and consumes only the exit code —
 nothing decodes a line, so line-delimited progress events would have been built
