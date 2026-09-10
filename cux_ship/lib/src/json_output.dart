@@ -98,6 +98,13 @@ Map<String, Object?> appStoreVersionsDocument(
   'versions': <Map<String, Object?>>[
     for (final version in listing.versions) ...[_version(version)],
   ],
+  // **This one looks like the concatenation of the versions' `display`, and
+  // that is the trap.** [AppStoreVersions.lines] has no cap and no trailing
+  // line, so for every non-empty listing the two are byte-identical — and for
+  // an empty one, `lines` answers with "no App Store versions for …" while a
+  // concatenation answers with nothing. An account with no versions and a
+  // reader that forgot to render would then look the same. The empty case is
+  // the only input that can tell these apart, which is why the test uses one.
   'display': listing.lines,
 };
 

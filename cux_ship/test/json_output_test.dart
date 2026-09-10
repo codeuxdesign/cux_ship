@@ -394,6 +394,48 @@ void main() {
       expect(document['display'] as List, hasLength(20));
     });
 
+    test('and is never empty, because a silent store reads as a fine one', () {
+      // **The dangerous half of "not the items concatenated".** Deriving a
+      // document's `display` from its items' is correct for every non-empty
+      // document and yields an empty array exactly when that array is the only
+      // thing carrying meaning: `lines` answers the empty case with a
+      // sentence, and the items answer it with nothing at all. A store nothing
+      // has ever been uploaded to and a store the reader forgot to render then
+      // look identical — absence and failure again.
+      //
+      // Raised by the consumer, which routes its empty case through `lines`
+      // for exactly this reason and has two branches instead of one.
+      final builds = appStoreBuildsDocument(buildsOf(const []), bundleId: 'x');
+      final versions = appStoreVersionsDocument(
+        versionsOf(const []),
+        bundleId: 'x',
+      );
+      final tracks = playTracksDocument(
+        const PlayTracks(
+          packageName: 'design.codeux.example',
+          tracks: [],
+          uploadedVersionCodes: [],
+        ),
+      );
+
+      expect(builds['builds'], isEmpty);
+      expect(builds['display'], hasLength(1));
+      expect(
+        (builds['display'] as List).single,
+        contains('nothing has ever been uploaded'),
+      );
+
+      expect(versions['versions'], isEmpty);
+      expect(versions['display'], hasLength(1));
+      expect(
+        (versions['display'] as List).single,
+        contains('no App Store versions'),
+      );
+
+      expect(tracks['tracks'], isEmpty);
+      expect(tracks['display'], isNotEmpty);
+    });
+
     test('nor on the Play side, where a trailing line belongs to no track', () {
       final document = playTracksDocument(tracksOf());
 
