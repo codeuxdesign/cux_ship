@@ -271,6 +271,42 @@ void main() {
   });
 
   group('the dartdoc describes the JSON', () {
+    test('and no doc comment is orphaned from the thing it documents', () {
+      // **Found in the published dev.2, by the consumer reading pub.dev.**
+      // Twenty lines written for `AppStoreBuildsDocument.newest` sat between
+      // `builds` and `display` with a blank line under them, attached to
+      // nothing, while `newest` itself said only "see the note on [builds]" —
+      // which was one line and did not contain it. The analyzer says nothing:
+      // a dangling `///` block is valid Dart.
+      //
+      // It matters here more than it would elsewhere, because this file's
+      // dartdoc *is* the published statement of the format. A paragraph
+      // explaining why a member is a getter, rendered under no member at all,
+      // is a specification with a hole in it.
+      //
+      // The shape: a `///` line, then a blank line, then another `///` line —
+      // two blocks with nothing between them, so the first documents nothing.
+      final lines = _documentsSource().readAsLinesSync();
+      final orphans = <String>[];
+
+      for (var i = 1; i < lines.length - 1; i++) {
+        final blank = lines[i].trim().isEmpty;
+        final before = lines[i - 1].trimLeft().startsWith('///');
+        final after = lines[i + 1].trimLeft().startsWith('///');
+        if (blank && before && after) {
+          orphans.add('line ${i + 1}: ${lines[i - 1].trim()}');
+        }
+      }
+
+      expect(
+        orphans,
+        isEmpty,
+        reason:
+            'a doc comment separated from the next one by a blank line '
+            'documents nothing — put it on the member it describes',
+      );
+    });
+
     test('because no field is renamed on the way out', () {
       // **The published API docs are the format's only statement.** A
       // `@JsonKey(name:)` would leave every class reading correctly and every
