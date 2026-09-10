@@ -78,14 +78,22 @@ caller gets them too. `usable` and `editable` stay plain `bool` and fail
 closed — `usable == false` means "not known to be usable", which is the right
 default for a flag gating an action rather than a report.
 
-**Store vocabularies degrade and ours do not.** `processingState`,
-`appStoreState` and Play's `status` belong to Apple and Google, so their enums
-carry a permanent `unknown` and the raw string travels beside them — a state a
-store adds tomorrow still parses, and members are *not* added when it does,
-because a Dart switch expression must be exhaustive and adding one would break
-a consumer on a store's schedule rather than on ours. `kind` and `platform` are
-this package's own, are closed, and an unrecognized one is refused. A null
-field means the store sent nothing, which stays a different fact from `unknown`.
+**A store's vocabulary arrives twice: as ours, and as theirs.**
+`processingState` carries *this package's* closed vocabulary — `processing`,
+`valid`, `failed`, `invalid`, `unknown` — and the new `processingStateRaw`
+carries Apple's own word, exactly as sent. Same for `appStoreState`,
+`releaseType` and Play's `status`, each with a `*Raw` sibling. Write against
+ours; fall back to theirs in the one case ours cannot cover.
+
+`unknown` is a value of our vocabulary rather than a hole in it: a state Apple
+ships tomorrow arrives as `"unknown"`, keeps its real name in the `*Raw` field,
+and survives a round trip. **Members are never added because a store added a
+value** — a Dart switch expression must be exhaustive, so that would break a
+consumer's build on Apple's release schedule rather than on this package's.
+
+`kind` and `platform` are this package's own, are closed, and an unrecognized
+one is refused rather than degraded. A null field means the store sent nothing,
+which stays a different fact from `unknown`.
 
 `uploadedDate` is Apple's string rather than a `DateTime`, deliberately: the
 rendered docs are read by people who are not in Dart, and

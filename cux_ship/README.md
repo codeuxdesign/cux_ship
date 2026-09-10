@@ -703,12 +703,22 @@ upload a different build.
 means "not known to be usable" rather than "not usable" — the right default for
 a flag that gates an action rather than a report.
 
-**Store vocabularies degrade; ours do not.** `processingState`,
-`appStoreState` and Play's `status` are Apple's and Google's, so their enums
-carry a permanent `unknown` and the raw string sits beside them — a state a
-store adds tomorrow still parses. `kind` and `platform` are ours, are closed,
-and an unrecognized one is refused. A null field means the store sent nothing,
-which is not the same as `unknown`.
+**A store's vocabulary reaches you twice: as ours, and as theirs.**
+`processingState` is *this package's* closed vocabulary — `processing`,
+`valid`, `failed`, `invalid`, `unknown` — and `processingStateRaw` is Apple's
+own word, exactly as sent. Same for `appStoreState`, `releaseType` and Play's
+`status`. Write against the first; fall back to the second in the one case the
+first cannot cover.
+
+`unknown` is a value of our vocabulary rather than a hole in it, so a state
+Apple ships tomorrow arrives as `"unknown"` with its real name in the `*Raw`
+field, and survives a round trip intact. **Members are never added because a
+store added a value** — a Dart switch expression must be exhaustive, so that
+would break your build on Apple's schedule rather than ours.
+
+`kind` and `platform` are ours and closed, and an unrecognized one is refused
+rather than degraded. A null field means the store sent nothing, which is not
+the same as `unknown`.
 
 This adds nothing to what the command does: these are value types over what it
 printed. Reads that happen *in your process* — giving up the printed command

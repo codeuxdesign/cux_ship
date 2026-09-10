@@ -333,6 +333,7 @@ void main() {
           'buildNumber',
           'buildNumberAsInt',
           'processingState',
+          'processingStateRaw',
           'uploadedDate',
           'expired',
           'usable',

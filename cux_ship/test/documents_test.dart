@@ -43,8 +43,12 @@ File _documentsSource() {
   );
 }
 
+/// [processingState] is *this package's* spelling and [processingStateRaw] is
+/// Apple's — the two are different fields on purpose, and a fixture that let
+/// them drift would be testing a document nothing produces.
 Map<String, dynamic> _buildsJson({
-  String? processingState = 'VALID',
+  String? processingState = 'valid',
+  String? processingStateRaw = 'VALID',
   String platform = 'IOS',
 }) => <String, dynamic>{
   'schema': 1,
@@ -58,6 +62,7 @@ Map<String, dynamic> _buildsJson({
       'buildNumber': '169',
       'buildNumberAsInt': 169,
       'processingState': processingState,
+      'processingStateRaw': processingStateRaw,
       'uploadedDate': '2026-09-09T14:02:11-07:00',
       'expired': false,
       'usable': true,
@@ -68,34 +73,37 @@ Map<String, dynamic> _buildsJson({
   'display': ['  build 169  VALID  uploaded 2026-09-09T14:02:11-07:00'],
 };
 
-Map<String, dynamic> _tracksJson({String? status = 'completed'}) =>
-    <String, dynamic>{
-      'schema': 1,
-      'kind': 'play.tracks',
-      'packageName': 'design.codeux.example',
-      'tracks': [
+Map<String, dynamic> _tracksJson({
+  String? status = 'completed',
+  String? statusRaw = 'completed',
+}) => <String, dynamic>{
+  'schema': 1,
+  'kind': 'play.tracks',
+  'packageName': 'design.codeux.example',
+  'tracks': [
+    {
+      'name': 'internal',
+      'newestVersionCode': 152,
+      'releases': [
         {
-          'name': 'internal',
+          'name': '1.4.0',
+          'status': status,
+          'statusRaw': statusRaw,
+          'versionCodes': [152],
           'newestVersionCode': 152,
-          'releases': [
-            {
-              'name': '1.4.0',
-              'status': status,
-              'versionCodes': [152],
-              'newestVersionCode': 152,
-              'serving': true,
-              'display': ['  internal: "1.4.0" codes=[152] $status'],
-            },
-          ],
+          'serving': true,
           'display': ['  internal: "1.4.0" codes=[152] $status'],
         },
       ],
-      'uploadedVersionCodes': [151, 152],
-      'display': [
-        '  internal: "1.4.0" codes=[152] $status',
-        '  uploaded bundles: [151, 152]',
-      ],
-    };
+      'display': ['  internal: "1.4.0" codes=[152] $status'],
+    },
+  ],
+  'uploadedVersionCodes': [151, 152],
+  'display': [
+    '  internal: "1.4.0" codes=[152] $status',
+    '  uploaded bundles: [151, 152]',
+  ],
+};
 
 void main() {
   group('decoding is the inverse of encoding', () {
@@ -130,30 +138,49 @@ void main() {
     });
   });
 
-  group('a store vocabulary degrades', () {
+  group('a store vocabulary degrades into ours, and the raw word survives', () {
     test(
-      'an unnamed processingState is unknown, and the raw value survives',
+      'an unnamed processingState is unknown, with Apple\'s word beside it',
       () {
-        // The whole reason these are not Dart enums on the wire. Apple ships a
-        // state, and a consumer pinned to this version keeps parsing.
+        // **Both halves matter, and only together.** `unknown` alone says this
+        // version did not understand; the raw alone makes every consumer learn
+        // Apple's vocabulary. The pair is what lets a caller write against a
+        // closed list and still see what actually arrived.
         final document = AppStoreBuildsDocument.fromJson(
-          _buildsJson(processingState: 'SOMETHING_APPLE_ADDED'),
+          _buildsJson(
+            processingState: 'unknown',
+            processingStateRaw: 'SOMETHING_APPLE_ADDED',
+          ),
         );
 
         final build = document.builds.single;
-        expect(build.processingStateKnown, ProcessingState.unknown);
-        expect(build.processingState, 'SOMETHING_APPLE_ADDED');
+        expect(build.processingState, ProcessingState.unknown);
+        expect(build.processingStateRaw, 'SOMETHING_APPLE_ADDED');
       },
     );
 
+    test('and it survives a round trip, which the alternative did not', () {
+      // The measured failure of typing the field with Apple's own spellings:
+      // `unknown` mapped to nothing, so re-encoding wrote null and the word
+      // was gone. Our vocabulary gives `unknown` a spelling of its own.
+      final json = _buildsJson(
+        processingState: 'unknown',
+        processingStateRaw: 'SOMETHING_APPLE_ADDED',
+      );
+
+      final out = AppStoreBuildsDocument.fromJson(json).toJson();
+
+      expect((out['builds'] as List).single, (json['builds'] as List).single);
+    });
+
     test('and an unnamed Play status does the same', () {
       final document = PlayTracksDocument.fromJson(
-        _tracksJson(status: 'somethingGoogleAdded'),
+        _tracksJson(status: 'unknown', statusRaw: 'somethingGoogleAdded'),
       );
 
       final release = document.tracks.single.releases.single;
-      expect(release.statusKnown, PlayReleaseStatus.unknown);
-      expect(release.status, 'somethingGoogleAdded');
+      expect(release.status, PlayReleaseStatus.unknown);
+      expect(release.statusRaw, 'somethingGoogleAdded');
     });
 
     test('but absent stays absent, which is a different fact', () {
@@ -161,13 +188,15 @@ void main() {
       // this version does not name. A reader that cannot tell those apart
       // cannot tell "no answer" from "an answer we did not understand".
       final builds = AppStoreBuildsDocument.fromJson(
-        _buildsJson(processingState: null),
+        _buildsJson(processingState: null, processingStateRaw: null),
       );
-      final tracks = PlayTracksDocument.fromJson(_tracksJson(status: null));
+      final tracks = PlayTracksDocument.fromJson(
+        _tracksJson(status: null, statusRaw: null),
+      );
 
       expect(builds.builds.single.processingState, isNull);
-      expect(builds.builds.single.processingStateKnown, isNull);
-      expect(tracks.tracks.single.releases.single.statusKnown, isNull);
+      expect(builds.builds.single.processingStateRaw, isNull);
+      expect(tracks.tracks.single.releases.single.status, isNull);
     });
   });
 
@@ -187,23 +216,35 @@ void main() {
       );
     });
 
-    test("and unknown's wire is null, because there is no such spelling", () {
-      // **The one case where a caller most needs the raw value is the one an
-      // enum cannot carry.** An earlier draft spelled this `''`, which reads
-      // like a store that sent an empty string — plausible, wrong, and wrong
-      // exactly where the truth matters. Null sends the reader to the sibling
-      // field, which has it.
-      expect(ProcessingState.unknown.wire, isNull);
-      expect(AppStoreState.unknown.wire, isNull);
-      expect(ReleaseType.unknown.wire, isNull);
-      expect(PlayReleaseStatus.unknown.wire, isNull);
-      // And every named member does have one, so the null is a statement
-      // rather than an oversight nobody filled in.
+    test('so unknown has a wire spelling and no store spelling', () {
+      // **The two columns, and what each is for.** `wire` is ours and every
+      // member has one, including `unknown` — which is what lets it survive a
+      // round trip. `appleValue` is Apple's, and `unknown` has none, because
+      // it is the member that exists precisely when Apple said something this
+      // version has no word for.
+      expect(ProcessingState.unknown.wire, 'unknown');
+      expect(ProcessingState.unknown.appleValue, isNull);
+      expect(AppStoreState.unknown.appleValue, isNull);
+      expect(ReleaseType.unknown.appleValue, isNull);
+      expect(PlayReleaseStatus.unknown.playValue, isNull);
+
+      // And every named member has both, so a null in either column is a
+      // statement rather than an entry nobody filled in.
       for (final state in ProcessingState.values) {
+        expect(state.wire, isNotEmpty);
         if (state != ProcessingState.unknown) {
-          expect(state.wire, isNotNull);
+          expect(state.appleValue, isNotNull);
         }
       }
+    });
+
+    test('and our spellings are ours, not a copy of the store’s', () {
+      // The document says `valid`; Apple says `VALID`. Visibly different, so a
+      // reader of one field is never in doubt which vocabulary they are in.
+      expect(ProcessingState.valid.wire, 'valid');
+      expect(ProcessingState.valid.appleValue, 'VALID');
+      expect(AppStoreState.readyForSale.wire, 'readyForSale');
+      expect(AppStoreState.readyForSale.appleValue, 'READY_FOR_SALE');
     });
 
     test('and a platform nobody names is refused rather than degraded', () {
@@ -255,17 +296,17 @@ void main() {
     // and says nothing about the rule. The rule lives in the encoder, and
     // `json_output_test.dart` drives it with real statuses.
     PlayReleaseEntry releaseWith(String? status) => PlayTracksDocument.fromJson(
-      _tracksJson(status: status),
+      _tracksJson(status: status, statusRaw: status),
     ).tracks.single.releases.single;
 
     test('so a halted rollout and an unsent draft stay distinguishable', () {
       // `serving` is false for both, and they are not the same thing. The
       // boolean answers the common question; the status is there for the one
       // it cannot.
-      expect(releaseWith('halted').statusKnown, PlayReleaseStatus.halted);
-      expect(releaseWith('draft').statusKnown, PlayReleaseStatus.draft);
+      expect(releaseWith('halted').status, PlayReleaseStatus.halted);
+      expect(releaseWith('draft').status, PlayReleaseStatus.draft);
       expect(
-        releaseWith('statusUnspecified').statusKnown,
+        releaseWith('statusUnspecified').status,
         PlayReleaseStatus.statusUnspecified,
       );
     });

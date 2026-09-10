@@ -16,32 +16,37 @@
 // a name nicer. That is the price of the dartdoc being the specification, and
 // it is the right one — but it is a price.
 //
-// **Enums over store vocabularies carry a permanent [unknown], and the raw
-// string travels beside them.** Dart 3 switch expressions must be exhaustive,
-// so adding a member is a breaking change for a consumer that switched over
-// one — and the trigger would be Apple or Google shipping a state, not this
-// package deciding anything. So the enum says what *this package* names, the
-// string says what the store actually sent, and a value nobody here has named
-// arrives as [unknown] rather than as a parse failure or a silent zero.
+// **A store's vocabulary reaches a caller twice: as ours, and as theirs.**
+// `processingState` is this package's own closed vocabulary — documented here,
+// stable, and safe to write against — and `processingStateRaw` is Apple's
+// string exactly as sent. Same for `appStoreState`, `releaseType` and Play's
+// `status`.
 //
-// Absent and unknown stay different facts: a null field is a store that sent
-// nothing, and [unknown] is a store that sent something this version does not
-// name.
+// Two fields rather than one, and they are two different facts: what this
+// package *understood*, and what the store *said*. A caller writes against the
+// first and falls back to the second in the one case the first cannot cover.
 //
-// **The store's fields are typed `String`, and that is what keeps this
-// document a passthrough rather than a re-encoding.** Typing them as enums and
-// letting `json_serializable` decode them would make the wire format *ours*
-// instead of Apple's: identical for every value we name, and lossy for the one
-// case that matters. Measured, with `releaseType` as an enum field and
-// `unknownEnumValue`:
+// **`unknown` is a value of our vocabulary rather than a hole in it.** It has
+// a `wire` spelling of its own, so it survives a round trip — which the
+// obvious alternative does not. Giving the enum Apple's spellings and letting
+// `unknown` map to nothing was tried and measured:
 //
 //     decoded   : ReleaseType.unknown
 //     re-encoded: null
 //
 // A `releaseType` Apple ships after this version would arrive, decode to
-// `unknown`, and go back out as `null` — the raw value destroyed by a round
-// trip, in exactly the situation a reader needs it. So the field carries what
-// the store sent and the enum is the typed *reading* of it.
+// `unknown`, and go back out as `null`. With a vocabulary of our own it goes
+// out as `"unknown"`, and `releaseTypeRaw` still says what Apple's word was.
+//
+// **Members are never added because a store added a value.** Dart 3 switch
+// expressions must be exhaustive, so adding one is a breaking change for every
+// consumer that switched over it — and the trigger would be Apple's or
+// Google's release schedule rather than anything decided here. New store
+// values arrive as `unknown` with their spelling in the `*Raw` field.
+//
+// Absent and unknown stay different facts: a null field is a store that sent
+// nothing, and `unknown` is a store that sent something this version does not
+// name.
 import 'package:json_annotation/json_annotation.dart';
 
 import 'appstore/app_store.dart' show AscPlatform, editableVersionStates;
@@ -67,117 +72,142 @@ enum DocumentKind {
   final String wire;
 }
 
-/// Apple's `processingState` for a build.
+/// This package's vocabulary for Apple's `processingState`.
 ///
-/// The members are what this package names, not what Apple has. See the note
-/// at the top of this file for why that distinction is deliberate and why
-/// [unknown] is permanent.
-///
-/// **These enums are not what travels.** The document carries the store's
-/// string; this is the typed reading of it, and there is no `@JsonEnum` here
-/// because nothing serializes it.
+/// **The members are what this package names, not what Apple has**, and that
+/// is the point rather than a shortfall: [wire] is what the document carries,
+/// so a caller writes against a closed list that does not move when Apple's
+/// does. [AppStoreBuildEntry.processingStateRaw] carries Apple's own word for
+/// the case [unknown] covers.
+@JsonEnum(valueField: 'wire')
 enum ProcessingState {
   /// Apple is still processing the upload. Not releasable *yet* — see
   /// [AppStoreBuildEntry.mayBecomeUsable], which is the difference between
   /// this and [failed].
-  processing('PROCESSING'),
+  processing('processing', 'PROCESSING'),
 
   /// Processed and usable, subject to expiry — see [AppStoreBuildEntry.usable].
-  valid('VALID'),
+  valid('valid', 'VALID'),
 
   /// Apple refused the binary during processing. **Terminal**: it will not
   /// become [valid] by waiting.
-  failed('FAILED'),
+  failed('failed', 'FAILED'),
 
   /// As [failed], and equally terminal.
-  invalid('INVALID'),
+  invalid('invalid', 'INVALID'),
 
-  /// A state this version does not name. The raw value is in
-  /// [AppStoreBuildEntry.processingState].
-  unknown(null);
-
-  const ProcessingState(this.wire);
-
-  /// Apple's spelling, or **null for [unknown]** — which is the one member for
-  /// which there is no such thing.
+  /// Apple sent a state this version does not name.
   ///
-  /// An earlier draft spelled it `''`, and that was a lie in the single case
-  /// where the truth matters: a caller reaching for the raw value of a state
-  /// nobody named would have been handed a plausible-looking empty string
-  /// instead of being sent to the field that has it.
-  final String? wire;
+  /// **A value of this vocabulary rather than a hole in it** — it has a [wire]
+  /// spelling of its own, so it survives a round trip. What Apple actually
+  /// said is in [AppStoreBuildEntry.processingStateRaw], which is the field to
+  /// read when this is the answer.
+  unknown('unknown', null);
 
-  /// [wire] read as a member: [unknown] for a value this version does not
-  /// name, and null when the store sent nothing.
+  const ProcessingState(this.wire, this.appleValue);
+
+  /// **This package's spelling, and what the document carries.** Lowercase, so
+  /// a reader can tell it from [appleValue] at a glance.
+  final String wire;
+
+  /// Apple's spelling, or null for [unknown], which Apple has no word for.
+  final String? appleValue;
+
+  /// Apple's [appleValue] read as a member: [unknown] for a value this version
+  /// does not name, null when Apple sent nothing.
   ///
-  /// **This is the only place Apple's spellings are compared to anything.**
-  /// A `switch` case pattern must be a compile-time constant and
-  /// `processing.wire` is not one, so code branching on the state used to
-  /// switch on string literals — putting `'PROCESSING'` in the enum and again
-  /// in every branch that cared. Reading to a member first makes the switch an
-  /// enum switch, which is one copy of each spelling *and* exhaustive, so
-  /// adding a member breaks the branches that have not considered it.
-  static ProcessingState? read(String? wire) => wire == null
+  /// **The only place Apple's spellings are compared to anything.** A `switch`
+  /// case pattern must be a compile-time constant and `processing.appleValue`
+  /// is not one, so code branching on the state used to switch on string
+  /// literals — `'PROCESSING'` written in the enum and again in every branch
+  /// that cared. Reading to a member first makes those enum switches, which is
+  /// one copy of each spelling *and* exhaustive.
+  static ProcessingState? read(String? appleValue) => appleValue == null
       ? null
-      : values.firstWhere((s) => s.wire == wire, orElse: () => unknown);
+      : values.firstWhere(
+          (s) => s.appleValue == appleValue,
+          orElse: () => unknown,
+        );
 }
 
-/// Apple's `appStoreState` for a version record.
+/// This package's vocabulary for Apple's `appStoreState`.
 ///
 /// **Incomplete on purpose, and safely so.** These are the states this
 /// repository has handled or observed; Apple's vocabulary is longer and moves.
-/// Anything else is [unknown] and its raw value is in
-/// [AppStoreVersionEntry.appStoreState] — and the question most callers
+/// Anything else is [unknown], with Apple's word in
+/// [AppStoreVersionEntry.appStoreStateRaw] — and the question most callers
 /// actually have is answered by [AppStoreVersionEntry.editable] instead.
+@JsonEnum(valueField: 'wire')
 enum AppStoreState {
-  prepareForSubmission('PREPARE_FOR_SUBMISSION'),
-  readyForReview('READY_FOR_REVIEW'),
-  waitingForReview('WAITING_FOR_REVIEW'),
-  rejected('REJECTED'),
-  developerRejected('DEVELOPER_REJECTED'),
-  metadataRejected('METADATA_REJECTED'),
-  invalidBinary('INVALID_BINARY'),
-  pendingDeveloperRelease('PENDING_DEVELOPER_RELEASE'),
-  preorderReadyForSale('PREORDER_READY_FOR_SALE'),
-  readyForSale('READY_FOR_SALE'),
-  developerRemovedFromSale('DEVELOPER_REMOVED_FROM_SALE'),
-  removedFromSale('REMOVED_FROM_SALE'),
+  prepareForSubmission('prepareForSubmission', 'PREPARE_FOR_SUBMISSION'),
+  readyForReview('readyForReview', 'READY_FOR_REVIEW'),
+  waitingForReview('waitingForReview', 'WAITING_FOR_REVIEW'),
+  rejected('rejected', 'REJECTED'),
+  developerRejected('developerRejected', 'DEVELOPER_REJECTED'),
+  metadataRejected('metadataRejected', 'METADATA_REJECTED'),
+  invalidBinary('invalidBinary', 'INVALID_BINARY'),
+  pendingDeveloperRelease(
+    'pendingDeveloperRelease',
+    'PENDING_DEVELOPER_RELEASE',
+  ),
+  preorderReadyForSale('preorderReadyForSale', 'PREORDER_READY_FOR_SALE'),
+  readyForSale('readyForSale', 'READY_FOR_SALE'),
+  developerRemovedFromSale(
+    'developerRemovedFromSale',
+    'DEVELOPER_REMOVED_FROM_SALE',
+  ),
+  removedFromSale('removedFromSale', 'REMOVED_FROM_SALE'),
 
-  /// A state this version does not name.
-  unknown(null);
+  /// Apple sent a state this version does not name. See
+  /// [AppStoreVersionEntry.appStoreStateRaw].
+  unknown('unknown', null);
 
-  const AppStoreState(this.wire);
+  const AppStoreState(this.wire, this.appleValue);
 
-  /// Apple's spelling, or null for [unknown]. See [ProcessingState.wire].
-  final String? wire;
+  /// This package's spelling. See [ProcessingState.wire].
+  final String wire;
 
-  /// [wire] read as a member. See [ProcessingState.read].
-  static AppStoreState? read(String? wire) => wire == null
+  /// Apple's spelling, or null for [unknown].
+  final String? appleValue;
+
+  /// See [ProcessingState.read].
+  static AppStoreState? read(String? appleValue) => appleValue == null
       ? null
-      : values.firstWhere((s) => s.wire == wire, orElse: () => unknown);
+      : values.firstWhere(
+          (s) => s.appleValue == appleValue,
+          orElse: () => unknown,
+        );
 }
 
 /// How an approved version reaches the store.
 ///
 /// Not a fraction: Apple runs its own phased schedule, so `AFTER_APPROVAL`
 /// and `SCHEDULED` describe *when* rather than *how much*.
+@JsonEnum(valueField: 'wire')
 enum ReleaseType {
-  manual('MANUAL'),
-  afterApproval('AFTER_APPROVAL'),
-  scheduled('SCHEDULED'),
+  manual('manual', 'MANUAL'),
+  afterApproval('afterApproval', 'AFTER_APPROVAL'),
+  scheduled('scheduled', 'SCHEDULED'),
 
-  /// A value this version does not name.
-  unknown(null);
+  /// Apple sent a value this version does not name. See
+  /// [AppStoreVersionEntry.releaseTypeRaw].
+  unknown('unknown', null);
 
-  const ReleaseType(this.wire);
+  const ReleaseType(this.wire, this.appleValue);
 
-  /// Apple's spelling, or null for [unknown]. See [ProcessingState.wire].
-  final String? wire;
+  /// This package's spelling. See [ProcessingState.wire].
+  final String wire;
 
-  /// [wire] read as a member. See [ProcessingState.read].
-  static ReleaseType? read(String? wire) => wire == null
+  /// Apple's spelling, or null for [unknown].
+  final String? appleValue;
+
+  /// See [ProcessingState.read].
+  static ReleaseType? read(String? appleValue) => appleValue == null
       ? null
-      : values.firstWhere((t) => t.wire == wire, orElse: () => unknown);
+      : values.firstWhere(
+          (t) => t.appleValue == appleValue,
+          orElse: () => unknown,
+        );
 }
 
 /// Play's `status` for one release on a track.
@@ -187,40 +217,53 @@ enum ReleaseType {
 /// consumer this was built for needs both. [halted] and [draft] are both "not
 /// serving" and call for different advice: one was stopped by a person, the
 /// other never started. Reach for the status when the next action differs.
+@JsonEnum(valueField: 'wire')
 enum PlayReleaseStatus {
   /// Fully rolled out to the track's audience.
-  completed('completed'),
+  completed('completed', 'completed'),
 
   /// A staged rollout is under way — some of the audience has it. The
   /// *fraction* is not in this document.
-  inProgress('inProgress'),
+  inProgress('inProgress', 'inProgress'),
 
   /// A rollout that was started and stopped. The release still exists and
   /// still names its versionCodes.
-  halted('halted'),
+  halted('halted', 'halted'),
 
   /// Prepared and not sent.
-  draft('draft'),
+  draft('draft', 'draft'),
 
   /// Play's own "no status", which it sends rather than omitting the field.
   ///
   /// Named, and still not an answer: [PlayReleaseEntry.serving] is null here
   /// for the same reason it is null for [unknown]. Play saying "unspecified"
   /// and Play saying nothing are the same amount of information.
-  statusUnspecified('statusUnspecified'),
+  statusUnspecified('statusUnspecified', 'statusUnspecified'),
 
-  /// A value this version does not name.
-  unknown(null);
+  /// Play sent a value this version does not name. See
+  /// [PlayReleaseEntry.statusRaw].
+  unknown('unknown', null);
 
-  const PlayReleaseStatus(this.wire);
+  const PlayReleaseStatus(this.wire, this.playValue);
 
-  /// Play's spelling, or null for [unknown]. See [ProcessingState.wire].
-  final String? wire;
+  /// This package's spelling. See [ProcessingState.wire].
+  ///
+  /// Identical to [playValue] for every named member here, because Play's
+  /// spellings already read like Dart names — which makes this the one enum
+  /// where the two columns look redundant. They are not: [unknown] has a
+  /// [wire] and no [playValue], and the day Play renames one the columns part.
+  final String wire;
 
-  /// [wire] read as a member. See [ProcessingState.read].
-  static PlayReleaseStatus? read(String? wire) => wire == null
+  /// Play's spelling, or null for [unknown].
+  final String? playValue;
+
+  /// See [ProcessingState.read].
+  static PlayReleaseStatus? read(String? playValue) => playValue == null
       ? null
-      : values.firstWhere((s) => s.wire == wire, orElse: () => unknown);
+      : values.firstWhere(
+          (s) => s.playValue == playValue,
+          orElse: () => unknown,
+        );
 }
 
 String _platformToJson(AscPlatform platform) => platform.api;
@@ -245,6 +288,7 @@ class AppStoreBuildEntry {
     required this.buildNumber,
     required this.buildNumberAsInt,
     required this.processingState,
+    required this.processingStateRaw,
     required this.uploadedDate,
     required this.expired,
     required this.usable,
@@ -269,11 +313,23 @@ class AppStoreBuildEntry {
   /// not apply.
   final int? buildNumberAsInt;
 
+  /// **This package's reading of Apple's `processingState`**, or null when
+  /// Apple sent none.
+  ///
+  /// Write against this: it is a documented, closed vocabulary, and
+  /// [ProcessingState.unknown] is a value of it rather than a hole in it.
+  /// [processingStateRaw] is what Apple actually said, and is the fallback for
+  /// the case this does not name. Most callers want [usable] or
+  /// [mayBecomeUsable] instead of either.
+  @JsonKey(unknownEnumValue: ProcessingState.unknown)
+  final ProcessingState? processingState;
+
   /// Apple's `processingState`, exactly as sent, or null when it was absent.
   ///
-  /// [processingStateKnown] is the same value typed. Most callers want
-  /// [usable] instead of either.
-  final String? processingState;
+  /// **The fallback, and the only thing that survives Apple shipping a state
+  /// this version does not name** — [processingState] is
+  /// [ProcessingState.unknown] then, and this says what the word was.
+  final String? processingStateRaw;
 
   /// Apple's `uploadedDate`, exactly as sent.
   ///
@@ -323,13 +379,6 @@ class AppStoreBuildEntry {
   /// release without a `schema` bump; the array itself, and its being an array
   /// rather than a string, are promised. Print it; read the fields.
   final List<String> display;
-
-  /// [processingState] as a [ProcessingState], or null when Apple sent none.
-  ///
-  /// [ProcessingState.unknown] when Apple sent a state this version does not
-  /// name — which is not the same as null.
-  ProcessingState? get processingStateKnown =>
-      ProcessingState.read(processingState);
 
   Map<String, dynamic> toJson() => _$AppStoreBuildEntryToJson(this);
 }
@@ -395,7 +444,9 @@ class AppStoreVersionEntry {
   const AppStoreVersionEntry({
     required this.versionString,
     required this.appStoreState,
+    required this.appStoreStateRaw,
     required this.releaseType,
+    required this.releaseTypeRaw,
     required this.copyright,
     required this.editable,
     required this.display,
@@ -407,13 +458,23 @@ class AppStoreVersionEntry {
   /// The marketing version — `1.4.0`, not a build number.
   final String versionString;
 
-  /// Apple's `appStoreState`, exactly as sent, or null when absent.
-  /// [appStoreStateKnown] is the same value typed.
-  final String? appStoreState;
+  /// This package's reading of Apple's `appStoreState`, or null when absent.
+  ///
+  /// Write against this; [appStoreStateRaw] is the fallback for a state it
+  /// does not name. The question most callers have is [editable].
+  @JsonKey(unknownEnumValue: AppStoreState.unknown)
+  final AppStoreState? appStoreState;
 
-  /// Apple's `releaseType`, exactly as sent, or null.
-  /// [releaseTypeKnown] is the same value typed.
-  final String? releaseType;
+  /// Apple's `appStoreState`, exactly as sent. See
+  /// [AppStoreBuildEntry.processingStateRaw].
+  final String? appStoreStateRaw;
+
+  /// This package's reading of Apple's `releaseType`, or null when absent.
+  @JsonKey(unknownEnumValue: ReleaseType.unknown)
+  final ReleaseType? releaseType;
+
+  /// Apple's `releaseType`, exactly as sent.
+  final String? releaseTypeRaw;
 
   /// Required before review, and null by default.
   final String? copyright;
@@ -427,13 +488,6 @@ class AppStoreVersionEntry {
   /// The two lines `cux_ship appstore versions` prints for this version: the
   /// state line and the copyright line. Display text, unpromised content.
   final List<String> display;
-
-  /// [appStoreState] typed, [AppStoreState.unknown] for a state this version
-  /// does not name, null when Apple sent none.
-  AppStoreState? get appStoreStateKnown => AppStoreState.read(appStoreState);
-
-  /// [releaseType] typed, on the same terms as [appStoreStateKnown].
-  ReleaseType? get releaseTypeKnown => ReleaseType.read(releaseType);
 
   Map<String, dynamic> toJson() => _$AppStoreVersionEntryToJson(this);
 }
@@ -479,6 +533,7 @@ class PlayReleaseEntry {
   const PlayReleaseEntry({
     required this.name,
     required this.status,
+    required this.statusRaw,
     required this.versionCodes,
     required this.newestVersionCode,
     required this.serving,
@@ -492,9 +547,16 @@ class PlayReleaseEntry {
   /// not set, or null when the response did not carry one.
   final String? name;
 
-  /// Play's `status`, exactly as sent, or null. [statusKnown] is it typed, and
-  /// [serving] is the question most callers actually have.
-  final String? status;
+  /// This package's reading of Play's `status`, or null when Play sent none.
+  ///
+  /// Write against this; [statusRaw] is the fallback for a value it does not
+  /// name, and [serving] is the question most callers actually have.
+  @JsonKey(unknownEnumValue: PlayReleaseStatus.unknown)
+  final PlayReleaseStatus? status;
+
+  /// Play's `status`, exactly as sent. See
+  /// [AppStoreBuildEntry.processingStateRaw].
+  final String? statusRaw;
 
   /// Every versionCode this release serves — more than one when an app ships
   /// separate bundles per ABI.
@@ -539,10 +601,6 @@ class PlayReleaseEntry {
 
   /// The line `cux_ship play tracks` prints for this release. Display text.
   final List<String> display;
-
-  /// [status] typed, [PlayReleaseStatus.unknown] for a value this version does
-  /// not name, null when Play sent none.
-  PlayReleaseStatus? get statusKnown => PlayReleaseStatus.read(status);
 
   Map<String, dynamic> toJson() => _$PlayReleaseEntryToJson(this);
 }

@@ -10,7 +10,12 @@ AppStoreBuildEntry _$AppStoreBuildEntryFromJson(Map<String, dynamic> json) =>
     AppStoreBuildEntry(
       buildNumber: json['buildNumber'] as String,
       buildNumberAsInt: (json['buildNumberAsInt'] as num?)?.toInt(),
-      processingState: json['processingState'] as String?,
+      processingState: $enumDecodeNullable(
+        _$ProcessingStateEnumMap,
+        json['processingState'],
+        unknownValue: ProcessingState.unknown,
+      ),
+      processingStateRaw: json['processingStateRaw'] as String?,
       uploadedDate: json['uploadedDate'] as String?,
       expired: json['expired'] as bool,
       usable: json['usable'] as bool,
@@ -24,13 +29,22 @@ Map<String, dynamic> _$AppStoreBuildEntryToJson(AppStoreBuildEntry instance) =>
     <String, dynamic>{
       'buildNumber': instance.buildNumber,
       'buildNumberAsInt': instance.buildNumberAsInt,
-      'processingState': instance.processingState,
+      'processingState': _$ProcessingStateEnumMap[instance.processingState],
+      'processingStateRaw': instance.processingStateRaw,
       'uploadedDate': instance.uploadedDate,
       'expired': instance.expired,
       'usable': instance.usable,
       'mayBecomeUsable': instance.mayBecomeUsable,
       'display': instance.display,
     };
+
+const _$ProcessingStateEnumMap = {
+  ProcessingState.processing: 'processing',
+  ProcessingState.valid: 'valid',
+  ProcessingState.failed: 'failed',
+  ProcessingState.invalid: 'invalid',
+  ProcessingState.unknown: 'unknown',
+};
 
 AppStoreBuildsDocument _$AppStoreBuildsDocumentFromJson(
   Map<String, dynamic> json,
@@ -70,8 +84,18 @@ AppStoreVersionEntry _$AppStoreVersionEntryFromJson(
   Map<String, dynamic> json,
 ) => AppStoreVersionEntry(
   versionString: json['versionString'] as String,
-  appStoreState: json['appStoreState'] as String?,
-  releaseType: json['releaseType'] as String?,
+  appStoreState: $enumDecodeNullable(
+    _$AppStoreStateEnumMap,
+    json['appStoreState'],
+    unknownValue: AppStoreState.unknown,
+  ),
+  appStoreStateRaw: json['appStoreStateRaw'] as String?,
+  releaseType: $enumDecodeNullable(
+    _$ReleaseTypeEnumMap,
+    json['releaseType'],
+    unknownValue: ReleaseType.unknown,
+  ),
+  releaseTypeRaw: json['releaseTypeRaw'] as String?,
   copyright: json['copyright'] as String?,
   editable: json['editable'] as bool,
   display: (json['display'] as List<dynamic>).map((e) => e as String).toList(),
@@ -81,11 +105,36 @@ Map<String, dynamic> _$AppStoreVersionEntryToJson(
   AppStoreVersionEntry instance,
 ) => <String, dynamic>{
   'versionString': instance.versionString,
-  'appStoreState': instance.appStoreState,
-  'releaseType': instance.releaseType,
+  'appStoreState': _$AppStoreStateEnumMap[instance.appStoreState],
+  'appStoreStateRaw': instance.appStoreStateRaw,
+  'releaseType': _$ReleaseTypeEnumMap[instance.releaseType],
+  'releaseTypeRaw': instance.releaseTypeRaw,
   'copyright': instance.copyright,
   'editable': instance.editable,
   'display': instance.display,
+};
+
+const _$AppStoreStateEnumMap = {
+  AppStoreState.prepareForSubmission: 'prepareForSubmission',
+  AppStoreState.readyForReview: 'readyForReview',
+  AppStoreState.waitingForReview: 'waitingForReview',
+  AppStoreState.rejected: 'rejected',
+  AppStoreState.developerRejected: 'developerRejected',
+  AppStoreState.metadataRejected: 'metadataRejected',
+  AppStoreState.invalidBinary: 'invalidBinary',
+  AppStoreState.pendingDeveloperRelease: 'pendingDeveloperRelease',
+  AppStoreState.preorderReadyForSale: 'preorderReadyForSale',
+  AppStoreState.readyForSale: 'readyForSale',
+  AppStoreState.developerRemovedFromSale: 'developerRemovedFromSale',
+  AppStoreState.removedFromSale: 'removedFromSale',
+  AppStoreState.unknown: 'unknown',
+};
+
+const _$ReleaseTypeEnumMap = {
+  ReleaseType.manual: 'manual',
+  ReleaseType.afterApproval: 'afterApproval',
+  ReleaseType.scheduled: 'scheduled',
+  ReleaseType.unknown: 'unknown',
 };
 
 AppStoreVersionsDocument _$AppStoreVersionsDocumentFromJson(
@@ -115,7 +164,12 @@ Map<String, dynamic> _$AppStoreVersionsDocumentToJson(
 PlayReleaseEntry _$PlayReleaseEntryFromJson(Map<String, dynamic> json) =>
     PlayReleaseEntry(
       name: json['name'] as String?,
-      status: json['status'] as String?,
+      status: $enumDecodeNullable(
+        _$PlayReleaseStatusEnumMap,
+        json['status'],
+        unknownValue: PlayReleaseStatus.unknown,
+      ),
+      statusRaw: json['statusRaw'] as String?,
       versionCodes: (json['versionCodes'] as List<dynamic>)
           .map((e) => (e as num).toInt())
           .toList(),
@@ -129,12 +183,22 @@ PlayReleaseEntry _$PlayReleaseEntryFromJson(Map<String, dynamic> json) =>
 Map<String, dynamic> _$PlayReleaseEntryToJson(PlayReleaseEntry instance) =>
     <String, dynamic>{
       'name': instance.name,
-      'status': instance.status,
+      'status': _$PlayReleaseStatusEnumMap[instance.status],
+      'statusRaw': instance.statusRaw,
       'versionCodes': instance.versionCodes,
       'newestVersionCode': instance.newestVersionCode,
       'serving': instance.serving,
       'display': instance.display,
     };
+
+const _$PlayReleaseStatusEnumMap = {
+  PlayReleaseStatus.completed: 'completed',
+  PlayReleaseStatus.inProgress: 'inProgress',
+  PlayReleaseStatus.halted: 'halted',
+  PlayReleaseStatus.draft: 'draft',
+  PlayReleaseStatus.statusUnspecified: 'statusUnspecified',
+  PlayReleaseStatus.unknown: 'unknown',
+};
 
 PlayTrackEntry _$PlayTrackEntryFromJson(Map<String, dynamic> json) =>
     PlayTrackEntry(

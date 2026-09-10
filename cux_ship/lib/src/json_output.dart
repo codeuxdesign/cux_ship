@@ -91,7 +91,8 @@ AppStoreBuildsDocument appStoreBuildsDocument(
 AppStoreBuildEntry _build(AppStoreBuild build) => AppStoreBuildEntry(
   buildNumber: build.buildNumber,
   buildNumberAsInt: build.buildNumberAsInt,
-  processingState: build.processingState,
+  processingState: ProcessingState.read(build.processingState),
+  processingStateRaw: build.processingState,
   // Apple's own string, and not [AppStoreBuild.uploadedAt] beside it: they are
   // the same instant and Apple already spells it ISO-8601, so a second key
   // would be a second source for one fact and a second thing to be wrong.
@@ -158,8 +159,10 @@ AppStoreVersionsDocument appStoreVersionsDocument(
 
 AppStoreVersionEntry _version(AppStoreVersion version) => AppStoreVersionEntry(
   versionString: version.versionString,
-  appStoreState: version.appStoreState,
-  releaseType: version.releaseType,
+  appStoreState: AppStoreState.read(version.appStoreState),
+  appStoreStateRaw: version.appStoreState,
+  releaseType: ReleaseType.read(version.releaseType),
+  releaseTypeRaw: version.releaseType,
   copyright: version.copyright,
   editable: version.editable,
   // Two entries, not one: a version renders its state and its copyright on
@@ -194,7 +197,8 @@ PlayTrackEntry _track(PlayTrack track) => PlayTrackEntry(
 PlayReleaseEntry _release(PlayTrackRelease release, String track) =>
     PlayReleaseEntry(
       name: release.name,
-      status: release.status,
+      status: PlayReleaseStatus.read(release.status),
+      statusRaw: release.status,
       versionCodes: release.versionCodes,
       newestVersionCode: release.newestVersionCode,
       // **Computed here rather than left to the caller**, for the reason the

@@ -390,38 +390,62 @@ than the reader does — refusing is the answer, exactly as for an unrecognized
 **And absent stays distinct from unknown.** A null field is a store that sent
 nothing; `unknown` is a store that sent something this version does not name.
 
-**`unknown` carries no wire value at all** — `null`, not `''`. An earlier draft
-gave it the empty string, which is a lie in the single case where the truth
-matters: a caller reaching for the raw value of a state nobody named would have
-been handed a plausible-looking `''` instead of being sent to the sibling field
-that has it.
+**`unknown` has a spelling of ours and none of the store's.** Every member
+carries a `wire` — this package's word, which is what the document says — and
+every member except `unknown` also carries the store's, which is what the
+encoder reads to decide which member arrived. `unknown` has no store spelling
+because it is the member that exists precisely when the store said something
+this version has no word for; the store's actual word is in the `*Raw` field.
 
-### The store's fields are `String`, and that is what makes this a passthrough
+An earlier draft gave `unknown` the empty string as its only spelling, which
+was a lie in the single case where the truth matters — a caller reaching for
+the raw value would have been handed a plausible-looking `''`.
 
-**Typing them as enums would make the wire format ours rather than Apple's.**
-It is the obvious simplification — `json_serializable` decodes enums natively,
-`@JsonEnum(valueField: 'wire')` with `unknownEnumValue` is one annotation, and
-it would delete the hand-written lookup. It was tried, and measured with
-`releaseType` as an enum field:
+### A store's vocabulary arrives twice: as ours, and as theirs
+
+**The document carries this package's own vocabulary, and the store's word
+beside it.** `processingState` is `processing` / `valid` / `failed` / `invalid`
+/ `unknown`, ours and closed; `processingStateRaw` is `PROCESSING` / `VALID` /
+… , Apple's and unchanged. Same for `appStoreState`, `releaseType` and Play's
+`status`. Two fields, and two genuinely different facts: what this package
+*understood*, and what the store *said*. A caller writes against the first and
+falls back to the second in the one case the first cannot cover.
+
+Lowercase on purpose. A reader looking at `"valid"` next to `"VALID"` is never
+in doubt which vocabulary they are in.
+
+**The shape this replaced looked simpler and was measured to be lossy.** The
+first version had one field carrying Apple's string, with the enum as a Dart
+*reading* of it — no `@JsonEnum`, a hand-written lookup, and a shell caller
+left with Apple's vocabulary and no way to reach ours. The version before
+*that* typed the field with Apple's own spellings and let
+`json_serializable` decode it, which was tried on `releaseType`:
 
 ```
 decoded   : ReleaseType.unknown
 re-encoded: null
 ```
 
-A `releaseType` Apple ships after a version of this package goes out would
-arrive, decode to `unknown`, and **go back out as `null`** — the raw value
-destroyed by a round trip, in precisely the case a reader needs it. The
-generated encoder writes `_$ReleaseTypeEnumMap[value]`, and for `unknown` that
-is null by construction.
+The generated encoder writes `_$ReleaseTypeEnumMap[value]`, and an `unknown`
+whose spelling is Apple's-or-nothing maps to null — so a state Apple ships
+after a release would arrive, decode, and **go back out as `null`**, the word
+destroyed in precisely the case a reader needs it.
 
-So the field carries what the store sent, unchanged, and the enum is the typed
-*reading* of it. `documents_test.dart`'s round-trip test is what holds that:
-it decodes a document with a state nobody names and asserts the re-encoded
-document equals the one that came in.
+Giving `unknown` a spelling in *our* vocabulary fixes that at the root: it is a
+value rather than a hole, `"unknown"` round-trips, and the store's word is in
+the sibling field where nothing can lose it. `documents_test.dart` holds it —
+a document with a state nobody names, decoded and re-encoded, asserted equal.
 
-There is therefore no `@JsonEnum` on the store enums, only on `DocumentKind` —
-which is this package's own vocabulary and the one that genuinely travels.
+The generated codec is therefore back, on all four store enums as well as on
+`DocumentKind`, and the hand-written lookup shrinks to one job: reading the
+*store's* spelling into a member, which is what the encoder does once per
+field.
+
+**And it fixes a consistency failure the earlier shape had.** `usable`,
+`mayBecomeUsable` and `serving` are emitted as fields on the argument that a
+shell caller gets them too and a Dart getter structurally cannot reach them.
+The typed state was a Dart getter — so a shell caller had Apple's vocabulary
+and nothing else, which is what this whole document says it is ending.
 
 ### One place for each spelling
 
