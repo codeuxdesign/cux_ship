@@ -48,6 +48,49 @@ to choose. The document uses Apple's own field names, `videoDeliveryState`,
 `previewFrameImageState` and `previewFrameTimeCode`, so it can be read beside
 Apple's reference without a translation table; `done` is this package's own
 opinion over both states and says so in a field of its own.
+**`appstore previews` reads a version Apple has already taken.** It went through
+the same version lookup a *write* uses, so a live or in-review version answered
+"READY_FOR_SALE, which cannot be edited" — a refusal to look, landing on exactly
+the versions worth looking at, since a version stops being editable the moment
+it is submitted. `wait-previews` checks editability only when `--metadata` makes
+it write.
+
+**`wait-previews --metadata` asserts the poster frames, which it accepted the
+flag for and did not do.** The option was declared, validated, and then ignored:
+the tree was only loaded for `upload` and `promote`, so the assertion sat behind
+a condition nothing could satisfy and the command reported success having
+asserted nothing — on the one attribute that cannot be changed after approval,
+reached by following the instruction `upload --skip-waiting` prints.
+
+**`--json` answers with a document in two cases where it did not.** A version
+carrying no previews printed prose and returned, so a run that exited 0 handed
+its consumer a parse error; and `display` said `ready` for previews the same
+document reported as unfinished. Under `--json` every write's own report now
+goes to stderr, so stdout carries the document and nothing else.
+
+**A poster frame Apple has not cut is null in the document, not `""`.** Apple
+answers with an empty string, which is now collapsed where the preview is read
+rather than by each caller — the dartdoc has always promised `HH:MM:SS:FF` or
+null.
+
+**`serving` is about the rollout, not about availability — the doc comments now
+say so.** No behaviour changes and the mapping is unchanged: `completed ||
+inProgress => true` is the right split for what Play's `status` field *is*. What
+was wrong was three sentences describing it, all of which claimed the release
+was in front of users.
+
+A consumer promoted to Play production, this package answered `serving: true`,
+and the Play Console said **In review · Full rollout** — nobody could install
+it. **The Play Developer API carries no app-review state on any resource**, so
+this is not a gap to fill later: the developer's configured rollout is the only
+thing `status` can describe. Google's own documentation for `completed` says its
+APKs *"are being served to all users"*, which is false while a release is in
+review and is where the misreading starts.
+
+`PlayReleaseStatus.completed`, `PlayReleaseStatus.serving` and
+`PlayReleaseEntry.serving` now name the rollout rather than the audience.
+Reported by a consumer whose status grid printed `LIVE`; see
+`docs/design/rollout-state.md`.
 
 ## 4.5.0-dev.2
 

@@ -628,9 +628,48 @@ than reaching them through `package:cux_ship/verify.dart`. That re-export still
 works and is kept for compatibility, but it brings the whole CLI — googleapis
 included — into the lockfile of every contributor.
 
+### Exit codes
+
+**A caller that branches on status needs to know which numbers exist**, and
+until now they were only discoverable by grepping for the constants. The
+vocabulary is the whole binary's, not one per command — the same number never
+means two things:
+
+| | | |
+|---|---|---|
+| **0** | success | |
+| **1** | a failure | everything not named below |
+| **2** | there is work to do | `screenshots flatten --check` found unflattened screenshots |
+| **3** | upload collision | Apple or Play already holds this build number |
+| **4** | previews still ingesting | `appstore wait-previews` reached its deadline |
+| **64** | usage | the arguments were wrong; nothing ran |
+
+**2, 3 and 4 are the re-runnable ones**, in the sense that the run did what it
+could and the state is recoverable — but *that property is not what the number
+means*, and a caller must not treat "non-1 and non-0" as a category. Each code
+names **one condition**, deliberately: a wrapper branching on 2 must not have to
+know which subcommand produced it, which is why `uploadCollisionExit` took 3
+rather than reusing "there is work to do", and why the preview deadline took 4
+rather than reusing either.
+
+**The rule for anything added later, so a caller can size its risk:** an
+existing code never changes meaning, and a new condition takes a new number
+rather than joining an old one. So a future waiting command would exit 5, not 4
+— even though "a wait did not finish" describes both. Conflating two conditions
+under one number is the thing this vocabulary exists to prevent, and it applies
+to the future as much as to the past.
+
+The consequence for a caller is worth stating plainly: **enumerate the codes you
+accept, per command.** A general "this one is re-runnable" predicate written
+against 4 will silently swallow an unrelated condition the day a fifth code
+arrives. That is more tedious than a generic code and it is the honest shape —
+the alternative is a number whose meaning widens without anyone deciding it
+should.
+
 ### Reading the stores as JSON
 
-**`appstore builds`, `appstore versions` and `play tracks` take `--json`.** For
+**`appstore builds`, `appstore versions`, `appstore previews` and `play tracks`
+take `--json`.** For
 a caller that is not a Dart program — a shell `status`, `jq` at a terminal, a
 CI step reading one number:
 
