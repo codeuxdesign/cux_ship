@@ -88,32 +88,41 @@ AppStoreBuildsDocument appStoreBuildsDocument(
   display: listing.lines,
 );
 
-AppStoreBuildEntry _build(AppStoreBuild build) => AppStoreBuildEntry(
-  buildNumber: build.buildNumber,
-  buildNumberAsInt: build.buildNumberAsInt,
-  processingState: ProcessingState.read(build.processingState),
-  processingStateRaw: build.processingState,
-  // Apple's own string, and not [AppStoreBuild.uploadedAt] beside it: they are
-  // the same instant and Apple already spells it ISO-8601, so a second key
-  // would be a second source for one fact and a second thing to be wrong.
-  uploadedDate: build.uploadedDate,
-  expired: build.expired,
-  usable: build.usable,
-  // **The axis `usable` hides, and the one an operator's next action turns
-  // on.** A consumer built its Apple advice on `usable == false` and told the
-  // operator to wait for `VALID` in every case — right for `PROCESSING`, wrong
-  // for `FAILED` and `INVALID`, which are Apple refusing the binary and never
-  // change again.
-  //
-  // **The rule itself is on [ProcessingState], not here**, so the three copies
-  // of it already living in `app_store.dart` and `cli.dart` have somewhere to
-  // move to: the next change deletes them rather than reconciling a fourth.
-  needsNewUpload: ProcessingState.needsNewUpload(
-    ProcessingState.read(build.processingState),
+AppStoreBuildEntry _build(AppStoreBuild build) {
+  // **Read once.** It was read twice — for the field and again inside the
+  // derivation — which was harmless and still invited a reader to wonder
+  // whether the two could disagree. They cannot, and now they visibly cannot.
+  final state = ProcessingState.read(build.processingState);
+
+  return AppStoreBuildEntry(
+    buildNumber: build.buildNumber,
+    buildNumberAsInt: build.buildNumberAsInt,
+    processingState: state,
+    processingStateRaw: build.processingState,
+    // Apple's own string, and not [AppStoreBuild.uploadedAt] beside it: they
+    // are the same instant and Apple already spells it ISO-8601, so a second
+    // key would be a second source for one fact and a second thing to be
+    // wrong.
+    uploadedDate: build.uploadedDate,
     expired: build.expired,
-  ),
-  display: <String>[build.line],
-);
+    usable: build.usable,
+    // **The axis `usable` hides, and the one an operator's next action turns
+    // on.** A consumer built its Apple advice on `usable == false` and told
+    // the operator to wait for `VALID` in every case — right for
+    // `PROCESSING`, wrong for `FAILED` and `INVALID`, which are Apple
+    // refusing the binary and never change again.
+    //
+    // **The rule itself is on [ProcessingState], not here**, so the three
+    // copies of it already living in `app_store.dart` and `cli.dart` have
+    // somewhere to move to: the next change deletes them rather than
+    // reconciling a fourth.
+    needsNewUpload: ProcessingState.needsNewUpload(
+      state,
+      expired: build.expired,
+    ),
+    display: <String>[build.line],
+  );
+}
 
 /// `cux_ship appstore versions --json`.
 AppStoreVersionsDocument appStoreVersionsDocument(

@@ -428,6 +428,13 @@ class AppStoreBuildEntry {
   /// that processed cleanly** — expiry is terminal reached from a healthy
   /// state, and the older phrasing gave it the same answer as a healthy build.
   /// Null for a state this version does not name.
+  ///
+  /// **A refused build and an expired one are the same answer here, and
+  /// [expired] is what tells them apart.** Both are `usable: false,
+  /// needsNewUpload: true`, because the next action genuinely is the same —
+  /// upload another. What differs is what a human should be told: *rejected*
+  /// and *expired* are not the same sentence, and this pair alone cannot say
+  /// which. Read [expired] when the wording matters.
   final bool? needsNewUpload;
 
   /// The lines `cux_ship appstore builds` prints for this build.
