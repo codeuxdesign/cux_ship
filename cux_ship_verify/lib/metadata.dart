@@ -294,6 +294,48 @@ String? previewFrameTimeCodeProblem(String value, {double? frameRate}) {
   return null;
 }
 
+/// The one path among [candidates] that poses the video at [videoPath], or
+/// null when none does.
+///
+/// **Matched case-insensitively, because the video filter is.** The tree
+/// accepts `RIDE.MP4` as a preview, so an `existsSync` on a constructed
+/// `RIDE.MP4.timecode` is not the same question: on a case-sensitive
+/// filesystem a sidecar written `01-ride.mp4.TIMECODE` simply did not exist,
+/// the preview shipped at Apple's default, and the orphan check — which does
+/// compare case-insensitively — counted it as claimed and said nothing.
+///
+/// **Two candidates are an error rather than a coin flip.** On Linux both
+/// spellings can exist at once, and taking the first directory entry picks by
+/// an order the platform does not define. For a value that cannot be changed
+/// after approval, "whichever the filesystem listed first" is not an answer.
+///
+/// A pure function over paths rather than a directory walk, so that the
+/// ambiguity can be exercised on any platform — the case that motivates it is
+/// unreachable on a case-insensitive volume, where the second file cannot be
+/// created, and a guard nobody can watch fail is a guard nobody has checked.
+String? posterFrameSidecar(
+  String videoPath,
+  Iterable<String> candidates, {
+  String label = '',
+}) {
+  final wanted = '$videoPath$previewTimeCodeSuffix'.toLowerCase();
+  final matches = [
+    for (final candidate in candidates) ...{
+      if (candidate.toLowerCase() == wanted) candidate,
+    },
+  ];
+  if (matches.length > 1) {
+    throw MetadataException(
+      '${label.isEmpty ? videoPath : label} has ${matches.length} poster-frame '
+      'files differing only in case: '
+      '${matches.map(_basename).join(', ')}.\n'
+      '  Which one applies depends on the order the filesystem lists them, so '
+      'delete all but one.',
+    );
+  }
+  return matches.isEmpty ? null : matches.single;
+}
+
 /// [value] as a position in the video, given the rate its frames run at.
 Duration previewFrameOffset(String value, double frameRate) {
   final match = _timeCode.firstMatch(value)!;
@@ -854,17 +896,15 @@ String? _loadTimeCode(String name, File file, VideoInfo video) {
   // said. Consistent with the orphan check above, which compares the same way
   // — the two have to agree, or a sidecar is either missed by both or claimed
   // by one and ignored by the other.
-  final wanted = '${file.path}$previewTimeCodeSuffix'.toLowerCase();
-  File? sidecar;
-  for (final candidate in file.parent.listSync().whereType<File>()) {
-    if (candidate.path.toLowerCase() == wanted) {
-      sidecar = candidate;
-      break;
-    }
-  }
-  if (sidecar == null) {
+  final chosen = posterFrameSidecar(
+    file.path,
+    file.parent.listSync().whereType<File>().map((f) => f.path),
+    label: name,
+  );
+  if (chosen == null) {
     return null;
   }
+  final sidecar = File(chosen);
   final value = sidecar.readAsStringSync().trim();
   if (value.isEmpty) {
     throw MetadataException(

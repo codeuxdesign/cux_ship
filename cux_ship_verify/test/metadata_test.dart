@@ -581,6 +581,54 @@ void main() {
       expect(load, throwsMetadata(contains('past the end')));
     });
 
+    test('two sidecars differing only in case are an error', () {
+      // On a case-sensitive filesystem both can exist. Taking the first
+      // `listSync()` match picks by an order the platform does not define,
+      // and the orphan check counts both as claimed so neither is reported —
+      // so the poster frame, which cannot be changed after approval, would be
+      // decided by directory order.
+      writeValidTree();
+      writePreview('listings/en-US/previews/IPHONE_67/01-tour.mp4');
+      write(
+        'listings/en-US/previews/IPHONE_67/01-tour.mp4$previewTimeCodeSuffix',
+        '00:00:02:06',
+      );
+      write(
+        'listings/en-US/previews/IPHONE_67/01-tour.mp4.TIMECODE',
+        '00:00:09:00',
+      );
+      expect(load, throwsMetadata(contains('differing only in case')));
+    }, testOn: 'linux');
+
+    test('two sidecar candidates are an error on any platform', () {
+      // **The tree test above only runs on Linux**, because a
+      // case-insensitive volume cannot hold both files — so on the machine
+      // this is usually developed on, that guard can never be watched
+      // failing. The decision is therefore a pure function over paths, and
+      // this is the case that exercises it anywhere.
+      expect(
+        () => posterFrameSidecar('a/01-ride.mp4', [
+          'a/01-ride.mp4.timecode',
+          'a/01-ride.mp4.TIMECODE',
+        ]),
+        throwsMetadata(contains('differing only in case')),
+      );
+    });
+
+    test('one sidecar is found whatever its case', () {
+      expect(
+        posterFrameSidecar('a/01-ride.mp4', [
+          'a/other.mp4.timecode',
+          'a/01-ride.mp4.TIMECODE',
+        ]),
+        'a/01-ride.mp4.TIMECODE',
+      );
+      expect(
+        posterFrameSidecar('a/01-ride.mp4', ['a/other.mp4.timecode']),
+        isNull,
+      );
+    });
+
     test('an orphaned poster frame is refused rather than ignored', () {
       // Somebody renamed the video. The sidecar is not an unused file: it is
       // a deliberate choice of frame now applying to nothing, and the preview

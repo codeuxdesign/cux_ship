@@ -234,16 +234,19 @@ String? videoEncodingProblem(VideoInfo video, VideoRules rules) {
     // Apple. Printed for whatever `rules` it was handed, it would tell a Play
     // uploader that Google's cap is a reading of Apple's page — CONTRIBUTING's
     // "a claim about both stores is checked against both", one store early.
-    final band = rules.ambiguousMegabytes
+    // **Two conditions, not one.** The store's limit has to be the ambiguous
+    // kind *and* the file has to fall between the two readings of it — a file
+    // over both is refused by either reading, and hedging there would offer
+    // false hope. Collapsing these to the flag alone is a tempting tidy-up and
+    // it silently widens the hedge to every oversized file.
+    final binary = rules.maxFileSize / 1000000 * 1024 * 1024;
+    final band = rules.ambiguousMegabytes && video.fileSize <= binary
         ? ' — ${rules.store} writes this limit without units, and it is read '
               'here as decimal MB. Your file is under the binary reading, so '
               'it may well be accepted; refusing it here is the cheap error '
               'and a 24-hour rejection is not.'
         : '';
-    final binary = rules.maxFileSize / 1000000 * 1024 * 1024;
-    final ambiguous = rules.ambiguousMegabytes && video.fileSize <= binary;
-    return 'is $size; ${rules.store} takes at most $cap'
-        '${ambiguous ? band : ''}';
+    return 'is $size; ${rules.store} takes at most $cap$band';
   }
   return null;
 }
@@ -486,11 +489,18 @@ int _readAudioChannels(List<int> bytes, _Box moov) {
     final stsd = stbl == null
         ? null
         : _findBox(bytes, stbl.start, stbl.end, 'stsd');
-    if (stsd == null || _be32(bytes, stsd.start + 4) == 0) {
-      continue;
-    }
-    final entry = stsd.start + 8;
-    if (entry + 26 > stsd.end || entry + 26 > bytes.length) {
+    // **Bounded before the entry count is read, not after.** This had the two
+    // in the other order, so an `stsd` whose payload is under eight bytes read
+    // its count from the sibling box's header — or off the end of the buffer,
+    // as a `RangeError` escaping a metadata loader. Both are defect classes
+    // fixed elsewhere in this same file: `_readCodec` reading `stts` as a
+    // codec, and `_findBox`'s comment about what must never escape. `_be32`
+    // indexes raw where `_isType` guards, which is what makes the order matter.
+    final entry = stsd == null ? 0 : stsd.start + 8;
+    if (stsd == null ||
+        entry + 26 > stsd.end ||
+        entry + 26 > bytes.length ||
+        _be32(bytes, stsd.start + 4) == 0) {
       continue;
     }
     return _be16(bytes, entry + 24);

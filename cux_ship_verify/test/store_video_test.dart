@@ -166,6 +166,17 @@ void main() {
       expect(problem, contains('MOV_RESAVE_STEREO'));
     });
 
+    test('an audio stsd too short to hold a count reads as no audio', () {
+      // **Bounds before the read, and this had them the other way round.** An
+      // `stsd` whose payload is under eight bytes had its entry count read
+      // from the sibling box's header — or off the end of the buffer, as a
+      // RangeError escaping a metadata loader. `_readCodec` in the same file
+      // bounds first; this did not, in the same commit.
+      final video = readVideoInfo(mp4(shortAudioStsd: true));
+      expect(video, isNotNull, reason: 'the video track is still readable');
+      expect(video!.audioChannels, 0);
+    });
+
     test('a mono track is refused and says how many it found', () {
       final video = readVideoInfo(mp4(audioChannels: 1))!;
       final problem = videoEncodingProblem(video, appStorePreviewRules)!;

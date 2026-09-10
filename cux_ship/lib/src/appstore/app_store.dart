@@ -3010,30 +3010,94 @@ class AppStore {
     for (final preview in previews) {
       final name = preview.file.uri.pathSegments.last;
       final apple = held[name];
-      // A readback Apple has not filled in yet is not an answer. Empty string
-      // and null both mean "nothing to compare against" — see
-      // [_effectiveFrameTimeCode], which learned that distinction the hard way.
-      final stored = _effectiveFrameTimeCode(apple?.frameTimeCode);
       final wanted = preview.frameTimeCode;
 
-      if (wanted != null && stored != wanted && apple?.id != null) {
-        await writer.patch(
-          '/v1/appPreviews/${apple!.id}',
-          {
-            'data': {
-              'type': 'appPreviews',
-              'id': apple.id,
-              'attributes': {'previewFrameTimeCode': wanted},
-            },
-          },
-          describe:
-              '$previewType: $name posed at $wanted'
-              '${stored == null ? '' : ' (Apple had cut it at $stored)'}',
+      // **An asset Apple did not report back is not an asset to make claims
+      // about.** Falling through to the reporting line printed the *tree's*
+      // timecode as though it were the outcome — a confident sentence about a
+      // preview this run could not find. Same class as the blank print, with
+      // the opposite symptom.
+      if (apple == null || apple.id == null) {
+        stdout.writeln(
+          '      $name: Apple did not report this preview back, so what it is '
+          'posed at is unknown — check App Store Connect',
         );
         continue;
       }
-      stdout.writeln('      $name: ${describePreviewFrame(wanted ?? stored)}');
+
+      // A readback Apple has not filled in yet is not an answer. Empty string
+      // and null both mean "nothing to compare against" — see
+      // [_effectiveFrameTimeCode], which learned that distinction the hard way.
+      final stored = _effectiveFrameTimeCode(apple.frameTimeCode);
+
+      // **The annotation follows the tree, not the readback** — the same rule
+      // the commit line learned, and reintroduced here forty lines later. With
+      // no sidecar, `wanted` is null and `stored` is whatever Apple chose, so
+      // `describePreviewFrame(wanted ?? stored)` took the non-null branch and
+      // printed a bare `poster frame 00:00:05:01`: a default, reported as a
+      // decision. Apple's value is worth showing beside it, and never instead
+      // of it.
+      if (wanted == null) {
+        stdout.writeln(
+          '      $name: ${describePreviewFrame(null)}'
+          '${stored == null ? '' : ' (Apple cut it at $stored)'}',
+        );
+        continue;
+      }
+
+      if (stored == wanted) {
+        stdout.writeln('      $name: ${describePreviewFrame(wanted)}');
+        continue;
+      }
+
+      await writer.patch('/v1/appPreviews/${apple.id}', {
+        'data': {
+          'type': 'appPreviews',
+          'id': apple.id,
+          'attributes': {'previewFrameTimeCode': wanted},
+        },
+      }, describe: '$previewType: $name — asking for poster frame $wanted');
+
+      // **Read back, because the defect being fixed is that Apple accepts this
+      // attribute and ignores it.** Reporting success from the request would
+      // repeat, on the retry, the exact assumption that failed on the create —
+      // and on the one input nobody can correct after approval.
+      //
+      // It also closes the hole the grace period opens. That period exists to
+      // proceed when Apple never reports a frame state, which is precisely
+      // when the poster may not have been cut yet — and a PATCH that lands
+      // before ingestion is the thing this whole function exists because Apple
+      // discards. So the run does not claim the frame moved; it asks Apple and
+      // repeats the answer.
+      final confirmed = _effectiveFrameTimeCode(
+        await _readFrameTimeCode(apple.id!),
+      );
+      if (confirmed == wanted) {
+        stdout.writeln(
+          '      $name: ${describePreviewFrame(wanted)}'
+          '${stored == null ? '' : ', moved from Apple\'s $stored'}',
+        );
+      } else {
+        stdout.writeln(
+          '      $name: asked for poster frame $wanted and Apple still reports '
+          '${confirmed ?? 'none'} — the poster may still be being cut. '
+          'Re-running publishes nothing and asserts the frame again.',
+        );
+      }
     }
+  }
+
+  /// What Apple currently reports as one preview's poster frame.
+  ///
+  /// Its own read rather than a re-listing of the set: the caller wants one
+  /// asset's answer immediately after writing it, and a collection read would
+  /// be a larger request for a smaller question.
+  Future<String?> _readFrameTimeCode(String previewId) async {
+    final response = await client.get('/v1/appPreviews/$previewId');
+    final data = response['data'];
+    return data is Map<String, dynamic>
+        ? _attributes(data)['previewFrameTimeCode'] as String?
+        : null;
   }
 
   /// A `previewFrameTimeCode` Apple has actually chosen, or null.

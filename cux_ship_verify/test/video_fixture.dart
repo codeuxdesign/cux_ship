@@ -65,6 +65,10 @@ Uint8List mp4({
   /// Channels the sound track declares. 0 omits the track entirely, which
   /// is the silent-cut case Apple refuses with MOV_RESAVE_STEREO.
   int audioChannels = 2,
+
+  /// Truncates the audio `stsd` payload below the eight bytes its entry
+  /// count needs, so a reader that does not bound first reads past it.
+  bool shortAudioStsd = false,
   bool soundTrackFirst = false,
   bool emptyStsd = false,
 
@@ -193,18 +197,24 @@ Uint8List mp4({
       // revision and vendor, then channelcount at +24.
       ..._box('minf', [
         ..._box('stbl', [
-          ..._box('stsd', [
-            ...[0, 0, 0, 0], // version, flags
-            ..._be32(1), // one entry
-            ..._be32(36), // entry size
-            ...'mp4a'.codeUnits,
-            ...List<int>.filled(6, 0), // reserved
-            ...[0, 1], // data reference index
-            ...[0, 0], ...[0, 0], ..._be32(0), // version, revision, vendor
-            ...[0, audioChannels], // channelcount, at +24
-            ...[0, 16], // sample size
-            ..._be32(0),
-          ]),
+          if (shortAudioStsd) ...[
+            ..._box('stsd', [
+              ...[0, 0, 0], // three bytes: not even a full version+flags
+            ]),
+          ] else ...[
+            ..._box('stsd', [
+              ...[0, 0, 0, 0], // version, flags
+              ..._be32(1), // one entry
+              ..._be32(36), // entry size
+              ...'mp4a'.codeUnits,
+              ...List<int>.filled(6, 0), // reserved
+              ...[0, 1], // data reference index
+              ...[0, 0], ...[0, 0], ..._be32(0), // version, revision, vendor
+              ...[0, audioChannels], // channelcount, at +24
+              ...[0, 16], // sample size
+              ..._be32(0),
+            ]),
+          ],
         ]),
       ]),
     ]),
