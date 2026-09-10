@@ -127,6 +127,7 @@ AppStoreListingDiffDocument appStoreListingDiffDocument(
         entry.key: entry.value.keys.toList()..sort(),
     },
   ),
+  assets: outcome.assetChanges,
   appleOnlyLocales: outcome.appleOnlyLocales,
   display: display,
 );

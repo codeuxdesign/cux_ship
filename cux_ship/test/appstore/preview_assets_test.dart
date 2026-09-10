@@ -890,12 +890,15 @@ void main() {
           client,
           Writer(client, dryRun: false, out: captured),
           platform: AscPlatform.ios,
+          // The class carries the sink now, rather than the one method that
+          // `--json` could reach when this test was written.
+          out: captured,
         );
 
         final onStdout = await _printed(
           () => store.assertPosterFramesOn(_localization, 'IPHONE_67', [
             _video('promo.mp4', 'bytes', timeCode: '00:00:02:06'),
-          ], out: captured),
+          ]),
         );
 
         await captured.close();

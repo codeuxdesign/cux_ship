@@ -2248,7 +2248,7 @@ class VerifyCommand extends Command<void> {
 
     final display = <String>[
       for (final entry in checked) ...[
-        '    checked ${entry.what.padRight(11)}${entry.where}',
+        '    checked ${entry.what.padRight(12)}${entry.where}',
       ],
       if (problems.isEmpty)
         '==> release inputs are publishable'
@@ -2279,7 +2279,7 @@ class VerifyCommand extends Command<void> {
     }
 
     for (final entry in checked) {
-      stdout.writeln('    checked ${entry.what.padRight(11)}${entry.where}');
+      stdout.writeln('    checked ${entry.what.padRight(12)}${entry.where}');
     }
 
     if (problems.isEmpty) {

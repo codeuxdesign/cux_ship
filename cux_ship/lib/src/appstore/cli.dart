@@ -791,7 +791,7 @@ Future<void> publishReleaseNotes(
     return;
   }
   if (await store.isFirstVersion(app, version)) {
-    stdout.writeln(
+    store.say(
       '==> ${versionName ?? 'this'} is this app\'s first App Store version, '
       'so it has no\n'
       '    "What\'s New" — the release notes are skipped and the '
@@ -810,7 +810,7 @@ Future<void> publishReleaseNotes(
   // its notes, which is the thing this whole function exists to stop happening
   // in silence.
   if (declaredLocales.isNotEmpty && !declaredLocales.contains(locale)) {
-    stdout.writeln(
+    store.say(
       '==> release notes skipped: this tree declares '
       '${declaredLocales.join(", ")} and the notes would go to $locale.\n'
       '    Pass --locale ${declaredLocales.first} to publish them there.',
@@ -818,11 +818,11 @@ Future<void> publishReleaseNotes(
     return;
   }
 
-  stdout.writeln('==> release notes');
+  store.say('==> release notes');
   var releaseNotes = notes;
   if (needsStrippingForApple(notes)) {
     releaseNotes = stripForApple(notes);
-    stdout.writeln(
+    store.say(
       '    the App Store rejects emoji in "What\'s New", so these are '
       'stripped:\n'
       '      ${_removedCharacters(notes, releaseNotes)}\n'
@@ -871,6 +871,8 @@ class ListingOutcome {
     required this.app,
     required this.versionLevel,
     required this.appleOnlyLocales,
+    required this.versionComparisonSkipped,
+    required this.assetChanges,
   });
 
   /// The `appStoreVersions` record written against, or null when the tree
@@ -899,8 +901,41 @@ class ListingOutcome {
   /// told the listing matches.
   final List<String> appleOnlyLocales;
 
+  /// Set when the version-scoped half could not be compared at all.
+  ///
+  /// **A dry run creates no version**, so `ensureVersion` returns null when
+  /// Apple holds neither the named version nor an editable one to rename — the
+  /// state of every dry run before a release is prepared. Nothing
+  /// version-scoped is then read, and in reality every field of it would be
+  /// written.
+  final bool versionComparisonSkipped;
+
+  /// Screenshot and preview sets that differ from the tree.
+  ///
+  /// **Assets were compared and left out of the answer.** The document
+  /// promised `version`, `app` and *assets*; the first two were carried and
+  /// the third was not, so replacing a screenshot and changing nothing else
+  /// reported `matches: true`.
+  final List<String> assetChanges;
+
   /// Whether anything at all would change.
-  bool get matches => (app?.isEmpty ?? true) && (versionLevel?.isEmpty ?? true);
+  ///
+  /// **"Not compared" is not "nothing differs", and this returned true for
+  /// it.** With no version to compare against, [versionLevel] stays null and
+  /// an `isEmpty ?? true` reads absence as agreement — so the one field this
+  /// document exists for answered the opposite of the truth on an ordinary
+  /// run. The prose beside it was honest the whole time: it prints *(dry run
+  /// created no version, so the fields below are skipped)*.
+  ///
+  /// Nothing was asserted about the asset half either, and that is stated in
+  /// [AppStoreListingDiffDocument.matches] rather than papered over here:
+  /// screenshots and previews are compared, but by methods that report their
+  /// findings as prose and return `void`.
+  bool get matches =>
+      !versionComparisonSkipped &&
+      assetChanges.isEmpty &&
+      (app?.isEmpty ?? true) &&
+      (versionLevel?.isEmpty ?? true);
 
   /// Locale to the field names differing in it, both scopes merged.
   ///
@@ -958,6 +993,12 @@ Future<ListingOutcome> _publishAscListing(
   /// Upload the previews and stop, leaving the ingestion wait and the
   /// poster-frame assertion to `appstore wait-previews`.
   bool skipPreviewWait = false,
+
+  /// Whether to report the effective release type, or leave it to the caller.
+  ///
+  /// False from `promote`, which resolves the version itself and has already
+  /// printed the line by the time it calls this — see there.
+  bool reportReleaseType = true,
 
   /// What the version should do once Apple approves, or null to leave it.
   ///
@@ -1125,7 +1166,12 @@ Future<ListingOutcome> _publishAscListing(
   // passed, for that reason exactly. Suppressed on a dry run, where nothing
   // was written and the record's current value would be a claim a real run
   // falsifies.
-  if (version != null && !store.writer.dryRun) {
+  //
+  // **And suppressed when the caller prints it itself.** A promote resolves
+  // the version, reports the release type, and *then* publishes the listing —
+  // which comes back through here and reported it a second time. The line is
+  // this function's only when nobody upstream has already said it.
+  if (version != null && !store.writer.dryRun && reportReleaseType) {
     final effective =
         (version['attributes'] as Map<String, dynamic>?)?['releaseType'];
     if (effective is String) {
@@ -1321,6 +1367,10 @@ Future<ListingOutcome> _publishAscListing(
     app: changes,
     versionLevel: versionLevel,
     appleOnlyLocales: appleOnlyLocales,
+    // Set exactly where the prose says the fields are skipped, so the two
+    // cannot disagree about whether a comparison happened.
+    versionComparisonSkipped: needsVersion && version == null,
+    assetChanges: List<String>.unmodifiable(store.assetChanges),
   );
 }
 
@@ -2136,7 +2186,16 @@ Future<void> runAsc(
     dryRun: dryRun,
     out: jsonOutput ? stderr : null,
   );
-  final store = AppStore(client, writer, platform: platform);
+  // **One sink for the whole class, set here.** `--json` reaches into
+  // `AppStore` now that `upload --dry-run --json` exists, and routing the
+  // reachable lines has been tried three times: each round covered what was
+  // reachable then, and the next flag to reach a new block undid it.
+  final store = AppStore(
+    client,
+    writer,
+    platform: platform,
+    out: jsonOutput ? stderr : null,
+  );
   started = store;
 
   if (dryRun) {
@@ -2345,13 +2404,12 @@ Future<void> runAsc(
             continue;
           }
           for (final entry in locale.previews.entries) {
+            // The report follows [AppStore.out], set once where the store
+            // is built — `--json` points it at stderr.
             await store.assertPosterFramesOn(
               localization,
               entry.key,
               entry.value,
-              // Progress, so stderr under `--json` — and this one *writes*,
-              // so its report is the only record of what moved.
-              out: args.flag('json') ? stderr : null,
             );
           }
         }
@@ -2680,7 +2738,7 @@ Future<void> runAsc(
     // being shipped for the copy to be ahead of, and moving the live page now
     // is the entire purpose of the command.
     if (publish == ListingPublish.none && metadata != null) {
-      stdout.writeln(
+      (jsonOutput ? stderr : stdout).writeln(
         '==> listing: untouched — an upload does not publish it.\n'
         '    Publish deliberately with --metadata and no artifact.',
       );
@@ -2746,7 +2804,7 @@ Future<void> runAsc(
         // genuinely not publishable here, but saying nothing is what the
         // original bug did, and the whole point is that a flag taken and
         // dropped must not look like a command that did what was asked.
-        stdout.writeln(
+        (jsonOutput ? stderr : stdout).writeln(
           '==> release notes skipped: this tree declares nothing Apple scopes '
           'to a version,\n'
           '    so no version was created to carry them. Add version-scoped '
@@ -2785,12 +2843,41 @@ Future<void> runAsc(
             platform: platform,
             bundleId: bundleId,
             versionName: published.version == null ? null : versionName,
+            // **Never empty, which README.md promises of every `display` and
+            // this one broke.** The lines came only from `changedByLocale`, so
+            // a difference in a field that is not per-locale — `copyright`, a
+            // category, an age rating — rendered `matches: false` beside an
+            // empty array. A caller following the documented advice, *print
+            // those lines rather than rendering the fields yourself*, showed
+            // nothing at all for a genuine mismatch.
             display: <String>[
               if (published.matches)
                 'every field this tree declares already matches the App Store'
               else ...[
+                if (published.versionComparisonSkipped) ...[
+                  'no $versionName on the App Store yet, so nothing '
+                      'version-scoped could be compared — all of it would be '
+                      'written',
+                ],
                 for (final entry in published.changedByLocale.entries) ...[
                   '${entry.key}: ${entry.value.join(", ")}',
+                ],
+                for (final field
+                    in published.versionLevel?.copyright == null
+                        ? const <String>[]
+                        : const <String>['copyright']) ...['version: $field'],
+                if (published.versionLevel?.reviewDetails != null) ...[
+                  'version: reviewDetails',
+                ],
+                if (published.app?.categories.isNotEmpty ?? false) ...[
+                  'app: categories',
+                ],
+                if (published.app?.ageRating != null) ...['app: ageRating'],
+                if (published.app?.contentRights != null) ...[
+                  'app: contentRights',
+                ],
+                for (final asset in published.assetChanges) ...[
+                  '$asset differ',
                 ],
               ],
               for (final locale in published.appleOnlyLocales) ...[
@@ -2962,6 +3049,8 @@ Future<void> runAsc(
             locale,
             versionName,
             fail,
+            // Already reported above, against the same record.
+            reportReleaseType: false,
           );
         }
 

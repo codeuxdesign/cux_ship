@@ -72,6 +72,13 @@ flag, and printed whether or not one was passed — because the case worth
 naming is the run where nobody did. Reported by a consumer running exactly that
 flow.
 
+**`matches` covers all three scopes, and is false when it could not compare.**
+It shipped covering the version and app text only, so replacing a screenshot
+reported `matches: true` — and a dry run for a version Apple does not hold yet
+reported `true` as well, reading "not compared" as "nothing differs" while the
+prose beside it said the fields were skipped. Assets are recorded now and
+carried as `assets`, and an unmade comparison is never an agreement.
+
 **`appstore upload --metadata … --dry-run --json`.** One document saying
 whether the App Store still shows what the repository declares, and where it
 does not: `matches`, plus the changed field names per locale, split into

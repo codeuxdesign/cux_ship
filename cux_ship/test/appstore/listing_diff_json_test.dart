@@ -31,10 +31,22 @@ void _write(String relative, String contents) {
 /// Canned App Store Connect holding one version and whatever localizations a
 /// case gives it.
 class _FakeClient implements AscClient {
-  _FakeClient({this.localizations = const []});
+  _FakeClient({this.localizations = const [], this.holdsVersion = true});
 
   /// `appStoreVersionLocalizations` Apple already holds for the version.
   final List<Map<String, dynamic>> localizations;
+
+  /// **Whether Apple holds a 1.1.6 at all, and whether it holds anything
+  /// editable.** False is the state right after a release goes
+  /// `READY_FOR_SALE`: no version by that name, and none to rename — so a dry
+  /// run creates nothing and has nothing to compare against.
+  ///
+  /// Settable because the fake used to answer the same record to the filtered
+  /// lookup *and* the unfiltered editable-version scan, which made
+  /// `ensureVersion` return non-null on every case in this file. The branch
+  /// where it returns null was unreachable from the whole suite, and that is
+  /// the branch where `matches` was wrong.
+  final bool holdsVersion;
 
   final patched = <String>[];
   final posted = <String>[];
@@ -58,6 +70,24 @@ class _FakeClient implements AscClient {
       ];
     }
     if (path.endsWith('/appStoreVersions')) {
+      if (!holdsVersion) {
+        return const [];
+      }
+      // **`filter[versionString]` is honoured**, because `ensureVersion` asks
+      // twice with different queries: once for the named version, and once
+      // unfiltered to find an editable one it could rename.
+      //
+      // No case below selects on it — every one asks for 1.1.6, and the
+      // not-held case is `holdsVersion: false`, which returns before this. So
+      // a mutation removing it survives, and that is recorded rather than
+      // dressed up: it is here because a fake that answers the same record to
+      // two different questions is the shape CONTRIBUTING names, and because
+      // the next case to ask for a second version name would otherwise be
+      // written against a fake that cannot tell them apart.
+      final wanted = query?['filter[versionString]'];
+      if (wanted != null && wanted != '1.1.6') {
+        return const [];
+      }
       return [
         {
           'type': 'appStoreVersions',
@@ -260,6 +290,34 @@ void main() {
       (document['display'] as List).join('\n'),
       contains('de-DE'),
       reason: 'unclaimed is not the same as invisible',
+    );
+  });
+
+  test('a version that would be created is not "already matches"', () async {
+    // **The field the document exists for, answering the opposite of the
+    // truth.** A dry run cannot create a version, so `ensureVersion` returns
+    // null and the version-scoped comparison never runs — and `matches` read
+    // "not compared" as "nothing differs". The prose on the same run is
+    // honest: it prints *(dry run created no version, so the fields below are
+    // skipped)*. Only the document lied.
+    //
+    // The state is ordinary rather than exotic: it is every dry run for a
+    // version that does not exist yet, which is every run before a release is
+    // prepared. `ready` would have reported the store in sync while every
+    // description, keyword and screenshot was still to be written.
+    final client = _FakeClient(holdsVersion: false);
+
+    final said = await _upload(client);
+
+    final document = _document(said);
+    expect(
+      document['matches'],
+      isFalse,
+      reason: 'nothing was compared, which is not the same as nothing differs',
+    );
+    expect(
+      (document['display'] as List).join('\n'),
+      isNot(contains('already matches')),
     );
   });
 

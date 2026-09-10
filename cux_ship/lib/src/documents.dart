@@ -1331,6 +1331,7 @@ class AppStoreListingDiffDocument {
     required this.matches,
     required this.version,
     required this.app,
+    required this.assets,
     required this.appleOnlyLocales,
     required this.display,
   });
@@ -1354,6 +1355,17 @@ class AppStoreListingDiffDocument {
 
   /// **The answer**: true when nothing this repository declares would change.
   ///
+  /// Covers all three scopes — [version], [app] and [assets]. It shipped
+  /// covering the first two, so a replaced screenshot reported `true`.
+  ///
+  /// **False whenever the comparison could not be made**, which is not the
+  /// same statement as "something differs" and is deliberately reported the
+  /// same way. A dry run creates no version, so a tree whose version Apple
+  /// does not hold yet has nothing to compare against — and in that state
+  /// every version-scoped field would in fact be written, so `false` is also
+  /// the truthful answer. It returned `true` there, reading absence as
+  /// agreement, on every dry run before a release is prepared.
+  ///
   /// Read [appleOnlyLocales] beside it before saying the listing matches.
   final bool matches;
 
@@ -1363,6 +1375,13 @@ class AppStoreListingDiffDocument {
   /// App-scoped differences — categories, age rating, content rights, and the
   /// app-info localizations.
   final ListingChangeSet app;
+
+  /// Screenshot and preview sets that differ, as `<type> <kind>`.
+  ///
+  /// **Not a [ListingChangeSet], because an asset set has no field names.**
+  /// What differs is the set itself — its files, or a preview's poster frame —
+  /// and naming the type and kind is what a reader acts on.
+  final List<String> assets;
 
   /// Locales Apple holds that the tree never mentions.
   ///

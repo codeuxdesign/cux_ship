@@ -57,7 +57,7 @@ void main() {
 
     final result = _verify([]);
     expect(result.exitCode, 0, reason: '${result.stdout}${result.stderr}');
-    expect('${result.stdout}', contains('section    1.0.1 (pubspec.yaml)'));
+    expect('${result.stdout}', contains('section     1.0.1 (pubspec.yaml)'));
   });
 
   test('the summary names the check, not a result it did not get', () {
@@ -66,7 +66,7 @@ void main() {
 
     final result = _verify([]);
     expect(result.exitCode, 1, reason: '${result.stdout}${result.stderr}');
-    expect('${result.stdout}', contains('section    1.0.1 (pubspec.yaml)'));
+    expect('${result.stdout}', contains('section     1.0.1 (pubspec.yaml)'));
     expect('${result.stdout}', isNot(contains('has its section')));
   });
 

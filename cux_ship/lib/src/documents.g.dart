@@ -385,6 +385,7 @@ AppStoreListingDiffDocument _$AppStoreListingDiffDocumentFromJson(
   matches: json['matches'] as bool,
   version: ListingChangeSet.fromJson(json['version'] as Map<String, dynamic>),
   app: ListingChangeSet.fromJson(json['app'] as Map<String, dynamic>),
+  assets: (json['assets'] as List<dynamic>).map((e) => e as String).toList(),
   appleOnlyLocales: (json['appleOnlyLocales'] as List<dynamic>)
       .map((e) => e as String)
       .toList(),
@@ -402,6 +403,7 @@ Map<String, dynamic> _$AppStoreListingDiffDocumentToJson(
   'matches': instance.matches,
   'version': instance.version.toJson(),
   'app': instance.app.toJson(),
+  'assets': instance.assets,
   'appleOnlyLocales': instance.appleOnlyLocales,
   'display': instance.display,
 };

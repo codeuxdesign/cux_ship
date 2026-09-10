@@ -145,9 +145,43 @@ void main() {
 
     final document = _document(_verify());
 
+    // **The column is twelve wide, not eleven.** `data-safety` is exactly
+    // eleven characters, so padding to eleven put its path flush against its
+    // name — `checked data-safetystore/data-safety.json`. The width is pinned
+    // here because the only other thing that would catch it is somebody
+    // reading a report they had no reason to doubt.
     final display = (document['display'] as List).cast<String>();
-    expect(display, contains('    checked section    1.0.1 (pubspec.yaml)'));
+    expect(display, contains('    checked section     1.0.1 (pubspec.yaml)'));
     expect(display, contains('==> release inputs are publishable'));
+  });
+
+  test('every checked kind keeps a separator, including the longest', () {
+    // **`data-safety` is exactly as long as the column was wide.** Padding to
+    // eleven made it a no-op, so the report read `checked data-safetystore/…`
+    // — the name and the path run together, in the one output whose entire
+    // purpose is telling a reader what was inspected.
+    //
+    // Only `section` was asserted before, and it pads correctly at any width
+    // over seven, so the guard could not see it. This walks every kind rather
+    // than adding the one that broke, because the next label to reach eleven
+    // characters would break the same way.
+    _write('pubspec.yaml', 'name: consumer\nversion: 1.0.1+2\n');
+    _write('CHANGELOG.md', '# Changelog\n\n## 1.0.1\n\n- Next\n');
+    _write('store/play/data-safety.csv', 'a,b\n1,2\n');
+
+    final document = _document(_verify());
+
+    for (final entry in document['checked'] as List) {
+      final what = (entry as Map<String, dynamic>)['what'] as String;
+      final line = (document['display'] as List).cast<String>().firstWhere(
+        (l) => l.contains(what),
+      );
+      expect(
+        line,
+        contains('$what '),
+        reason: '$what runs into its value with no separator',
+      );
+    }
   });
 
   test('nothing to check is still a refusal, not an empty document', () {
