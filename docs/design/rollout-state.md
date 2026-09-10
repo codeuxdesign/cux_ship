@@ -1,20 +1,19 @@
 # Release and rollout state: what a publishing tool should answer
 
-Status: **proposed**, 10 September 2026 — **implemented on a branch and not
-merged**, which is a state the index has no word for.
+Status: **built**, 10 September 2026 — the Play rollout fraction, the four
+`AppStoreState` members and a version's build number are on `main`.
 
-`tool/status.sh` has four: `open`, `proposed`, `decided`, `built`, and
-`design_status_test.dart` fails a document that invents a fifth, so this line
-cannot say what is actually true. `built` would claim something that has not
-landed; `proposed` understates a Play half that is written, tested and twice
-reviewed. **`proposed` is the one to be wrong with**, because it understates
-rather than overstates and the correction is a commit away — where a premature
-`built` is a claim `tool/status.sh` exists to keep honest, believed by anyone
-reading the index rather than the file. Move it to `built` when this merges.
+**Two sections below carry their own status and one of them is still open**, so
+this word is a claim about the document's subject rather than about every
+argument in it: `tool/status.sh open` is the list, not the top of each file.
 
-Recorded rather than fixed: whether the vocabulary wants a fifth word is a
-question about the index and not about this document, and answering it here
-would be a design changing the tool that reports on it.
+This line said `proposed` while the work sat on a branch, and the note under it
+argued for the lesser of two wrong words — the index has four (`open`,
+`proposed`, `decided`, `built`) and `design_status_test.dart` refuses a fifth,
+so *implemented and not merged* could not be said. Whether the vocabulary wants
+a fifth word is a question about the index rather than about this document, and
+it stopped being urgent the moment this merged. Recorded because the next
+document to sit in that state will meet it again.
 
 Read against 4.3.0 as published, which is the version that settled the shape
 anything new here has to fit into. The
@@ -565,10 +564,23 @@ the table above.
 
 ### Apple's phased release: what it would cost, and the fraction not to invent
 
-Status: **open**, 10 September 2026. The cost is measured below and the
-fraction rule is settled; what is missing is a consumer that reads it.
-`--phased` is a flag on `promote`, and nothing in this repository establishes
-that anyone passes it.
+Status: **open**, 10 September 2026 — **and open on nothing but a caller.** The
+cost is now near zero, the mechanism ships, and the fraction rule is settled.
+`--phased` is a flag on `promote`; nothing in this repository establishes that
+anyone passes it, and the consumer confirmed it does not and has no plan to.
+
+**Everything the cost argument below was about has been built for something
+else.** `AscClient.getAllWithIncluded` exists, `appStoreVersions` already sends
+an `include`, and adding the phased release is
+`include=build,appStoreVersionPhasedRelease` plus a second resolver beside the
+build's. The section is kept as written because the *reasoning* about the
+fraction is the durable part and because the cost estimates in it were wrong
+three times in three different directions — which is the more useful record.
+
+**Cheap is not why a field gets added.** That is the whole argument for leaving
+this open now: read-api.md §"No field is missing" says what a consumer *uses*
+is the evidence and what it might need is not, and a field costing nothing does
+not change which list this is on.
 
 `cux_ship appstore promote --phased` **writes**
 `/v1/appStoreVersionPhasedReleases` and nothing in this package ever reads it
@@ -576,9 +588,11 @@ back. So the Apple analogue of a staged rollout is a thing this tool can start
 and cannot observe — which is a sharper gap than Play's, and a more expensive
 one to close.
 
-**Cost, measured rather than guessed.** `AscClient.getAll` follows `links.next`
-and accumulates `body['data']`; it discards `body['included']` entirely.
-`appStoreVersions` is a `getAll`. So carrying the phased release means either
+**Cost, measured rather than guessed — and stale, kept for the record.** When
+this was written `AscClient.getAll` followed `links.next`, accumulated
+`body['data']` and discarded `body['included']` entirely, and
+`appStoreVersions` was a plain `getAll`. Neither is true now. As it stood, then,
+carrying the phased release meant either
 
 - teaching `getAll` to collect `included` across pages — a change to the one
   client every read in this package goes through, for one caller; or
