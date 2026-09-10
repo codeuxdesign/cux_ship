@@ -183,6 +183,31 @@ enum AppStoreState {
   prepareForSubmission('prepareForSubmission', 'PREPARE_FOR_SUBMISSION'),
   readyForReview('readyForReview', 'READY_FOR_REVIEW'),
   waitingForReview('waitingForReview', 'WAITING_FOR_REVIEW'),
+  // **The four below were Apple's all along, and this enum simply never named
+  // them.** That is a different thing from the case [unknown] is for, and the
+  // difference decides whether adding them is allowed: the rule above forbids
+  // growing this enum *because a store added a value*, since that breaks a
+  // consumer's exhaustive switch on Apple's release schedule rather than on
+  // this package's. None of these is new. `IN_REVIEW` appears twice in
+  // `app_store.dart`'s comments, once in `cli.dart` and seven times in
+  // `app_info_states_test.dart`; `REPLACED_WITH_NEW_VERSION` is a string
+  // constant in `publishedAppInfoStates` in that same file.
+  //
+  // What that cost while they were absent: a version Apple is looking at right
+  // now decoded as `unknown`, whose own doc comment tells the reader Apple
+  // sent something this version does not name — so the single most ordinary
+  // state in a release read as a state nobody had ever seen.
+  //
+  // **And no derived `withApple` beside them, deliberately.** `IN_REVIEW` and
+  // `PENDING_APPLE_RELEASE` are both "wait" and are not the same sentence —
+  // one may still be rejected, the other cannot — so a boolean answering
+  // "waiting on Apple" for both would hide the difference an operator's report
+  // turns on. That is `usable` hiding `needsNewUpload`, one resource over.
+  // docs/design/rollout-state.md argues it.
+  inReview('inReview', 'IN_REVIEW'),
+  pendingAppleRelease('pendingAppleRelease', 'PENDING_APPLE_RELEASE'),
+  processingForAppStore('processingForAppStore', 'PROCESSING_FOR_APP_STORE'),
+  replacedWithNewVersion('replacedWithNewVersion', 'REPLACED_WITH_NEW_VERSION'),
   // Named on a consumer's evidence rather than this repository's: their tree
   // has met it, and `app_info_states_test.dart` here carries it too.
   accepted('accepted', 'ACCEPTED'),
@@ -326,6 +351,73 @@ enum PlayReleaseStatus {
   static bool? serving(PlayReleaseStatus? status) => switch (status) {
     completed || inProgress => true,
     halted || draft => false,
+    statusUnspecified || unknown || null => null,
+  };
+
+  /// The fraction of the track's audience a release in [status] has been given.
+  ///
+  /// **Play omits its own `userFraction` exactly when it means one**, and that
+  /// is the hole this fills. Google sets the field only for [inProgress] and
+  /// [halted], so a [completed] rollout carries no fraction at all, and a
+  /// caller reading Play's number alone gets `null` for the release that
+  /// reached everybody, then has to learn from Google's documentation that
+  /// null-beside-`completed` is what 100% looks like. That is the deferral
+  /// [serving] exists to end, one field down.
+  ///
+  /// **Where the range comes from, because the values below lean on it.**
+  /// Google's own words for `userFraction`, reaching this package through
+  /// `googleapis` 16.0.0's dartdoc, which `discoveryapis_generator` writes from
+  /// the Android Publisher v3 discovery document:
+  ///
+  /// > Fraction of users who are eligible for a staged release. 0 \< fraction
+  /// > \< 1. Can only be set when status is "inProgress" or "halted".
+  ///
+  /// **Two honest caveats about that sentence.** It is phrased as a constraint
+  /// on what may be *set*, so it binds a write directly and a read only by
+  /// inference. And nothing in this repository has measured it — there is no
+  /// observation of a live account here, unlike the App Store states next door.
+  ///
+  /// **So the values below do not depend on it for correctness, and that is
+  /// the second reason [PlayReleaseEntry.userFraction] is carried rather than
+  /// folded away.** If Play ever answered `1.0` for an [inProgress] release,
+  /// this would return `1.0` — the same number it infers for [completed] — and
+  /// the two would still be distinguishable, because **this is a function of
+  /// [PlayReleaseEntry.status] and [PlayReleaseEntry.userFraction] and the
+  /// document carries both of its inputs.** A caller reading `status` sees
+  /// which branch produced the number: `completed` means the `1.0` is ours,
+  /// `inProgress` means it is Play's.
+  ///
+  /// **The status is the discriminator, and not the raw field's nullness** —
+  /// which is the tempting answer and is only true while the quoted sentence
+  /// holds in its *second* half. Were Play to set `userFraction` on a
+  /// [completed] release, ours and a full rollout would both read `1.0` beside
+  /// `1.0`, and nullness would have stopped separating them. Nullness is a
+  /// convenience for the common case; `status` is the guarantee.
+  ///
+  /// Reading [PlayReleaseEntry.audienceFraction] alone is what the range
+  /// buys. Reading it beside `status` needs nothing documented about the
+  /// value.
+  ///
+  /// `1.0` for [completed] and `0.0` for [draft] — both stated by Play's
+  /// status rather than measured by it. [PlayReleaseEntry.userFraction] for
+  /// [inProgress] and for [halted]: a halted release's fraction is the one it
+  /// stopped at, and the users who already took it keep it.
+  ///
+  /// Null for [statusUnspecified], for [unknown] and for an absent status, on
+  /// the same terms as every other derived answer here — **and null for an
+  /// [inProgress] or [halted] release Play sent no fraction for**, which is
+  /// Play contradicting its own documentation and not a case to guess at.
+  ///
+  /// **It measures who has it, not what the rollout is doing**, which is why
+  /// it is safe to read beside [serving] in either order: a [halted] release
+  /// is `serving: false` with a non-zero fraction, and both are true at once.
+  static double? audienceFraction(
+    PlayReleaseStatus? status, {
+    required double? userFraction,
+  }) => switch (status) {
+    completed => 1.0,
+    draft => 0.0,
+    inProgress || halted => userFraction,
     statusUnspecified || unknown || null => null,
   };
 }
@@ -588,6 +680,17 @@ class AppStoreVersionEntry {
   ///
   /// **The question, rather than the vocabulary** — a caller asking this never
   /// has to learn which of Apple's dozen states are writable.
+  ///
+  /// **And the only derived answer this entry carries**, which is deliberate
+  /// and was decided against a draft that added a second.
+  ///
+  /// "Is it still in review" looks like the next one to add, and
+  /// [appStoreState] answers it directly now that [AppStoreState.inReview]
+  /// exists. A boolean over the states was designed, argued to three drafts
+  /// and dropped: the one consumer that would read it renders **five** distinct
+  /// outcomes across the review and release states, so any boolean is a
+  /// coarsening of what it already prints rather than an answer it lacks.
+  /// docs/design/rollout-state.md records the drafts and the evidence.
   final bool editable;
 
   /// The two lines `cux_ship appstore versions` prints for this version: the
@@ -642,6 +745,8 @@ class PlayReleaseEntry {
     required this.versionCodes,
     required this.newestVersionCode,
     required this.serving,
+    required this.userFraction,
+    required this.audienceFraction,
     required this.display,
   });
 
@@ -674,13 +779,24 @@ class PlayReleaseEntry {
   /// The highest of [versionCodes], or null when the release serves none.
   final int? newestVersionCode;
 
-  /// Whether this release is in front of any of the track's audience, or null
-  /// when that cannot be said.
+  /// Whether Play is still handing this release to new users, or null when
+  /// that cannot be said.
   ///
   /// **The question, rather than the vocabulary**: true for a completed
   /// rollout and for one still in progress, false for a halted one and for an
   /// unsent draft. A caller asking this never has to learn Play's status
   /// strings.
+  ///
+  /// **"Still being handed out" and not "in front of anybody", and the
+  /// difference is [PlayReleaseStatus.halted].** This field said the second
+  /// thing until
+  /// [userFraction] arrived beside it and made the two visibly disagree:
+  /// Google's own wording for a halted release is *"Users who already have
+  /// these APKs are unaffected"*, so a halted rollout **is** in front of the
+  /// fraction that installed it, while this answers `false`. The `false` is
+  /// right — what an operator asking "is this rollout stopped" means is
+  /// whether anyone new is still getting it — and the sentence describing it
+  /// was the part that was wrong. Read [audienceFraction] for who has it.
   ///
   /// **Null rather than false for a status this version does not name**, and
   /// for [PlayReleaseStatus.statusUnspecified], which is Play declining to
@@ -694,15 +810,76 @@ class PlayReleaseEntry {
   /// A caller wanting the conservative reading writes `serving != true`; one
   /// that wants to say so writes `serving == null`.
   ///
-  /// **It does not say how much.** A staged rollout's *fraction* is not in
-  /// this document, so `inProgress` means "some of the audience", not "all of
-  /// it" — and `serving == true` cannot tell a 1% rollout from a finished one.
+  /// **It does not say how much.** `inProgress` means "some of the audience"
+  /// rather than "all of it", so `serving == true` cannot tell a 1% rollout
+  /// from a finished one. [audienceFraction] is the field that can, and it is
+  /// a separate one on purpose: a three-valued boolean that also carried a
+  /// magnitude would be two answers under one key.
   ///
   /// **And it is not sufficient alone.** [PlayReleaseStatus.halted] and
   /// [PlayReleaseStatus.draft] are both `false` and call for different advice:
   /// one was stopped by a person, the other never started. Read [statusKnown]
   /// when the next action differs.
   final bool? serving;
+
+  /// **Play's `userFraction`, exactly as sent — the authoritative value.**
+  /// Null when Play sent none.
+  ///
+  /// Google sets it only for [PlayReleaseStatus.inProgress] and
+  /// [PlayReleaseStatus.halted], and documents it as `0 < fraction < 1` —
+  /// cited, and caveated, on [PlayReleaseStatus.audienceFraction]. So **null
+  /// here is not "no rollout"**: a [PlayReleaseStatus.completed] release
+  /// carries no fraction precisely because it reached everybody, which is the
+  /// one case where reading this field instead of [audienceFraction] gives the
+  /// opposite of the right answer.
+  ///
+  /// **And it is load-bearing even for a caller that never reads it.** It is
+  /// the second input to [audienceFraction], so carrying it is what lets a
+  /// caller recompute that field rather than trust it — and
+  /// [PlayReleaseStatus.audienceFraction] states why the recomputation, not
+  /// this field's nullness, is what survives Google's documented range being
+  /// wrong.
+  ///
+  /// **Unread and load-bearing are compatible**, which is worth saying because
+  /// the two get filed together. A field nobody reads can usually be deleted
+  /// at no cost to anyone; deleting this one would leave [audienceFraction]
+  /// checkable only against a sentence in a dependency's generated dartdoc.
+  /// Unread is a fact about callers, load-bearing is a fact about the
+  /// document, and only the first is an argument about whether a field earns
+  /// its place.
+  ///
+  /// Spelled with Play's own key rather than as a `*Raw` sibling, which the
+  /// enums beside it need because ours and theirs share a name. Here they do
+  /// not, so there is one name per fact instead of three names for two.
+  final double? userFraction;
+
+  /// **This package's answer: the fraction of the track's audience that has
+  /// been given this release.** Null when that cannot be said.
+  ///
+  /// [PlayReleaseStatus.audienceFraction] is the rule, so it has one
+  /// definition rather than a copy here and another in a consumer's fixtures —
+  /// the asymmetry that cost [PlayReleaseStatus.serving] a round trip through
+  /// a consumer's tree before it was made public.
+  ///
+  /// **Named for what it measures rather than for the process**, and that is
+  /// the whole of why it is not `rolloutFraction`. On a
+  /// [PlayReleaseStatus.halted] release `rolloutFraction: 0.2` reads as *"the
+  /// rollout is at 20%"*, which sounds live, with [serving]`: false` beside it
+  /// saying otherwise — a pair correct in only one reading order, which is
+  /// exactly the mechanism [AppStoreBuildEntry.needsNewUpload] was renamed to
+  /// escape. *Who has it* is true in every state on its own.
+  ///
+  /// **Three things it is not**, because a bare number is read as more than it
+  /// is:
+  ///
+  /// - Not a fraction of the app's users. It is a fraction of the **track's**
+  ///   audience, and an `internal` track's audience is a list of addresses.
+  /// - Not adjusted for country targeting. Play can restrict a release to a
+  ///   set of countries; this document carries neither that field nor its
+  ///   `includeRestOfWorld` flag, so a targeted rollout's fraction is a
+  ///   fraction of the targeted set.
+  /// - Not a statement about *which* devices. Play chooses who is eligible.
+  final double? audienceFraction;
 
   /// The line `cux_ship play tracks` prints for this release. Display text.
   final List<String> display;

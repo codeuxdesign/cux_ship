@@ -657,6 +657,14 @@ Build numbers are strings, because `CFBundleVersion` may be dotted;
 `buildNumberAsInt` and `newestBuildNumberAsInt` are the integers to compare
 with, `null` rather than zero when the version is not a single integer.
 
+**A staged rollout carries two fractions, and the second is the one to read.**
+Play sets `userFraction` only for `inProgress` and `halted`, so it is `null`
+for the release that reached everybody; `audienceFraction` is this package's
+answer and is `1.0` there. It measures who has the release rather than what the
+rollout is doing, so it reads correctly beside `serving` in either order — a
+halted release is `serving: false` with a non-zero fraction, and both are true
+at once.
+
 The whole contract, and why it is JSON rather than YAML, is
 [docs/design/json-output.md](https://github.com/codeuxdesign/cux_ship/blob/main/docs/design/json-output.md).
 

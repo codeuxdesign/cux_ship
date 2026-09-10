@@ -261,15 +261,19 @@ void main() {
       PlayTrack(
         name: 'internal',
         releases: [
+          // Play sends no `userFraction` for a completed rollout, which is
+          // what makes `audienceFraction` more than a rename of it.
           PlayTrackRelease(
             name: '1.4.0',
             versionCodes: [152],
             status: 'completed',
+            userFraction: null,
           ),
           PlayTrackRelease(
             name: '1.3.0',
             versionCodes: [151],
             status: 'halted',
+            userFraction: 0.2,
           ),
         ],
       ),
@@ -339,6 +343,59 @@ void main() {
           'expired',
           'usable',
           'needsNewUpload',
+          'display',
+        },
+      );
+    });
+
+    test('and so does an App Store version, which had none either', () {
+      expect(
+        ((appStoreVersionsJson(
+                          versionsOf([_version('1.4.0')]),
+                          bundleId: 'x',
+                        )['versions']
+                        as List)
+                    .single
+                as Map)
+            .keys
+            .toSet(),
+        {
+          'versionString',
+          'appStoreState',
+          'appStoreStateRaw',
+          'releaseType',
+          'releaseTypeRaw',
+          'copyright',
+          'editable',
+          'display',
+        },
+      );
+    });
+
+    test('and so does a Play release, which had no such list', () {
+      // **Added when the rollout fraction widened this entry**, which is when
+      // its absence showed: the App Store side has held its keys since
+      // `--json` shipped and the Play side did not, so `play.tracks` could
+      // grow a key with nothing to make that a decision. Two fields arrived at
+      // once here, which is exactly the change this shape is meant to make
+      // somebody type out.
+      expect(
+        ((((playTracksJson(tracksOf())['tracks'] as List).single
+                            as Map)['releases']
+                        as List)
+                    .first
+                as Map)
+            .keys
+            .toSet(),
+        {
+          'name',
+          'status',
+          'statusRaw',
+          'versionCodes',
+          'newestVersionCode',
+          'serving',
+          'userFraction',
+          'audienceFraction',
           'display',
         },
       );
@@ -470,6 +527,7 @@ void main() {
                 name: '1.4.0',
                 versionCodes: const [152],
                 status: status,
+                userFraction: null,
               ),
             ],
           ),
@@ -515,6 +573,176 @@ void main() {
           PlayReleaseStatus.serving(status.playValue == null ? null : status),
           reason:
               'encoder and PlayReleaseStatus.serving disagree on '
+              '${status.name}',
+        );
+      }
+    });
+
+    test('and the review states are answered by the vocabulary, not a flag', () {
+      // **The decision this pins is a removal.** An `underReview` boolean was
+      // built here, argued to three drafts, and taken out: the one consumer
+      // that would read it renders *five* distinct outcomes across these
+      // states — not submitted, queued, in review, approved-waiting-on-a-human,
+      // Apple publishing — so every boolean over them is a coarsening of what
+      // it already prints rather than an answer it lacks.
+      //
+      // What replaced it is the four enum members, which is what that consumer
+      // asked for: `IN_REVIEW` stops arriving as `unknown`, and a caller that
+      // wants two of these states together says so in its own switch, where it
+      // can also want three or five. docs/design/rollout-state.md carries the
+      // drafts and why each died.
+      AppStoreState? stateFor(String state) => AppStoreState.read(
+        ((appStoreVersionsJson(
+                          versionsOf([_version('1.4.0', state: state)]),
+                          bundleId: 'x',
+                        )['versions']
+                        as List)
+                    .single
+                as Map)['appStoreStateRaw']
+            as String?,
+      );
+
+      // The five a report distinguishes, distinguishable here.
+      expect(stateFor('READY_FOR_REVIEW'), AppStoreState.readyForReview);
+      expect(stateFor('WAITING_FOR_REVIEW'), AppStoreState.waitingForReview);
+      expect(stateFor('IN_REVIEW'), AppStoreState.inReview);
+      expect(
+        stateFor('PENDING_DEVELOPER_RELEASE'),
+        AppStoreState.pendingDeveloperRelease,
+      );
+      expect(
+        stateFor('PENDING_APPLE_RELEASE'),
+        AppStoreState.pendingAppleRelease,
+      );
+
+      // And the entry carries exactly one derived answer, which is the shape
+      // the removal restored. The key set above is the other half of this.
+      expect(
+        (appStoreVersionsJson(
+                      versionsOf([_version('1.4.0')]),
+                      bundleId: 'x',
+                    )['versions']
+                    as List)
+                .single
+            as Map,
+        isNot(contains('underReview')),
+      );
+    });
+
+    test('and `audienceFraction` fills the hole Play leaves at 100%', () {
+      // **Play omits `userFraction` exactly when it means one.** Google sets
+      // it only for `inProgress` and `halted`, so a completed rollout carries
+      // none — and a caller reading Play's own number gets `null` for the one
+      // release that reached everybody. That is the case this field exists
+      // for, and the one a rename of `userFraction` would not cover.
+      PlayTracks trackWith(String? status, double? userFraction) => PlayTracks(
+        packageName: 'design.codeux.example',
+        tracks: [
+          PlayTrack(
+            name: 'internal',
+            releases: [
+              PlayTrackRelease(
+                name: '1.4.0',
+                versionCodes: const [152],
+                status: status,
+                userFraction: userFraction,
+              ),
+            ],
+          ),
+        ],
+        uploadedVersionCodes: const [152],
+      );
+
+      Map<String, dynamic> releaseFor(String? status, double? userFraction) =>
+          ((((playTracksJson(trackWith(status, userFraction))['tracks'] as List)
+                                  .single
+                              as Map)['releases']
+                          as List)
+                      .single
+                  as Map)
+              .cast<String, dynamic>();
+
+      double? fractionFor(String? status, double? userFraction) =>
+          releaseFor(status, userFraction)['audienceFraction'] as double?;
+
+      // The two Play states, and the two it does not send a number for.
+      expect(fractionFor('completed', null), 1.0);
+      expect(fractionFor('draft', null), 0.0);
+      expect(fractionFor('inProgress', 0.2), 0.2);
+      // **A halted release keeps its fraction**, because the users who took it
+      // keep the release: `serving` is false and this is non-zero, and both
+      // are true at once. That pair is the whole reason this is not called
+      // `rolloutFraction`.
+      expect(fractionFor('halted', 0.2), 0.2);
+      expect(releaseFor('halted', 0.2)['serving'], isFalse);
+
+      // Null on the same terms as `serving`, plus one of its own: an
+      // `inProgress` release Play sent no fraction for is Play contradicting
+      // its own documentation, and guessing 1.0 there would report a rollout
+      // that has barely started as finished.
+      expect(fractionFor('statusUnspecified', null), isNull);
+      expect(fractionFor('somethingGoogleAdded', null), isNull);
+      expect(fractionFor(null, null), isNull);
+      expect(fractionFor('inProgress', null), isNull);
+
+      // **Play's own number travels beside ours, and they differ where it
+      // matters.** A completed rollout is the case: Play said nothing, we say
+      // one. A consumer that cannot tell those apart cannot tell an inference
+      // from a measurement.
+      expect(releaseFor('completed', null)['userFraction'], isNull);
+      expect(releaseFor('inProgress', 0.2)['userFraction'], 0.2);
+
+      // **The one claim in this design that comes from Google rather than from
+      // here is `0 < fraction < 1`, and this is what happens if it is false.**
+      // It is cited on `PlayReleaseStatus.audienceFraction` — googleapis'
+      // dartdoc, from the discovery document — phrased as a constraint on what
+      // may be *set*, and measured against no live account by this repository.
+      //
+      // If Play answered `1.0` for an `inProgress` release, `audienceFraction`
+      // would be `1.0`: the same number this package infers for `completed`.
+      // The two are still distinguishable, and **`status` is what
+      // distinguishes them** — the derivation is a function of `status` and
+      // `userFraction`, and the document carries both inputs, so a caller can
+      // see which branch produced the number.
+      expect(fractionFor('inProgress', 1.0), 1.0);
+      expect(releaseFor('inProgress', 1.0)['status'], 'inProgress');
+      expect(releaseFor('completed', null)['audienceFraction'], 1.0);
+      expect(releaseFor('completed', null)['status'], 'completed');
+
+      // **Not the raw field's nullness, which is the tempting answer and only
+      // holds while Google's sentence holds in its *second* half** — set only
+      // for `inProgress` and `halted`. Let Play set it on a `completed`
+      // release and both cases read `1.0` beside `1.0`, with nullness no
+      // longer separating them, while `status` still does. Pinned so the
+      // weaker claim cannot come back as a simplification.
+      expect(releaseFor('completed', 1.0)['userFraction'], 1.0);
+      expect(releaseFor('completed', 1.0)['audienceFraction'], 1.0);
+      expect(releaseFor('inProgress', 1.0)['userFraction'], 1.0);
+      expect(releaseFor('inProgress', 1.0)['audienceFraction'], 1.0);
+
+      // The common case, where nullness does tell them apart. A convenience,
+      // and worth keeping true.
+      expect(releaseFor('completed', null)['userFraction'], isNull);
+
+      // The encoder and the published rule cannot drift, for the reason
+      // `serving`'s own row above says: a consumer's fixtures are built from
+      // the static.
+      //
+      // **It cannot reach `unknown`, deliberately and not usefully.**
+      // `unknown.playValue` is null, so the map below turns it into the
+      // absent-status case before the static sees it. The `unknown` arm is
+      // pinned by `fractionFor('somethingGoogleAdded', null)` above; if that
+      // expect is ever deleted this loop will keep passing while the arm goes
+      // unchecked.
+      for (final status in PlayReleaseStatus.values) {
+        expect(
+          fractionFor(status.playValue, 0.2),
+          PlayReleaseStatus.audienceFraction(
+            status.playValue == null ? null : status,
+            userFraction: 0.2,
+          ),
+          reason:
+              'encoder and PlayReleaseStatus.audienceFraction disagree on '
               '${status.name}',
         );
       }

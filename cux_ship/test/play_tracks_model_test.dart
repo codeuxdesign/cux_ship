@@ -18,7 +18,18 @@ TrackRelease _release(
   String? name,
   List<String>? versionCodes, {
   String? status = 'completed',
-}) => TrackRelease(name: name, versionCodes: versionCodes, status: status);
+  double? userFraction,
+}) => TrackRelease(
+  name: name,
+  versionCodes: versionCodes,
+  status: status,
+  // **The fake carries Play's own nullability, not a convenience default.**
+  // Google sets `userFraction` only for `inProgress` and `halted`, so the
+  // `completed` default here sends none — which is the case that makes
+  // `audienceFraction` more than a rename, and a default of `1.0` would hide
+  // it in every test that did not name one.
+  userFraction: userFraction,
+);
 
 Track _track(String name, List<TrackRelease> releases) =>
     Track(track: name, releases: releases);
@@ -185,6 +196,77 @@ void main() {
         '  production: "1.4.0" codes=[2132] inProgress',
         '  uploaded bundles: []',
       ]);
+    });
+
+    test('carry the rollout percentage, and only where Play sent one', () {
+      // **The line is what a consumer prints verbatim**, so a staged rollout
+      // that renders identically to a finished one is the gap read as prose
+      // rather than as a field. `completed` keeps its old line exactly:
+      // appending `100%` there would print an inference rather than what Play
+      // said, and the word `completed` is already on the line.
+      final tracks = _tracksOf([
+        _track('production', [
+          _release('1.4.0', ['2132'], status: 'inProgress', userFraction: 0.2),
+          _release('1.3.0', ['2130'], status: 'halted', userFraction: 0.05),
+          _release('1.2.0', ['2128']),
+        ]),
+      ]);
+
+      expect(tracks.lines, [
+        '  production: "1.4.0" codes=[2132] inProgress  20%',
+        '  production: "1.3.0" codes=[2130] halted  5%',
+        '  production: "1.2.0" codes=[2128] completed',
+        '  uploaded bundles: []',
+      ]);
+    });
+
+    test('render a fraction Play allows and a whole percent cannot say', () {
+      // Play takes any fraction in `0 < f < 1`. Rounding to whole percent
+      // would print 1.5% as 2% and 0.5% as 0% — a number the store never sent,
+      // in a line this package promises is derived from its own fields.
+      //
+      // `0.07` is here because the arithmetic, not the text, is the trap:
+      // `0.07 * 100` is `7.000000000000001` as a double, so a renderer that
+      // trusted the multiplication would print that.
+      final tracks = _tracksOf([
+        _track('production', [
+          _release('a', ['1'], status: 'inProgress', userFraction: 0.015),
+          _release('b', ['2'], status: 'inProgress', userFraction: 0.005),
+          _release('c', ['3'], status: 'inProgress', userFraction: 0.07),
+          _release('d', ['4'], status: 'inProgress', userFraction: 0.5),
+        ]),
+      ]);
+
+      expect(tracks.lines.take(4), [
+        '  production: "a" codes=[1] inProgress  1.5%',
+        '  production: "b" codes=[2] inProgress  0.5%',
+        '  production: "c" codes=[3] inProgress  7%',
+        '  production: "d" codes=[4] inProgress  50%',
+      ]);
+    });
+  });
+
+  group('the fraction a release carries', () {
+    test('is Play\'s own, parsed through unchanged', () {
+      final tracks = _tracksOf([
+        _track('production', [
+          _release('1.4.0', ['2132'], status: 'inProgress', userFraction: 0.2),
+        ]),
+      ]);
+
+      expect(tracks.track('production')?.releases.single.userFraction, 0.2);
+    });
+
+    test('and is null for a completed rollout, which is what Play sends', () {
+      // Not zero. Play omits the field for `completed` precisely because the
+      // release reached everybody, so a zero here would invert the fact.
+      final tracks = _tracksOf([
+        _track('production', [
+          _release('1.4.0', ['2132']),
+        ]),
+      ]);
+
+      expect(tracks.track('production')?.releases.single.userFraction, isNull);
     });
   });
 }

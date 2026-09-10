@@ -118,6 +118,10 @@ const _$AppStoreStateEnumMap = {
   AppStoreState.prepareForSubmission: 'prepareForSubmission',
   AppStoreState.readyForReview: 'readyForReview',
   AppStoreState.waitingForReview: 'waitingForReview',
+  AppStoreState.inReview: 'inReview',
+  AppStoreState.pendingAppleRelease: 'pendingAppleRelease',
+  AppStoreState.processingForAppStore: 'processingForAppStore',
+  AppStoreState.replacedWithNewVersion: 'replacedWithNewVersion',
   AppStoreState.accepted: 'accepted',
   AppStoreState.rejected: 'rejected',
   AppStoreState.developerRejected: 'developerRejected',
@@ -176,6 +180,8 @@ PlayReleaseEntry _$PlayReleaseEntryFromJson(Map<String, dynamic> json) =>
           .toList(),
       newestVersionCode: (json['newestVersionCode'] as num?)?.toInt(),
       serving: json['serving'] as bool?,
+      userFraction: (json['userFraction'] as num?)?.toDouble(),
+      audienceFraction: (json['audienceFraction'] as num?)?.toDouble(),
       display: (json['display'] as List<dynamic>)
           .map((e) => e as String)
           .toList(),
@@ -189,6 +195,8 @@ Map<String, dynamic> _$PlayReleaseEntryToJson(PlayReleaseEntry instance) =>
       'versionCodes': instance.versionCodes,
       'newestVersionCode': instance.newestVersionCode,
       'serving': instance.serving,
+      'userFraction': instance.userFraction,
+      'audienceFraction': instance.audienceFraction,
       'display': instance.display,
     };
 

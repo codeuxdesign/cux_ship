@@ -146,6 +146,13 @@ AppStoreVersionsDocument appStoreVersionsDocument(
   display: listing.lines,
 );
 
+// **No second derived field here, and that was decided rather than skipped.**
+// The App Store side has `editable` and stops; a boolean answering "is it still
+// in review" was built, argued to three drafts and removed, because the one
+// consumer that would read it renders five distinct outcomes across those
+// states and every boolean is a coarsening of that. `appStoreState` answers the
+// question directly now that `inReview` is a member of it.
+// docs/design/rollout-state.md carries the drafts.
 AppStoreVersionEntry _version(AppStoreVersion version) => AppStoreVersionEntry(
   versionString: version.versionString,
   appStoreState: AppStoreState.read(version.appStoreState),
@@ -212,10 +219,25 @@ PlayReleaseEntry _release(PlayTrackRelease release, String track) {
     // `statusUnspecified` is null too. Play saying "unspecified" and Play
     // saying nothing are the same amount of information.
     //
-    // **Deliberately not a fraction.** `inProgress` means some of the
-    // audience has it; how much is not in this document, and belongs to the
-    // release-and-rollout task rather than here.
+    // **Deliberately not a fraction**, which is why there are two more fields
+    // below: a three-valued boolean that also carried a magnitude would be two
+    // answers under one key.
     serving: PlayReleaseStatus.serving(status),
+    // Play's own number, and then ours. The pairing is the enums' — theirs is
+    // authoritative and ours is a reading of it — with the difference that a
+    // number has no `unknown` to fall through to, so what ours adds is not a
+    // vocabulary but a value Play declines to send: it omits `userFraction`
+    // for a `completed` rollout, which is the one release that reached
+    // everybody.
+    userFraction: release.userFraction,
+    // **The rule is on [PlayReleaseStatus], not here**, for the reason
+    // `serving` was made public in 4.3.0: a derived rule this package owns and
+    // a consumer's fixtures cannot call is a rule that gets restated in a tree
+    // this package cannot see.
+    audienceFraction: PlayReleaseStatus.audienceFraction(
+      status,
+      userFraction: release.userFraction,
+    ),
     // The track name is not a field of a release — Play nests releases under
     // tracks and the rendering says which track it is on, so the line needs
     // an argument the object does not carry.
