@@ -387,12 +387,25 @@ new package.
 Status: **open**, 10 September 2026. A gap that was measured, and a fix that
 was designed and not built.
 
-**A consumer cannot see a document's shape from the published package.**
-`json_output.dart` is in `lib/src/`, dartdoc does not document `lib/src/`,
-there is no `dartdoc_options.yaml` overriding that, and no public library
-exports it. So the envelope, the `kind` strings and the key list live on GitHub
-and nowhere else. What pub.dev carries is the README's *Reading the stores as
-JSON* section and this document, linked from it.
+**A consumer cannot see a document's shape in the published package's API
+docs.** `json_output.dart` is in `lib/src/`, dartdoc does not document
+`lib/src/`, there is no `dartdoc_options.yaml` overriding that, and no public
+library exports it.
+
+**The source does ship, though, and an earlier draft of this section said
+otherwise.** It claimed the key list "lives on GitHub and nowhere else", which
+is false: `pub publish` puts all of `lib/` in the archive, so
+`json_output.dart` is in every consumer's pub cache. That is not hypothetical
+reading either — the consumer this was built for checked the 4.2.0 models that
+way before answering a review.
+
+So the gap is narrower than first written, and it is still a gap. Learning a
+wire format by reading the encoder that emits it is worse than reading a
+statement of the format, and it is only available to a *Dart* consumer at all:
+a shell `status` or a Python step has no pub cache to look in. What those get
+is what pub.dev renders — `--json`'s own `--help` text, the README's *Reading
+the stores as JSON* section, the changelog entry, and this document linked from
+the README.
 
 **And `read.dart`'s dartdoc is a good source for meaning and a bad one for
 shape**, which is the worse of the two failures: the member names are the item

@@ -648,9 +648,10 @@ Three things worth knowing before you parse one:
   because it is what says which counter applies.
 - **`display` is for showing a human, and its text is not promised.** It is
   always an array of strings, at the document level and on each item, and that
-  nesting *is* promised. Print those lines rather than rendering the fields
-  yourself — a caller that renders the same model its own way reports something
-  different from what this command reports, silently.
+  nesting *is* promised — as is its never being empty: an empty listing renders
+  a sentence saying so, not an empty array. Print those lines rather than
+  rendering the fields yourself — a caller that renders the same model its own
+  way reports something different from what this command reports, silently.
 
 Build numbers are strings, because `CFBundleVersion` may be dotted;
 `buildNumberAsInt` and `newestBuildNumberAsInt` are the integers to compare

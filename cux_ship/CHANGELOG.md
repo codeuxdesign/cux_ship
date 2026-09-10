@@ -30,6 +30,12 @@ one from the other: a builds document renders twenty at most while `builds`
 carries everything Apple returned, a version item spends two lines, and a
 tracks document ends with an uploaded-bundles line that belongs to no track.
 
+**And a document's `display` is never empty**, which matters most where there
+is nothing to show: an empty listing renders `no builds at all — nothing has
+ever been uploaded` rather than an empty array, because a caller iterating
+nothing prints nothing, and a store the output said nothing about reads as a
+store with nothing wrong.
+
 **Build numbers stay strings and the integers travel beside them.**
 `buildNumber` is a `String` because `CFBundleVersion` may be dotted;
 `buildNumberAsInt` and the new `newestBuildNumberAsInt` are `null` rather than
