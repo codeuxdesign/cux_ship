@@ -1,11 +1,51 @@
 # `package:cux_ship/read.dart` — the stores, as objects
 
-Status: **decided**, 4 September 2026, at the moment a consumer's release train
-was ported from shell to Dart.
+Status: **decided**, and the library is **removed**. `--json` and
+`documents.dart` answer the question it was built for.
 
-A Dart consumer can ask the stores what they hold without spawning `cux_ship`
-and matching regular expressions against what it printed. Three reads, plus the
+**This document is kept whole rather than deleted**, because the argument is
+what has value now: it was written in good faith, it was right about the
+problem, and it was wrong about the answer for a reason nobody could have seen
+at the time. Deleting it would leave the next person to want an in-process API
+with no record of why this one did not survive.
+
+The original header read *decided, 4 September 2026, at the moment a consumer's
+release train was ported from shell to Dart*, and described three reads plus a
 wait: Play's tracks, and the App Store's builds and versions per platform.
+
+## What actually happened
+
+Six days. §"Was a library the right answer, or would `--json` have been?" — an
+open section added on 10 September — names the flaw exactly: the decision below
+compares the library against **one** alternative, matching regular expressions
+against printed prose, and every word of that argument applies equally to a
+JSON schema. So the decision was *library over the status quo*, not *library
+over JSON*, because `--json` did not exist yet.
+
+Then it did. The consumer this was built for ported onto it — `status` reads
+through the command, the second entrypoint deleted, output byte-identical — and
+that left the library with **no known caller**, in-repo or out.
+
+**What is removed:** `lib/read.dart`, and the two session classes it existed to
+publish, `AppStoreReads` and `PlayReads`. That is a breaking change and costs a
+major version.
+
+**What is kept, and why it is not a compromise:** the value types those sessions
+returned — `AppStoreBuilds`, `AppStoreVersions`, `PlayTracks` and their entries
+— stay in `src/`, because `--json` is built from them. They were never the read
+API; they are the model the encoder renders, and they were merely *also*
+exported through it. `BuildProcessingProgress` and `ProcessingTimeout` stay for
+the same reason: `appstore wait` raises and reports them.
+
+So what went is the *in-process session* — opening a client, holding
+credentials in the calling process, and reading without spawning. Nothing that
+`--json` needs went with it.
+
+**The trade the sections below defend is the one that decided it.**
+§"Credentials move into the calling process" is honest that in-process reads
+widen what each call can reach, giving up per-step `secrets exec --only`. A
+spawned `--json` read keeps that narrowing. Given two answers to one question,
+the one that does not widen a credential's blast radius is the one to keep.
 
 ## Why now, and why not earlier
 
@@ -167,11 +207,12 @@ caller of that callback. Existing behaviour is unchanged because
 
 ## Was a library the right answer, or would `--json` have been?
 
-Status: **open**, 10 September 2026. Raised by the consumer this API was built
-for, after living with it, and recorded a day before it was acted on. The
-transport half is decided and specified in [json-output.md](json-output.md) —
-`--json`, carrying the rendered lines. What this status names is the half that
-stays open: whether `read.dart` should have existed at all.
+Status: **decided**, 10 September 2026 — **no**, and the library is removed.
+Raised by the consumer this API was built for, after living with it, and
+recorded a day before it was acted on. The transport half was already decided
+and specified in [json-output.md](json-output.md) — `--json`, carrying the
+rendered lines. This section named the half that stayed open: whether
+`read.dart` should have existed at all. It should not have; see the header.
 
 The sections that follow were written before that transport existed. Two have
 since been touched and say so where they sit: §Sequencing, whose bullet was
@@ -292,7 +333,10 @@ different lists, and only the first one would have been guessed.
 
 ### What is left of the surface once `--json` exists
 
-Status: **open**, 10 September 2026. `--json` and
+Status: **decided**, and the answer turned out to be *nothing that had a
+caller*. The audit below is what made removal safe to act on: it enumerated
+every exported name with no route through `--json` and found each one **unused
+rather than unavailable-and-unwanted**. `--json` and
 `package:cux_ship/documents.dart` shipped in 4.3.0-dev.1
 ([json-output.md](json-output.md) is the format; the classes' own dartdoc is
 the specification), and the consumer ported: its `status` reads through the

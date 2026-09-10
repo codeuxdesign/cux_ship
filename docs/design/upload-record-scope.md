@@ -86,14 +86,20 @@ about the present, which a tag cannot record at any granularity, because it is
 written before the store is contacted and never revised. Per-store names would
 have turned one over-reporting record into four.
 
-`read.dart` (4.1.0) answers it directly, per store and per Apple platform, from
+**A store read answers it directly**, per store and per Apple platform, from
 the only authority there is. So the tag goes back to being one thing: **the
 commit an artifact was built from**, which is a git fact no store knows and the
 reason the record exists. `release-check.md` §1 had already written the
 distinction down — *"git records what we sent; a store records what users can
 get"* — and named the git-versus-store diff as the thing that catches the gap,
 out of scope there and still not built. Half of it is now cheap: the store side
-is a library call rather than four regular expressions over stdout.
+is `play tracks --json` or `appstore builds --json` rather than four regular
+expressions over stdout.
+
+This said `read.dart` (4.1.0), which was the route when it was written and is
+not any more — that library is removed, and `--json` is what answers the same
+question now. The point it makes is unchanged: the store side is one call to a
+machine-readable answer.
 
 **The consumer's hedge is the consumer's to remove**, and it is not a
 workaround for a missing capability — it is a correct sentence about the wrong

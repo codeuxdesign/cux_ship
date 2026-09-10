@@ -204,9 +204,10 @@ for package in "${MEMBERS[@]}"; do
       cat "$docs/log" >&2
       die "dart doc failed in $package"
     fi
-    # **This warning, not any warning.** `AscPlatform` is exported from both
-    # `documents.dart` and `read.dart`, and dartdoc calls that an ambiguous
-    # reexport on every single run. A check that counted warnings would have
+    # **This warning, not any warning.** `documents.dart` and `exit_codes.dart`
+    # both reexport names from `src/appstore/app_store.dart` — `AscPlatform`
+    # from the first, the two exit-code constants from the second — and dartdoc
+    # calls that an ambiguous reexport of `app_store` on every single run. A check that counted warnings would have
     # been red on the day it was written, and the only way to get it green
     # would be to silence it — which is how a guard stops being read.
     # To stderr with the explanation under it, so the two halves of one

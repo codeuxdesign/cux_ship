@@ -9,15 +9,14 @@
 //     // Apple holds no such version yet — an ordinary state, not a failure.
 //   }
 //
-// **Its own library rather than a corner of `documents.dart`, and not
-// `read.dart` either.** These belong to the contract of *spawning* the binary:
-// a caller reads the status and then decodes stdout, and the two halves are
-// the same conversation. But `documents.dart` states a precise rule about
-// itself — the field names are the JSON keys, and its dartdoc is the published
-// format — which a handful of integers does not fit; and `read.dart` is for
-// callers that do not spawn anything at all. A caller that only branches on
-// status, and never decodes a document, should not have to pull in the
-// document classes to name a number.
+// **Its own library rather than a corner of `documents.dart`.** These belong
+// to the contract of *spawning* the binary: a caller reads the status and then
+// decodes stdout, and the two halves are the same conversation. But
+// `documents.dart` states a precise rule about itself — the field names are the
+// JSON keys, and its dartdoc is the published format — which a handful of
+// integers does not fit. A caller that only branches on status, and never
+// decodes a document, should not have to pull in the document classes to name
+// a number.
 //
 // **Exported because a consumer was writing the digit with a comment where the
 // name belongs.** They reported it ranked below everything else and were right

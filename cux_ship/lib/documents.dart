@@ -29,8 +29,8 @@
 // limitation — the printed command line is what makes a failed release step
 // re-runnable by hand, and per-step `secrets exec --only …` is what keeps a
 // credential out of a step with no use for it. A caller that spawns keeps
-// both; `package:cux_ship/read.dart`, which reads in-process, gives up both by
-// construction and says so.
+// both. An in-process read gives up both by construction, which is half of why
+// `read.dart` was removed rather than kept beside this — see read-api.md.
 //
 // **This dartdoc is the published statement of the format.** pub.dev renders
 // it per version, and the field names are the JSON keys — a test fails if they

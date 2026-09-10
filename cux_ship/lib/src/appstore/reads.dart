@@ -1,26 +1,37 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// The App Store reads as objects, for a Dart caller that would otherwise be
-// matching regular expressions against this command's stdout.
+// The App Store reads as objects — the model `appstore builds` and `appstore
+// versions` print from, and that `--json` is encoded from.
+//
+// **No longer a public API.** This was reached through
+// `package:cux_ship/read.dart`, for a Dart caller that would otherwise match
+// regular expressions against this command's stdout. That library is gone:
+// `--json` answers the same question without moving credentials into the
+// calling process, and read-api.md records why the library did not survive it.
+// Nothing here is exported now.
 //
 // **The printed lines are derived from these objects, not the other way
 // round.** [printBuilds] and [printVersions] render [AppStoreBuilds.lines] and
-// [AppStoreVersions.lines]; there is one
-// description of what a build listing looks like and both the CLI and a
-// library caller get it. That matters more than it sounds: a consumer that
-// prints this command's output verbatim — because a `status` that renders the
-// same model its own way reports something different from what this command
-// reports, silently — needs those lines to be the same lines, and a second
-// formatter beside the first is a second thing to drift.
+// [AppStoreVersions.lines], and `json_output.dart` builds the documents from
+// the same objects — so there is one description of what a build listing looks
+// like and every renderer gets it. That matters more than it sounds: a
+// consumer that prints this command's output verbatim — because a `status`
+// that renders the same model its own way reports something different from
+// what this command reports, silently — needs those lines to be the same
+// lines, and a second formatter beside the first is a second thing to drift.
 //
-// Reads only. Nothing here can write, and that is structural rather than a
-// promise: the [Writer] an [AppStoreReads] session builds is a dry-run writer,
-// so the write path is refused at the one place every write goes through.
+// **Reads only, and that is now a convention rather than a structure.** It
+// used to be structural: an `AppStoreReads` session built a dry-run [Writer],
+// so the write path was refused at the one place every write goes through.
+// That session is deleted, and nothing in this file constructs a [Writer] any
+// more — [printBuilds] and [printVersions] take an [AppStore] from their
+// caller and can only do with it what that caller could. Said plainly because
+// the sentence it replaces claimed a guarantee, and somebody reading
+// "structural" would go looking for a refusal that is no longer anywhere.
 import 'dart:io';
 
 import '../json_output.dart';
 import 'app_store.dart';
-import 'asc_client.dart';
 
 /// `attributes` off a JSON:API resource, empty when a sparse fieldset left it
 /// out. The same shape as the private helper in app_store.dart; duplicated
@@ -413,128 +424,4 @@ Future<void> printVersions(AppStore store, App app, {bool json = false}) async {
   for (final line in listing.lines) {
     stdout.writeln(line);
   }
-}
-
-/// A read-only App Store Connect session for one app on one platform.
-///
-/// One session per platform, because that is how App Store Connect answers:
-/// builds and versions are per-platform, and an iOS and a macOS build of the
-/// same commit carry the same build number, so a query that does not name the
-/// platform cannot tell them apart.
-///
-///     final reads = await AppStoreReads.open(
-///       bundleId: 'design.codeux.example',
-///       platform: AscPlatform.ios,
-///     );
-///     try {
-///       final builds = await reads.builds();
-///       for (final line in builds.lines) {
-///         log.writeln(line);
-///       }
-///       print(builds.newestBuildNumber);
-///     } finally {
-///       reads.close();
-///     }
-///
-/// Credentials come from the environment `cux_ship secrets exec` sets up —
-/// `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID` and
-/// `APPLE_API_PRIVATE_KEY_PATH`. In-process reads therefore need those
-/// variables in the *calling* process, which is the one thing a caller
-/// switching from a spawned `cux_ship` to this has to arrange.
-class AppStoreReads {
-  AppStoreReads._(this._client, this._store, this._app, this.platform);
-
-  /// Resolves [bundleId] and holds the session open.
-  ///
-  /// Throws [StateError] when no credentials are configured, and
-  /// [AscApiException] when Apple has no app with that exact bundle id.
-  static Future<AppStoreReads> open({
-    required String bundleId,
-    required AscPlatform platform,
-  }) async {
-    final credentials = AscCredentials.fromEnvironment();
-    if (credentials == null) {
-      throw StateError(
-        'no App Store Connect credentials. APPLE_API_KEY_ID, '
-        'APPLE_API_ISSUER_ID and APPLE_API_PRIVATE_KEY_PATH are not set in '
-        'this process. Run it through `cux_ship secrets exec`, which writes '
-        'the key file and sets all three, or export them yourself.',
-      );
-    }
-    final client = AscClient(credentials);
-    // **dryRun is not a mode here, it is the guarantee.** Every write in this
-    // package goes through a [Writer], so a session whose writer refuses
-    // cannot write however it is later extended.
-    final store = AppStore(
-      client,
-      Writer(client, dryRun: true),
-      platform: platform,
-    );
-    try {
-      final app = await store.resolveApp(bundleId);
-      return AppStoreReads._(client, store, app, platform);
-    } on Object {
-      client.close();
-      rethrow;
-    }
-  }
-
-  final AscClient _client;
-  final AppStore _store;
-  final App _app;
-
-  /// The platform this session was opened for.
-  final AscPlatform platform;
-
-  /// App Store Connect's own id for the app, as `appstore` prints it.
-  String get appId => _app.id;
-
-  /// The app's name in App Store Connect.
-  String get appName => _app.name;
-
-  /// The bundle id this session resolved.
-  String get bundleId => _app.bundleId;
-
-  /// What `cux_ship appstore builds` reads.
-  Future<AppStoreBuilds> builds() async =>
-      appStoreBuildsFrom(await _store.builds(_app), platform);
-
-  /// What `cux_ship appstore versions` reads.
-  Future<AppStoreVersions> versions() async {
-    final payload = await _store.appStoreVersions(_app);
-    return appStoreVersionsFrom(
-      payload.data,
-      platform,
-      included: payload.included,
-    );
-  }
-
-  /// Waits until Apple has finished processing [buildNumber].
-  ///
-  /// What `cux_ship appstore wait` does, without the printing: [onProgress] is
-  /// called once per poll — including the poll that ends the wait — so a
-  /// caller streaming to a log can write its own heartbeat rather than
-  /// scraping one. Passing no [onProgress] waits silently.
-  ///
-  /// Throws [ProcessingTimeout] when [timeout] runs out, and
-  /// [AscApiException] when Apple reports `FAILED` or `INVALID`.
-  Future<AppStoreBuild> awaitBuild(
-    String buildNumber, {
-    Duration timeout = const Duration(minutes: 45),
-    Duration poll = const Duration(seconds: 30),
-    void Function(BuildProcessingProgress progress)? onProgress,
-  }) async {
-    final build = await _store.awaitProcessing(
-      _app,
-      buildNumber,
-      timeout: timeout,
-      poll: poll,
-      onProgress: onProgress ?? (_) {},
-    );
-    return appStoreBuildFrom(build);
-  }
-
-  /// Releases the HTTP client. A session that is not closed keeps a connection
-  /// pool alive, which is what stops a long-running process from exiting.
-  void close() => _client.close();
 }

@@ -334,7 +334,10 @@ still right. No `schema` bumped; the convention did leave the room it promised.
 
 ## What this does not decide
 
-**Whether `read.dart` survives.** It is published, and removing an export is a
+**Whether `read.dart` survives — since decided: it did not.** The paragraph
+below is left as written, because it is the statement of a question this
+document deliberately declined to answer, and read-api.md answers it. What
+follows is what was true when this was written. It is published, and removing an export is a
 major version. The consumer says it would revert onto `--json` and drop the
 library given `display` in the document, and that answer is what settled
 `display`. It is still a separate decision, taken after `--json` exists rather
