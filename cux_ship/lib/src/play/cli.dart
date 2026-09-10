@@ -73,6 +73,7 @@ import 'package:cux_ship_verify/release_notes.dart';
 import 'package:googleapis/androidpublisher/v3.dart';
 import 'package:googleapis_auth/auth_io.dart';
 
+import '../json_output.dart';
 import '../listing_requirements.dart';
 import '../notes_source.dart';
 import 'credentials.dart';
@@ -247,9 +248,18 @@ Future<void> _listListing(AndroidPublisherApi api, String packageName) async {
 /// The reading, the edit it needs and the model it produces are in reads.dart,
 /// so a library caller gets the same answer this prints rather than a second
 /// implementation of it.
-Future<void> _listTracks(AndroidPublisherApi api, String packageName) async {
+Future<void> _listTracks(
+  AndroidPublisherApi api,
+  String packageName, {
+  bool json = false,
+}) async {
   try {
-    for (final line in (await readTracks(api, packageName)).lines) {
+    final tracks = await readTracks(api, packageName);
+    if (json) {
+      writeJsonDocument(playTracksDocument(tracks));
+      return;
+    }
+    for (final line in tracks.lines) {
       stdout.writeln(line);
     }
   } on StateError catch (e) {
@@ -988,6 +998,19 @@ ArgParser buildPlayParser(PlayCommand cmd) {
   // `tracks` and `listing` need nothing else; `version-code` needs to know
   // which track to read.
   if (cmd == PlayCommand.tracks || cmd == PlayCommand.listing) {
+    // Tracks only. `version-code` already prints one value a caller can use
+    // unquoted, and `listing` has asked no one for a document — a flag on a
+    // command with no consumer is a promise made to nobody.
+    if (cmd == PlayCommand.tracks) {
+      parser.addFlag(
+        'json',
+        negatable: false,
+        help:
+            'Print the tracks as a JSON document instead of prose. stdout '
+            'carries the document and nothing else; every other line goes to '
+            'stderr. See docs/design/json-output.md.',
+      );
+    }
     return parser;
   }
 
@@ -1342,7 +1365,7 @@ Future<void> runPlay(
     try {
       switch (cmd) {
         case PlayCommand.tracks:
-          await _listTracks(api, packageName);
+          await _listTracks(api, packageName, json: flag('json'));
         case PlayCommand.listing:
           await _listListing(api, packageName);
         case PlayCommand.versionCode:

@@ -1,9 +1,10 @@
 # `--json`, and the document it prints
 
-Status: **decided, not built**, 10 September 2026. This settles the transport
-question [read-api.md](read-api.md) left open — recorded there the day after
-the library shipped, because `read.dart` had been weighed against parsing
-printed prose and never against a schema.
+Status: **built**, 10 September 2026 — `--json` on `appstore builds`, `appstore
+versions` and `play tracks`, and nothing else. This settles the transport
+question [read-api.md](read-api.md) left open, recorded there the day after the
+library shipped because `read.dart` had been weighed against parsing printed
+prose and never against a schema.
 
 It specifies **the envelope and the rules**. It deliberately does not enumerate
 fields: `lib/src/appstore/reads.dart` and `lib/src/play/reads.dart` are the
@@ -182,8 +183,15 @@ is a remedy only a library caller has.** A document carrying the string alone
 would hand a shell caller precisely the comparison that comment forbids, and
 the way back would be to find the newest item and re-implement the ordering
 rule — which the paragraph above says should be handed over rather than
-reimplemented. So the document emits it, `null` on the same terms, and the
-model grows the getter to feed it.
+reimplemented. So the document emits it, `null` on the same terms.
+
+**Computed in the encoder, and not added to `AppStoreBuilds`.** The draft of
+this section said the model would grow the getter, and it should not: that is a
+new public name on a published class, and this repository adds those on their
+own argument rather than as a side effect of building something else. A library
+caller already has the value in two hops, which is precisely why the *document*
+needs it and the model does not — a shell caller is the one with no hops
+available. If the one-hop getter is ever wanted, it is its own change.
 
 **And it collides with the manifest, deliberately and only in name.**
 `build_manifest.dart` refuses a `buildNumber` that is not an integer, on the
