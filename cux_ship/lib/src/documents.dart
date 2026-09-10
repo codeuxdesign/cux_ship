@@ -63,15 +63,24 @@ part 'documents.g.dart';
 ///
 /// **Read before `schema`.** The counters are per kind, so a reader that
 /// checks the number first has checked it against nothing. Closed, with no
-/// `unknown` member, because these three are this package's own names rather
-/// than a store's — an unrecognized one means the document came from a version
-/// that knows a kind this one does not, and refusing is the answer.
+/// `unknown` member, because these are this package's own names rather than a
+/// store's — an unrecognized one means the document came from a version that
+/// knows a kind this one does not, and refusing is the answer.
+///
+/// The word here used to be "these three", which was wrong from the moment a
+/// fourth arrived and wrong again at the fifth. A count in prose is a fact that
+/// goes stale without anybody editing it.
 @JsonEnum(valueField: 'wire')
 enum DocumentKind {
   appStoreBuilds('appstore.builds'),
   appStoreVersions('appstore.versions'),
   appStorePreviews('appstore.previews'),
-  playTracks('play.tracks');
+  playTracks('play.tracks'),
+
+  /// **The one kind that describes no store.** `verify` is offline and reads
+  /// the repository, so there is no platform and no bundle id — which is why
+  /// it is not `appstore.verify`.
+  verify('verify');
 
   const DocumentKind(this.wire);
 
@@ -1164,3 +1173,101 @@ class PlayTracksDocument {
 /// than two — the encoder computes it from the same set.
 bool isEditableVersionState(String? state) =>
     state != null && editableVersionStates.contains(state);
+
+/// One artifact `verify` looked at, or declined to.
+///
+/// **`what` is a kind rather than a sentence**, so a caller can branch on it —
+/// `changelog`, `section`, `appstore`, `play`, `data-safety`. [where] says
+/// which one, absent when there was nothing to find.
+@JsonSerializable(explicitToJson: true)
+class VerifyCheck {
+  const VerifyCheck({required this.what, this.where, this.why});
+
+  factory VerifyCheck.fromJson(Map<String, dynamic> json) =>
+      _$VerifyCheckFromJson(json);
+
+  /// What kind of artifact this is.
+  final String what;
+
+  /// Which one, for a check that ran. Null in [VerifyDocument.skipped].
+  ///
+  /// **Not called `path`, which is what it was first**, because two of the
+  /// five are not paths: `section` carries `1.0.1 (pubspec.yaml)` — a version
+  /// and where it was declared — and `appstore` carries the tree with the
+  /// platform it was checked against, since one path cannot say which of the
+  /// two rule sets applied. A field named `path` holding those would be a name
+  /// a consumer could reasonably `File()` and be wrong about.
+  ///
+  /// It is exactly the string the report prints after the artifact's name, so
+  /// the document and the prose cannot drift.
+  final String? where;
+
+  /// Why it did not run. Null in [VerifyDocument.checked].
+  ///
+  /// A sentence, because the reason is for a person: the caller has already
+  /// branched on [what] by the time it reads this.
+  final String? why;
+
+  Map<String, dynamic> toJson() => _$VerifyCheckToJson(this);
+}
+
+/// `cux_ship verify --json`.
+///
+/// **[checked] and [skipped] are the point, not [ok].** A caller reading `ok:
+/// true` alone has learned nothing about *coverage* — which is the defect the
+/// prose version was changed to close, when a clean run printed one line and a
+/// reader could not tell whether the data safety declaration had been
+/// validated or silently passed over.
+///
+/// [checked] alone was not enough either, and the consumer said why: a reader
+/// notices an omission only by already holding the expected set in their head,
+/// so a check that silently did not run is invisible unless somebody is
+/// keeping the list. [skipped] makes it impossible to miss rather than merely
+/// possible to catch — **absence stops being inferred from what is not in a
+/// list**, which is a thing nobody does reliably.
+@JsonSerializable(explicitToJson: true)
+class VerifyDocument {
+  const VerifyDocument({
+    required this.schema,
+    required this.kind,
+    required this.ok,
+    required this.checked,
+    required this.skipped,
+    required this.problems,
+    required this.display,
+  });
+
+  factory VerifyDocument.fromJson(Map<String, dynamic> json) =>
+      _$VerifyDocumentFromJson(json);
+
+  /// This kind's schema number. Refuse one you do not recognize.
+  final int schema;
+
+  final DocumentKind kind;
+
+  /// Whether every check that ran found nothing.
+  ///
+  /// **Not "the release is publishable" on its own** — read it beside
+  /// [skipped], because a run that checked one artifact and skipped three is
+  /// `ok: true` and says almost nothing.
+  final bool ok;
+
+  /// Every artifact that was inspected, with where it was found.
+  final List<VerifyCheck> checked;
+
+  /// Every artifact that was not, with why.
+  final List<VerifyCheck> skipped;
+
+  /// What was wrong, each written for a person to read and fix.
+  ///
+  /// **Strings rather than structure, deliberately.** Nobody has asked to
+  /// branch on a problem's identity — the consumer prints them and counts
+  /// them — and starting with strings makes a structured version an addition
+  /// rather than a replacement. See `dry-run-json.md`.
+  final List<String> problems;
+
+  /// What `cux_ship verify` prints. Display text.
+  final List<String> display;
+
+  Map<String, dynamic> toJson() => _$VerifyDocumentToJson(this);
+}

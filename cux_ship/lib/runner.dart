@@ -32,6 +32,8 @@ import 'src/changelog_section.dart';
 import 'src/config.dart';
 import 'src/confirm.dart';
 import 'src/deps.dart';
+import 'src/documents.dart';
+import 'src/json_output.dart';
 import 'src/keychain.dart';
 import 'src/listing_requirements.dart';
 import 'src/manifest_cli.dart';
@@ -2026,6 +2028,15 @@ class VerifyCommand extends Command<void> {
         help:
             'A locale the listing must carry, e.g. en-US. Overrides '
             'appstore.locales and play.locales.',
+      )
+      ..addFlag(
+        'json',
+        negatable: false,
+        help:
+            'Print one JSON document on stdout instead of the report. Carries '
+            'what was checked AND what was skipped, because "no problems" '
+            'from a run that inspected one artifact and passed over three is '
+            'not the same answer as one that checked everything.',
       );
   }
 
@@ -2168,21 +2179,107 @@ class VerifyCommand extends Command<void> {
     // they had to suspect it and go looking. That is the failure this release
     // exists to close, on the success path: absence of output reading as
     // coverage. Every artifact says so itself.
-    for (final line in [
-      if (changelog != null) 'changelog  $changelog',
-      // What was checked, not what was found: this line prints on the run
+    final checked = <VerifyCheck>[
+      if (changelog != null) VerifyCheck(what: 'changelog', where: changelog),
+      // What was checked, not what was found: this entry is present on the run
       // that goes on to report the section missing, and once read "has its
       // section" there.
       if (changelog != null && project.versionName != null) ...[
-        'section    ${project.versionName} (pubspec.yaml)',
+        VerifyCheck(
+          what: 'section',
+          where: '${project.versionName} (pubspec.yaml)',
+        ),
       ],
       for (final tree in appStoreTrees.entries) ...[
-        'appstore   ${tree.value} (${tree.key})',
+        VerifyCheck(what: 'appstore', where: '${tree.value} (${tree.key})'),
       ],
-      if (play != null) 'play       $play',
-      if (dataSafety != null) 'data safe  $dataSafety',
-    ]) {
-      stdout.writeln('    checked $line');
+      if (play != null) VerifyCheck(what: 'play', where: play),
+      if (dataSafety != null)
+        VerifyCheck(what: 'data-safety', where: dataSafety),
+    ];
+
+    // **And what was *not*, with why — which `checked` alone cannot say.**
+    //
+    // With only the list above, a reader notices an omission by already
+    // holding the expected set in their head; a check that silently did not
+    // run is invisible unless somebody is keeping the list. That is the same
+    // data-safety failure the line above closes, moved one level up. Naming
+    // the absences makes it impossible to miss rather than merely possible to
+    // catch — absence stops being inferred from what is not in a list, which
+    // is a thing nobody does reliably.
+    //
+    // Only the reachable ones: a run that got here has at least one artifact,
+    // and `section` is skipped for a reason of its own — there is a changelog
+    // but nothing in pubspec.yaml saying which version to look for.
+    final skipped = <VerifyCheck>[
+      if (changelog == null)
+        const VerifyCheck(
+          what: 'changelog',
+          why: 'no CHANGELOG.md was found, and none was named with --changelog',
+        ),
+      if (changelog != null && project.versionName == null)
+        const VerifyCheck(
+          what: 'section',
+          why:
+              'pubspec.yaml declares no version, so there is no section to '
+              'look for',
+        ),
+      if (appStoreTrees.isEmpty)
+        const VerifyCheck(
+          what: 'appstore',
+          why:
+              'no App Store metadata tree was found, and none was named with '
+              '--appstore',
+        ),
+      if (play == null)
+        const VerifyCheck(
+          what: 'play',
+          why:
+              'no Play metadata tree was found, and none was named with --play',
+        ),
+      if (dataSafety == null)
+        const VerifyCheck(
+          what: 'data-safety',
+          why:
+              'no data safety declaration was found, and none was named with '
+              '--data-safety',
+        ),
+    ];
+
+    final display = <String>[
+      for (final entry in checked) ...[
+        '    checked ${entry.what.padRight(11)}${entry.where}',
+      ],
+      if (problems.isEmpty)
+        '==> release inputs are publishable'
+      else ...[
+        'cux_ship verify: ${problems.length} problem(s)',
+        for (final problem in problems) ...['  $problem'],
+      ],
+    ];
+
+    if (args.flag('json')) {
+      writeJsonDocument(
+        verifyDocument(
+          checked: checked,
+          skipped: skipped,
+          problems: problems.map((p) => '$p').toList(),
+          display: display,
+        ),
+      );
+      // **Exit 1 on problems even under `--json`.** The document says `ok:
+      // false` and the status says failure, which is two channels for one
+      // fact — allowed here, and not for `matches`, because this is a *check*
+      // whose whole purpose is to fail a build. A caller wiring `verify` into
+      // CI expects the status to mean what every other checker's does.
+      if (problems.isNotEmpty) {
+        exitCode = 1;
+      }
+      return;
+    }
+
+    for (final entry in checked) {
+      stdout.writeln('    checked ${entry.what.padRight(11)}${entry.where}');
     }
 
     if (problems.isEmpty) {

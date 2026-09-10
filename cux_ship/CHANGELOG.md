@@ -49,6 +49,21 @@ to choose. The document uses Apple's own field names, `videoDeliveryState`,
 Apple's reference without a translation table; `done` is this package's own
 opinion over both states and says so in a field of its own.
 
+**`verify --json`.** One document on stdout carrying `ok`, `problems`, and —
+the reason it has the shape it does — both `checked` and `skipped`. `checked`
+names every artifact inspected and where; `skipped` names every one that was
+not, and why. With `checked` alone a reader notices an omission only by already
+holding the expected set in their head, so a check that silently did not run is
+invisible unless somebody is keeping the list: the same failure the `checked`
+lines were added to close, one level up. Asked for by the consumer, who spotted
+that the fix had it too.
+
+`ok` is computed from `problems` rather than assembled beside it, so the two
+cannot disagree. Problems stay strings, because nobody has asked to branch on a
+problem's identity and starting with strings makes structure an addition rather
+than a replacement. A run with nothing to check is still a refusal rather than
+an empty document.
+
 **`AppStorePreviewsDocument` and `AppStorePreviewEntry` are exported.** They
 were missing from `lib/documents.dart`'s `show` list, so the feature shipped
 with a working flag, an emitted document and a `kind` a caller could name — and

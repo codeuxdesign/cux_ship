@@ -50,6 +50,9 @@ const appStorePreviewsSchema = 1;
 /// The schema `play tracks` declares. See [appStoreBuildsSchema].
 const playTracksSchema = 1;
 
+/// The schema `verify` declares. See [appStoreBuildsSchema].
+const verifySchema = 1;
+
 /// Writes [document] to stdout, whole, once.
 ///
 /// **Once and at the end, because `fail()` calls `exit()`.** A document
@@ -62,13 +65,35 @@ const playTracksSchema = 1;
 /// small, and the reader is as often a person as a program.
 ///
 /// [document] is one of the classes in documents.dart. Typed as [Object]
-/// because there are three of them with no common supertype — and giving them
+/// because they have no common supertype — and giving them
 /// one would put a name in `documents.dart` that exists for this function's
 /// convenience rather than for a caller's use. `JsonEncoder`'s default
 /// `toEncodable` calls `toJson()`, so this needs nothing else.
 void writeJsonDocument(Object document) {
   stdout.writeln(const JsonEncoder.withIndent('  ').convert(document));
 }
+
+/// `cux_ship verify --json`.
+///
+/// **[VerifyDocument.ok] is computed here rather than passed in**, so it cannot
+/// disagree with [problems]. A caller assembling both would eventually hand
+/// this an `ok: true` beside a non-empty list, and the document would say two
+/// things — which is the defect `matches` and `serving` are both shaped to
+/// avoid, one field down.
+VerifyDocument verifyDocument({
+  required List<VerifyCheck> checked,
+  required List<VerifyCheck> skipped,
+  required List<String> problems,
+  required List<String> display,
+}) => VerifyDocument(
+  schema: verifySchema,
+  kind: DocumentKind.verify,
+  ok: problems.isEmpty,
+  checked: checked,
+  skipped: skipped,
+  problems: problems,
+  display: display,
+);
 
 /// `cux_ship appstore builds --json`.
 AppStoreBuildsDocument appStoreBuildsDocument(

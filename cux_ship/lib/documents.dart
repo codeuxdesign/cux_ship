@@ -63,4 +63,6 @@ export 'src/documents.dart'
         PlayTracksDocument,
         ProcessingState,
         ReleaseType,
+        VerifyCheck,
+        VerifyDocument,
         isEditableVersionState;

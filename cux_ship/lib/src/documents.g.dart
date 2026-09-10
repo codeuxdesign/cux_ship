@@ -79,6 +79,7 @@ const _$DocumentKindEnumMap = {
   DocumentKind.appStoreVersions: 'appstore.versions',
   DocumentKind.appStorePreviews: 'appstore.previews',
   DocumentKind.playTracks: 'play.tracks',
+  DocumentKind.verify: 'verify',
 };
 
 AppStoreVersionEntry _$AppStoreVersionEntryFromJson(
@@ -309,5 +310,48 @@ Map<String, dynamic> _$PlayTracksDocumentToJson(PlayTracksDocument instance) =>
       'packageName': instance.packageName,
       'tracks': instance.tracks.map((e) => e.toJson()).toList(),
       'uploadedVersionCodes': instance.uploadedVersionCodes,
+      'display': instance.display,
+    };
+
+VerifyCheck _$VerifyCheckFromJson(Map<String, dynamic> json) => VerifyCheck(
+  what: json['what'] as String,
+  where: json['where'] as String?,
+  why: json['why'] as String?,
+);
+
+Map<String, dynamic> _$VerifyCheckToJson(VerifyCheck instance) =>
+    <String, dynamic>{
+      'what': instance.what,
+      'where': instance.where,
+      'why': instance.why,
+    };
+
+VerifyDocument _$VerifyDocumentFromJson(Map<String, dynamic> json) =>
+    VerifyDocument(
+      schema: (json['schema'] as num).toInt(),
+      kind: $enumDecode(_$DocumentKindEnumMap, json['kind']),
+      ok: json['ok'] as bool,
+      checked: (json['checked'] as List<dynamic>)
+          .map((e) => VerifyCheck.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      skipped: (json['skipped'] as List<dynamic>)
+          .map((e) => VerifyCheck.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      problems: (json['problems'] as List<dynamic>)
+          .map((e) => e as String)
+          .toList(),
+      display: (json['display'] as List<dynamic>)
+          .map((e) => e as String)
+          .toList(),
+    );
+
+Map<String, dynamic> _$VerifyDocumentToJson(VerifyDocument instance) =>
+    <String, dynamic>{
+      'schema': instance.schema,
+      'kind': _$DocumentKindEnumMap[instance.kind]!,
+      'ok': instance.ok,
+      'checked': instance.checked.map((e) => e.toJson()).toList(),
+      'skipped': instance.skipped.map((e) => e.toJson()).toList(),
+      'problems': instance.problems,
       'display': instance.display,
     };

@@ -318,17 +318,25 @@ void main() {
         AppStoreVersionsDocument,
         AppStorePreviewsDocument,
         PlayTracksDocument,
+        VerifyDocument,
       ];
+      // The repeated element type each document carries. `verify`'s
+      // [VerifyCheck] fills two fields rather than one — this asserts it is
+      // nameable from outside, not how often it appears.
       const entries = <Type>[
         AppStoreBuildEntry,
         AppStoreVersionEntry,
         AppStorePreviewEntry,
         PlayTrackEntry,
+        VerifyCheck,
       ];
 
-      // **The assertion that keeps this honest.** A fifth `DocumentKind` added
-      // without its document exported fails here, rather than in somebody
-      // else's package a release later.
+      // **The assertion that keeps this honest, and it has already earned its
+      // place.** `DocumentKind.verify` was added in the very next change, and
+      // this failed with `Expected: an object with length of <5>` before the
+      // types were exported — which is the whole of what it was written to do,
+      // on its first real occasion rather than in a consumer's package a
+      // release later.
       expect(
         documents,
         hasLength(DocumentKind.values.length),
