@@ -318,3 +318,101 @@ do this before the rollout task rather than after: **if `--json` wins, release
 and rollout state should never be added to `read.dart` at all.** Adding it
 first does not merely cost a version bump later — it spends a permanent API
 promise on a surface the only consumer may be about to leave.
+
+## Hand-written, and what would change that
+
+Status: **open**, 10 September 2026. Recorded rather than acted on, with a
+trigger that is countable rather than a matter of taste.
+
+`json_output.dart` builds map literals by hand. Nothing in this workspace uses
+codegen: no `build_runner`, `json_serializable`, `json_annotation` or `freezed`
+in any of the three pubspecs, no tracked `.g.dart` or `.freezed.dart`, no
+`build.yaml`.
+
+### The case for annotated document classes, which is real
+
+**The keys would stop being strings.** `'newestBuildNumberAsInt': …` is a
+string literal today, so a typo is caught by `json_output_test.dart`'s key set
+and not by the compiler — and this repository's whole disposition is that a
+check beats a test. Field names on a class are compile-checked, nullability
+lands in the type system, and classes are the thing a schema generator could
+later hang off.
+
+`json_serializable` is also not a risky dependency. It is dart.dev-published
+and among the most used packages in the ecosystem, so the ecosystem argument
+that applies to the schema generators below does not apply to it.
+
+### What it would not remove, which is the deciding half
+
+**The encoder is not a serializer.** Between the models and the documents it
+renames `line` and `lines` to `display`, drops `uploadedAt`, adds
+`newestBuildNumberAsInt` reached through `newest`, adds a `bundleId` that is on
+no model at all, flattens `platform` to `platform.api`, and passes a parent's
+`track.name` into `release.lineOn` so a release can say which track it is on.
+Every one is deliberate and every one is argued in a comment beside the field.
+
+Codegen generates the `toJson` half. **The mapping half — where all six of
+those decisions live — stays exactly as hand-written as it is now**: a map
+literal becomes a constructor call, the same lines carrying the same judgment.
+
+So the ledger, at three documents, four item shapes and roughly forty fields:
+compile-checked keys and typed nullability, against `build_runner` as a sixth
+step in `tool/check.sh` and in CI, committed `.g.dart` that `dart pub publish`
+needs present, a `json_annotation` runtime dependency in a pubspec that argues
+every line — and a set of classes that exist only to be serialized, carrying no
+behaviour, holding no invariant, constructed at exactly one call site each.
+
+### The trigger
+
+**Roughly double the document count.** The release-and-rollout read task would
+do it on its own. At three documents the build step costs more than it removes;
+at six or seven the classes stop being write-only scaffolding and the
+compile-checked keys start paying for the step rather than the other way round.
+
+Nothing else should reopen this — not a preference, and not the appearance of a
+new package.
+
+## Publishing the schema, which is still open
+
+Status: **open**, 10 September 2026. A gap that was measured, and a fix that
+was designed and not built.
+
+**A consumer cannot see a document's shape from the published package.**
+`json_output.dart` is in `lib/src/`, dartdoc does not document `lib/src/`,
+there is no `dartdoc_options.yaml` overriding that, and no public library
+exports it. So the envelope, the `kind` strings and the key list live on GitHub
+and nowhere else. What pub.dev carries is the README's *Reading the stores as
+JSON* section and this document, linked from it.
+
+**And `read.dart`'s dartdoc is a good source for meaning and a bad one for
+shape**, which is the worse of the two failures: the member names are the item
+keys in most places and are not in three — `line` and `lines` are `display`,
+`uploadedAt` is absent from the document, `newestBuildNumberAsInt` is absent
+from the model. Those are exactly the places a reader working from the API docs
+would get it wrong, and getting it nearly right is what makes it dangerous.
+
+The fix, when it is wanted: `cux_ship/schema/<kind>.v<n>.schema.json`, hand
+written, under `cux_ship/` so they ship inside the published archive as well as
+having a stable URL. **Immutable by construction** — the schema number is per
+kind and only increments, so v2 is a new file and v1 never changes again, and a
+consumer holding a document written six months ago reads its `schema` and
+fetches exactly the file that describes it. A validator as a dev dependency
+then makes the test ask *"does this document validate"* rather than compare key
+sets by hand.
+
+**Not a `--schema` flag on the commands.** `--help` belongs to `CommandRunner`
+— both parsers say so where they decline to add one — and a mode selected by
+combining flags is what this CLI moved away from when `--promote` and
+`--list-builds` became subcommands. A flag would also only ever describe the
+installed binary, where a per-version file answers for a document already
+written.
+
+**And not generated, because nothing generates it.** Every package requires the
+shape declared somewhere; none infers nullability or "may be empty" from an
+encoder. The survey, recorded so it is not repeated: `ack` with
+`ack_json_schema_builder` is the schema-first option with real traction;
+`schemantic_builder` (genkit.dev), `typed_llm_generator` and `spectra_schema`
+generate schemas from annotated classes and had no likes between them;
+`betto_schema` validates 2020-12 in pure Dart and is what a test would use;
+`schema2dart` goes the other way and is what a *consumer* would run against
+published files.
