@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+**`serving` is about the rollout, not about availability — the doc comments now
+say so.** No behaviour changes and the mapping is unchanged: `completed ||
+inProgress => true` is the right split for what Play's `status` field *is*. What
+was wrong was three sentences describing it, all of which claimed the release
+was in front of users.
+
+A consumer promoted to Play production, this package answered `serving: true`,
+and the Play Console said **In review · Full rollout** — nobody could install
+it. **The Play Developer API carries no app-review state on any resource**, so
+this is not a gap to fill later: the developer's configured rollout is the only
+thing `status` can describe. Google's own documentation for `completed` says its
+APKs *"are being served to all users"*, which is false while a release is in
+review and is where the misreading starts.
+
+`PlayReleaseStatus.completed`, `PlayReleaseStatus.serving` and
+`PlayReleaseEntry.serving` now name the rollout rather than the audience.
+Reported by a consumer whose status grid printed `LIVE`; see
+`docs/design/rollout-state.md`.
+
 ## 4.5.0-dev.2
 
 ### Found by the first real upload, not by the review
