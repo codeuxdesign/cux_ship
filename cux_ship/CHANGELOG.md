@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+**A listing-only upload publishes the release notes.** `upload --metadata
+--changelog CHANGELOG.md` accepted the flag and wrote no "What's New in This
+Version" — the write existed and lived inside the promote block, so `promote
+--changelog` was correct and a listing-only publish silently was not. Found by
+a consumer whose flow never reaches promote by design: publish everything, look
+at it in App Store Connect, then submit by hand.
+
+`publishReleaseNotes` is now one function with two callers, carrying the two
+rules that travel with the write — a first version has no "What's New", and the
+App Store rejects emoji in `whatsNew`.
+
+**The preview wait reports through a callback.** `PreviewProcessingProgress`
+sits beside `BuildProcessingProgress` and carries two states rather than one,
+because Apple ingests the video and then cuts the poster frame out of it.
+Passing no callback prints exactly what it printed before.
+
+**Reaching the wait's deadline is `PreviewsPending` rather than a 504.** A
+distinct type for a distinct outcome: `ProcessingTimeout` means a build that
+never appeared, which has usually been refused. Nothing is wrong here — Apple
+is not done — and it carries each preview's two states rather than a count.
+`previewsPendingExit` is reserved at 4 for the command that will read it; see
+`docs/design/preview-wait-split.md`.
+
 ## 4.5.0-dev.2
 
 ### Found by the first real upload, not by the review
