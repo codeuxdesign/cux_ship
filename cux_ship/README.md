@@ -682,8 +682,9 @@ the child's.
 **2, 3, 4 and 5 are not failures**, in the sense that the command did what it
 could and the answer is the exit status — but *that property is not what any of
 the numbers means*, and a caller must not treat "non-1 and non-0" as a category.
-255 and the `exec` pass-through below are the proof of that: both are non-zero,
-neither is one of these conditions.
+255 and the `exec` pass-through above are the proof of that: both are non-zero,
+and neither is one of these conditions.
+
 Each code names **one condition**, deliberately: a wrapper branching on 2 must
 not have to know which subcommand produced it, which is why
 `uploadCollisionExit` took 3 rather than reusing "there is work to do", the
@@ -711,17 +712,16 @@ for it in those words.
 
 The consequence for a caller is worth stating plainly: **enumerate the codes you
 accept, per command.** A general "this one is re-runnable" predicate written
-against 4 will silently swallow an unrelated condition the day a fifth code
-arrives. That is more tedious than a generic code and it is the honest shape —
-the alternative is a number whose meaning widens without anyone deciding it
-should.
+against 4 silently swallows an unrelated condition the day another one
+arrives — which has already happened once, to 5. That is more tedious than a
+generic code and it is the honest shape: the alternative is a number whose
+meaning widens without anyone deciding it should.
 
 ### Reading the stores as JSON
 
 **`appstore builds`, `appstore versions`, `appstore previews` and `play tracks`
-take `--json`.** For
-a caller that is not a Dart program — a shell `status`, `jq` at a terminal, a
-CI step reading one number:
+take `--json`.** For a caller that is not a Dart program — a shell `status`,
+`jq` at a terminal, a CI step reading one number:
 
 ```bash
 cux_ship appstore builds --platform ios --json | jq -r '.newestBuildNumberAsInt'

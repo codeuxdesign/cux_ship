@@ -778,9 +778,24 @@ const noSuchVersionExit = 5;
 /// Apple holds no App Store version named [versionString] on [platform].
 ///
 /// A subclass rather than a sibling, so a caller that already handles
-/// [AscApiException] keeps working and one that wants to tell this apart can.
-/// **The `on NoSuchVersion` clause must precede `on AscApiException`**, since
-/// Dart takes the first matching clause and every instance of this is one.
+/// [AscApiException] keeps working. **The `on NoSuchVersion` clause must
+/// precede `on AscApiException`**, since Dart takes the first matching clause
+/// and every instance of this is one.
+///
+/// **Telling it apart is available inside this package, and outside it only as
+/// [noSuchVersionExit].** This sentence used to say *"one that wants to tell
+/// this apart can"*, full stop, which is false from outside: the type is not
+/// exported, and it deliberately is not. `read.dart` — the only library that
+/// publishes catchable exceptions — sets the bar at *something outside this
+/// repository cannot be written without it*, and nothing that library exposes
+/// can raise this: its surface is `builds()`, `versions()` and `awaitBuild()`,
+/// none of which resolves a named version. [ProcessingTimeout] is exported
+/// because `awaitBuild` documents throwing it; this has no such caller.
+///
+/// So the route for a consumer is the exit code, which is what it was minted
+/// for and what `package:cux_ship/exit_codes.dart` exports. Adding the type to
+/// a public library to make this comment true would be API surface nobody
+/// could reach.
 class NoSuchVersion extends AscApiException {
   NoSuchVersion(this.versionString, this.platform)
     : super(404, [
