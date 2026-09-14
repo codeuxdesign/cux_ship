@@ -904,6 +904,17 @@ class AppStoreBuildEntry {
   /// [inExternalTesting] is null rather than false in that case for exactly
   /// this reason, so a consumer reading only that flag is already safe. This
   /// field is for one that wants to say *why*.
+  ///
+  /// **Required by [AppStoreBuildEntry.fromJson], and that is a fact about
+  /// timing rather than a general rule.** It and [unresolvedBuildBetaDetail]
+  /// are non-nullable with no default, so a document lacking them is refused:
+  /// a default of `0` would read a document's silence as *nothing was
+  /// missing*, which is the reading these two exist to prevent, turned on
+  /// themselves. That is only safe because schema 2 had not shipped when they
+  /// were added, so no document outside this repository was ever written
+  /// without them. **Adding a required field to a schema that has shipped is a
+  /// new schema number**, not a stricter decoder — a reader would be refusing
+  /// documents this package told it to accept.
   final int unresolvedBetaGroups;
 
   /// **This package's reading of [externalBuildStateRaw]**, or null when Apple

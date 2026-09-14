@@ -274,6 +274,16 @@ class AppStoreBuild {
   /// enough to answer `true` however many others were truncated, because the
   /// missing ones could only add attachments. It is only the empty list that a
   /// shortfall makes uninformative.
+  ///
+  /// **This rule is implemented twice and the compiler connects neither copy.**
+  /// `cycling_storyteller`'s `status_test` fixture derives delivery rather than
+  /// stating it — so that a fixture cannot assert a delivery this encoder would
+  /// never emit — which means it mirrors the predicate above by hand. It was
+  /// still mirroring the superseded `externalBuildState == 'IN_BETA_TESTING'`
+  /// after this getter moved to two facts, and the drift was invisible because
+  /// the old rule only ever produced `false`, which stays plausible. So a
+  /// change here is a change there: the guard against fixtures inventing
+  /// impossible states is itself capable of generating them.
   bool? get inExternalTesting {
     final state = externalBuildState;
     if (state == null) {
