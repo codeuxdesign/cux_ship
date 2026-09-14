@@ -46,6 +46,13 @@ Map<String, dynamic> _build(
   // attached to twelve groups names ten and states twelve. Defaults to
   // [groupIds]'s length, which is what Apple sends when nothing was cut.
   int? groupsTotal,
+  // Non-object entries appended to `betaGroups.data`, which JSON:API forbids
+  // and Apple has never sent. The fake carries it because the branch that
+  // counts them is unreachable otherwise, and because the default
+  // [groupsTotal] counts them — Apple's total describes what it put in `data`,
+  // garbage included, which is exactly what makes the shortfall invisible to a
+  // comparison against `data.length`.
+  int malformedGroupEntries = 0,
 }) => {
   'type': 'builds',
   'id': 'build-$platform-$version',
@@ -69,10 +76,16 @@ Map<String, dynamic> _build(
       if (groupIds != null)
         'betaGroups': {
           'meta': {
-            'paging': {'total': groupsTotal ?? groupIds.length, 'limit': 10},
+            'paging': {
+              'total': groupsTotal ?? (groupIds.length + malformedGroupEntries),
+              'limit': 10,
+            },
           },
           'data': [
-            for (final id in groupIds) {'type': 'betaGroups', 'id': id},
+            for (final id in groupIds) ...[
+              {'type': 'betaGroups', 'id': id},
+            ],
+            for (var i = 0; i < malformedGroupEntries; i++) ...['garbage-$i'],
           ],
         }
       // **Apple's shape for a relationship the request did not include**:
@@ -925,6 +938,39 @@ void main() {
       expect(build.betaGroups!.map((g) => g.name), ['Team']);
       expect(build.unresolvedBetaGroups, 4);
     });
+
+    test(
+      'and an entry that is not a resource at all is counted, not dropped',
+      () {
+        // **The same hole as the two caps, one filter further in**, and found by
+        // review rather than by a mutation. The loop used to iterate
+        // `data.whereType<Map<String, dynamic>>()` while the paging comparison
+        // measured against the unfiltered `data.length` — so a `data` of three
+        // carrying one non-object resolved two, counted no shortfall, and
+        // matched its own total exactly. Short by one, describing itself as
+        // whole.
+        //
+        // Not reachable from Apple today: JSON:API forbids it and none has ever
+        // been seen. It is fixed because *the filter is itself defensive* —
+        // trusting the shape enough not to count what was discarded, inside the
+        // one function whose job is counting what went missing, is the
+        // inconsistency.
+        final build = listingWith(
+          _build(
+            '180',
+            groupIds: const ['g-int', 'g-ext'],
+            malformedGroupEntries: 1,
+          ),
+          [
+            _group('g-int', name: 'Team', internal: true),
+            _group('g-ext', name: 'Beta Testers', internal: false),
+          ],
+        ).newest!;
+
+        expect(build.betaGroups, hasLength(2));
+        expect(build.unresolvedBetaGroups, 1);
+      },
+    );
 
     test('and a total that contradicts its own ids never lowers the count', () {
       // **Found by a mutation that survived.** Dropping the `total >

@@ -541,10 +541,12 @@ int _byBuildNumberDescending(AppStoreBuild a, AppStoreBuild b) =>
 /// the old reading takes `.resolved` and has to walk past `.unresolved` to do
 /// it.
 ///
-/// An entry naming no `type` or no `id` counts as unresolved too. It is not a
-/// resource this can find and it is not one Apple left out either — but of the
-/// two ways to be wrong about it, counting it is the one that makes a reader
-/// say *I do not know* instead of *there are none*.
+/// An entry naming no `type` or no `id` counts as unresolved too, and so does
+/// one that is not an object at all. Neither is a resource this can find, and
+/// neither is one Apple left out either — but of the two ways to be wrong
+/// about it, counting it is the one that makes a reader say *I do not know*
+/// instead of *there are none*. Discarding it is the way that produces a short
+/// list describing itself as whole.
 ({List<Map<String, dynamic>> resolved, int unresolved})? _relatedMany(
   Map<String, dynamic> resource,
   String relationship,
@@ -564,9 +566,22 @@ int _byBuildNumberDescending(AppStoreBuild a, AppStoreBuild b) =>
   }
   final resolved = <Map<String, dynamic>>[];
   var unresolved = 0;
-  for (final entry in data.whereType<Map<String, dynamic>>()) {
-    final type = entry['type'];
-    final id = entry['id'];
+  // **`data` directly rather than `whereType`, and the filter's absence is the
+  // point.** Filtering dropped a non-object entry before the loop could count
+  // it, while the paging comparison below measures against the *unfiltered*
+  // `data.length` — so a `data` of three carrying one piece of garbage
+  // resolved two, counted no shortfall, and matched its total exactly. A list
+  // short by one reporting itself whole, which is the sentence this field's
+  // own doc comment calls impossible.
+  //
+  // Removing the filter fixes it without a branch: a non-object falls through
+  // to the same `found == null` arm that already catches a map missing its
+  // `type` or `id`, and the loop's idea of how many entries there were now
+  // agrees with the comparison's.
+  for (final entry in data) {
+    final named = entry is Map<String, dynamic> ? entry : null;
+    final type = named?['type'];
+    final id = named?['id'];
     final found = type is String && id is String ? included['$type:$id'] : null;
     if (found == null) {
       unresolved += 1;
