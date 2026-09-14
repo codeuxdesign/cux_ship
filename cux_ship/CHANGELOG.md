@@ -192,6 +192,14 @@ cleared beta review *and* is attached to at least one external group. Apple's
 approval is not delivery and an attachment made while review is pending is not
 delivery either, so neither half answers alone.
 
+**And it is false for an expired build whatever those two say.** TestFlight
+withdraws a build after ninety days, so one that cleared review and is attached
+to an external group is still a build nobody can install — and this answered
+`true` for exactly that combination. Both inputs were read correctly; the
+reading over them was missing a third fact `expired` already carried. Found in
+review, and unreachable on the account this was measured against until
+2026-11-14, which is the first day anything on it expires.
+
 **Measured against a live account on 2026-09-14**, which corrected two things
 the published schema had suggested. Apple's terminal external state after
 review is `BETA_APPROVED`; `IN_BETA_TESTING` did not occur once in 123 builds,

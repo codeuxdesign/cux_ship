@@ -1104,6 +1104,48 @@ void main() {
       expect(build.inExternalTesting, isNull);
     });
 
+    test('and false for an expired build, whatever the other two say', () {
+      // **Found in review, and both inputs were right.** An expired build that
+      // cleared beta review and is attached to an external group answered
+      // `true` — *external testers can install this now* about a build
+      // TestFlight has withdrawn. The state and the attachment were read
+      // correctly; the reading over them was missing a third fact `expired`
+      // already carried.
+      //
+      // Unreachable on the account this package is measured against, which has
+      // no expired build until 2026-11-14 — and the oldest externally attached
+      // build is 53, so it becomes reachable before the rest of them.
+      final build = appStoreBuildsFrom(
+        [
+          _build(
+            '180',
+            expired: true,
+            groupIds: const ['g-ext'],
+            detailId: 'd-1',
+          ),
+        ],
+        AscPlatform.ios,
+        included: {
+          'betaGroups:g-ext': _group(
+            'g-ext',
+            name: 'Beta Testers',
+            internal: false,
+          ),
+          'buildBetaDetails:d-1': _detail(
+            'd-1',
+            externalState: 'BETA_APPROVED',
+          ),
+        },
+      ).newest!;
+
+      // The two inputs that used to be the whole answer, both saying yes.
+      expect(build.externalBuildState, 'BETA_APPROVED');
+      expect(build.externalGroups, hasLength(1));
+      // And the answer is no, because nobody can install an expired build.
+      expect(build.inExternalTesting, isFalse);
+      expect(build.usable, isFalse);
+    });
+
     test('and null when the only attached group has a kind Apple withheld', () {
       // `externalGroups` counts an unknown kind out of both lists, so
       // answering `false` from its emptiness would turn a refusal to guess

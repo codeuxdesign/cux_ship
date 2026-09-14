@@ -321,6 +321,19 @@ class AppStoreBuild {
   /// change here is a change there: the guard against fixtures inventing
   /// impossible states is itself capable of generating them.
   bool? get inExternalTesting {
+    // **Expiry settles it before any of the rest, and this did not check it.**
+    // An expired build that cleared review and is attached to an external
+    // group answered `true` — *external testers can install this now* about a
+    // build TestFlight has withdrawn. Both inputs were right and the reading
+    // over them was missing a third fact that [expired] already carries.
+    //
+    // `false` rather than null: expiry is knowable from an attribute Apple
+    // sends on every build, without the state or the groups, so this is a
+    // refusal shaped like [usable]'s rather than a claim. It is also the one
+    // arm that does not depend on the audience having been read at all.
+    if (expired) {
+      return false;
+    }
     final state = externalBuildState;
     if (state == null) {
       return null;

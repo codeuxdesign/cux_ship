@@ -952,7 +952,15 @@ class AppStoreBuildEntry {
   /// this field was added to fix rather than a safe default. Null says the
   /// question was not answered, which is what a consumer should show.
   ///
-  /// **Two facts and not one**: true when the build has cleared beta review —
+  /// **False for an expired build whatever else is true of it.** TestFlight
+  /// withdraws a build after ninety days, so a build that cleared review and
+  /// is attached to an external group is still one nobody can install — and
+  /// this answered `true` for exactly that combination until review caught it.
+  /// The `false` is a refusal like [usable]'s rather than a claim, and it is
+  /// the one reading here that does not need [betaGroups] to have been read.
+  ///
+  /// **Two facts and not one**, once it is not expired: true when the build
+  /// has cleared beta review —
   /// [ExternalBuildState.betaApproved], [ExternalBuildState.readyForBetaTesting]
   /// or [ExternalBuildState.inBetaTesting] — *and* [betaGroups] holds at least
   /// one group whose kind is [BetaGroupKindEntry.external]. Apple's verdict is
