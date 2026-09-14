@@ -52,13 +52,29 @@ interesting part: **approval genuinely is not delivery — but the fact that
 carries delivery is the group attachment, not a second state.** So the reading
 is both fields or neither:
 
+- **false when the build has expired**, before anything else is read — no state
+  and no attachment makes a withdrawn build installable;
+- null when the state is one this version has no word for, because *not
+  cleared* and *not recognized* are different facts and the complement of the
+  cleared set collapses them;
+- false when the state has not cleared review — no assignment makes a build in
+  review installable, so the groups need not be read;
 - true when the state has cleared beta review (`BETA_APPROVED`,
   `READY_FOR_BETA_TESTING`, `IN_BETA_TESTING`) **and** at least one attached
   group is external;
-- false when the state has not cleared review — no assignment makes a build in
-  review installable, so the groups need not be read;
 - null when either input is missing, including when the only attached group
-  came back with a kind Apple withheld.
+  came back with a kind Apple withheld, or when the group list came up short —
+  but only where the shortfall could change the answer, since one *resolved*
+  external group settles it whatever else went missing.
+
+**Listed in the order they are asked, because the order is the part that kept
+being wrong.** Two of this getter's four defects were precedence rather than a
+missing rule: expiry had no position because the check did not exist, and the
+shortfall arm sat above the positive answer in its first draft. The five arms
+above are pinned in `build_listing_test.dart` by a table of *guard against the
+guards after it*, and the vocabulary the second and third arms turn on is
+pinned by one row per state Apple names — a list nothing checked, which was
+free to be wrong in either direction until it had rows.
 
 `IN_BETA_TESTING` and `READY_FOR_BETA_TESTING` stay in the set because Apple
 publishes them and one account is one account. An unobserved state is not an

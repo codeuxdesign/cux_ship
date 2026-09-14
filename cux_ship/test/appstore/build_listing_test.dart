@@ -308,6 +308,405 @@ Future<String> _printed(Future<void> Function() body) async {
   return captured.buffer.toString();
 }
 
+/// The group shapes `inExternalTesting` distinguishes, named rather than spelled
+/// out at each row.
+///
+/// Raw ids and `included` maps at twenty-four call sites would bury the one
+/// thing each row is about, and a row whose inputs have to be decoded is a row
+/// nobody checks.
+enum _Groups {
+  /// No `betaGroups` relationship — the read did not send the include.
+  notRead,
+
+  /// `data: []` — Apple saying the build is attached to nothing.
+  none,
+  internalOnly,
+  externalAttached,
+
+  /// One group whose `isInternalGroup` Apple withheld, counted as neither kind.
+  unknownKindOnly,
+  externalAndUnknownKind,
+
+  /// Apple named a group and did not send it, and nothing else resolved.
+  truncatedNoneResolved,
+  externalAndTruncated,
+  internalAndTruncated,
+
+  /// Apple's own `meta.paging.total` exceeds the ids it sent — the
+  /// relationship's own pagination, which is a second and separate way for the
+  /// list to come up short from `included` being truncated. Every id present
+  /// resolves, so a count of unresolved ids alone reads this as complete.
+  totalBeyondTheIdsSent,
+}
+
+({List<String>? ids, int? total, List<Map<String, dynamic>> resources})
+_shapeOf(_Groups groups) {
+  final internal = _group('g-int', name: 'Team', internal: true);
+  final external = _group('g-ext', name: 'Beta Testers', internal: false);
+  final withheld = _group('g-?', name: 'Mystery');
+  return switch (groups) {
+    _Groups.notRead => (ids: null, total: null, resources: const []),
+    _Groups.none => (ids: const <String>[], total: null, resources: const []),
+    _Groups.internalOnly => (
+      ids: const ['g-int'],
+      total: null,
+      resources: [internal],
+    ),
+    _Groups.externalAttached => (
+      ids: const ['g-ext'],
+      total: null,
+      resources: [external],
+    ),
+    _Groups.unknownKindOnly => (
+      ids: const ['g-?'],
+      total: null,
+      resources: [withheld],
+    ),
+    _Groups.externalAndUnknownKind => (
+      ids: const ['g-ext', 'g-?'],
+      total: null,
+      resources: [external, withheld],
+    ),
+    _Groups.truncatedNoneResolved => (
+      ids: const ['g-gone'],
+      total: null,
+      resources: const [],
+    ),
+    _Groups.externalAndTruncated => (
+      ids: const ['g-ext', 'g-gone'],
+      total: null,
+      resources: [external],
+    ),
+    _Groups.internalAndTruncated => (
+      ids: const ['g-int', 'g-gone'],
+      total: null,
+      resources: [internal],
+    ),
+    _Groups.totalBeyondTheIdsSent => (
+      ids: const ['g-int'],
+      total: 3,
+      resources: [internal],
+    ),
+  };
+}
+
+AppStoreBuild _deliveryOf({
+  required bool expired,
+  required String? state,
+  required _Groups groups,
+}) {
+  final shape = _shapeOf(groups);
+  return appStoreBuildsFrom(
+    [
+      _build(
+        '180',
+        expired: expired,
+        groupIds: shape.ids,
+        groupsTotal: shape.total,
+        detailId: 'd-1',
+      ),
+    ],
+    AscPlatform.ios,
+    included: <String, Map<String, dynamic>>{
+      for (final resource in shape.resources) ...{
+        '${resource['type']}:${resource['id']}': resource,
+      },
+      'buildBetaDetails:d-1': _detail('d-1', externalState: state),
+    },
+  ).newest!;
+}
+
+/// One row per guard beating a *later* guard that would have answered
+/// differently. A combination where the two agree proves nothing about order
+/// and is not here.
+const _deliveryPrecedence =
+    <
+      ({
+        String name,
+        bool expired,
+        String? state,
+        _Groups groups,
+        bool? expected,
+      })
+    >[
+      // ---- expiry, which answers before anything else is read ----
+      (
+        name: 'expiry beats an attached external group that would say true',
+        expired: true,
+        state: 'BETA_APPROVED',
+        groups: _Groups.externalAttached,
+        expected: false,
+      ),
+      (
+        name: 'expiry beats an absent state that would say unknown',
+        expired: true,
+        state: null,
+        groups: _Groups.notRead,
+        expected: false,
+      ),
+      (
+        name: 'expiry beats an unreadable state that would say unknown',
+        expired: true,
+        state: 'SOMETHING_APPLE_ADDED_LATER',
+        groups: _Groups.externalAttached,
+        expected: false,
+      ),
+      (
+        name: 'expiry beats groups nobody read, which would say unknown',
+        expired: true,
+        state: 'BETA_APPROVED',
+        groups: _Groups.notRead,
+        expected: false,
+      ),
+      (
+        name: 'expiry beats a shortfall that would say unknown',
+        expired: true,
+        state: 'BETA_APPROVED',
+        groups: _Groups.internalAndTruncated,
+        expected: false,
+      ),
+
+      // ---- a state Apple did not send ----
+      (
+        name: 'an absent state beats an external group that would say true',
+        expired: false,
+        state: null,
+        groups: _Groups.externalAttached,
+        expected: null,
+      ),
+      (
+        name:
+            'an absent state beats attached-to-nothing, which would say false',
+        expired: false,
+        state: null,
+        groups: _Groups.none,
+        expected: null,
+      ),
+
+      // ---- a state this version has no word for ----
+      (
+        name: 'an unreadable state beats the not-cleared arm, which says false',
+        expired: false,
+        state: 'SOMETHING_APPLE_ADDED_LATER',
+        groups: _Groups.notRead,
+        expected: null,
+      ),
+      (
+        name: 'an unreadable state beats an external group that would say true',
+        expired: false,
+        state: 'SOMETHING_APPLE_ADDED_LATER',
+        groups: _Groups.externalAttached,
+        expected: null,
+      ),
+      (
+        name: 'an unreadable state beats attached-to-nothing, saying false',
+        expired: false,
+        state: 'SOMETHING_APPLE_ADDED_LATER',
+        groups: _Groups.none,
+        expected: null,
+      ),
+
+      // ---- a known state that has not cleared review ----
+      (
+        name: 'in review beats groups nobody read, which would say unknown',
+        expired: false,
+        state: 'IN_BETA_REVIEW',
+        groups: _Groups.notRead,
+        expected: false,
+      ),
+      (
+        name: 'in review beats an attached external group that would say true',
+        expired: false,
+        state: 'WAITING_FOR_BETA_REVIEW',
+        groups: _Groups.externalAttached,
+        expected: false,
+      ),
+      (
+        name: 'in review beats a shortfall that would say unknown',
+        expired: false,
+        state: 'BETA_REJECTED',
+        groups: _Groups.internalAndTruncated,
+        expected: false,
+      ),
+
+      // ---- cleared review, and the groups were never read ----
+      (
+        name: 'unread groups beat the terminal false',
+        expired: false,
+        state: 'BETA_APPROVED',
+        groups: _Groups.notRead,
+        expected: null,
+      ),
+
+      // ---- cleared, and one external group did arrive ----
+      (
+        name: 'a resolved external group beats a withheld kind beside it',
+        expired: false,
+        state: 'BETA_APPROVED',
+        groups: _Groups.externalAndUnknownKind,
+        expected: true,
+      ),
+      (
+        name: 'a resolved external group beats a shortfall beside it',
+        expired: false,
+        state: 'BETA_APPROVED',
+        groups: _Groups.externalAndTruncated,
+        expected: true,
+      ),
+      (
+        name: 'a resolved external group beats the terminal false',
+        expired: false,
+        state: 'BETA_APPROVED',
+        groups: _Groups.externalAttached,
+        expected: true,
+      ),
+
+      // ---- cleared, no external group arrived, and something is missing ----
+      (
+        name: 'a withheld kind beats the terminal false',
+        expired: false,
+        state: 'BETA_APPROVED',
+        groups: _Groups.unknownKindOnly,
+        expected: null,
+      ),
+      (
+        name: 'a group named and not sent beats the terminal false',
+        expired: false,
+        state: 'BETA_APPROVED',
+        groups: _Groups.truncatedNoneResolved,
+        expected: null,
+      ),
+      (
+        name: 'a shortfall beside an internal group beats the terminal false',
+        expired: false,
+        state: 'BETA_APPROVED',
+        groups: _Groups.internalAndTruncated,
+        expected: null,
+      ),
+      (
+        name: 'a paging total beyond the ids sent beats the terminal false',
+        expired: false,
+        state: 'BETA_APPROVED',
+        groups: _Groups.totalBeyondTheIdsSent,
+        expected: null,
+      ),
+    ];
+
+/// The answer for each state Apple names, and for the two group shapes that
+/// end in a plain `false`. **Not precedence rows** — no later guard would have
+/// answered differently — so they are here rather than padding the table above
+/// with rows that prove nothing about order.
+///
+/// **This is the guard the first draft of these tests left open.** Three of the
+/// twelve states in `_knownExternalStates` were exercised by nothing at all, so
+/// dropping one from the set — or promoting one into `_clearedBetaReview` —
+/// passed all 1148 tests. A vocabulary nothing checks is the defect this whole
+/// branch keeps finding, and it was written three commits after the last one
+/// while fixing a different instance of it.
+///
+/// Each state is asked **with an external group attached and unexpired**, which
+/// is the one shape where all three answers are reachable: a state that has
+/// cleared review answers `true` there, one that has not answers `false`, and
+/// one the set does not name answers `null`. So a single row per state catches
+/// both directions of a vocabulary edit.
+const _deliveryVocabulary =
+    <({String name, String? state, _Groups groups, bool? expected})>[
+      // Not cleared. Every one of these answers `false` because the state says
+      // so, before the attached external group is even looked at.
+      (
+        name: 'PROCESSING has not cleared review',
+        state: 'PROCESSING',
+        groups: _Groups.externalAttached,
+        expected: false,
+      ),
+      (
+        name: 'PROCESSING_EXCEPTION has not cleared review',
+        state: 'PROCESSING_EXCEPTION',
+        groups: _Groups.externalAttached,
+        expected: false,
+      ),
+      (
+        name: 'MISSING_EXPORT_COMPLIANCE has not cleared review',
+        state: 'MISSING_EXPORT_COMPLIANCE',
+        groups: _Groups.externalAttached,
+        expected: false,
+      ),
+      (
+        name: 'IN_EXPORT_COMPLIANCE_REVIEW has not cleared review',
+        state: 'IN_EXPORT_COMPLIANCE_REVIEW',
+        groups: _Groups.externalAttached,
+        expected: false,
+      ),
+      (
+        name: 'READY_FOR_BETA_SUBMISSION has not cleared review',
+        state: 'READY_FOR_BETA_SUBMISSION',
+        groups: _Groups.externalAttached,
+        expected: false,
+      ),
+      (
+        name: 'WAITING_FOR_BETA_REVIEW has not cleared review',
+        state: 'WAITING_FOR_BETA_REVIEW',
+        groups: _Groups.externalAttached,
+        expected: false,
+      ),
+      (
+        name: 'IN_BETA_REVIEW has not cleared review',
+        state: 'IN_BETA_REVIEW',
+        groups: _Groups.externalAttached,
+        expected: false,
+      ),
+      (
+        name: 'BETA_REJECTED has not cleared review',
+        state: 'BETA_REJECTED',
+        groups: _Groups.externalAttached,
+        expected: false,
+      ),
+      (
+        name: 'EXPIRED, the state, has not cleared review',
+        state: 'EXPIRED',
+        groups: _Groups.externalAttached,
+        expected: false,
+      ),
+
+      // Cleared. `BETA_APPROVED` is the only one of the three observed across
+      // 123 builds — Apple's terminal state after review — so these rows are
+      // the whole of what holds the other two in the set, and the set is what
+      // keeps this getter from being the constant `false` its first shape was.
+      (
+        name: 'BETA_APPROVED has cleared review',
+        state: 'BETA_APPROVED',
+        groups: _Groups.externalAttached,
+        expected: true,
+      ),
+      (
+        name: 'READY_FOR_BETA_TESTING has cleared review',
+        state: 'READY_FOR_BETA_TESTING',
+        groups: _Groups.externalAttached,
+        expected: true,
+      ),
+      (
+        name: 'IN_BETA_TESTING has cleared review, and Apple never sends it',
+        state: 'IN_BETA_TESTING',
+        groups: _Groups.externalAttached,
+        expected: true,
+      ),
+
+      // The two shapes that reach the terminal `false`: cleared review, nothing
+      // missing, and nobody outside.
+      (
+        name: 'cleared review with an internal group only is a plain false',
+        state: 'BETA_APPROVED',
+        groups: _Groups.internalOnly,
+        expected: false,
+      ),
+      (
+        name: 'cleared review attached to nothing is the same plain false',
+        state: 'BETA_APPROVED',
+        groups: _Groups.none,
+        expected: false,
+      ),
+    ];
+
 void main() {
   final app = App('app-1', 'Example', 'design.codeux.example');
 
@@ -1238,6 +1637,61 @@ void main() {
       expect(build.unresolvedBetaGroups, 1);
       expect(build.inExternalTesting, isFalse);
     });
+  });
+
+  group('external delivery, each guard against the ones after it', () {
+    // **The tests above were each written on the day a defect was found, and
+    // that is four separate days.** `inExternalTesting` has now been wrong
+    // four times — reading one fact where there were two, ignoring a truncated
+    // group list, ignoring `expired`, and treating a state it cannot read as a
+    // denial. Every fix was correct; the *next* reading over it was not.
+    //
+    // **Two of the four were about order rather than about any single
+    // answer.** The `expired` check had no position because it did not exist,
+    // and the shortfall check sat *above* `external.isNotEmpty` in its first
+    // draft — so one resolved external group could not answer `true` while any
+    // other group was missing. A test per defect exercises one path and says
+    // nothing about which guard would have won had two applied at once, which
+    // is exactly the question that kept being answered wrongly.
+    //
+    // So each row here is a guard **beating a later guard that would have
+    // answered differently**. A row where the two agree carries no information
+    // about precedence and is not here. Every expectation is written out
+    // rather than computed, because a table that derives what it asserts tests
+    // the implementation against itself — which is what M7 caught the schema
+    // check doing, and what the consumer's fixture was doing with this very
+    // predicate.
+    for (final row in _deliveryPrecedence) {
+      test(row.name, () {
+        expect(
+          _deliveryOf(
+            expired: row.expired,
+            state: row.state,
+            groups: row.groups,
+          ).inExternalTesting,
+          row.expected,
+          reason:
+              'expired=${row.expired} state=${row.state} '
+              'groups=${row.groups.name}',
+        );
+      });
+    }
+  });
+
+  group('external delivery, one answer for every state Apple names', () {
+    for (final row in _deliveryVocabulary) {
+      test(row.name, () {
+        expect(
+          _deliveryOf(
+            expired: false,
+            state: row.state,
+            groups: row.groups,
+          ).inExternalTesting,
+          row.expected,
+          reason: 'state=${row.state} groups=${row.groups.name}',
+        );
+      });
+    }
   });
 
   test('the listing names the platform it answered for', () {
