@@ -497,6 +497,33 @@ package already makes, and adding it would be a new question rather than a free
 field — which is what the probe was for, and the answer being no is worth the
 same as the answer being yes.
 
+### What a build's attributes carry, and what they do not
+
+Measured the same way, all 72 macOS builds: `version`, `uploadedDate`,
+`expirationDate`, `expired`, `processingState`, `minOsVersion`,
+`lsMinimumSystemVersion`, `computedMinMacOsVersion`,
+`computedMinVisionOsVersion`, `iconAssetToken`, `buildAudienceType`,
+`usesNonExemptEncryption`. Two of those bear dates, and they are the upload and
+the expiry.
+
+**There is no modification timestamp on a Build, which settles incremental sync
+by removing its precondition rather than failing it.** The plan was to sort
+newest-modified-first, hold a watermark, and page until reaching it. The
+question posed against that was the careful one — not *does a Build carry a
+modification timestamp* but *does it move when a related resource changes*,
+since `externalBuildState` lives on `buildBetaDetail` and the audience is a
+relationship, so a timestamp tracking only the Build would sit still while both
+facts this listing reports change. **That question never gets asked, because
+there is no field to ask it of.** It is recorded in its careful form anyway:
+the crude version would have been satisfied by an upload-only timestamp, which
+is the likelier trap and the one that would have shipped a sync silently
+missing every overnight approval.
+
+**`buildAudienceType` is `APP_STORE_ELIGIBLE` on all 72 and is not a shortcut.**
+It describes store eligibility rather than testers, so despite the name it does
+not answer who has the build. Written down so the next reader does not spend
+the request finding out.
+
 **Caching belongs to the consumer, for a better reason than statelessness.**
 The argument against it here was staleness, and opt-in caching with a stated
 age answers that. What does not survive the move is *invalidation*: a
@@ -511,12 +538,23 @@ prose on stderr, which is this package's existing convention and which the
 consumer's panel already parses as a phase milestone, with the document
 untouched on stdout. NDJSON would need a parser on both sides to be no better.
 
-**`filter[expired]` survives as the one lever still worth having**, and it is
-simply too early: it needs only that the account reach ninety days, from which
-point it would hold the listing to ninety days of uploads rather than all of
-them, and it narrows nothing a caller wants since `usable` already excludes
-what it would remove. Whether Apple accepts the parameter is unmeasured, and
-there would be nothing to observe if it did.
+**`filter[expired]` is closed, and not as *too early*.** It is *not needed*:
+every build carries an `expirationDate`, measured on all 72, and
+`expirationDate - uploadedDate` is **exactly ninety days on every one of them,
+without exception**. Expiry is therefore fully derivable from data already in
+the response, and a request narrowed by a parameter nobody has verified buys
+nothing over arithmetic on a field that is already there. That also retires the
+worry above about the growth argument resting on an unobserved claim — the
+first build on this account expires on **2026-11-14**, which is when *an
+expired build stays listed* becomes checkable, and it is the only half still
+open.
+
+`expirationDate` is on the wire and this package does not parse it; `expired`,
+the boolean Apple derives, is what [AppStoreBuild] carries. Adding it would be
+free while schema 2 is unreleased and a schema bump afterwards — and it has no
+caller, which is the same test the per-group read failed. Recorded so the next
+person weighing "how long until this build expires" knows the answer is one
+field away rather than one request.
 
 The reason to write all this down rather than act on it is the one §3 earned
 the hard way: the previous change to this request was made against a

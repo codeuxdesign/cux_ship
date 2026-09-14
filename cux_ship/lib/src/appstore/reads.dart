@@ -96,6 +96,23 @@ class AppStoreBuild {
 
   /// TestFlight builds expire after 90 days. An expired build is still listed
   /// and can no longer be given to a group.
+  ///
+  /// **The ninety days is exact, and measured rather than quoted.** Every one
+  /// of 72 macOS builds carries an `expirationDate`, and
+  /// `expirationDate - uploadedDate` is ninety days on all of them without
+  /// exception. So expiry is derivable from the response without this flag,
+  /// and `filter[expired]` buys nothing over arithmetic — see
+  /// `docs/design/testflight-audience.md` §4.
+  ///
+  /// **`expirationDate` is on the wire and is not parsed here.** Nothing has
+  /// asked *how long until this build expires*; the field is one line away if
+  /// something does.
+  ///
+  /// **"Still listed" is the half that is not measured.** No build on the
+  /// account this package reads has ever expired — it was thirty days old when
+  /// this was written, and the first expiry falls on 2026-11-14. Until then
+  /// that clause is Apple's documentation rather than an observation, which is
+  /// worth knowing before anything is built on it.
   final bool expired;
 
   /// The TestFlight groups this build is attached to, or null when the
