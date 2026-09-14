@@ -128,7 +128,13 @@ class AppStoreBuild {
   /// before; a member per state would make an unrecognized value either a
   /// parse failure or a silent fallback, and both are worse than handing the
   /// caller the word Apple used. [inExternalTesting] is the one reading this
-  /// package commits to, and it is a single `==`.
+  /// package commits to, and it deliberately reads this field *and*
+  /// [externalGroups] rather than this one alone.
+  ///
+  /// **Observed 2026-09-14** on `design.codeux.howitwent`: 36 builds
+  /// `READY_FOR_BETA_SUBMISSION`, 14 `BETA_APPROVED`, and one build whose
+  /// `buildBetaDetail` resolved to nothing at all — which is this field's null
+  /// arriving from a live account rather than from a fixture.
   final String? externalBuildState;
 
   /// The attached groups Apple said were internal, or null when [betaGroups]
@@ -158,13 +164,72 @@ class AppStoreBuild {
   bool get hasUnknownGroupKind =>
       betaGroups?.any((group) => group.kind == BetaGroupKind.unknown) ?? false;
 
+  /// Apple's external states in which a build has cleared beta review and is
+  /// deliverable. Approval, not delivery — see [inExternalTesting].
+  static const _clearedBetaReview = <String>{
+    'BETA_APPROVED',
+    'READY_FOR_BETA_TESTING',
+    'IN_BETA_TESTING',
+  };
+
   /// Whether external testers can install this build now.
   ///
-  /// True only for Apple's `IN_BETA_TESTING`. Null when [externalBuildState]
-  /// is — *not known* rather than *no*, for the reason that field states.
-  bool? get inExternalTesting => externalBuildState == null
-      ? null
-      : externalBuildState == 'IN_BETA_TESTING';
+  /// **Two facts, because Apple splits the answer across two of them and
+  /// neither one is sufficient.** A build is installable by an external tester
+  /// only when it has cleared beta review *and* is attached to an external
+  /// group. The state alone says Apple would allow it; the attachment alone
+  /// says somebody asked for it while review may still be pending.
+  ///
+  /// **This read as `externalBuildState == 'IN_BETA_TESTING'` and that is a
+  /// constant `false` against a real account.** Measured 2026-09-14 over 51
+  /// iOS builds of `design.codeux.howitwent`: Apple's terminal external state
+  /// after review is `BETA_APPROVED` (14 builds, every one of them attached to
+  /// the external group `Beta Testers`), `READY_FOR_BETA_SUBMISSION` for the
+  /// 36 nobody submitted, and `IN_BETA_TESTING` never once. Builds 178–180
+  /// were demonstrably installable by external testers and this getter said
+  /// they were not — the same defect one layer inside the fix for it, and the
+  /// reason `false` here is held to the standard [AppStoreBuildEntry.usable]
+  /// is not: it is a claim rather than a refusal.
+  ///
+  /// `IN_BETA_TESTING` and `READY_FOR_BETA_TESTING` stay in
+  /// [_clearedBetaReview] because Apple publishes them and this account is one
+  /// account — an unobserved state is not an impossible one.
+  ///
+  /// **Null wherever an input is missing rather than false**, which is three
+  /// cases: Apple sent no [externalBuildState], the read did not ask for
+  /// [betaGroups], or the only attached group came back with a kind Apple
+  /// withheld — that last one is [hasUnknownGroupKind]'s stake, because
+  /// counting it out of [externalGroups] and then answering `false` would
+  /// report the refusal as a delivery answer.
+  ///
+  /// **The hole this cannot close on its own**: [_relatedMany] resolves a
+  /// named group through `included` and *skips* one that did not arrive, so a
+  /// build whose groups Apple named and truncated reads as `[]` — attached to
+  /// nothing — and this answers a confident `false`. `betaGroups` does not
+  /// reach Apple's 50-resource cap on any account measured, because `included`
+  /// holds distinct resources and an account has a handful of groups, while
+  /// the build detail reaches it immediately. See [AppStore.buildsWithIncluded],
+  /// which records the cap and the remedy: until a named-but-unresolved
+  /// resource is representable, this getter is only as truthful as its inputs.
+  bool? get inExternalTesting {
+    final state = externalBuildState;
+    if (state == null) {
+      return null;
+    }
+    if (!_clearedBetaReview.contains(state)) {
+      // Not cleared is knowable from the state alone: no group assignment
+      // makes a build in review installable, so the groups need not be read.
+      return false;
+    }
+    final external = externalGroups;
+    if (external == null) {
+      return null;
+    }
+    if (external.isEmpty && hasUnknownGroupKind) {
+      return null;
+    }
+    return external.isNotEmpty;
+  }
 
   /// [buildNumber] read as an integer, or null when it is not one.
   ///

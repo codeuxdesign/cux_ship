@@ -35,6 +35,7 @@ Map<String, dynamic> _build(
   List<String>? groupIds,
   String? detailId,
   bool groupsLinksOnly = false,
+  bool detailLinksOnly = false,
 }) => {
   'type': 'builds',
   'id': 'build-$platform-$version',
@@ -50,7 +51,10 @@ Map<String, dynamic> _build(
   // request that did not ask — measured on `relationships.build` and recorded
   // at `_buildNumberOf` — so a fixture that always carried an empty `data`
   // could never produce the null the model uses to mean *not asked*.
-  if (groupIds != null || detailId != null || groupsLinksOnly)
+  if (groupIds != null ||
+      detailId != null ||
+      groupsLinksOnly ||
+      detailLinksOnly)
     'relationships': <String, dynamic>{
       if (groupIds != null)
         'betaGroups': {
@@ -72,6 +76,16 @@ Map<String, dynamic> _build(
       if (detailId != null)
         'buildBetaDetail': {
           'data': {'type': 'buildBetaDetails', 'id': detailId},
+        }
+      // The to-one half of the same shape, and it had no fixture: a request
+      // that did not send `include=buildBetaDetail` gets `links` and no `data`
+      // key, which is the third arm of `_relatedOne` exactly as it is the
+      // third arm of `_relatedMany`. Every test reached the to-one guards by
+      // omitting the relationship instead, so this arm was reachable from
+      // nothing.
+      else if (detailLinksOnly)
+        'buildBetaDetail': {
+          'links': {'self': '/v1/builds/b/relationships/buildBetaDetail'},
         },
     },
 };
@@ -537,13 +551,17 @@ void main() {
       expect(listingOf([_build('180')]).newest!.hasUnknownGroupKind, isFalse);
     });
 
-    test('reads external delivery from the build beta detail', () {
+    test('reads the external state from the build beta detail', () {
+      // The state itself, carried raw. Whether external testers *have* the
+      // build takes this and the group attachment together and is the
+      // `external delivery` group below — this build's groups were never
+      // read, so it is precisely the case that cannot be answered.
       final build = listingWith(_build('180', detailId: 'd-1'), [
         _detail('d-1', externalState: 'IN_BETA_TESTING'),
       ]).newest!;
 
       expect(build.externalBuildState, 'IN_BETA_TESTING');
-      expect(build.inExternalTesting, isTrue);
+      expect(build.inExternalTesting, isNull);
     });
 
     test('and a build in beta review is not in external testing', () {
@@ -621,6 +639,130 @@ void main() {
       expect(line, isNot(contains('internal:')));
       expect(line, isNot(contains('external:')));
       expect(line, '  build 180  VALID  uploaded 2026-09-04T09:12:33-07:00');
+    });
+
+    test('and a detail carrying links and no data reads as not known', () {
+      // `_relatedOne`'s third arm, which no test reached: the to-one shape a
+      // request without `include=buildBetaDetail` actually gets back. The
+      // to-many twin of this is covered two tests up; this side was reached
+      // only by omitting the relationship, which lands on a different guard.
+      final build = listingWith(
+        _build('180', groupIds: const ['g-int'], detailLinksOnly: true),
+        [_group('g-int', name: 'Team', internal: true)],
+      ).newest!;
+
+      expect(build.externalBuildState, isNull);
+      expect(build.inExternalTesting, isNull);
+    });
+
+    test('and a detail Apple named but did not send reads as not known', () {
+      // **Live on 2026-09-14, and not a defensive branch.** Apple caps
+      // `included` at 50 resources per relationship, and `buildBetaDetail` is
+      // one resource per build: of 72 macOS builds, 50 details arrived and 22
+      // did not, the relationship still naming an id for every one of them.
+      // See `AppStore.buildsWithIncluded`, which records the measurement.
+      final build = listingWith(
+        _build('180', groupIds: const ['g-ext'], detailId: 'd-gone'),
+        [_group('g-ext', name: 'Beta Testers', internal: false)],
+      ).newest!;
+
+      expect(build.externalBuildState, isNull);
+      expect(build.inExternalTesting, isNull);
+    });
+  });
+
+  group('external delivery', () {
+    // **Measured against a live account on 2026-09-14**, which is what moved
+    // this from one `==` to two facts. `externalBuildState == 'IN_BETA_TESTING'`
+    // was a constant `false`: across 51 iOS builds that state never occurred,
+    // Apple's terminal external state after review being `BETA_APPROVED`, and
+    // the fourteen builds external testers demonstrably had all reported that
+    // they did not have them.
+    AppStoreBuild deliveryOf({
+      required List<String> groupIds,
+      required List<Map<String, dynamic>> groups,
+      String? externalState,
+    }) => appStoreBuildsFrom(
+      [_build('180', groupIds: groupIds, detailId: 'd-1')],
+      AscPlatform.ios,
+      included: <String, Map<String, dynamic>>{
+        for (final resource in [
+          ...groups,
+          _detail('d-1', externalState: externalState),
+        ])
+          '${resource['type']}:${resource['id']}': resource,
+      },
+    ).newest!;
+
+    test('is true for an approved build attached to an external group', () {
+      // Builds 178, 179 and 180 of `design.codeux.howitwent`, exactly: both
+      // groups attached, `BETA_APPROVED`, and external testers had them.
+      final build = deliveryOf(
+        groupIds: const ['g-int', 'g-ext'],
+        groups: [
+          _group('g-int', name: 'howitwent testers', internal: true),
+          _group('g-ext', name: 'Beta Testers', internal: false),
+        ],
+        externalState: 'BETA_APPROVED',
+      );
+
+      expect(build.inExternalTesting, isTrue);
+    });
+
+    test('and false for an approved build attached to no external group', () {
+      // Apple's verdict is not delivery: approval with nobody outside
+      // attached means nobody outside has it.
+      final build = deliveryOf(
+        groupIds: const ['g-int'],
+        groups: [_group('g-int', name: 'Team', internal: true)],
+        externalState: 'BETA_APPROVED',
+      );
+
+      expect(build.inExternalTesting, isFalse);
+    });
+
+    test('and false while an attached external group waits on review', () {
+      // The other half of the pair: attachment is what submits a build, so it
+      // exists throughout review and does not mean anyone can install it.
+      final build = deliveryOf(
+        groupIds: const ['g-ext'],
+        groups: [_group('g-ext', name: 'Beta Testers', internal: false)],
+        externalState: 'WAITING_FOR_BETA_REVIEW',
+      );
+
+      expect(build.inExternalTesting, isFalse);
+    });
+
+    test('and null when the state is known and the groups were not read', () {
+      // Approved, and whether anybody has it turns on a relationship this read
+      // never asked for — so the answer is that it was not answered.
+      final build = appStoreBuildsFrom(
+        [_build('180', detailId: 'd-1')],
+        AscPlatform.ios,
+        included: {
+          'buildBetaDetails:d-1': _detail(
+            'd-1',
+            externalState: 'BETA_APPROVED',
+          ),
+        },
+      ).newest!;
+
+      expect(build.betaGroups, isNull);
+      expect(build.inExternalTesting, isNull);
+    });
+
+    test('and null when the only attached group has a kind Apple withheld', () {
+      // `externalGroups` counts an unknown kind out of both lists, so
+      // answering `false` from its emptiness would turn a refusal to guess
+      // into a claim that nobody outside has the build.
+      final build = deliveryOf(
+        groupIds: const ['g-?'],
+        groups: [_group('g-?', name: 'Mystery')],
+        externalState: 'BETA_APPROVED',
+      );
+
+      expect(build.hasUnknownGroupKind, isTrue);
+      expect(build.inExternalTesting, isNull);
     });
   });
 

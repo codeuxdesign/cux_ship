@@ -908,9 +908,18 @@ class AppStoreBuildEntry {
   /// this field was added to fix rather than a safe default. Null says the
   /// question was not answered, which is what a consumer should show.
   ///
-  /// True only for [ExternalBuildState.inBetaTesting].
-  /// [ExternalBuildState.betaApproved] is Apple's verdict and not delivery, so
-  /// it is not true here.
+  /// **Two facts and not one**: true when the build has cleared beta review —
+  /// [ExternalBuildState.betaApproved], [ExternalBuildState.readyForBetaTesting]
+  /// or [ExternalBuildState.inBetaTesting] — *and* [betaGroups] holds at least
+  /// one group whose kind is [BetaGroupKindEntry.external]. Apple's verdict is
+  /// not delivery, and an attachment made while review is still pending is not
+  /// delivery either, so neither half answers on its own.
+  ///
+  /// Reading the state alone was this field's first shape, and it was a
+  /// constant `false` against a real account: over 51 iOS builds measured
+  /// 2026-09-14, Apple's terminal external state after review is
+  /// `BETA_APPROVED` and `IN_BETA_TESTING` did not occur once, so fourteen
+  /// builds external testers demonstrably had reported that they did not.
   final bool? inExternalTesting;
 
   /// The lines `cux_ship appstore builds` prints for this build.

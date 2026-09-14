@@ -1904,13 +1904,54 @@ class AppStore {
   /// [AscClient.getAllWithIncluded] merges `included` across pages rather than
   /// answering for the last one.
   ///
-  /// **Not measured against a live account.** [appStoreVersions] records that
-  /// its include was, and this one says the opposite out loud rather than
-  /// inheriting that sentence by sitting next to it: the shapes below are read
-  /// from Apple's published schema, and the parsing treats every absence as
-  /// *not known* rather than as a fact about the build — see
-  /// [AppStoreBuild.externalBuildState] and [BetaGroupKind.unknown], neither of
-  /// which guesses.
+  /// **Measured against a live account on 2026-09-14.** Apple accepts both
+  /// includes on one request, resolves `betaGroups` for every build, and sends
+  /// `isInternalGroup` on every group — so the audience split itself is
+  /// confirmed on the wire. The one naming asymmetry worth writing down is
+  /// that `include=buildBetaDetail` is singular and sideloads resources of
+  /// type `buildBetaDetails`; the relationship name and the resource type
+  /// differ on this one and not on `betaGroups`, and the fake in
+  /// `build_listing_test.dart` carries that mapping for the same reason.
+  ///
+  /// **`included` is capped at 50 resources per relationship, and
+  /// `buildBetaDetail` reaches that cap immediately.** Same run, same request,
+  /// both platforms:
+  ///
+  /// | platform | builds | detail resolved | absent |
+  /// |---|---|---|---|
+  /// | ios | 51 | 50 | 1 |
+  /// | macos | 72 | 50 | 22 |
+  ///
+  /// Exactly 50 on both, which is Apple's limit rather than an account quirk.
+  /// **The two relationships behave completely differently at scale and that
+  /// is why it was invisible**: `included` holds *distinct* resources, this
+  /// account has two beta groups in total, so `betaGroups` never approaches
+  /// the cap while `buildBetaDetail` is one resource per build and passes it
+  /// at build 51.
+  ///
+  /// **Which 50 arrive is not the sorted order.** On macOS the absences fall
+  /// at positions 1, 5, 6, 13 … 71 of a newest-first listing, and four of the
+  /// 22 are attached to the external group — including build 179, the
+  /// second-newest. So the builds a reader most wants an answer about are as
+  /// likely to be missing as any other.
+  ///
+  /// **This is a known defect and not a documented limit.**
+  /// [AppStoreBuild.externalBuildState] documents its null as *not known*, and
+  /// a truncated detail and a build Apple holds no detail for arrive as the
+  /// same null — absence and failure wearing each other's clothes. The
+  /// information to separate them is on the wire and thrown away: a truncated
+  /// relationship still names an id in its `data` and only the resource is
+  /// missing from `included`. Fixing it means backfilling the builds whose
+  /// detail did not arrive through `/v1/builds/<id>/buildBetaDetail`, which is
+  /// what [reportExternalBuildState] already does one build at a time — that
+  /// keeps the no-extra-round-trip property for the common case instead of
+  /// abandoning it, and a merely larger `limit[…]` would be the same defect
+  /// deferred to a bigger account.
+  ///
+  /// Until then every absence still parses as *not known* rather than as a
+  /// fact about the build — see that field and [BetaGroupKind.unknown],
+  /// neither of which guesses — so the listing is uninformative here rather
+  /// than wrong.
   Future<
     ({
       List<Map<String, dynamic>> data,

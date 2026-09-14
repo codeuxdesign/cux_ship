@@ -16,7 +16,7 @@
 //   final builds = AppStoreBuildsDocument.fromJson(
 //     jsonDecode(result.stdout as String) as Map<String, dynamic>,
 //   );
-//   if (builds.schema != 1) {
+//   if (builds.schema != 2) {
 //     throw StateError('schema ${builds.schema} is not one this knows');
 //   }
 //   print(builds.newestBuildNumberAsInt);

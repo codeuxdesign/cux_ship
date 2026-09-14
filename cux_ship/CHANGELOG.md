@@ -126,10 +126,25 @@ because a consumer that *wants* the audience needs to tell *Apple said nothing*
 from *this document predates the question*, and a null field alone cannot say
 which.
 
-**Not measured against a live account.** The wire shapes are read from Apple's
-published schema rather than observed, which is the opposite of what
-`appStoreVersions`' `include=build` can say, and it is stated out loud rather
-than left to be inferred from the code sitting next to that one.
+**`inExternalTesting` reads two facts, not one.** It is true when the build has
+cleared beta review *and* is attached to at least one external group. Apple's
+approval is not delivery and an attachment made while review is pending is not
+delivery either, so neither half answers alone.
+
+**Measured against a live account on 2026-09-14**, which corrected two things
+the published schema had suggested. Apple's terminal external state after
+review is `BETA_APPROVED`; `IN_BETA_TESTING` did not occur once in 123 builds,
+so reading that state alone — this field's first shape — was a constant
+`false`, and said so about fourteen builds external testers demonstrably had.
+
+**A known limit, recorded rather than fixed here:** Apple caps `included` at 50
+resources per relationship. `betaGroups` never approaches it — an account has a
+handful of groups and `included` holds distinct resources — but `buildBetaDetail`
+is one resource per build, so past 50 builds some details do not arrive and
+`externalBuildState` is null for them. Measured the same day: 51 iOS builds gave
+50 details, 72 macOS builds gave 50. Those builds read as *not known*, which is
+honest but uninformative, and `AppStore.buildsWithIncluded` carries the
+measurement and the remedy.
 
 ### Breaking
 
