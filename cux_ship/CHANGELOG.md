@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 4.5.0-dev.4
 
 **`play upload` and `appstore upload` take `--json`, and it is a stream rather
 than a document.** Newline-delimited JSON on stdout, one object per line, while
