@@ -73,9 +73,17 @@ Map<String, dynamic> _buildsJson({
       // null are different answers here and a fixture carrying only one of
       // them would leave the distinction untested.
       'betaGroups': null,
+      // **Zero and false beside the nulls, not absent.** These two say the
+      // response was complete, and they are non-nullable for that reason: a
+      // document that could omit them would decode as *nothing was missing*
+      // on the strength of a key nobody wrote, which is the reading they
+      // exist to make impossible. So a schema 2 document always carries them
+      // and `fromJson` refuses one that does not.
+      'unresolvedBetaGroups': 0,
       'externalBuildState': null,
       'externalBuildStateRaw': null,
       'inExternalTesting': null,
+      'unresolvedBuildBetaDetail': false,
       'display': ['  build 169  VALID  uploaded 2026-09-09T14:02:11-07:00'],
     },
   ],
@@ -163,6 +171,27 @@ void main() {
         ..['inExternalTesting'] = true;
 
       expect(AppStoreBuildsDocument.fromJson(json).toJson(), json);
+    });
+
+    test('and so does one whose response came up short', () {
+      // The third populated shape, and the one that is neither *asked and
+      // answered* nor *never asked*: Apple named two groups and a detail and
+      // sent one group. A round trip that lost either number would turn an
+      // incomplete listing back into a confident one at the boundary the
+      // consumer actually reads.
+      final json = _buildsJson();
+      ((json['builds'] as List).single as Map)
+        ..['betaGroups'] = [
+          {'name': 'Team', 'kind': 'internal'},
+        ]
+        ..['unresolvedBetaGroups'] = 2
+        ..['unresolvedBuildBetaDetail'] = true;
+
+      final decoded = AppStoreBuildsDocument.fromJson(json);
+
+      expect(decoded.builds.single.unresolvedBetaGroups, 2);
+      expect(decoded.builds.single.unresolvedBuildBetaDetail, isTrue);
+      expect(decoded.toJson(), json);
     });
 
     test('and an empty group list survives as empty, not as null', () {
@@ -557,9 +586,11 @@ void main() {
         'usable': false,
         'needsNewUpload': true,
         'betaGroups': null,
+        'unresolvedBetaGroups': 0,
         'externalBuildState': null,
         'externalBuildStateRaw': null,
         'inExternalTesting': null,
+        'unresolvedBuildBetaDetail': false,
         'display': ['  build 9  VALID  uploaded 2026-09-01T09:00:00-07:00'],
       });
 

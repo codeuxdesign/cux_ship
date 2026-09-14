@@ -70,7 +70,9 @@ class AppStoreBuild {
     required this.uploadedAt,
     required this.expired,
     required this.betaGroups,
+    required this.unresolvedBetaGroups,
     required this.externalBuildState,
+    required this.unresolvedBuildBetaDetail,
   });
 
   /// `CFBundleVersion` — Apple calls this attribute `version`, which reads
@@ -110,7 +112,35 @@ class AppStoreBuild {
   /// That is [BetaGroupKind.unknown]'s rule one level up — a reader that
   /// cannot read must not report a reading — applied to the list rather than
   /// to a group's kind.
+  ///
+  /// **Incomplete rather than wrong when [unresolvedBetaGroups] is positive.**
+  /// Every group here is one Apple both named and sent; a group it named and
+  /// truncated out of `included` is counted there instead of being invented.
+  /// So this list is a lower bound in that case, and the emptiness of
+  /// [externalGroups] stops being evidence — which is the reading
+  /// [inExternalTesting] makes.
   final List<AppStoreBetaGroup>? betaGroups;
+
+  /// How many attached groups Apple named and did not send.
+  ///
+  /// **The difference between *attached to nothing* and *we could not see what
+  /// it is attached to*.** A `relationships.betaGroups.data` entry names a
+  /// `type` and an `id` whether or not the matching resource reaches
+  /// `included`, so a truncated response still says how many attachments there
+  /// were. Without this count [betaGroups] would read `[]` for a build Apple
+  /// named three groups for — a positive claim built out of a shortfall, and
+  /// the one shape this field exists to make impossible.
+  ///
+  /// Zero for a read that did not ask, which is [betaGroups]'s null and not a
+  /// shortfall: nothing was named, so nothing went missing.
+  ///
+  /// **`betaGroups` does not reach Apple's cap on any account measured** —
+  /// `included` holds *distinct* resources and an account has a handful of
+  /// groups, where the build detail is one resource per build and reaches it
+  /// at build 51. This is here because the cap is a property of the response
+  /// rather than of the relationship, and a reader that trusts the list only
+  /// because today's accounts are small is trusting the wrong thing.
+  final int unresolvedBetaGroups;
 
   /// `buildBetaDetail.externalBuildState`, or null when the response did not
   /// carry it.
@@ -131,11 +161,40 @@ class AppStoreBuild {
   /// package commits to, and it deliberately reads this field *and*
   /// [externalGroups] rather than this one alone.
   ///
+  /// **Null means Apple had nothing to say, and no longer doubles as *the
+  /// response was truncated*.** Those were the same null until
+  /// [unresolvedBuildBetaDetail] existed, which made a read that had merely
+  /// run past the size of one response indistinguishable from an answer — the
+  /// exact conflation the rest of this class refuses one field at a time. Read
+  /// that flag before showing this one's absence as a fact about the build.
+  ///
   /// **Observed 2026-09-14** on `design.codeux.howitwent`: 36 builds
   /// `READY_FOR_BETA_SUBMISSION`, 14 `BETA_APPROVED`, and one build whose
-  /// `buildBetaDetail` resolved to nothing at all — which is this field's null
-  /// arriving from a live account rather than from a fixture.
+  /// `buildBetaDetail` resolved to nothing at all — which was read at the time
+  /// as this field's null arriving from a live account rather than from a
+  /// fixture. It was not: it was the 51st build of a 51-build listing falling
+  /// off the end of a capped `included`, and re-reading the same account a page
+  /// at a time resolves all 51. See [AppStore.buildsWithIncluded].
   final String? externalBuildState;
+
+  /// Whether Apple named a `buildBetaDetail` for this build and did not send
+  /// it.
+  ///
+  /// **True is a statement about the response, not about the build**: the
+  /// relationship named an id, the resource did not arrive in `included`, and
+  /// [externalBuildState] is therefore null for a reason that has nothing to
+  /// do with what Apple knows. A caller rendering that null as *not known* is
+  /// right; one rendering it as *nobody outside has this* is wrong, and
+  /// [inExternalTesting] is null in this case for that reason.
+  ///
+  /// **It should never be true, and that is the point of keeping it.**
+  /// [AppStore.buildsWithIncluded] asks for a page of exactly the cap, so a
+  /// page cannot name more details than one response can carry. This is what
+  /// notices if that ever stops holding — Apple lowering the ceiling, or a
+  /// third include arriving that costs a second resource per build — instead
+  /// of the listing quietly going back to answering null for a fifth of its
+  /// builds, which is how the defect went unseen the first time.
+  final bool unresolvedBuildBetaDetail;
 
   /// The attached groups Apple said were internal, or null when [betaGroups]
   /// is null.
@@ -202,15 +261,19 @@ class AppStoreBuild {
   /// counting it out of [externalGroups] and then answering `false` would
   /// report the refusal as a delivery answer.
   ///
-  /// **The hole this cannot close on its own**: [_relatedMany] resolves a
-  /// named group through `included` and *skips* one that did not arrive, so a
-  /// build whose groups Apple named and truncated reads as `[]` — attached to
-  /// nothing — and this answers a confident `false`. `betaGroups` does not
-  /// reach Apple's 50-resource cap on any account measured, because `included`
-  /// holds distinct resources and an account has a handful of groups, while
-  /// the build detail reaches it immediately. See [AppStore.buildsWithIncluded],
-  /// which records the cap and the remedy: until a named-but-unresolved
-  /// resource is representable, this getter is only as truthful as its inputs.
+  /// **A truncated group list is a fourth null and not a `false`.**
+  /// [_relatedMany] resolves a named group through `included` and cannot
+  /// describe one that did not arrive, so a build whose groups Apple named and
+  /// truncated has an [externalGroups] that is empty for a reason that is not
+  /// about the build. Answering `false` from that emptiness is the same
+  /// mistake as answering it from [hasUnknownGroupKind], one shortfall further
+  /// out, so [unresolvedBetaGroups] is read in the same breath.
+  ///
+  /// **Empty and non-empty are not symmetric here**, which is why the check is
+  /// where it is rather than at the top: one *resolved* external group is
+  /// enough to answer `true` however many others were truncated, because the
+  /// missing ones could only add attachments. It is only the empty list that a
+  /// shortfall makes uninformative.
   bool? get inExternalTesting {
     final state = externalBuildState;
     if (state == null) {
@@ -225,10 +288,13 @@ class AppStoreBuild {
     if (external == null) {
       return null;
     }
-    if (external.isEmpty && hasUnknownGroupKind) {
+    if (external.isNotEmpty) {
+      return true;
+    }
+    if (hasUnknownGroupKind || unresolvedBetaGroups > 0) {
       return null;
     }
-    return external.isNotEmpty;
+    return false;
   }
 
   /// [buildNumber] read as an integer, or null when it is not one.
@@ -277,7 +343,11 @@ class AppStoreBuild {
   String get _audienceSuffix {
     final groups = betaGroups;
     if (groups == null) {
-      return '';
+      // **A shortfall still gets said, because it is not an audience half.**
+      // The silence above is for a read that did not ask; a detail Apple named
+      // and did not send is a read that asked and was answered short, and the
+      // two would otherwise print the same nothing.
+      return unresolvedBuildBetaDetail ? '  state not sent' : '';
     }
     final unknown = groups
         .where((group) => group.kind == BetaGroupKind.unknown)
@@ -291,7 +361,16 @@ class AppStoreBuild {
           // hiding the state behind a group being present is how it would go
           // unexplained.
           '${externalBuildState == null ? '' : ' ($externalBuildState)'}',
-      if (unknown.isNotEmpty) '  kind not reported: ${unknown.join(', ')}',
+      if (unknown.isNotEmpty) ...['  kind not reported: ${unknown.join(', ')}'],
+      // **Said out loud, because the alternative is a shorter line that is
+      // wrong.** A truncated group list renders as `external: none` — the
+      // commonest and least remarkable half of this line — so without this
+      // the one case where the listing does not know reads as the one case
+      // everybody expects.
+      if (unresolvedBetaGroups > 0) ...[
+        '  groups not sent: $unresolvedBetaGroups',
+      ],
+      if (unresolvedBuildBetaDetail) ...['  state not sent'],
     ].join();
   }
 
@@ -387,10 +466,23 @@ int _byBuildNumberDescending(AppStoreBuild a, AppStoreBuild b) =>
 /// fact from an empty `data` list, which is Apple saying the relationship is
 /// genuinely empty, and this returns `[]` for it.
 ///
-/// A named resource that is missing from [included] is skipped rather than
-/// faked: it cannot be described, and a placeholder would be a group with no
-/// kind, which is the one thing [BetaGroupKind] refuses to invent.
-List<Map<String, dynamic>>? _relatedMany(
+/// A named resource that is missing from [included] is **counted rather than
+/// faked or forgotten**. It cannot be described — a placeholder would be a
+/// group with no kind, which is the one thing [BetaGroupKind] refuses to
+/// invent — but dropping it silently makes a short response look like a
+/// complete one: three groups named and none sent would return `[]`, which
+/// reads as *attached to nothing*, a positive claim assembled entirely out of
+/// what is missing.
+///
+/// So the answer is two numbers rather than one list, and a caller that wants
+/// the old reading takes `.resolved` and has to walk past `.unresolved` to do
+/// it.
+///
+/// An entry naming no `type` or no `id` counts as unresolved too. It is not a
+/// resource this can find and it is not one Apple left out either — but of the
+/// two ways to be wrong about it, counting it is the one that makes a reader
+/// say *I do not know* instead of *there are none*.
+({List<Map<String, dynamic>> resolved, int unresolved})? _relatedMany(
   Map<String, dynamic> resource,
   String relationship,
   Map<String, Map<String, dynamic>> included,
@@ -407,41 +499,63 @@ List<Map<String, dynamic>>? _relatedMany(
   if (data is! List) {
     return null;
   }
-  return <Map<String, dynamic>>[
-    for (final entry in data.whereType<Map<String, dynamic>>())
-      if (entry['type'] case final String type)
-        if (entry['id'] case final String id)
-          if (included['$type:$id'] case final Map<String, dynamic> found)
-            found,
-  ];
+  final resolved = <Map<String, dynamic>>[];
+  var unresolved = 0;
+  for (final entry in data.whereType<Map<String, dynamic>>()) {
+    final type = entry['type'];
+    final id = entry['id'];
+    final found = type is String && id is String ? included['$type:$id'] : null;
+    if (found == null) {
+      unresolved += 1;
+    } else {
+      resolved.add(found);
+    }
+  }
+  return (resolved: resolved, unresolved: unresolved);
 }
 
 /// The single resource a to-one relationship names, resolved through
-/// [included]. Null for every way of not knowing — see [_relatedMany], which
-/// draws the same distinctions on the many side.
-Map<String, dynamic>? _relatedOne(
+/// [included], and whether the relationship named one at all.
+///
+/// **`named` is the whole reason this is a record.** A null [resolved] used to
+/// mean four things at once — no `relationships` block, no such relationship,
+/// a `data` key Apple did not send, and a resource named but truncated out of
+/// `included` — and only the last of those is a defect rather than an answer.
+/// `named: true, resolved: null` is that one, said out loud.
+///
+/// The three ways of not asking all give `named: false`, because a caller
+/// cannot act on the difference: there is no follow-up request that turns *you
+/// did not send the include* into data. See [_relatedMany], which draws the
+/// same line on the many side and counts rather than flags, a to-many
+/// relationship being able to be short without being empty.
+///
+/// A `data` object carrying no `type` or no `id` is `named: true` for
+/// [_relatedMany]'s reason: it is a relationship saying something this cannot
+/// read, which is nearer to *truncated* than to *absent*.
+({bool named, Map<String, dynamic>? resolved}) _relatedOne(
   Map<String, dynamic> resource,
   String relationship,
   Map<String, Map<String, dynamic>> included,
 ) {
+  const notNamed = (named: false, resolved: null);
   final relationships = resource['relationships'];
   if (relationships is! Map<String, dynamic>) {
-    return null;
+    return notNamed;
   }
   final named = relationships[relationship];
   if (named is! Map<String, dynamic>) {
-    return null;
+    return notNamed;
   }
   final data = named['data'];
   if (data is! Map<String, dynamic>) {
-    return null;
+    return notNamed;
   }
-  if (data['type'] case final String type) {
-    if (data['id'] case final String id) {
-      return included['$type:$id'];
-    }
-  }
-  return null;
+  final type = data['type'];
+  final id = data['id'];
+  return (
+    named: true,
+    resolved: type is String && id is String ? included['$type:$id'] : null,
+  );
 }
 
 /// One `builds` resource, as sent, with the groups and beta detail that came
@@ -463,15 +577,21 @@ AppStoreBuild appStoreBuildFrom(
     betaGroups: groups == null
         ? null
         : <AppStoreBetaGroup>[
-            for (final group in groups)
+            for (final group in groups.resolved) ...[
               AppStoreBetaGroup(
                 name: '${_attributes(group)['name'] ?? '(unnamed)'}',
                 kind: betaGroupKind(group),
               ),
+            ],
           ],
-    externalBuildState: detail == null
+    // **Zero when the relationship was never read**, which is [betaGroups]'s
+    // null rather than a shortfall: a read that asked for nothing cannot have
+    // been answered short.
+    unresolvedBetaGroups: groups?.unresolved ?? 0,
+    externalBuildState: detail.resolved == null
         ? null
-        : _attributes(detail)['externalBuildState'] as String?,
+        : _attributes(detail.resolved!)['externalBuildState'] as String?,
+    unresolvedBuildBetaDetail: detail.named && detail.resolved == null,
   );
 }
 

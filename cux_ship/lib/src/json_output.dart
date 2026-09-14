@@ -37,7 +37,8 @@ import 'play/reads.dart';
 /// would then refuse a document that had not changed.
 ///
 /// **2 adds the TestFlight audience**: `betaGroups`, `externalBuildState`,
-/// `externalBuildStateRaw` and `inExternalTesting` on each build. The change
+/// `externalBuildStateRaw`, `inExternalTesting`, `unresolvedBetaGroups` and
+/// `unresolvedBuildBetaDetail` on each build. The change
 /// is additive — a reader that ignores unknown keys decodes a schema 2
 /// document exactly as it decoded a schema 1 one — and it is bumped anyway,
 /// because the number names the shape rather than the compatibility. The
@@ -302,8 +303,14 @@ AppStoreBuildEntry _build(AppStoreBuild build) {
           ),
         )
         .toList(),
+    // **Carried rather than derived here for `betaGroups`' own reason**: the
+    // shortfall is a fact about the response the model parsed, and this file
+    // cannot see the response. A count re-derived from `betaGroups.length`
+    // could only ever say zero.
+    unresolvedBetaGroups: build.unresolvedBetaGroups,
     externalBuildState: ExternalBuildState.read(build.externalBuildState),
     externalBuildStateRaw: build.externalBuildState,
+    unresolvedBuildBetaDetail: build.unresolvedBuildBetaDetail,
     // **Derived on the model, not re-derived here**, so the printed line and
     // the document cannot come to different conclusions about who has the
     // build — this file's stated job being the mapping and nothing else.

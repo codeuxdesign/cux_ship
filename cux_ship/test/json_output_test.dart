@@ -416,6 +416,80 @@ void main() {
 
       expect(entry['betaGroups'], isEmpty);
       expect(entry['betaGroups'], isNotNull);
+      // And *attached to nothing* is said with a zero shortfall beside it,
+      // which is what makes it a claim rather than a silence.
+      expect(entry['unresolvedBetaGroups'], 0);
+    });
+
+    test('and a truncated response reaches the document as a shortfall', () {
+      // **The document is where the consumer reads this, so it is where the
+      // distinction has to survive.** Apple named three groups and a detail
+      // and sent one group; without these two keys the entry is
+      // indistinguishable from a build genuinely attached to one group with
+      // no detail, and the consumer renders a shortfall as a fact.
+      //
+      // The encoder carries them rather than deriving them — a count taken
+      // from `betaGroups.length` here could only ever be zero, because by
+      // this point the resources that did not arrive are gone.
+      final entry =
+          (appStoreBuildsJson(
+                        buildsOf(
+                          [
+                            _build(
+                              '169',
+                              groupIds: const ['g-int', 'g-gone', 'g-also'],
+                              detailId: 'd-gone',
+                            ),
+                          ],
+                          included: [
+                            _group('g-int', name: 'Team', internal: true),
+                          ],
+                        ),
+                        bundleId: 'x',
+                      )['builds']
+                      as List)
+                  .single
+              as Map;
+
+      expect(entry['unresolvedBetaGroups'], 2);
+      expect(entry['unresolvedBuildBetaDetail'], isTrue);
+      // The fields those shortfalls explain, so a reader can see that the
+      // nulls beside them are about the response.
+      expect(entry['externalBuildStateRaw'], isNull);
+      expect(entry['inExternalTesting'], isNull);
+    });
+
+    test('and a complete response says so rather than saying nothing', () {
+      // The other half: two booleans that are only ever true are two
+      // booleans nobody can trust, so the false case is asserted too.
+      final entry =
+          (appStoreBuildsJson(
+                        buildsOf(
+                          [
+                            _build(
+                              '169',
+                              groupIds: const ['g-ext'],
+                              detailId: 'd-1',
+                            ),
+                          ],
+                          included: [
+                            _group(
+                              'g-ext',
+                              name: 'Beta Testers',
+                              internal: false,
+                            ),
+                            _detail('d-1', externalState: 'BETA_APPROVED'),
+                          ],
+                        ),
+                        bundleId: 'x',
+                      )['builds']
+                      as List)
+                  .single
+              as Map;
+
+      expect(entry['unresolvedBetaGroups'], 0);
+      expect(entry['unresolvedBuildBetaDetail'], isFalse);
+      expect(entry['inExternalTesting'], isTrue);
     });
 
     test('and a resolved group carries its name and its kind through', () {
@@ -592,9 +666,11 @@ void main() {
           'usable',
           'needsNewUpload',
           'betaGroups',
+          'unresolvedBetaGroups',
           'externalBuildState',
           'externalBuildStateRaw',
           'inExternalTesting',
+          'unresolvedBuildBetaDetail',
           'display',
         },
       );

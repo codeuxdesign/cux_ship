@@ -768,9 +768,11 @@ class AppStoreBuildEntry {
     required this.usable,
     required this.needsNewUpload,
     required this.betaGroups,
+    required this.unresolvedBetaGroups,
     required this.externalBuildState,
     required this.externalBuildStateRaw,
     required this.inExternalTesting,
+    required this.unresolvedBuildBetaDetail,
     required this.display,
   });
 
@@ -883,7 +885,26 @@ class AppStoreBuildEntry {
   ///
   /// Internal and external groups are both here and are told apart by
   /// [BetaGroupEntry.kind], never by counting or by name.
+  ///
+  /// **A lower bound rather than the list when [unresolvedBetaGroups] is not
+  /// zero.** Every group here is one Apple named *and* sent; read that field
+  /// before treating `[]` as *attached to nothing*.
   final List<BetaGroupEntry>? betaGroups;
+
+  /// How many attached groups Apple named and did not send, normally `0`.
+  ///
+  /// **A third reading of an empty [betaGroups], and the one that is about the
+  /// response rather than the build.** `null` is *this read did not ask*, `[]`
+  /// with this at `0` is *Apple says the build is attached to nothing*, and
+  /// `[]` with this above `0` is *Apple named attachments and this listing did
+  /// not receive them*. Only the middle one is a fact about the build, and a
+  /// consumer that renders the third as the second reports *no external
+  /// testers have this* out of a shortfall.
+  ///
+  /// [inExternalTesting] is null rather than false in that case for exactly
+  /// this reason, so a consumer reading only that flag is already safe. This
+  /// field is for one that wants to say *why*.
+  final int unresolvedBetaGroups;
 
   /// **This package's reading of [externalBuildStateRaw]**, or null when Apple
   /// sent nothing. See [ExternalBuildState], and see [processingState], whose
@@ -920,7 +941,30 @@ class AppStoreBuildEntry {
   /// 2026-09-14, Apple's terminal external state after review is
   /// `BETA_APPROVED` and `IN_BETA_TESTING` did not occur once, so fourteen
   /// builds external testers demonstrably had reported that they did not.
+  ///
+  /// Null also when this listing was answered short — see
+  /// [unresolvedBetaGroups] and [unresolvedBuildBetaDetail], which say which
+  /// of the two inputs went missing and are `0` and `false` on a complete
+  /// read.
   final bool? inExternalTesting;
+
+  /// Whether Apple named a build beta detail for this build and did not send
+  /// it, normally `false`.
+  ///
+  /// **True means [externalBuildStateRaw]'s null is about the response, not
+  /// about the build.** Apple caps sideloaded resources per response, and at
+  /// the wrong page size a listing runs off the end of that cap while the
+  /// relationship still names every resource — so the state came back null for
+  /// a fifth of a 72-build account with nothing saying so. That is fixed at
+  /// the request: `cux_ship` now reads a page no larger than the cap.
+  ///
+  /// **So this should always be `false`, and it is published anyway.** It is
+  /// what tells a consumer that the fix has stopped working — Apple lowering
+  /// the ceiling, or this package adding a third sideloaded resource — instead
+  /// of the same silent nulls returning. A consumer can reasonably treat
+  /// `true` as *this row is not trustworthy, re-read*; what it must not do is
+  /// treat it as a fact about the build.
+  final bool unresolvedBuildBetaDetail;
 
   /// The lines `cux_ship appstore builds` prints for this build.
   ///

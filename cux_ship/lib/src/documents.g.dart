@@ -45,6 +45,7 @@ AppStoreBuildEntry _$AppStoreBuildEntryFromJson(Map<String, dynamic> json) =>
       betaGroups: (json['betaGroups'] as List<dynamic>?)
           ?.map((e) => BetaGroupEntry.fromJson(e as Map<String, dynamic>))
           .toList(),
+      unresolvedBetaGroups: (json['unresolvedBetaGroups'] as num).toInt(),
       externalBuildState: $enumDecodeNullable(
         _$ExternalBuildStateEnumMap,
         json['externalBuildState'],
@@ -52,6 +53,7 @@ AppStoreBuildEntry _$AppStoreBuildEntryFromJson(Map<String, dynamic> json) =>
       ),
       externalBuildStateRaw: json['externalBuildStateRaw'] as String?,
       inExternalTesting: json['inExternalTesting'] as bool?,
+      unresolvedBuildBetaDetail: json['unresolvedBuildBetaDetail'] as bool,
       display: (json['display'] as List<dynamic>)
           .map((e) => e as String)
           .toList(),
@@ -68,10 +70,12 @@ Map<String, dynamic> _$AppStoreBuildEntryToJson(AppStoreBuildEntry instance) =>
       'usable': instance.usable,
       'needsNewUpload': instance.needsNewUpload,
       'betaGroups': instance.betaGroups?.map((e) => e.toJson()).toList(),
+      'unresolvedBetaGroups': instance.unresolvedBetaGroups,
       'externalBuildState':
           _$ExternalBuildStateEnumMap[instance.externalBuildState],
       'externalBuildStateRaw': instance.externalBuildStateRaw,
       'inExternalTesting': instance.inExternalTesting,
+      'unresolvedBuildBetaDetail': instance.unresolvedBuildBetaDetail,
       'display': instance.display,
     };
 
