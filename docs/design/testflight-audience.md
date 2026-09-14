@@ -591,6 +591,33 @@ claim from a number the code speaks as though it knows.
 *listed* at all. No build on this account has ever expired; 2026-11-14 is when
 that becomes checkable, and §4's growth argument is what rests on it.
 
+### The failure mode this section is actually an example of
+
+Every other correction in this document fell to the same remedy: stop reasoning
+and ask the store. The page size, the lexical sort, the universal internal
+attachment, `unresolvedBetaGroups` being complete — each was a belief a live
+request overturned, and each is an argument for measuring earlier.
+
+**This one was a measurement, and the error was downstream of it.**
+`expirationDate` is on the wire, ninety days exactly, all 72 builds: correct,
+observed, and not in dispute. The mistake was concluding from it that
+`filter[expired]` was unnecessary — a lever on *how many builds come back*,
+closed by a fact about *what is computable once a build is already in the
+response*. Two different questions, one answering the other, and the
+measurement's authority carried the reasoning past two reviewers who had spent
+six rounds being sceptical of everything else.
+
+So the narrower rule, which is the one this section is worth keeping for: **a
+measurement closes the question it measures, and the step from there to a
+conclusion is ordinary reasoning with no special protection.** A number with a
+date on it makes the sentence containing it *sound* measured. The probe-first
+habit does nothing about that, because the probe was run and came back right.
+
+What caught it was somebody asking *are you sure, and how would we notice* —
+about the retention period, not about the conclusion. That is the check with no
+process behind it, which is why it is written down here rather than turned into
+a rule.
+
 The reason to write all this down rather than act on it is the one §3 earned
 the hard way: the previous change to this request was made against a
 measurement, and the measurement is what made it right. The measurements here
