@@ -323,6 +323,48 @@ void main() {
       expect((penultimate * 100 / total).floor(), 99);
     });
 
+    test('and one line arrives after accepting, which is the trap', () async {
+      // **The premise of the third warning on `bytesTotal`, pinned here
+      // because nothing about it looks like a hazard until it is hit.** The
+      // final chunk is acknowledged by the very response `accepting` was
+      // written ahead of, so a progress line follows that state — and a
+      // consumer that hides the percentage on a non-transferring state and
+      // re-shows it on any progress line flickers it back on for exactly one
+      // line, immediately after it was right to drop it.
+      //
+      // Reported by the first consumer from a rendered frame: `committing 99%`,
+      // which is floored correctly, is not claiming the run finished, and has
+      // simply stopped describing anything.
+      //
+      // The remedy is a rendering rule and lives in the dartdoc, because
+      // nothing here can check somebody else's frame. What is checkable is
+      // that the ordering the warning is about is still the ordering this
+      // emits — move `accepting` after the final acknowledgement and the
+      // warning becomes advice about a stream that no longer exists.
+      //
+      // **This is about the emitted sequence, not about when the line is
+      // written relative to the request.** That second claim is the one
+      // `upload_events_test.dart` owns, through the transport's hook, and
+      // neither case can see what the other does: moving the announcement to
+      // after `send` leaves this sequence identical, and reordering it against
+      // the final acknowledgement leaves the hook's answer identical.
+      final all = events((await upload(extra: ['--json'])).out);
+      final accepting = all.indexWhere((e) => e.state == UploadState.accepting);
+      final lastProgress = all.lastIndexWhere(
+        (e) => e.event == UploadEvent.progress,
+      );
+
+      expect(accepting, isNot(-1));
+      expect(lastProgress, greaterThan(accepting));
+      // And the state after all of it is not a transfer, which is the half
+      // that makes a stale percentage visible in the first place.
+      expect(all.last.event, UploadEvent.result);
+      expect(
+        all.sublist(accepting).map((e) => e.state),
+        isNot(contains(UploadState.transferring)),
+      );
+    });
+
     test('and it arrives between transferring and accepting', () async {
       // Ordering across the two emitters — the CLI writes the states, the
       // observing client writes the progress, and nothing but the order they

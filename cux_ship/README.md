@@ -882,6 +882,20 @@ still to come on Play and five to fifteen minutes of `processing` still to come
 on the App Store. **`result` is the line that says the run finished**, and it
 is the only one that does.
 
+**And stop showing it once the state leaves `transferring`.** `accepting`,
+`committing` and `processing` are the store working on bytes it already holds —
+they are not fractions of anything, and `committing 99%` reads as a transfer
+one percent short of done, so a reader waits for a number that will never move.
+Let the state name stand alone.
+
+Watch the ordering there, because the obvious implementation is wrong: **a
+`progress` line arrives after `accepting`**, since the final chunk is
+acknowledged by the very response that announcement was written ahead of. A
+consumer that hides the percentage on a non-transferring state and re-shows it
+on any progress line flickers it back on for exactly one line. Let the last
+`state` line decide whether a percentage is meaningful, and let `progress` say
+only how far.
+
 **`appstore.upload` carries no byte progress, and has no field for one.** The
 transfer is `xcrun altool`, whose transport Apple documents nowhere, so there
 is nothing per-chunk to report — and a tick on a timer would turn at the same

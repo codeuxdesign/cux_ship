@@ -163,6 +163,32 @@ that the last-but-one line rounds to 100 and floors to 99. Sized to an exact
 multiple that case disappears, silently, and the warning above loses its worked
 example — which is what that test watches for.
 
+**A third way a percentage misleads, and the ordering is what makes it a
+trap.** Reported from a rendered frame rather than from arithmetic:
+`committing 99%`. Floored correctly, not claiming the run finished — and a
+number that has stopped describing anything, because the bytes have all landed
+and Play is working on the edit. A reader watches that cell for a tick to 100
+that never comes.
+
+So the rule is *stop showing the percentage once the state leaves
+`transferring`*: `accepting`, `committing` and `processing` are the store
+working on what it already holds, and none of them is a fraction of anything.
+
+**And the obvious implementation of that is wrong, because this stream emits a
+`progress` line after `accepting`.** It has to: the final chunk is acknowledged
+by the very response the announcement was written ahead of. So a consumer that
+hides the number on a non-transferring state and re-shows it on any progress
+line flickers it back on for exactly one line, immediately after it was right
+to drop it. The shape that works is that a `progress` line says only *how far*
+and stays silent about *what kind of work* — the last `state` line owns that
+judgment.
+
+Nothing here can check a frame in another tree, so the rule lives in
+`PlayUploadEvent.bytesTotal`'s dartdoc with the other two. What
+`play_upload_events_test.dart` pins is the premise: a progress line still
+follows `accepting`. Reorder those two and the warning becomes advice about a
+stream that no longer exists.
+
 ### And the App Store carries none of it, deliberately
 
 App Store Connect has no endpoint that accepts a binary, so the transfer is

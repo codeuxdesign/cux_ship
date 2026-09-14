@@ -52,6 +52,14 @@ bytesTotal` means the store has the bytes and nothing more, with `committing`
 still to come on Play and five to fifteen minutes of `processing` still to come
 on the App Store. The `result` line is the one that says a run finished.
 
+**And stop showing the percentage once the state leaves `transferring`.**
+`accepting`, `committing` and `processing` are the store working on bytes it
+already holds, so `committing 99%` is a number that has stopped describing
+anything. Watch the ordering when implementing that: a `progress` line arrives
+*after* `accepting`, so a consumer that re-shows the number on any progress
+line flickers it back on for one line — let the last `state` line own that
+judgment and let `progress` say only how far.
+
 `package:cux_ship/documents.dart` gains `PlayUploadEvent`, `PlayUploadResult`,
 `AppStoreUploadEvent`, `AppStoreUploadResult`, `UploadEvent` and `UploadState`.
 

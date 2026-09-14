@@ -1638,10 +1638,28 @@ class PlayUploadEvent {
   /// minutes long. [UploadEvent.result] is the line that says the run
   /// finished, and it is the only one that does.
   ///
-  /// Both of those are the same rule [AppStoreUploadEvent] follows by having
-  /// no `bytesSent` at all: a display must not imply a state the data does not
-  /// support. Reported by the first consumer, from a real run against these
-  /// events.
+  /// **And stop showing it once [state] leaves [UploadState.transferring].**
+  /// The bytes have landed by then and the store is working on what it already
+  /// holds, so a percentage beside [UploadState.accepting],
+  /// [UploadState.committing] or [UploadState.processing] describes something
+  /// that has finished — `committing 99%` reads as a transfer one percent
+  /// short of done, and a reader waits for a number that will never move. Those
+  /// states are not fractions of anything; let the state name stand alone.
+  ///
+  /// **The ordering makes the obvious version of that wrong**, and nothing
+  /// about the ordering looks like a hazard until it is hit: a `progress` line
+  /// arrives *after* [UploadState.accepting], because the final chunk is
+  /// acknowledged by the response that announcement was written ahead of. So a
+  /// consumer that hides the number on a non-transferring state and re-shows it
+  /// on any progress line flickers it back on for exactly one line. **Let the
+  /// last `state` line own that judgment and let `progress` say only how far** —
+  /// a progress line is silent about what kind of work is going on.
+  ///
+  /// All three are the same rule [AppStoreUploadEvent] follows by having no
+  /// `bytesSent` at all: a display must not imply a state the data does not
+  /// support. Each was reported by the first consumer, from real runs against
+  /// these events — the first two from the arithmetic, the third from reading
+  /// a rendered frame.
   final int? bytesTotal;
 
   /// What the run did. Present on [UploadEvent.result], which is the last
