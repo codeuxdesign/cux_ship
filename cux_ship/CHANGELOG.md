@@ -45,8 +45,24 @@ for. The flag now picks the format from the mode: `--dry-run --json` prints the
 `appstore.listing-diff` document unchanged, `--json` alone writes the stream.
 Two kinds, so a consumer reading `kind` first cannot confuse them.
 
+**Derive the percentage from `bytesSent` and `bytesTotal`, floor it, and do not
+read 100% as finished.** An artifact is not a whole number of 1 MiB chunks, so
+a rounded fraction reaches 100 with bytes still in flight — and `bytesSent ==
+bytesTotal` means the store has the bytes and nothing more, with `committing`
+still to come on Play and five to fifteen minutes of `processing` still to come
+on the App Store. The `result` line is the one that says a run finished.
+
 `package:cux_ship/documents.dart` gains `PlayUploadEvent`, `PlayUploadResult`,
 `AppStoreUploadEvent`, `AppStoreUploadResult`, `UploadEvent` and `UploadState`.
+
+**`docs/design/dry-run-json.md` said `Status: proposed. Nothing here is built`
+about `upload --dry-run --json` and `verify --json`, which shipped in
+4.5.0-dev.3.**
+It says `built` now. `tool/status.sh` reads that line, so the index had been
+reporting shipped work as an open proposal for four days — the failure that
+script's own header names, since a stale index of open questions is believed.
+Found by a consumer following this flag's help text to a document saying the
+thing they had just used does not exist.
 
 ### Breaking
 

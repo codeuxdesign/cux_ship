@@ -125,9 +125,14 @@ void main() {
   setUp(() {
     final dir = Directory.systemTemp.createTempSync('cux_ship_play_events');
     addTearDown(() => dir.deleteSync(recursive: true));
-    // **Two and a bit chunks, so the transfer is more than one event.** A
-    // one-chunk artifact would make "a line per chunk" and "one line at the
-    // end" indistinguishable.
+    // **Two chunks and a bit, and the bit is load-bearing twice over.** Two
+    // and a bit, so the transfer is more than one event — a one-chunk artifact
+    // would make "a line per chunk" and "one line at the end"
+    // indistinguishable. And *a bit* rather than a whole number of chunks, so
+    // the last-but-one line is short of the total by less than a rounding
+    // error, which is the case the percentage warning below is about. An
+    // artifact sized to an exact multiple would take that case out of this
+    // suite without failing anything.
     aab = File('${dir.path}/app.aab')
       ..writeAsBytesSync(List<int>.filled(1024 * 1024 * 2 + 4096, 7));
   });
@@ -290,6 +295,32 @@ void main() {
         ),
         isTrue,
       );
+    });
+
+    test('and a percentage rounds to 100 before the upload is over', () async {
+      // **Not a defect in the events — a defect a consumer will write against
+      // them**, reported by the first one from a real run. A chunk is 1 MiB
+      // and an artifact is not a whole number of them, so the last-but-one
+      // line is a few kibibytes short: `(sent * 100 / total).round()` prints
+      // 100 with bytes still in flight, and a finished cell becomes
+      // indistinguishable from an almost-finished one. Which is the confusion
+      // this whole stream exists to remove.
+      //
+      // The remedy is a floor, and it is `PlayUploadEvent.bytesTotal`'s
+      // dartdoc and the README that carry it, because it governs a rendering
+      // in somebody else's tree and nothing here can enforce it. What *is*
+      // checkable, and is what this pins, is that the warning still has a
+      // worked example behind it: an artifact sized to an exact multiple of a
+      // chunk would quietly remove the case.
+      final run = await upload(extra: ['--json']);
+      final sent = [for (final event in events(run.out)) ?event.bytesSent];
+      final total = aab.lengthSync();
+
+      final penultimate = sent[sent.length - 2];
+      expect(penultimate, lessThan(total));
+      expect((penultimate * 100 / total).round(), 100);
+      // And the floor is the answer, which is the half the guidance gives.
+      expect((penultimate * 100 / total).floor(), 99);
     });
 
     test('and it arrives between transferring and accepting', () async {

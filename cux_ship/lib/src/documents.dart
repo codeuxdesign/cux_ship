@@ -1622,6 +1622,26 @@ class PlayUploadEvent {
   /// Beside [bytesSent] rather than instead of a percentage, so the fraction
   /// is derivable rather than asserted — a consumer that wants two decimal
   /// places is not held to whatever this package rounded to.
+  ///
+  /// **Floor that fraction; do not round it.** A chunk is 1 MiB and an
+  /// artifact is not a whole number of them, so the last-but-one line is a
+  /// few kibibytes short of the total and `(sent * 100 / total).round()` is
+  /// **100 with bytes still in flight**. A finished cell and an
+  /// almost-finished one then look identical, which is the confusion this
+  /// stream exists to remove. Measured on a 2 101 248-byte artifact: the
+  /// second progress line is 2 097 152, which is 99.805%.
+  ///
+  /// **And do not read 100% as finished, however it is computed.** `bytesSent
+  /// == bytesTotal` means the store has the bytes and nothing more: on Play
+  /// the run is still to reach [UploadState.committing], and on the App Store
+  /// it is still to reach [UploadState.processing], which is five to fifteen
+  /// minutes long. [UploadEvent.result] is the line that says the run
+  /// finished, and it is the only one that does.
+  ///
+  /// Both of those are the same rule [AppStoreUploadEvent] follows by having
+  /// no `bytesSent` at all: a display must not imply a state the data does not
+  /// support. Reported by the first consumer, from a real run against these
+  /// events.
   final int? bytesTotal;
 
   /// What the run did. Present on [UploadEvent.result], which is the last

@@ -5,6 +5,13 @@ Status: **built**, 14 September 2026 — `--json` on `play upload` and on
 that is not one document, and most of what follows is about why that is a
 different thing rather than a larger one.
 
+**Tested by the first consumer against their release train before merge**, at
+the branch commit: the stream decodes into the exported classes, the panel
+renders a real progress cell from it, and — the check that mattered most —
+`documents.dart` changing did not break their `status` command, which decodes
+every store read through it. One finding came back and is
+*100% is not finished* below.
+
 Asked for by the first consumer, correcting their own earlier request. Their
 release train (`tool/train/`) captures each build and upload to
 `dist/train-*.log` and draws a pinned status grid above them; it gets a usable
@@ -119,6 +126,42 @@ Read back from a finished stream the two orderings look identical, because
 nothing else is written between them — the first version of the test for it
 was green against both, and the fix was to have the fake transport report what
 the sink held at the moment the request arrived.
+
+### 100% is not finished, and a consumer will compute it that way
+
+**Found by the first consumer, on a real run against these events**, before
+anything here had a second reader. Their panel did the obvious thing —
+`(sent * 100 / total).round()` — and printed `100%` with four kibibytes still
+in flight, because the last-but-one line of a 2 101 248-byte artifact is
+2 097 152, which is 99.805%. A finished cell and an almost-finished one then
+look identical, which is the confusion this whole stream exists to remove.
+
+**The fix is the consumer's and the guidance is ours.** Nothing here can check
+a rendering in a tree this package cannot see, so the rule lives where the
+format is published — `PlayUploadEvent.bytesTotal`'s dartdoc, and the README —
+and it is two rules rather than one:
+
+- **Floor the fraction.** An artifact is not a whole number of 1 MiB chunks, so
+  a rounded one reaches 100 before the transfer does.
+- **Do not read 100% as finished however it is computed.** `bytesSent ==
+  bytesTotal` means the store has the bytes and nothing more: Play has still to
+  reach `committing`, and the App Store has still to reach `processing`, which
+  is five to fifteen minutes long. `result` is the line that says the run
+  finished, and it is the only one that does.
+
+The wording that invited it is worth recording, because it was written here in
+good faith: *"neither is rounded for you"* was meant as "the precision is
+yours" and reads as "go ahead and round". Both rules above are the same one
+this document already applies to the App Store half one section down — **a
+display must not imply a state the data does not support** — so the failure was
+not a missing principle but a principle applied to one store and not to the
+consumer's arithmetic.
+
+`play_upload_events_test.dart` pins the premise rather than the remedy: its
+artifact is deliberately *not* a whole number of chunks, and a case asserts
+that the last-but-one line rounds to 100 and floors to 99. Sized to an exact
+multiple that case disappears, silently, and the warning above loses its worked
+example — which is what that test watches for.
 
 ### And the App Store carries none of it, deliberately
 

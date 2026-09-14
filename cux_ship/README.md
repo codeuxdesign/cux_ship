@@ -871,9 +871,16 @@ Apple's. Render a bar while the bytes move, and the state name otherwise.
 a 68 MB bundle is about sixty-eight lines, `bytesSent` never runs ahead of the
 socket, and — the point of the whole signal — **the lines stop arriving when
 the transfer stops**. They are absolute offsets, so a resumed upload reports
-where the store actually is rather than starting again from zero. Derive the
-percentage from `bytesSent` and `bytesTotal` yourself; neither is rounded for
-you.
+where the store actually is rather than starting again from zero.
+
+**Derive the percentage yourself, and floor it.** An artifact is not a whole
+number of 1 MiB chunks, so the last-but-one line is a few kibibytes short and
+`round()` gives you **100% with bytes still in flight** — a finished cell and
+an almost-finished one, identical. And 100% is not finished in any case:
+`bytesSent == bytesTotal` means the store has the bytes, with `committing`
+still to come on Play and five to fifteen minutes of `processing` still to come
+on the App Store. **`result` is the line that says the run finished**, and it
+is the only one that does.
 
 **`appstore.upload` carries no byte progress, and has no field for one.** The
 transfer is `xcrun altool`, whose transport Apple documents nowhere, so there

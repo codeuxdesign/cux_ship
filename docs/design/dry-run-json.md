@@ -1,8 +1,22 @@
 # Judging the listing without reading prose: `--json` on `upload --dry-run` and on `verify`
 
-Status: **proposed**. Nothing here is built. Two commands, argued in one
-document because they answer halves of a single question a consumer is asking
-today and cannot get an answer to.
+Status: **built**, 10 September 2026 — both halves, in one batch. Two commands,
+argued in one document because they answer halves of a single question a
+consumer was asking and could not get an answer to.
+
+**It said `proposed`, `Nothing here is built`, through the release that shipped
+it** — 4.5.0-dev.3, four days — and that is worth a sentence rather than a
+silent edit. `tool/status.sh` reads
+this line, so the index has been reporting shipped work as an open proposal —
+which is the exact failure that script's own header names: *a stale index of
+open questions is worse than none, because it is believed.* Caught by the
+consumer, who followed the flag's help text here and met a document saying the
+thing it had just used does not exist. Nothing catches this: a status is prose
+about the world outside the file, and `design_status_test.dart` checks only
+that the word is one of the four the index knows.
+
+**The `Open:` section below is still open**, and stays — a document's status is
+the state of its subject, and a section may carry its own.
 
 **Reviewed by that consumer before any of it was typed**, which is the process
 `preview-wait-split.md` established and which paid again: they took three
