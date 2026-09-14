@@ -97,16 +97,24 @@ class AppStoreBuild {
   /// TestFlight builds expire after 90 days. An expired build is still listed
   /// and can no longer be given to a group.
   ///
-  /// **The ninety days is exact, and measured rather than quoted.** Every one
-  /// of 72 macOS builds carries an `expirationDate`, and
-  /// `expirationDate - uploadedDate` is ninety days on all of them without
-  /// exception. So expiry is derivable from the response without this flag,
-  /// and `filter[expired]` buys nothing over arithmetic — see
-  /// `docs/design/testflight-audience.md` §4.
+  /// **The ninety days is measured rather than quoted, and nothing here
+  /// depends on it.** Every one of 72 macOS builds carries an
+  /// `expirationDate`, and `expirationDate - uploadedDate` is ninety days on
+  /// all of them without exception — a fact about Apple's policy on
+  /// 2026-09-14, not a rule this package applies. **This field is Apple's own
+  /// boolean**, so a changed retention period is reported correctly without
+  /// any arithmetic of ours, and nothing in this package computes with ninety.
+  /// That matters because **nothing would notice if it changed**: no test can
+  /// assert against Apple's policy, and a number stated in prose that no
+  /// reader can disprove is the shape `sort=-version` was wrong in for
+  /// thirty-nine days.
   ///
   /// **`expirationDate` is on the wire and is not parsed here.** Nothing has
   /// asked *how long until this build expires*; the field is one line away if
-  /// something does.
+  /// something does, and reading Apple's date is the answer rather than adding
+  /// ninety to [uploadedDate]. `appstore beta-release` reports it verbatim
+  /// when it refuses an expired build, having previously told the operator the
+  /// ninety days as a fact.
   ///
   /// **"Still listed" is the half that is not measured.** No build on the
   /// account this package reads has ever expired — it was thirty days old when

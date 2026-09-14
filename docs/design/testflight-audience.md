@@ -538,23 +538,58 @@ prose on stderr, which is this package's existing convention and which the
 consumer's panel already parses as a phase milestone, with the document
 untouched on stdout. NDJSON would need a parser on both sides to be no better.
 
-**`filter[expired]` is closed, and not as *too early*.** It is *not needed*:
-every build carries an `expirationDate`, measured on all 72, and
-`expirationDate - uploadedDate` is **exactly ninety days on every one of them,
-without exception**. Expiry is therefore fully derivable from data already in
-the response, and a request narrowed by a parameter nobody has verified buys
-nothing over arithmetic on a field that is already there. That also retires the
-worry above about the growth argument resting on an unobserved claim — the
-first build on this account expires on **2026-11-14**, which is when *an
-expired build stays listed* becomes checkable, and it is the only half still
-open.
+**`filter[expired]` is closed as *wrong*, which is a stronger answer than the
+two this section reached on the way to it.** It was first written down as *too
+early* — nothing has expired yet — and then, worse, as *not needed*, on the
+grounds that every build carries an `expirationDate` so expiry is derivable
+client-side. **That second reason was a conflation and is retracted.**
+`filter[expired]` was a lever on how many builds *come back*; deriving expiry
+from a field requires the build to be in the response already, so it does
+nothing whatever for request size. The two facts are unrelated and one was
+being used to close the other.
 
-`expirationDate` is on the wire and this package does not parse it; `expired`,
-the boolean Apple derives, is what [AppStoreBuild] carries. Adding it would be
-free while schema 2 is unreleased and a schema bump afterwards — and it has no
-caller, which is the same test the per-group read failed. Recorded so the next
-person weighing "how long until this build expires" knows the answer is one
-field away rather than one request.
+The real reason is the one this section already established about bounding, and
+it applies unchanged: **filtering expired builds out breaks the consumer's grid
+by the same mechanism, on a date that can be named.** That grid needs build 122
+for its 1.1.0 row; build 122 was uploaded 2026-08-28 and Apple gives its expiry
+as 2026-11-26. From that day `filter[expired]=false` drops it and the row loses
+its cells — *no build for this version* wearing the clothes of *I filtered it
+out*. The first build on the account expires 2026-11-14, so the window in which
+this looks harmless closes in under two months.
+
+So expired builds are not noise to be filtered; they are **history the caller
+asked for**, exactly as the old builds a bounded read would have dropped.
+
+### The ninety days is measured, nothing depends on it, and nothing would notice
+
+`expirationDate - uploadedDate` is ninety days on all 72 builds without
+exception. That is a fact about Apple's retention policy today, and **there is
+no mechanism in this package that would notice if it changed** — no test can
+assert against Apple's policy, and the two detectors this branch added work
+because they compare things *within one response*, which a retention period has
+no counterpart for.
+
+The correct response to *nothing would notice* is not to build a detector for
+it. It is to make sure nothing depends on it, and to say so out loud:
+
+- **`expired` is Apple's own boolean**, read straight off the build, so a
+  changed period is reported correctly with no arithmetic of ours involved.
+- **`expirationDate` is per-build and on the wire**, so any caller wanting *how
+  long until this expires* reads Apple's answer rather than computing one.
+- **Nothing computes with ninety.** It appears in two dartdocs as context, and
+  it used to appear in a user-facing error — `appstore beta-release` telling an
+  operator that *TestFlight builds last 90 days* — which is now that build's
+  own `expirationDate`, reported rather than asserted.
+
+That last one is the whole of the risk and it was worth removing: a constant
+stated in prose, that no test reads and no reader can disprove, is precisely
+the shape `sort=-version` was wrong in for thirty-nine days. The number stays
+recorded here as a measurement with a date on it, which is a different kind of
+claim from a number the code speaks as though it knows.
+
+**The one thing still resting on documentation** is that an expired build stays
+*listed* at all. No build on this account has ever expired; 2026-11-14 is when
+that becomes checkable, and §4's growth argument is what rests on it.
 
 The reason to write all this down rather than act on it is the one §3 earned
 the hard way: the previous change to this request was made against a

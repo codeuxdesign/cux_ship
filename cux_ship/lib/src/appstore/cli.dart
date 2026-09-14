@@ -2556,9 +2556,19 @@ Future<void> runAsc(
         fail(unusable);
       }
       if (attributes?['expired'] == true) {
+        // **Apple's own date rather than "TestFlight builds last 90 days".**
+        // The retention period is a number this package cannot check and no
+        // test can read, so stating it in an error is a claim that goes
+        // quietly wrong the day Apple changes it — the shape `sort=-version`
+        // was wrong in for thirty-nine days, in a comment nobody could have
+        // disproved by reading it. `expirationDate` arrives on every build in
+        // this same response, so the message reports instead of asserting, and
+        // a changed period corrects itself.
+        final expiredOn = attributes?['expirationDate'] as String?;
         fail(
-          'build $buildNumber has expired — TestFlight builds last 90 days, '
-          'so upload a new one.',
+          'build $buildNumber has expired'
+          '${expiredOn == null ? '' : ', Apple gives its expiry as $expiredOn'}'
+          ' — upload a new one.',
         );
       }
 
