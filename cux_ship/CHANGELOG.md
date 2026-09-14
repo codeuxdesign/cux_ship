@@ -2,6 +2,89 @@
 
 ## Unreleased
 
+**`play upload` and `appstore upload` take `--json`, and it is a stream rather
+than a document.** Newline-delimited JSON on stdout, one object per line, while
+the upload runs; every human-facing line goes on to stderr exactly as before.
+`docs/design/upload-events.md` is the whole argument.
+
+An upload is the one step in a release that says nothing for minutes at a time
+— the resumable uploader printed `uploading N bytes` once and then nothing
+until the transfer ended, so a three-minute upload and a wedged one looked
+identical from outside for their whole duration. A percentage would have been
+half an answer: it cannot say that the transfer finished four minutes ago and
+the wait is now Apple's. So the lines carry **states** as well as bytes, and a
+consumer renders a bar while the bytes move and a state name otherwise.
+
+**Byte progress is Play's own count, one line per chunk it acknowledges.** The
+resumable protocol answers each 1 MiB chunk with the range it now holds, and
+that is what is reported — so a 68 MB bundle produces about sixty-eight lines,
+the numbers cannot run ahead of the socket, and **they stop arriving when the
+transfer stops**, which a tick on a timer could never do. They are absolute
+rather than counted from the start of the run, so a resumed upload reports the
+offset the store already has instead of a jump from zero.
+
+**`appstore.upload` carries no byte progress and has no field for one.** The
+transfer is `xcrun altool`, a subprocess speaking a transport Apple documents
+nowhere, so there is nothing per-chunk to report and a timer would report a
+wedged upload as a healthy one. What it carries instead is `processing` — where
+an Apple upload spends most of its wall clock — and `bytesTotal` on the
+transfer line, so a consumer can say how big without pretending to know how
+far.
+
+**The last line is a `result`, and only a run that finished writes one.** It
+names what landed — Play's `versionCode` and whether the edit committed, or
+Apple's build number and whether this run waited for processing — so a caller
+does not parse the exit code plus the last line of prose. A failure ends the
+stream where it happened and reports on stderr, which is this package's
+existing rule said in a stream's vocabulary.
+
+**`appstore upload --json` no longer needs `--dry-run`.** That refusal was
+right about documents — one describing writes that already happened would have
+to describe partial ones — and a partial upload is exactly what a stream is
+for. The flag now picks the format from the mode: `--dry-run --json` prints the
+`appstore.listing-diff` document unchanged, `--json` alone writes the stream.
+Two kinds, so a consumer reading `kind` first cannot confuse them.
+
+**Derive the percentage from `bytesSent` and `bytesTotal`, floor it, and do not
+read 100% as finished.** An artifact is not a whole number of 1 MiB chunks, so
+a rounded fraction reaches 100 with bytes still in flight — and `bytesSent ==
+bytesTotal` means the store has the bytes and nothing more, with `committing`
+still to come on Play and five to fifteen minutes of `processing` still to come
+on the App Store. The `result` line is the one that says a run finished.
+
+**And stop showing the percentage once the state leaves `transferring`.**
+`accepting`, `committing` and `processing` are the store working on bytes it
+already holds, so `committing 99%` is a number that has stopped describing
+anything. Watch the ordering when implementing that: a `progress` line arrives
+*after* `accepting`, so a consumer that re-shows the number on any progress
+line flickers it back on for one line — let the last `state` line own that
+judgment and let `progress` say only how far.
+
+`package:cux_ship/documents.dart` gains `PlayUploadEvent`, `PlayUploadResult`,
+`AppStoreUploadEvent`, `AppStoreUploadResult`, `UploadEvent` and `UploadState`.
+
+**`upload --json --beta-group` was putting prose in the middle of its own
+stream.** `releaseToBetaGroup` wrote four lines straight to stdout — the
+external-group notice, the beta description, the beta review, and the
+build-state read-back — which was correct for every caller that existed until
+`upload` grew a stdout carrying JSON. They go through the sink `AppStore`
+already holds now. Found in review of this change.
+
+**`appstore.upload` and `play.upload` announce `accepting` once, however many
+attempts the final chunk takes.** googleapis answers a 5xx by sending that
+chunk again, and the state is written before the request — so a retry
+announced the same wait per attempt, and a consumer treating a transition as an
+edge would see the upload re-enter a state it never left. Also found in review.
+
+**`docs/design/dry-run-json.md` said `Status: proposed. Nothing here is built`
+about `upload --dry-run --json` and `verify --json`, which shipped in
+4.5.0-dev.3.**
+It says `built` now. `tool/status.sh` reads that line, so the index had been
+reporting shipped work as an open proposal for four days — the failure that
+script's own header names, since a stale index of open questions is believed.
+Found by a consumer following this flag's help text to a document saying the
+thing they had just used does not exist.
+
 ### Breaking
 
 **`package:cux_ship/read.dart` is removed**, with `AppStoreReads` and

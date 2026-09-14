@@ -348,15 +348,19 @@ void main() {
     );
   });
 
-  test('upload --json without --dry-run is refused, not ignored', () {
-    // **Refused rather than inert, which is the decision this pins.** A flag
-    // accepted and doing nothing is a promise the caller cannot check, and the
-    // consumer who asked for this has the scar from the other side: a build
-    // tool's flag ignored since a version bump, believed for a long time to be
-    // the difference between a passing and a failing run.
+  test('upload --json without --dry-run is no longer refused', () {
+    // **This case is the inverse of the one it replaces, and the old one was
+    // right at the time.** `--json` used to demand `--dry-run`, on the
+    // argument that a *document* about writes that already happened would have
+    // to describe partial ones. That argument is correct about documents and
+    // is the reason a real upload got a **stream**: a partial upload is what an
+    // event stream is for. See docs/design/upload-events.md.
     //
-    // The refusal is offline — it fires with the other incompatible-flag
-    // checks, long before credentials — so this reaches it with none.
+    // What is asserted is that the run gets past the flag check and stops at
+    // the one thing a test cannot supply. Asserting only "no refusal" would
+    // pass against a build that had removed the flag entirely.
+    final artifact = File('${repo.path}/app.ipa')
+      ..writeAsStringSync('not really an ipa');
     final result = Process.runSync(
       Platform.resolvedExecutable,
       [
@@ -368,6 +372,12 @@ void main() {
         'design.codeux.consumer',
         '--version-name',
         '1.1.6',
+        '--artifact',
+        artifact.path,
+        '--build-number',
+        '52',
+        '--no-metadata',
+        '--yes',
         '--json',
       ],
       workingDirectory: repo.path,
@@ -375,16 +385,13 @@ void main() {
     );
     final said = '${result.stdout}${result.stderr}';
 
-    expect(result.exitCode, isNot(0), reason: said);
-    expect(said, contains('--json needs --dry-run'));
-    // **The discriminator.** Without the refusal the run carries on and dies
-    // at the credential check instead, so asserting only "non-zero" would pass
-    // against the inert version this exists to forbid.
-    expect(
-      said,
-      isNot(contains('no App Store Connect credentials')),
-      reason: 'a run that reached credentials never refused the flag',
-    );
+    expect(said, isNot(contains('--json needs --dry-run')), reason: said);
+    expect(said, contains('App Store Connect credentials'), reason: said);
+    // **And stdout stayed empty while it failed**, which is the half the
+    // stream contract turns on: a run that never got as far as an event has
+    // nothing to say on the channel the events use, and a consumer decoding
+    // it must not meet prose there. The refusal is on stderr, where it was.
+    expect(result.stdout, isEmpty, reason: said);
   });
 
   test('upload --json with --dry-run is accepted', () {

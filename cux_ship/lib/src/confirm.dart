@@ -25,11 +25,22 @@ typedef Confirm = void Function(String summary);
 ///
 /// Exits rather than returning false: every caller would otherwise have to
 /// decide what a no means, and it always means the same thing.
-void confirmOrExit(String summary, {required bool assumeYes}) {
-  stdout.writeln(summary);
+///
+/// [out] is where the summary, the `--yes` acknowledgement and the question
+/// itself go, or null for [stdout]. **`upload --json` passes [stderr]**: this
+/// is the first thing a run prints and stdout is carrying JSON, so left here
+/// it would land in front of the stream and make every line of it unreadable.
+/// The *question* moves with the summary rather than staying behind — a
+/// prompt on one stream and the text it is about on another is not a prompt.
+///
+/// [stdin] is untouched either way. Where the answer is typed has nothing to
+/// do with where the question was printed, and a `--json` run with no terminal
+/// still refuses rather than assuming a yes.
+void confirmOrExit(String summary, {required bool assumeYes, IOSink? out}) {
+  (out ?? stdout).writeln(summary);
 
   if (assumeYes) {
-    stdout.writeln('--yes given, proceeding.');
+    (out ?? stdout).writeln('--yes given, proceeding.');
     return;
   }
 
@@ -42,10 +53,10 @@ void confirmOrExit(String summary, {required bool assumeYes}) {
     exit(1);
   }
 
-  stdout.write('Proceed? [y/N] ');
+  (out ?? stdout).write('Proceed? [y/N] ');
   final answer = stdin.readLineSync()?.trim().toLowerCase();
   if (answer != 'y' && answer != 'yes') {
-    stdout.writeln('Nothing was done.');
+    (out ?? stdout).writeln('Nothing was done.');
     exit(1);
   }
 }

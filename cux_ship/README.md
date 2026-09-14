@@ -647,9 +647,10 @@ means two things:
 | **255** | a crash | an exception nothing named — the stack trace is the report |
 
 **64 is the argument *parser*, and not every wrong argument reaches it.** A
-flag the parser accepts and the command then refuses — `--json` without
-`--dry-run`, `--metadata` with `--no-metadata`, a missing `--version-name` —
-exits **1**, because it is refused after parsing by the command itself. The two
+flag the parser accepts and the command then refuses — `--metadata` with
+`--no-metadata`, `--skip-waiting` with `--beta-group`, a missing
+`--version-name` — exits **1**, because it is refused after parsing by the
+command itself. The two
 are worth telling apart when writing a caller: 64 means the command line did
 not parse, 1 means it parsed and the command declined it.
 
@@ -828,6 +829,94 @@ the same as `unknown`.
 
 This adds nothing to what the command does: these are value types over what it
 printed.
+
+### Watching an upload as JSON
+
+**`play upload` and `appstore upload` take `--json` too, and it is a stream
+rather than a document.** Newline-delimited JSON on stdout, one object per
+line, written while the upload runs — because an upload is the one step that
+says nothing for minutes at a time, and from outside a three-minute one and a
+wedged one look identical.
+
+```bash
+cux_ship play upload --aab dist/android/app.aab --json |
+  while read -r line; do
+    jq -r 'if .event == "progress"
+           then "\(.bytesSent * 100 / .bytesTotal | floor)%"
+           else .state // "done" end' <<<"$line"
+  done
+```
+
+The three rules above still hold, with one change each:
+
+- **stdout carries the lines and nothing else** — but stderr is not merely
+  where the leftovers go. Every `==> ` line an upload has always printed still
+  goes there, whole and in order, because that log is what a person reads after
+  a failure. Nothing is suppressed, so **no line carries `display`**: it would
+  deliver the same text twice on two streams.
+- **`schema` and `kind` are on every line**, not on a header, because a line is
+  the unit you get. Read `kind`, then `schema`, then dispatch on `event`.
+- **A stream with no `result` line did not finish**, and stderr says why. That
+  is the stream's version of "a failure leaves stdout empty": you get a
+  positive completion marker instead of having to prove a negative from an exit
+  code.
+
+`event` is `state`, `progress` or `result`. A `state` line names what the
+upload is doing — `preparing`, `transferring`, `reusing`, `accepting`,
+`processing`, `committing` — which is the half a percentage cannot carry: `45%`
+cannot tell you that the transfer finished four minutes ago and the wait is now
+Apple's. Render a bar while the bytes move, and the state name otherwise.
+
+**Byte progress is Play's count, one line per 1 MiB chunk it acknowledges.** So
+a 68 MB bundle is about sixty-eight lines, `bytesSent` never runs ahead of the
+socket, and — the point of the whole signal — **the lines stop arriving when
+the transfer stops**. They are absolute offsets, so a resumed upload reports
+where the store actually is rather than starting again from zero.
+
+**Derive the percentage yourself, and floor it.** An artifact is not a whole
+number of 1 MiB chunks, so the last-but-one line is a few kibibytes short and
+`round()` gives you **100% with bytes still in flight** — a finished cell and
+an almost-finished one, identical. And 100% is not finished in any case:
+`bytesSent == bytesTotal` means the store has the bytes, with `committing`
+still to come on Play and five to fifteen minutes of `processing` still to come
+on the App Store. **`result` is the line that says the run finished**, and it
+is the only one that does.
+
+**And stop showing it once the state leaves `transferring`.** `accepting`,
+`committing` and `processing` are the store working on bytes it already holds —
+they are not fractions of anything, and `committing 99%` reads as a transfer
+one percent short of done, so a reader waits for a number that will never move.
+Let the state name stand alone.
+
+Watch the ordering there, because the obvious implementation is wrong: **a
+`progress` line arrives after `accepting`**, since the final chunk is
+acknowledged by the very response that announcement was written ahead of. A
+consumer that hides the percentage on a non-transferring state and re-shows it
+on any progress line flickers it back on for exactly one line. Let the last
+`state` line decide whether a percentage is meaningful, and let `progress` say
+only how far.
+
+**`appstore.upload` carries no byte progress, and has no field for one.** The
+transfer is `xcrun altool`, whose transport Apple documents nowhere, so there
+is nothing per-chunk to report — and a tick on a timer would turn at the same
+rate whether the socket was moving or dead, which is the failure this exists to
+make visible. It gives you `bytesTotal` on the transfer line and, far more
+usefully, the `processing` state: Apple takes 5–15 minutes there, and that is
+where an Apple upload spends most of its wall clock.
+
+**On `appstore upload`, the flag picks its format from the mode.** With
+`--dry-run` it prints the `appstore.listing-diff` document described above,
+unchanged; without it, this stream. They carry different `kind`s, so reading
+`kind` first — which you should anyway — tells them apart.
+
+`play upload --dry-run` is not the same shape, and that is Play rather than
+this tool: it opens a real edit, transfers the real bundle and then discards
+the edit, so it streams like any other run and `result.committed` is `false`.
+
+The whole contract is
+[docs/design/upload-events.md](https://github.com/codeuxdesign/cux_ship/blob/main/docs/design/upload-events.md),
+and from Dart the classes are `PlayUploadEvent` and `AppStoreUploadEvent` in
+`package:cux_ship/documents.dart`.
 
 ### Credentials
 

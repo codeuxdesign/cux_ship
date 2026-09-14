@@ -81,6 +81,8 @@ const _$DocumentKindEnumMap = {
   DocumentKind.playTracks: 'play.tracks',
   DocumentKind.appStoreListingDiff: 'appstore.listing-diff',
   DocumentKind.verify: 'verify',
+  DocumentKind.playUpload: 'play.upload',
+  DocumentKind.appStoreUpload: 'appstore.upload',
 };
 
 AppStoreVersionEntry _$AppStoreVersionEntryFromJson(
@@ -406,4 +408,106 @@ Map<String, dynamic> _$AppStoreListingDiffDocumentToJson(
   'assets': instance.assets,
   'appleOnlyLocales': instance.appleOnlyLocales,
   'display': instance.display,
+};
+
+PlayUploadEvent _$PlayUploadEventFromJson(Map<String, dynamic> json) =>
+    PlayUploadEvent(
+      schema: (json['schema'] as num).toInt(),
+      kind: $enumDecode(_$DocumentKindEnumMap, json['kind']),
+      event: $enumDecode(_$UploadEventEnumMap, json['event']),
+      state: $enumDecodeNullable(_$UploadStateEnumMap, json['state']),
+      bytesSent: (json['bytesSent'] as num?)?.toInt(),
+      bytesTotal: (json['bytesTotal'] as num?)?.toInt(),
+      result: json['result'] == null
+          ? null
+          : PlayUploadResult.fromJson(json['result'] as Map<String, dynamic>),
+    );
+
+Map<String, dynamic> _$PlayUploadEventToJson(PlayUploadEvent instance) =>
+    <String, dynamic>{
+      'schema': instance.schema,
+      'kind': _$DocumentKindEnumMap[instance.kind]!,
+      'event': _$UploadEventEnumMap[instance.event]!,
+      'state': ?_$UploadStateEnumMap[instance.state],
+      'bytesSent': ?instance.bytesSent,
+      'bytesTotal': ?instance.bytesTotal,
+      'result': ?instance.result?.toJson(),
+    };
+
+const _$UploadEventEnumMap = {
+  UploadEvent.state: 'state',
+  UploadEvent.progress: 'progress',
+  UploadEvent.result: 'result',
+};
+
+const _$UploadStateEnumMap = {
+  UploadState.preparing: 'preparing',
+  UploadState.transferring: 'transferring',
+  UploadState.reusing: 'reusing',
+  UploadState.accepting: 'accepting',
+  UploadState.processing: 'processing',
+  UploadState.committing: 'committing',
+};
+
+PlayUploadResult _$PlayUploadResultFromJson(Map<String, dynamic> json) =>
+    PlayUploadResult(
+      packageName: json['packageName'] as String,
+      track: json['track'] as String,
+      versionName: json['versionName'] as String,
+      versionCode: (json['versionCode'] as num?)?.toInt(),
+      committed: json['committed'] as bool,
+    );
+
+Map<String, dynamic> _$PlayUploadResultToJson(PlayUploadResult instance) =>
+    <String, dynamic>{
+      'packageName': instance.packageName,
+      'track': instance.track,
+      'versionName': instance.versionName,
+      'versionCode': ?instance.versionCode,
+      'committed': instance.committed,
+    };
+
+AppStoreUploadEvent _$AppStoreUploadEventFromJson(Map<String, dynamic> json) =>
+    AppStoreUploadEvent(
+      schema: (json['schema'] as num).toInt(),
+      kind: $enumDecode(_$DocumentKindEnumMap, json['kind']),
+      event: $enumDecode(_$UploadEventEnumMap, json['event']),
+      state: $enumDecodeNullable(_$UploadStateEnumMap, json['state']),
+      bytesTotal: (json['bytesTotal'] as num?)?.toInt(),
+      result: json['result'] == null
+          ? null
+          : AppStoreUploadResult.fromJson(
+              json['result'] as Map<String, dynamic>,
+            ),
+    );
+
+Map<String, dynamic> _$AppStoreUploadEventToJson(
+  AppStoreUploadEvent instance,
+) => <String, dynamic>{
+  'schema': instance.schema,
+  'kind': _$DocumentKindEnumMap[instance.kind]!,
+  'event': _$UploadEventEnumMap[instance.event]!,
+  'state': ?_$UploadStateEnumMap[instance.state],
+  'bytesTotal': ?instance.bytesTotal,
+  'result': ?instance.result?.toJson(),
+};
+
+AppStoreUploadResult _$AppStoreUploadResultFromJson(
+  Map<String, dynamic> json,
+) => AppStoreUploadResult(
+  bundleId: json['bundleId'] as String,
+  platform: _platformFromJson(json['platform'] as String),
+  versionName: json['versionName'] as String?,
+  buildNumber: json['buildNumber'] as String?,
+  waitedForProcessing: json['waitedForProcessing'] as bool,
+);
+
+Map<String, dynamic> _$AppStoreUploadResultToJson(
+  AppStoreUploadResult instance,
+) => <String, dynamic>{
+  'bundleId': instance.bundleId,
+  'platform': _platformToJson(instance.platform),
+  'versionName': ?instance.versionName,
+  'buildNumber': ?instance.buildNumber,
+  'waitedForProcessing': instance.waitedForProcessing,
 };

@@ -58,6 +58,19 @@ const verifySchema = 1;
 /// [appStoreBuildsSchema].
 const appStoreListingDiffSchema = 1;
 
+/// The schema `play upload --json` declares. See [appStoreBuildsSchema].
+const playUploadSchema = 1;
+
+/// The schema `appstore upload --json` declares. See [appStoreBuildsSchema].
+///
+/// **Its own counter, not [appStoreListingDiffSchema]'s**, even though one
+/// flag on one command produces both: `--dry-run --json` prints a listing diff
+/// and `--json` alone writes this stream, and they are two formats that change
+/// for different reasons. One number over both would tell a consumer of one to
+/// re-read the other. Same rule, one level finer than the usual
+/// one-per-command reading of it.
+const appStoreUploadSchema = 1;
+
 /// Writes [document] to stdout, whole, once.
 ///
 /// **Once and at the end, because `fail()` calls `exit()`.** A document
@@ -76,6 +89,55 @@ const appStoreListingDiffSchema = 1;
 /// `toEncodable` calls `toJson()`, so this needs nothing else.
 void writeJsonDocument(Object document) {
   stdout.writeln(const JsonEncoder.withIndent('  ').convert(document));
+}
+
+/// Writes one newline-delimited event to [out], compact and on one line.
+///
+/// **Compact, where [writeJsonDocument] indents, and the difference is the
+/// format rather than a preference.** A document is one object and is as often
+/// read by a person as by a program; a line of newline-delimited JSON is
+/// defined by there being exactly one object between two newlines, so an
+/// indented one would not be a line at all.
+///
+/// **Written as it happens, where a document is written whole at the end.**
+/// That inversion is the point and is not the hazard the document rule guards
+/// against: a `fail()` partway through a document leaves half an object on
+/// stdout under an exit code saying to trust it, and a `fail()` partway
+/// through a stream leaves whole lines and no `result` line — which is exactly
+/// what happened, said in the format's own vocabulary.
+///
+/// **No flush, and that was measured rather than assumed.** Review asked for
+/// one on the reasonable-sounding grounds that `IOSink.writeln` only queues
+/// bytes, so a piped consumer might see nothing until the buffer filled or the
+/// process exited — which would defeat the whole point of a live stream. Dart's
+/// `stdout` does not behave that way. A child writing a line and then sleeping
+/// three seconds:
+///
+///     parent saw {"line":1} after  249ms
+///     parent saw {"line":2} after 3244ms
+///
+/// and the same from async code between awaits, one line per second, arriving
+/// one second apart. Both through a pipe, on the runtime this is pinned to.
+///
+/// A flush would also not be free: it returns a `Future`, so either every
+/// caller becomes async — they are synchronous closures inside the upload
+/// paths, one of them inside an `http.BaseClient.send` override — or the lint
+/// that forbids a dropped future gets suppressed at each site. Paying that for
+/// a buffer that does not exist is the shape `docs/CONTRIBUTING.md` argues
+/// against, and the measurement is here so the next reader meets it rather
+/// than the belief.
+///
+/// **If those numbers ever stop holding** — a different runtime, or Dart
+/// changing how it opens fd 1 for a pipe — the remedy is a line-flushed sink
+/// chosen once where the emitter is built, not a flush per event. That keeps
+/// every caller synchronous, which is the property that makes the cost above a
+/// real one rather than a stylistic objection.
+///
+/// [out] rather than [stdout] directly so a test can read the stream back
+/// without an `IOOverrides` zone around every assertion; production passes
+/// [stdout].
+void writeJsonEvent(IOSink out, Object event) {
+  out.writeln(jsonEncode(event));
 }
 
 /// `cux_ship appstore upload --metadata … --dry-run --json`.

@@ -320,10 +320,18 @@ void main() {
         PlayTracksDocument,
         VerifyDocument,
         AppStoreListingDiffDocument,
+        // **Two kinds whose "document" is one line of a stream.** The rule the
+        // length assertion below states is about *nameability* — a kind a
+        // consumer cannot decode into a type is a kind it cannot read — and
+        // that is as true of a line as of a whole document.
+        PlayUploadEvent,
+        AppStoreUploadEvent,
       ];
       // The repeated element type each document carries. `verify`'s
       // [VerifyCheck] fills two fields rather than one — this asserts it is
-      // nameable from outside, not how often it appears.
+      // nameable from outside, not how often it appears. `appstore.upload`'s
+      // and `play.upload`'s fill one field on one line out of a whole stream,
+      // which is the far end of the same point.
       const entries = <Type>[
         AppStoreBuildEntry,
         AppStoreVersionEntry,
@@ -331,6 +339,8 @@ void main() {
         PlayTrackEntry,
         VerifyCheck,
         ListingChangeSet,
+        PlayUploadResult,
+        AppStoreUploadResult,
       ];
 
       // **The assertion that keeps this honest, and it has already earned its

@@ -44,6 +44,15 @@
 // rather than rendering the fields yourself — its text is not promised, its
 // shape is, and a caller that renders the same values its own way reports
 // something different from what the command reports, silently.
+//
+// **Two kinds are streams rather than documents**, and only those two:
+// [PlayUploadEvent] and [AppStoreUploadEvent], which `upload --json` writes
+// one per line while the upload is running. The three rules above hold with
+// one change each — stdout carries the lines and nothing else, `schema` and
+// `kind` are on every line because a line is the unit a reader gets, and
+// there is no `display` at all, because an upload goes on printing its
+// human-facing lines to stderr rather than suppressing them. Read
+// [PlayUploadEvent] first; it carries the whole of the stream contract.
 library;
 
 export 'src/appstore/app_store.dart' show AscPlatform;
@@ -55,6 +64,8 @@ export 'src/documents.dart'
         AppStorePreviewEntry,
         AppStorePreviewsDocument,
         AppStoreState,
+        AppStoreUploadEvent,
+        AppStoreUploadResult,
         AppStoreVersionEntry,
         AppStoreVersionsDocument,
         DocumentKind,
@@ -63,8 +74,12 @@ export 'src/documents.dart'
         PlayReleaseStatus,
         PlayTrackEntry,
         PlayTracksDocument,
+        PlayUploadEvent,
+        PlayUploadResult,
         ProcessingState,
         ReleaseType,
+        UploadEvent,
+        UploadState,
         VerifyCheck,
         VerifyDocument,
         isEditableVersionState;

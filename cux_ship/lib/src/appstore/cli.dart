@@ -75,11 +75,13 @@ import 'package:cux_ship_verify/metadata.dart';
 import 'package:cux_ship_verify/release_notes.dart';
 
 import '../asc_platforms.dart';
+import '../documents.dart' show UploadState;
 import '../json_output.dart';
 import '../listing_requirements.dart';
 import '../notes_source.dart';
 import '../reachable.dart';
 import '../release.dart' show ReleaseException;
+import '../upload_events.dart';
 import 'app_store.dart';
 import 'apple_notes.dart';
 import 'asc_client.dart';
@@ -354,17 +356,29 @@ ArgParser buildAscParser(AscCommand cmd) {
     );
   }
 
+  // **One flag, two formats, and the mode is what chooses.** With `--dry-run`
+  // it is one document describing what *would* be written; without, it is a
+  // stream of events describing what *is* being written, one object per line
+  // while it happens.
+  //
+  // That looks like one flag doing two things and is the opposite: the
+  // original refusal said a document about writes that already happened would
+  // have to describe partial ones, which an intention never does — and that
+  // argument is exactly right about documents and exactly why the answer here
+  // is a stream. A partial upload is what an event stream is *for*. The two
+  // carry different `kind`s, so a consumer that reads `kind` first — which the
+  // format says to — can never take one for the other.
   if (cmd == AscCommand.upload) {
     parser.addFlag(
       'json',
       negatable: false,
       help:
-          'With --dry-run, print what would change as one JSON document on '
-          'stdout instead of the report: which locales and which fields, and '
-          '"matches" when nothing would. Refused without --dry-run — a '
-          'document describing writes that already happened would have to '
-          'describe partial ones, which an intention never does. See '
-          'docs/design/dry-run-json.md.',
+          'Write machine-readable output on stdout instead of prose; every '
+          'other line goes to stderr. On a real upload that is a stream of '
+          'newline-delimited progress and state events, one object per line '
+          '(docs/design/upload-events.md). With --dry-run it is one document '
+          'describing what would change: which locales and which fields, and '
+          '"matches" when nothing would (docs/design/dry-run-json.md).',
     );
   }
 
@@ -1478,6 +1492,33 @@ Future<void> runAsc(
   final locale = opt('locale') ?? _defaultLocale;
   final dryRun = flag('dry-run');
 
+  // **`--json` without `--dry-run` is the event stream; with it, the listing
+  // diff.** One stdout, one format on it, chosen here — a run emitting both
+  // would put two shapes on one stream and neither consumer could parse it.
+  //
+  // A dry run has nothing to stream: it transfers no bytes, waits on no
+  // processing and writes nothing, so an event stream of it would be a
+  // rehearsal reporting states nothing entered.
+  //
+  // **Every other command leaves this silent.** `--json` is declared on
+  // `upload` alone among the writing commands, so `flag` answers false for a
+  // promote and this emitter writes nothing there.
+  final events = AppStoreUploadEvents(
+    jsonOutput && !dryRun && cmd == AscCommand.upload ? stdout : null,
+  );
+
+  // A human-facing line, on stderr whenever stdout is carrying JSON.
+  //
+  // **Routed through one function rather than branched at each call site**,
+  // which is the lesson `publishListing`'s `out:` parameter records after
+  // three rounds of getting it wrong: each round covered what was reachable
+  // then, and the next flag to reach a new block undid it.
+  //
+  // A function rather than a local holding the sink, because `close_sinks`
+  // reads such a local as a sink this function forgot to close — and it is not
+  // wrong to ask. The banner two hundred lines down says the same thing.
+  void say(String line) => (jsonOutput ? stderr : stdout).writeln(line);
+
   // Inference applies only where it makes sense. An upload publishes the
   // listing when there is one to publish; a promote never does, so the
   // metadata default is not offered to it.
@@ -1539,14 +1580,6 @@ Future<void> runAsc(
     }
   }
 
-  if (cmd == AscCommand.upload && flag('json') && !flag('dry-run')) {
-    fail(
-      '--json needs --dry-run. Every other --json here is a read, and this '
-      'one describes what a run *would* write — a document about writes that '
-      'already happened would have to describe partial ones, which an '
-      'intention never does. Add --dry-run, or drop --json.',
-    );
-  }
   final betaGroup = opt('beta-group');
   // A promotion to a group publishes no listing — which is `--beta-group`'s
   // own help text, and until here it was false: promote resolved the inferred
@@ -1987,12 +2020,12 @@ Future<void> runAsc(
         // Said out loud: publishing one version's notes under another
         // version's name should never happen quietly.
         if (fromVersion.isEmpty) {
-          stdout.writeln(
+          say(
             '==> nothing at or below $forVersion is user-visible on '
             '${platform.changelog} — publishing "$text"',
           );
         } else if (fromVersion != forVersion) {
-          stdout.writeln(
+          say(
             '==> $forVersion changes nothing on ${platform.changelog} — '
             "publishing $fromVersion's notes instead",
           );
@@ -2291,7 +2324,7 @@ Future<void> runAsc(
         return;
       }
       for (final line in lines) {
-        stdout.writeln(line);
+        say(line);
       }
       return;
     }
@@ -2347,7 +2380,7 @@ Future<void> runAsc(
             ),
           );
         } else {
-          stdout.writeln(line);
+          say(line);
         }
         return;
       }
@@ -2361,7 +2394,7 @@ Future<void> runAsc(
         if (args.flag('json')) {
           stderr.writeln(line);
         } else {
-          stdout.writeln(line);
+          say(line);
         }
       }
       // **Progress on stderr, always.** A wait is progress and *then* an
@@ -2443,7 +2476,7 @@ Future<void> runAsc(
         );
         return;
       }
-      stdout.writeln('==> previews are ready');
+      say('==> previews are ready');
       return;
     }
 
@@ -2529,7 +2562,7 @@ Future<void> runAsc(
         );
       }
 
-      stdout.writeln('==> giving build $buildNumber to "$betaGroup"');
+      say('==> giving build $buildNumber to "$betaGroup"');
       final internal = await releaseToBetaGroup(
         store,
         app,
@@ -2540,12 +2573,12 @@ Future<void> runAsc(
         metadataPath: listingTree,
       );
       if (internal) {
-        stdout.writeln('==> done — an internal group needs no beta review');
+        say('==> done — an internal group needs no beta review');
       } else if (!dryRun) {
-        stdout.writeln('==> done');
+        say('==> done');
       }
       if (dryRun) {
-        stdout.writeln('==> dry run — nothing was written');
+        say('==> dry run — nothing was written');
       }
       return;
     }
@@ -2596,14 +2629,14 @@ Future<void> runAsc(
         fail(unusable);
       }
 
-      stdout.writeln('==> TestFlight notes for build $buildNumber');
+      say('==> TestFlight notes for build $buildNumber');
       // The same announcement the upload path makes, for the same reason: what
       // testers read then differs from what Play users read, and that is said
       // out loud rather than done quietly.
       var text = whatToTestNotes!;
       if (needsStrippingForApple(text)) {
         text = stripForApple(text);
-        stdout.writeln(
+        say(
           '    TestFlight rejects emoji, so they are stripped from the notes\n'
           '    (Play publishes them verbatim)',
         );
@@ -2615,7 +2648,7 @@ Future<void> runAsc(
       // instead. Written down because a reader meeting "call the writer, then
       // print nothing was written" re-checks it — one already has.
       await store.setWhatToTest(build, locale, text);
-      stdout.writeln(dryRun ? '==> dry run — nothing was written' : '==> done');
+      say(dryRun ? '==> dry run — nothing was written' : '==> done');
       return;
     }
 
@@ -2631,13 +2664,26 @@ Future<void> runAsc(
       // are deliberately not compared: two archives over one commit differ
       // byte for byte, so provenance rests on the commit here as it does
       // everywhere else in this tooling.
+      // **`preparing` covers the question as well as the answer.** Asking
+      // Apple whether it already holds this build number is a REST round trip
+      // before any byte moves, which is the stretch this state names.
+      events.state(UploadState.preparing);
       final existing = await store.findBuild(app, buildNumber!);
       if (existing != null) {
-        stdout.writeln(
+        events.state(UploadState.reusing);
+        say(
           '==> Apple already holds build $buildNumber — using it rather than '
           're-uploading',
         );
       } else {
+        // **The size is the whole of what this stream can say about the
+        // transfer**, and it is said before altool starts rather than after it
+        // finishes — see [AppStoreUploadEvent] for why there is no byte
+        // progress to follow it with.
+        events.state(
+          UploadState.transferring,
+          bytesTotal: artifact.lengthSync(),
+        );
         await uploadPackage(
           ipa: artifact,
           app: app,
@@ -2649,13 +2695,14 @@ Future<void> runAsc(
           // truth about which one that is.
           credentials: client.credentials,
           dryRun: dryRun,
+          out: jsonOutput ? stderr : stdout,
         );
       }
 
       if (dryRun && existing == null) {
-        stdout.writeln('    would then wait for processing and set the notes');
+        say('    would then wait for processing and set the notes');
       } else if (flag('skip-waiting')) {
-        stdout.writeln('==> not waiting for processing, as asked');
+        say('==> not waiting for processing, as asked');
         // **Named, because skipping the wait skips the notes with it**, and
         // that used to be visible only in the flag's own help — where a
         // caller reaching for concurrency has no reason to look, since the
@@ -2681,24 +2728,33 @@ Future<void> runAsc(
             notes: true,
             notesArgument: asked,
           );
-          stdout.writeln(
+          say(
             '    so the TestFlight notes are NOT set. Finish elsewhere:\n'
             '${finish.map((line) => '      $line').join('\n')}',
           );
         }
       } else {
-        build = await store.awaitProcessing(app, buildNumber);
+        // **The long one, and the reason this stream exists at all.** Apple
+        // takes 5–15 minutes here and says nothing in between, so without a
+        // name for it a three-minute upload and a wedged one look the same
+        // from outside for their whole duration.
+        events.state(UploadState.processing);
+        build = await store.awaitProcessing(
+          app,
+          buildNumber,
+          onProgress: printProcessingProgress(out: jsonOutput ? stderr : null),
+        );
 
         final notes = notesFor(versionName!);
         if (notes != null) {
-          stdout.writeln('==> TestFlight notes');
+          say('==> TestFlight notes');
           // TestFlight refuses emoji, which CHANGELOG.md is full of by design.
           // Said out loud rather than done quietly, because what testers read
           // then differs from what Play users read.
           var testFlightNotes = notes;
           if (needsStrippingForApple(notes)) {
             testFlightNotes = stripForApple(notes);
-            stdout.writeln(
+            say(
               '    TestFlight rejects emoji, so they are stripped from the '
               'notes\n'
               '    (Play publishes them verbatim)',
@@ -2707,7 +2763,7 @@ Future<void> runAsc(
           await store.setWhatToTest(build, locale, testFlightNotes);
         }
         if (betaGroup != null) {
-          stdout.writeln('==> beta group');
+          say('==> beta group');
           await releaseToBetaGroup(
             store,
             app,
@@ -2785,7 +2841,7 @@ Future<void> runAsc(
         final on = platform == AscPlatform.ios
             ? ''
             : ' --platform ${platform.name}';
-        stdout.writeln(
+        say(
           '==> ${store.previewsLeftIngesting.length} preview set(s) are '
           'uploaded and still ingesting, and their poster frames are NOT set '
           'yet.\n'
@@ -2943,7 +2999,7 @@ Future<void> runAsc(
       if (betaGroup != null) {
         final number =
             (chosen['attributes'] as Map<String, dynamic>?)?['version'];
-        stdout.writeln('==> giving build $number to "$betaGroup"');
+        say('==> giving build $number to "$betaGroup"');
         final internal = await releaseToBetaGroup(
           store,
           app,
@@ -2957,17 +3013,17 @@ Future<void> runAsc(
           // The sentence belongs to the internal case alone: an external
           // group's build *was* submitted — for beta review — and printing
           // "not submitted" over that would describe a non-release as done.
-          stdout.writeln(
+          say(
             '==> done — not submitted for review, and the listing is untouched',
           );
         } else if (!dryRun) {
-          stdout.writeln('==> done');
+          say('==> done');
         }
         if (dryRun) {
           // Said here because this path returns before the closing notice, and
           // a dry run that printed "done" and nothing else would read as a
           // write that happened.
-          stdout.writeln('==> dry run — nothing was written');
+          say('==> dry run — nothing was written');
         }
         return;
       }
@@ -3001,7 +3057,7 @@ Future<void> runAsc(
         final effective =
             (version['attributes'] as Map<String, dynamic>?)?['releaseType'];
         if (!dryRun && effective is String) {
-          stdout.writeln(
+          say(
             '==> release type: $effective'
             '${effective == 'MANUAL' ? ' — release it yourself once approved' : ''}',
           );
@@ -3017,7 +3073,7 @@ Future<void> runAsc(
           versionName,
         );
         if (flag('phased')) {
-          stdout.writeln('==> phased release');
+          say('==> phased release');
           await store.enablePhasedRelease(version);
         }
         // **On a promotion the listing publishes here, and nowhere else** —
@@ -3054,16 +3110,26 @@ Future<void> runAsc(
           );
         }
 
-        stdout.writeln('==> submitting for review');
+        say('==> submitting for review');
         await store.submitForReview(app, version);
       }
     }
 
     if (dryRun) {
-      stdout.writeln('==> dry run — nothing was written');
+      say('==> dry run — nothing was written');
     } else {
-      stdout.writeln('==> done');
+      say('==> done');
     }
+    // **Last, and only on the path that reaches it.** Every `fail` and every
+    // raise above leaves the stream without this line, which is what makes
+    // its presence the answer to "did the run finish" — see [UploadEvent].
+    events.result(
+      bundleId: bundleId,
+      platform: platform,
+      versionName: versionName,
+      buildNumber: artifact == null ? null : buildNumber,
+      waitedForProcessing: build != null,
+    );
   } on NoSuchVersion catch (e) {
     // **Before [AscApiException], which this subclasses** — Dart takes the
     // first matching clause, so the order is the behaviour and not a

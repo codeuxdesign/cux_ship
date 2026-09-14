@@ -178,7 +178,16 @@ Future<bool> releaseToBetaGroup(
 
   // Said out loud because the two paths do very different amounts of work,
   // and which one ran should be readable from the run itself.
-  stdout.writeln(
+  //
+  // **`store.say`, not [stdout], and this file is the fourth round of that
+  // lesson.** The comment beside `AppStore`'s construction in `cli.dart`
+  // predicted it in as many words: routing the reachable lines has been tried
+  // three times, each round covered what was reachable *then*, and the next
+  // flag to reach a new block undid it. `upload --json` is that next flag —
+  // `--beta-group` is one of its options, so these four lines started landing
+  // in the middle of an NDJSON stream and made the whole of it unparseable.
+  // The class already holds the sink; nothing here needed a parameter.
+  store.say(
     '    "$groupName" is an external group — carrying on through beta review',
   );
 
@@ -218,12 +227,12 @@ Future<bool> releaseToBetaGroup(
   await store.addToBetaGroup(group, build);
 
   if (description != null) {
-    stdout.writeln('==> beta app description');
+    store.say('==> beta app description');
     if (description.text == current) {
       // The Play-images lesson: writing a value the store already holds
       // reports change where there is none, so an identical description is
       // said to be identical rather than re-sent.
-      stdout.writeln('    unchanged — App Store Connect already holds this');
+      store.say('    unchanged — App Store Connect already holds this');
     } else {
       await store.writeBetaAppDescription(
         app,
@@ -234,7 +243,7 @@ Future<bool> releaseToBetaGroup(
     }
   }
 
-  stdout.writeln('==> beta review');
+  store.say('==> beta review');
   await store.submitBetaReview(build);
   await store.reportExternalBuildState(build);
   return false;

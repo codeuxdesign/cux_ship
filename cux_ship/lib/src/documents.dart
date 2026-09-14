@@ -86,7 +86,21 @@ enum DocumentKind {
   /// **The one kind that describes no store.** `verify` is offline and reads
   /// the repository, so there is no platform and no bundle id — which is why
   /// it is not `appstore.verify`.
-  verify('verify');
+  verify('verify'),
+
+  /// One line of `play upload --json`, which is a **stream** rather than a
+  /// document — see [PlayUploadEvent].
+  playUpload('play.upload'),
+
+  /// One line of `appstore upload --json`, which is a **stream** rather than a
+  /// document — see [AppStoreUploadEvent].
+  ///
+  /// **Not what `upload --dry-run --json` prints**, which is
+  /// [appStoreListingDiff] and is one whole document. A dry run transfers
+  /// nothing, so it has no upload to report on; the two modes of one flag
+  /// therefore carry two kinds, and a consumer that reads `kind` first — as
+  /// this enum's own doc comment says to — can never confuse them.
+  appStoreUpload('appstore.upload');
 
   const DocumentKind(this.wire);
 
@@ -450,6 +464,129 @@ enum PlayReleaseStatus {
     inProgress || halted => userFraction,
     statusUnspecified || unknown || null => null,
   };
+}
+
+/// Which of an upload stream's three shapes one line is.
+///
+/// **The discriminator, and it is read after [DocumentKind] rather than
+/// instead of it.** `kind` says which store's stream this is and therefore
+/// which `schema` counter applies; this says what the line carries. Both are
+/// on every line, because a line is the unit a reader gets — there is no
+/// enclosing document to have said it once.
+///
+/// Closed, with no `unknown` member, on the same argument as [DocumentKind]:
+/// these are this package's own names, so one a reader does not recognize
+/// means a stream from a version that knows more than the reader does. **Skip
+/// the line rather than refusing the stream**, which is the one place an
+/// upload stream departs from a document: a document is refused whole because
+/// it is read whole, and a stream that stops being read on its first unknown
+/// line throws away the [UploadEvent.result] that says the run finished.
+@JsonEnum(valueField: 'wire')
+enum UploadEvent {
+  /// The upload moved into a new [UploadState], carried in `state`.
+  state('state'),
+
+  /// Bytes the store has taken, carried in `bytesSent` beside `bytesTotal`.
+  ///
+  /// **`play.upload` only.** `appstore.upload` emits none, and
+  /// [AppStoreUploadEvent] says why — the reason is a property of the
+  /// transport rather than something this member can carry.
+  progress('progress'),
+
+  /// The run finished, carrying what it did in `result`.
+  ///
+  /// **Exactly once, as the last line, and only on success.** A failure ends
+  /// the stream where it happened and reports on stderr with a non-zero exit,
+  /// which is `json-output.md`'s "errors stay prose on stderr" applied to a
+  /// stream: **a stream with no `result` line did not finish.** So a reader
+  /// has a positive completion marker rather than having to prove a negative
+  /// from an exit code and a last line.
+  result('result');
+
+  const UploadEvent(this.wire);
+
+  /// The value carried in the line's `event` field.
+  final String wire;
+}
+
+/// What an upload is doing, for the stretches when it is doing one thing for
+/// minutes at a time.
+///
+/// **This is the half a percentage cannot carry.** `45%` cannot say that the
+/// transfer finished four minutes ago and the wait is now the store's, so a
+/// reader watching a quiet minute cannot tell a healthy one from a wedged one.
+/// A consumer renders a bar while [transferring] and this name otherwise.
+///
+/// **Not every member is reached by both stores, and that is the stores
+/// rather than an omission here.** Play has an edit transaction and commits
+/// atomically; App Store Connect has none and every write lands as it is made.
+/// Each member below says which store reaches it, because a sentence about
+/// "the upload" is written in whichever store its author had in mind and is
+/// false about the other — `docs/CONTRIBUTING.md` has that as a rule.
+///
+/// Closed, with no `unknown` member, for [UploadEvent]'s reason: these are
+/// this package's names, not a store's.
+@JsonEnum(valueField: 'wire')
+enum UploadState {
+  /// Getting ready to send, before any byte moves.
+  ///
+  /// **Both stores, and it is a different piece of work in each.** Play
+  /// inserts an edit and lists the bundles the app already has; the App Store
+  /// resolves the bundle id to an app record and asks whether Apple already
+  /// holds this build number.
+  preparing('preparing'),
+
+  /// Bytes are moving to the store.
+  ///
+  /// **Both stores**, and the event carrying it carries `bytesTotal` on both —
+  /// so a consumer can say *how big* even where it cannot say *how far*.
+  transferring('transferring'),
+
+  /// The store already holds this artifact, so nothing is transferred.
+  ///
+  /// **Both stores.** Play answers a re-uploaded `versionCode` with a bare
+  /// 403 and the App Store answers a re-uploaded `CFBundleVersion` with
+  /// ITMS-90189, so both uploaders look first and reuse what is there — which
+  /// is what makes a re-run after a partial release the same command typed
+  /// again. Reached *instead of* [transferring], never after it.
+  reusing('reusing'),
+
+  /// Every byte is with the store and it has not yet answered.
+  ///
+  /// **Play only.** The last chunk of a resumable upload is the one Play
+  /// answers with the `Bundle` — the versionCode it read out of the artifact —
+  /// and it validates the bundle before doing so. That is a wait with no bytes
+  /// left to count, which is precisely the stretch a percentage misreports as
+  /// finished.
+  ///
+  /// The App Store has no equivalent: `xcrun altool` transfers and validates
+  /// inside one opaque run, so there is no point at which this package knows
+  /// the transfer is over and the wait has begun.
+  accepting('accepting'),
+
+  /// The store is processing the artifact, and this is the long one.
+  ///
+  /// **App Store only.** Apple takes 5–15 minutes to process a build and
+  /// nothing can be attached to it until that finishes, so `upload` polls.
+  /// This is the state a run spends most of its wall clock in and the one a
+  /// reader most needs named — an upload that has been quiet for six minutes
+  /// here is behaving exactly as designed.
+  ///
+  /// Play has no equivalent: a committed edit is live.
+  processing('processing'),
+
+  /// The transaction is being applied.
+  ///
+  /// **Play only**, and this is the moment the release becomes real: an edit
+  /// holds the bundle, the track assignment and any listing writes, and
+  /// `commit` applies all of it or none of it. The App Store has no edit to
+  /// commit — every write there has already landed as it was made.
+  committing('committing');
+
+  const UploadState(this.wire);
+
+  /// The value carried in the line's `state` field.
+  final String wire;
 }
 
 String _platformToJson(AscPlatform platform) => platform.api;
@@ -1395,4 +1532,307 @@ class AppStoreListingDiffDocument {
   final List<String> display;
 
   Map<String, dynamic> toJson() => _$AppStoreListingDiffDocumentToJson(this);
+}
+
+/// One line of `cux_ship play upload --json`.
+///
+/// **A stream, not a document, and the difference is a promise this format
+/// makes rather than a shortcut it takes.** Every other kind here is written
+/// whole and once at the end, because a `fail()` partway through would leave
+/// half a document on stdout under an exit code saying to trust it. A line is
+/// not half of anything: it is complete when its newline arrives, it carries
+/// its own `schema` and `kind`, and a stream that stops early is a stream that
+/// stopped — which is the only shape that can report an upload *while it is
+/// running*, which is the whole point.
+///
+/// The three shapes are [UploadEvent]:
+///
+/// ```json
+/// {"schema":1,"kind":"play.upload","event":"state","state":"transferring","bytesTotal":68123456}
+/// {"schema":1,"kind":"play.upload","event":"progress","bytesSent":1048576,"bytesTotal":68123456}
+/// {"schema":1,"kind":"play.upload","event":"result","result":{"packageName":"design.codeux.example","track":"internal","versionName":"1.4.0","versionCode":152,"committed":true}}
+/// ```
+///
+/// **A field that does not apply to a line is absent rather than null.** Null
+/// would say the field applies and had no value, which is the distinction the
+/// store vocabularies above are built on; here it is the difference between a
+/// progress line and a state line that lost its state.
+///
+/// **No `display`, and that is deliberate rather than forgotten.** The other
+/// kinds carry one because `--json` *suppresses* their rendering — a consumer
+/// with no `display` would have to re-render, and two renderings of one model
+/// drift. An upload suppresses nothing: every human-facing line it has always
+/// printed still goes to stderr, in full and in order, because that stream is
+/// a log somebody reads after a failure. Carrying those lines here as well
+/// would deliver each of them twice on two streams, and a consumer joining the
+/// two would print them twice.
+@JsonSerializable(explicitToJson: true, includeIfNull: false)
+class PlayUploadEvent {
+  const PlayUploadEvent({
+    required this.schema,
+    required this.kind,
+    required this.event,
+    this.state,
+    this.bytesSent,
+    this.bytesTotal,
+    this.result,
+  });
+
+  factory PlayUploadEvent.fromJson(Map<String, dynamic> json) =>
+      _$PlayUploadEventFromJson(json);
+
+  /// This kind's schema number. Refuse one you do not recognize.
+  ///
+  /// On every line rather than on a header line, because a stream has no
+  /// header: a reader that joined late, or one reading the tail of a captured
+  /// log, still holds a line that says what it is.
+  final int schema;
+
+  final DocumentKind kind;
+
+  /// Which shape this line is. Dispatch on this.
+  final UploadEvent event;
+
+  /// The state the upload just moved into. Present on [UploadEvent.state].
+  final UploadState? state;
+
+  /// Bytes the store has acknowledged. Present on [UploadEvent.progress].
+  ///
+  /// **Google's own count, not this package's.** A resumable upload PUTs one
+  /// chunk at a time and answers each with the range it now holds, and this is
+  /// that range — so the number is what Play says it has, arriving when Play
+  /// says it. It cannot run ahead of the socket, and **it stops arriving when
+  /// the transfer stops**, which is the property the whole signal exists for:
+  /// a tick driven by a timer turns at the same rate whether the connection is
+  /// moving or dead, and that is exactly the failure this is meant to make
+  /// visible.
+  ///
+  /// **Absolute, never a count from the start of this run.** A resumable
+  /// upload that resumes picks up at the offset the store already holds, and
+  /// reading the number off the wire is what makes the first line after a
+  /// resume report that offset instead of a jump from zero.
+  ///
+  /// One line per chunk, and a chunk is 1 MiB — so a 68 MB bundle produces
+  /// about sixty-eight of these, which is tens and not thousands.
+  final int? bytesSent;
+
+  /// The artifact's size. Present on [UploadEvent.progress] and on the
+  /// [UploadState.transferring] line.
+  ///
+  /// Beside [bytesSent] rather than instead of a percentage, so the fraction
+  /// is derivable rather than asserted — a consumer that wants two decimal
+  /// places is not held to whatever this package rounded to.
+  ///
+  /// **Floor that fraction; do not round it.** A chunk is 1 MiB and an
+  /// artifact is not a whole number of them, so the last-but-one line is a
+  /// few kibibytes short of the total and `(sent * 100 / total).round()` is
+  /// **100 with bytes still in flight**. A finished cell and an
+  /// almost-finished one then look identical, which is the confusion this
+  /// stream exists to remove. Measured on a 2 101 248-byte artifact: the
+  /// second progress line is 2 097 152, which is 99.805%.
+  ///
+  /// **And do not read 100% as finished, however it is computed.** `bytesSent
+  /// == bytesTotal` means the store has the bytes and nothing more: on Play
+  /// the run is still to reach [UploadState.committing], and on the App Store
+  /// it is still to reach [UploadState.processing], which is five to fifteen
+  /// minutes long. [UploadEvent.result] is the line that says the run
+  /// finished, and it is the only one that does.
+  ///
+  /// **And stop showing it once [state] leaves [UploadState.transferring].**
+  /// The bytes have landed by then and the store is working on what it already
+  /// holds, so a percentage beside [UploadState.accepting],
+  /// [UploadState.committing] or [UploadState.processing] describes something
+  /// that has finished — `committing 99%` reads as a transfer one percent
+  /// short of done, and a reader waits for a number that will never move. Those
+  /// states are not fractions of anything; let the state name stand alone.
+  ///
+  /// **The ordering makes the obvious version of that wrong**, and nothing
+  /// about the ordering looks like a hazard until it is hit: a `progress` line
+  /// arrives *after* [UploadState.accepting], because the final chunk is
+  /// acknowledged by the response that announcement was written ahead of. So a
+  /// consumer that hides the number on a non-transferring state and re-shows it
+  /// on any progress line flickers it back on for exactly one line. **Let the
+  /// last `state` line own that judgment and let `progress` say only how far** —
+  /// a progress line is silent about what kind of work is going on.
+  ///
+  /// All three are the same rule [AppStoreUploadEvent] follows by having no
+  /// `bytesSent` at all: a display must not imply a state the data does not
+  /// support. Each was reported by the first consumer, from real runs against
+  /// these events — the first two from the arithmetic, the third from reading
+  /// a rendered frame.
+  final int? bytesTotal;
+
+  /// What the run did. Present on [UploadEvent.result], which is the last
+  /// line of a run that finished.
+  final PlayUploadResult? result;
+
+  Map<String, dynamic> toJson() => _$PlayUploadEventToJson(this);
+}
+
+/// What a finished `play upload` did, on the stream's last line.
+///
+/// Carried so a caller has the outcome without parsing prose off stderr or
+/// inferring it from an exit code — the two things a run's last line used to
+/// be the only source of.
+@JsonSerializable(explicitToJson: true, includeIfNull: false)
+class PlayUploadResult {
+  const PlayUploadResult({
+    required this.packageName,
+    required this.track,
+    required this.versionName,
+    required this.versionCode,
+    required this.committed,
+  });
+
+  factory PlayUploadResult.fromJson(Map<String, dynamic> json) =>
+      _$PlayUploadResultFromJson(json);
+
+  /// The Play package this went to.
+  final String packageName;
+
+  /// The track the release was assigned to.
+  final String track;
+
+  /// The version name the release is shown under in the console.
+  final String versionName;
+
+  /// The versionCode Play holds, or null for a push that carried no artifact.
+  ///
+  /// **Play's number rather than the one asked for.** It is what Play read out
+  /// of the bundle, which is the only copy that is a fact about the artifact
+  /// rather than about the command line.
+  final int? versionCode;
+
+  /// Whether the edit was committed, and therefore whether any of this is
+  /// real.
+  ///
+  /// **False on `--dry-run`, which on Play still transfers the bundle.** Play
+  /// has an edit transaction, so a dry run does every step into a real edit
+  /// and discards it — the bytes move, the progress lines are genuine, and
+  /// nothing is published. This is the field that tells those two runs apart,
+  /// and there is nothing else in the stream that can.
+  final bool committed;
+
+  Map<String, dynamic> toJson() => _$PlayUploadResultToJson(this);
+}
+
+/// One line of `cux_ship appstore upload --json`.
+///
+/// See [PlayUploadEvent] for the stream's shape, the absent-rather-than-null
+/// rule and why no line carries `display`; all three hold here. What is
+/// different is what this stream can say, and there is one difference:
+///
+/// **There are no [UploadEvent.progress] lines, and no `bytesSent` field to
+/// carry one.** App Store Connect has no endpoint that accepts a binary, so
+/// the transfer is `xcrun altool --upload-package` — a subprocess speaking a
+/// transport Apple documents nowhere, whose output this package captures
+/// whole. There is no per-chunk signal to report. The alternative would be a
+/// tick on a timer, and a timer turns at the same rate whether the socket is
+/// moving or dead: it would report a wedged upload as a healthy one, which is
+/// the failure this stream exists to make visible. A field that is null on
+/// every line ever emitted is a format lying about itself, so there is none.
+///
+/// **What this stream has instead is [UploadState.processing]**, which is
+/// where an Apple upload spends most of its wall clock: Apple takes 5–15
+/// minutes to process a build, and naming that is worth more than a bar would
+/// have been — a percentage stuck at 100 for six minutes says nothing about
+/// whose wait it is.
+///
+/// ```json
+/// {"schema":1,"kind":"appstore.upload","event":"state","state":"transferring","bytesTotal":29360128}
+/// {"schema":1,"kind":"appstore.upload","event":"state","state":"processing"}
+/// {"schema":1,"kind":"appstore.upload","event":"result","result":{"bundleId":"design.codeux.example","platform":"IOS","versionName":"1.4.0","buildNumber":"169","waitedForProcessing":true}}
+/// ```
+@JsonSerializable(explicitToJson: true, includeIfNull: false)
+class AppStoreUploadEvent {
+  const AppStoreUploadEvent({
+    required this.schema,
+    required this.kind,
+    required this.event,
+    this.state,
+    this.bytesTotal,
+    this.result,
+  });
+
+  factory AppStoreUploadEvent.fromJson(Map<String, dynamic> json) =>
+      _$AppStoreUploadEventFromJson(json);
+
+  /// This kind's schema number. Refuse one you do not recognize.
+  final int schema;
+
+  final DocumentKind kind;
+
+  /// Which shape this line is. Dispatch on this.
+  final UploadEvent event;
+
+  /// The state the upload just moved into. Present on [UploadEvent.state].
+  final UploadState? state;
+
+  /// The artifact's size, on the [UploadState.transferring] line.
+  ///
+  /// **The one number this stream can give about the transfer**, and it is
+  /// worth giving on its own: a consumer showing "sending 28 MB" beside a
+  /// spinner is telling a reader something, where a bar it cannot fill would
+  /// be telling them something false.
+  final int? bytesTotal;
+
+  /// What the run did. Present on [UploadEvent.result], which is the last
+  /// line of a run that finished.
+  final AppStoreUploadResult? result;
+
+  Map<String, dynamic> toJson() => _$AppStoreUploadEventToJson(this);
+}
+
+/// What a finished `appstore upload` did, on the stream's last line.
+@JsonSerializable(explicitToJson: true, includeIfNull: false)
+class AppStoreUploadResult {
+  const AppStoreUploadResult({
+    required this.bundleId,
+    required this.platform,
+    required this.versionName,
+    required this.buildNumber,
+    required this.waitedForProcessing,
+  });
+
+  factory AppStoreUploadResult.fromJson(Map<String, dynamic> json) =>
+      _$AppStoreUploadResultFromJson(json);
+
+  /// The app this went to.
+  final String bundleId;
+
+  /// **On the result rather than inferred from the command line**, for the
+  /// reason `finishAfterSkippedWait` carries it on every suggested line: iOS
+  /// and macOS are given the same build number from one commit by design, so a
+  /// number without a platform beside it names two different binaries.
+  @JsonKey(toJson: _platformToJson, fromJson: _platformFromJson)
+  final AscPlatform platform;
+
+  /// The marketing version this build was uploaded under, or null for a run
+  /// that named none.
+  ///
+  /// **Nullable here and not on [PlayUploadResult], which is the stores
+  /// again.** `play upload` resolves a version name from the pubspec when no
+  /// flag gives one, because Play needs something to call the release in the
+  /// console; an App Store upload carrying no artifact and no `--metadata`
+  /// version has nothing to resolve one *for*, and inventing one would put a
+  /// number on this line that no Apple record carries.
+  final String? versionName;
+
+  /// The `CFBundleVersion` Apple now holds, or null for a push that carried no
+  /// artifact.
+  ///
+  /// A string, because `CFBundleVersion` is one and Apple accepts `1.2.3` —
+  /// the same reason [AppStoreBuildEntry.buildNumber] is.
+  final String? buildNumber;
+
+  /// Whether this run waited for Apple to finish processing the build.
+  ///
+  /// **False under `--skip-waiting`, and then the build is not usable yet.**
+  /// The flag exists so the transfer and the wait can run in different places,
+  /// so a caller reading `true` knows the build is `VALID` — `awaitProcessing`
+  /// raises rather than returning on any other terminal state — and a caller
+  /// reading `false` knows only that Apple has the bytes.
+  final bool waitedForProcessing;
+
+  Map<String, dynamic> toJson() => _$AppStoreUploadResultToJson(this);
 }

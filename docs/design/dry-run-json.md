@@ -1,8 +1,22 @@
 # Judging the listing without reading prose: `--json` on `upload --dry-run` and on `verify`
 
-Status: **proposed**. Nothing here is built. Two commands, argued in one
-document because they answer halves of a single question a consumer is asking
-today and cannot get an answer to.
+Status: **built**, 10 September 2026 — both halves, in one batch. Two commands,
+argued in one document because they answer halves of a single question a
+consumer was asking and could not get an answer to.
+
+**It said `proposed`, `Nothing here is built`, through the release that shipped
+it** — 4.5.0-dev.3, four days — and that is worth a sentence rather than a
+silent edit. `tool/status.sh` reads
+this line, so the index has been reporting shipped work as an open proposal —
+which is the exact failure that script's own header names: *a stale index of
+open questions is worse than none, because it is believed.* Caught by the
+consumer, who followed the flag's help text here and met a document saying the
+thing it had just used does not exist. Nothing catches this: a status is prose
+about the world outside the file, and `design_status_test.dart` checks only
+that the word is one of the four the index knows.
+
+**The `Open:` section below is still open**, and stays — a document's status is
+the state of its subject, and a section may carry its own.
 
 **Reviewed by that consumer before any of it was typed**, which is the process
 `preview-wait-split.md` established and which paid again: they took three
@@ -65,7 +79,11 @@ this paragraph would have justified a much larger change.
 
 ## Proposed: `upload --dry-run --json`
 
-**`--json` only with `--dry-run`, and refused without it.** Every other `--json`
+**`--json` only with `--dry-run`, and refused without it.** *(Since lifted —
+`upload --json` is an event stream now, and the paragraph under* Deliberately
+not proposed *at the end of this document says how. What follows is the
+argument as it stood, because it is the argument that produced the stream.)*
+Every other `--json`
 command in this package is a read. An `upload` that writes is not, and a
 document describing writes that already happened is a different artifact with
 different failure modes — it would have to say what *did* happen, including
@@ -211,6 +229,19 @@ as an addition rather than a replacement.
 **`--json` on a real `upload`.** See the refusal above. If somebody wants a
 receipt of what a publish did, that is a different document — it has to
 describe partial success, which an intention never does.
+
+> **Since built, and this paragraph is what built it.** Every clause above is
+> still true and turned out to be the argument *for* the thing it declines: a
+> partial upload is exactly what an event **stream** is for, so what could not
+> be a document is not one — it is a sequence of lines, one per state change
+> and one per chunk the store acknowledges. `upload --json` writes that;
+> `upload --dry-run --json` still prints the `appstore.listing-diff` document
+> below, byte for byte, because a dry run transfers nothing and a stream of it
+> would report states nothing entered. Two kinds, one stdout, and the mode
+> chooses. [upload-events.md](upload-events.md) carries the whole argument.
+>
+> The sentence left in place above is the one that was right and was read as
+> refusing more than it said. It refused a *document*, and it was correct to.
 
 **A `--check` exit code, like `flatten --check`'s 2.** Tempting, and wrong for
 the same reason 4 was not allowed to be reused: `matches: false` is not a

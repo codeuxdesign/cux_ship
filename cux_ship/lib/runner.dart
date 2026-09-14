@@ -95,6 +95,23 @@ CommandRunner<void> buildRunner() {
 bool _assumeYes(Command<void> command) =>
     command.globalResults?.flag('yes') ?? false;
 
+/// Where the confirmation is printed: [stderr] when stdout is carrying JSON.
+///
+/// **Null rather than [stdout] for the ordinary case**, so a run without
+/// `--json` is byte-identical to what it was — the sink is chosen inside
+/// `confirmOrExit`, and this only ever says "not there".
+///
+/// Read from this command's own `--json` rather than passed down from the
+/// subcommand, because the confirmation closure is built here and the flag is
+/// declared on the subcommand's parser: `args.options.contains` is what keeps
+/// this a question a command with no such flag can be asked.
+IOSink? _ask(Command<void> command) {
+  final args = command.argResults;
+  final json =
+      args != null && args.options.contains('json') && args.flag('json');
+  return json ? stderr : null;
+}
+
 /// The build manifest `--manifest` names, read and verified, or null.
 ///
 /// **Read once here rather than in each place that wants a value from it.** The
@@ -453,7 +470,8 @@ class _AscSubcommand extends Command<void> {
                     : project.requiredScreenshotTypes(platform) ?? const {},
               ),
       ),
-      confirm: (summary) => confirmOrExit(summary, assumeYes: _assumeYes(this)),
+      confirm: (summary) =>
+          confirmOrExit(summary, assumeYes: _assumeYes(this), out: _ask(this)),
     );
   }
 }
@@ -538,7 +556,8 @@ class _PlaySubcommand extends Command<void> {
                 screenshotTypes: store.screenshotsFor(StoreConfig.anyPlatform),
               ),
       ),
-      confirm: (summary) => confirmOrExit(summary, assumeYes: _assumeYes(this)),
+      confirm: (summary) =>
+          confirmOrExit(summary, assumeYes: _assumeYes(this), out: _ask(this)),
     );
   }
 }
