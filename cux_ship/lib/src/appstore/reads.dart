@@ -579,9 +579,14 @@ int _byBuildNumberDescending(AppStoreBuild a, AppStoreBuild b) =>
   // `type` or `id`, and the loop's idea of how many entries there were now
   // agrees with the comparison's.
   for (final entry in data) {
-    final named = entry is Map<String, dynamic> ? entry : null;
-    final type = named?['type'];
-    final id = named?['id'];
+    // `identifier` rather than a second `named`: the outer one is the
+    // *relationship*, and `named['meta']` below reads its paging total, so one
+    // word for both the relationship and an entry inside its `data` costs a
+    // reader a double-take in the function where that distinction is the
+    // subject.
+    final identifier = entry is Map<String, dynamic> ? entry : null;
+    final type = identifier?['type'];
+    final id = identifier?['id'];
     final found = type is String && id is String ? included['$type:$id'] : null;
     if (found == null) {
       unresolved += 1;
