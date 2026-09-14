@@ -73,9 +73,11 @@ import 'package:cux_ship_verify/release_notes.dart';
 import 'package:googleapis/androidpublisher/v3.dart';
 import 'package:googleapis_auth/auth_io.dart';
 
+import '../documents.dart' show UploadState;
 import '../json_output.dart';
 import '../listing_requirements.dart';
 import '../notes_source.dart';
+import '../upload_events.dart';
 import 'credentials.dart';
 import 'reads.dart';
 
@@ -367,6 +369,7 @@ Future<void> _assignToTrack(
   required double? userFraction,
   required String? notes,
   required String notesLanguage,
+  required IOSink out,
 }) async {
   await api.edits.tracks.update(
     Track(
@@ -392,7 +395,7 @@ Future<void> _assignToTrack(
     track,
   );
   final rollout = userFraction == null ? '' : ', to $userFraction of users';
-  stdout.writeln('==> assigned to track "$track" ($status$rollout)');
+  out.writeln('==> assigned to track "$track" ($status$rollout)');
 }
 
 /// The platform this program publishes for.
@@ -763,6 +766,7 @@ Future<void> _reportListingDiff(
   String packageName,
   String editId,
   _Metadata metadata,
+  IOSink out,
 ) async {
   final differences = <String>[];
 
@@ -812,10 +816,10 @@ Future<void> _reportListingDiff(
   }
 
   if (differences.isEmpty) {
-    stdout.writeln('==> listing: matches the console');
+    out.writeln('==> listing: matches the console');
     return;
   }
-  stdout.writeln(
+  out.writeln(
     '==> listing: repository differs from the console in '
     '${differences.join(", ")}\n'
     '    Not published by an upload. It goes live on a promote to production '
@@ -828,6 +832,7 @@ Future<void> _publishMetadata(
   String packageName,
   String editId,
   _Metadata metadata,
+  IOSink out,
 ) async {
   if (metadata.details.isNotEmpty) {
     // patch, not update: update replaces the whole resource, so a tree holding
@@ -842,7 +847,7 @@ Future<void> _publishMetadata(
       packageName,
       editId,
     );
-    stdout.writeln('==> details: ${metadata.details.keys.join(", ")}');
+    out.writeln('==> details: ${metadata.details.keys.join(", ")}');
   }
 
   for (final locale in metadata.locales) {
@@ -859,7 +864,7 @@ Future<void> _publishMetadata(
         editId,
         locale.locale,
       );
-      stdout.writeln('==> ${locale.locale}: listing text');
+      out.writeln('==> ${locale.locale}: listing text');
     }
 
     for (final entry in locale.images.entries) {
@@ -887,7 +892,7 @@ Future<void> _publishMetadata(
               .map((i) => i.sha256)
               .toList();
       if (imagesMatch(want, have)) {
-        stdout.writeln(
+        out.writeln(
           '==> ${locale.locale}: ${entry.value.length} ${entry.key} unchanged',
         );
         continue;
@@ -917,9 +922,7 @@ Future<void> _publishMetadata(
           ),
         );
       }
-      stdout.writeln(
-        '==> ${locale.locale}: ${entry.value.length} ${entry.key}',
-      );
+      out.writeln('==> ${locale.locale}: ${entry.value.length} ${entry.key}');
     }
   }
 }
@@ -1118,6 +1121,20 @@ ArgParser buildPlayParser(PlayCommand cmd) {
               'BCP-47 locale to remove from the listing. Explicit because the '
               'normal rule is that anything absent from the tree is left '
               'alone.',
+        )
+        // **A stream, where every other `--json` here is a document.** The
+        // reads print one object at the end; this writes one object per line
+        // as the upload happens, because an upload's whole problem is that it
+        // says nothing for minutes at a time. Same stream split either way:
+        // stdout carries the events and nothing else.
+        ..addFlag(
+          'json',
+          negatable: false,
+          help:
+              'Write progress and state as newline-delimited JSON events on '
+              'stdout, one object per line, while the upload runs. Every '
+              'other line goes to stderr. See '
+              'docs/design/upload-events.md.',
         );
     case PlayCommand.promote:
       parser
@@ -1389,6 +1406,23 @@ Future<void> runPlay(
   final upload = cmd == PlayCommand.upload;
   final deleteLocales = multi('delete-locale');
 
+  // **Under `--json`, stdout carries the events and nothing else**, so every
+  // human-facing line from here down moves to stderr — the same split the read
+  // commands make, with the difference that an upload does not *suppress* its
+  // rendering. Its stderr is a log somebody reads after a failure, and it
+  // stays whole and in order.
+  //
+  // **Routed once here rather than at each call site**, for the reason the App
+  // Store side's `publishListing` records after three rounds of getting it
+  // wrong: the rule is about the stream, not about which line happens to reach
+  // it, and a per-site branch is undone by the next line somebody adds.
+  //
+  // `--json` is declared on `upload` alone, so this is false for every
+  // promotion and `say` is plain [stdout] there.
+  final jsonOutput = flag('json');
+  void say(String line) => (jsonOutput ? stderr : stdout).writeln(line);
+  final events = PlayUploadEvents(jsonOutput ? stdout : null);
+
   // **Resolved for promote as well as upload**, which it was not: the gate
   // below reads `track == 'production'`, and with metadata null on every
   // promotion that branch could never be taken. A correct condition guarding
@@ -1576,12 +1610,12 @@ Future<void> runPlay(
         // Said out loud: publishing one version's notes under another
         // version's name should never happen quietly.
         if (fromVersion.isEmpty) {
-          stdout.writeln(
+          say(
             '==> nothing at or below $forVersion is user-visible on '
             '$_platform — publishing "$text"',
           );
         } else if (fromVersion != forVersion) {
-          stdout.writeln(
+          say(
             '==> $forVersion changes nothing on $_platform — publishing '
             "$fromVersion's notes instead",
           );
@@ -1600,7 +1634,7 @@ Future<void> runPlay(
   // `--release-notes and --changelog both supply the notes` should not have
   // already reported on a declaration it never got to.
   if (dataSafetyNote != null) {
-    stdout.writeln(dataSafetyNote);
+    say(dataSafetyNote);
   }
 
   // Asked after every offline check but the changelog's — `notesFor` above
@@ -1630,21 +1664,32 @@ Future<void> runPlay(
   // Built only once every local check has passed, so a 4001-character
   // description or a missing screenshot fails with no credential in scope at
   // all — which is what makes `--metadata` usable as an offline lint.
-  final (api, closeClient) = await _openPlay(androidPublisher);
+  final (api, closeClient) = await _openPlay(androidPublisher, events: events);
 
   String? editId;
 
   try {
+    // **`preparing` covers the edit and the bundle list, not just the
+    // insert.** What a reader wants named is the stretch before any byte
+    // moves, and on Play that is two calls: opening the transaction, and
+    // asking what the app already holds.
+    events.state(UploadState.preparing);
     final edit = await api.edits.insert(AppEdit(), packageName);
     editId = edit.id;
     if (editId == null) {
       _fail('Play did not return an edit id');
     }
-    stdout.writeln('==> opened edit $editId');
+    say('==> opened edit $editId');
 
     // What the commit line will say it did. Empty when this run carries no
     // artifact, which is a listing-only push.
     var released = '';
+
+    // **Play's number, held for the result line.** The one inside the branch
+    // below is scoped to it, and what a caller wants on the last line is what
+    // Play read out of the artifact rather than what the command line asked
+    // for — null when this run carried no artifact at all.
+    int? landedVersionCode;
 
     if (aab != null) {
       // Resolved before the upload rather than at assignment time below. A
@@ -1695,7 +1740,8 @@ Future<void> runPlay(
       final int? versionCode;
       if (uploaded.any((b) => b.versionCode == expectedVersionCode)) {
         versionCode = expectedVersionCode;
-        stdout.writeln(
+        events.state(UploadState.reusing);
+        say(
           '==> Play already holds versionCode $versionCode — reusing that '
           'bundle rather than re-uploading',
         );
@@ -1708,7 +1754,12 @@ Future<void> runPlay(
           aab.lengthSync(),
           contentType: 'application/octet-stream',
         );
-        stdout.writeln('==> uploading ${aab.lengthSync()} bytes');
+        // **The size is on the state line, before the first chunk lands.** A
+        // reader is then holding the denominator from the moment the transfer
+        // starts rather than from the first acknowledgement, which on a slow
+        // link is a minute later.
+        events.state(UploadState.transferring, bytesTotal: aab.lengthSync());
+        say('==> uploading ${aab.lengthSync()} bytes');
         final bundle = await api.edits.bundles.upload(
           packageName,
           editId,
@@ -1717,7 +1768,7 @@ Future<void> runPlay(
         );
 
         versionCode = bundle.versionCode;
-        stdout.writeln('==> Play accepted versionCode $versionCode');
+        say('==> Play accepted versionCode $versionCode');
 
         // The versionCode is baked into the bundle at build time from
         // --build-number. If Play reports a different one, the artifact is not
@@ -1743,7 +1794,9 @@ Future<void> runPlay(
         userFraction: userFraction,
         notes: notes,
         notesLanguage: notesLanguage,
+        out: jsonOutput ? stderr : stdout,
       );
+      landedVersionCode = versionCode;
       released = '$versionName ($versionCode) is on "$track"';
     }
 
@@ -1793,7 +1846,7 @@ Future<void> runPlay(
       final name = promoting.name ?? '$promotedCode';
       final notes = notesFor(versionFromReleaseName(name));
 
-      stdout.writeln('==> promoting "$name" from "$promoteFrom" to "$track"');
+      say('==> promoting "$name" from "$promoteFrom" to "$track"');
 
       await _assignToTrack(
         api,
@@ -1806,7 +1859,9 @@ Future<void> runPlay(
         userFraction: userFraction,
         notes: notes,
         notesLanguage: notesLanguage,
+        out: jsonOutput ? stderr : stdout,
       );
+      landedVersionCode = promotedCode;
       released = '$name is on "$track"';
     }
 
@@ -1829,28 +1884,63 @@ Future<void> runPlay(
       // live page now.
       final goingPublic = promoteFrom != null && track == 'production';
       if (goingPublic || aab == null) {
-        await _publishMetadata(api, packageName, editId, metadata);
+        await _publishMetadata(
+          api,
+          packageName,
+          editId,
+          metadata,
+          jsonOutput ? stderr : stdout,
+        );
       } else {
-        await _reportListingDiff(api, packageName, editId, metadata);
+        await _reportListingDiff(
+          api,
+          packageName,
+          editId,
+          metadata,
+          jsonOutput ? stderr : stdout,
+        );
       }
     }
 
     for (final locale in deleteLocales) {
       await api.edits.listings.delete(packageName, editId, locale);
-      stdout.writeln('==> removed the $locale listing');
+      say('==> removed the $locale listing');
     }
 
     if (dryRun) {
       await api.edits.delete(packageName, editId);
       editId = null;
-      stdout.writeln('==> dry run — edit discarded, nothing published');
+      say('==> dry run — edit discarded, nothing published');
+      // **A result line, because the run succeeded.** Play's dry run is not a
+      // rehearsal that sends nothing — it opens a real edit, transfers the
+      // real bundle and then throws the edit away, so every event before this
+      // one described something that genuinely happened.
+      // `PlayUploadResult.committed` is the field that says the last step did
+      // not, and it is the only thing in the stream that can.
+      events.result(
+        packageName: packageName,
+        track: track,
+        versionName: versionName,
+        versionCode: landedVersionCode,
+        committed: false,
+      );
       return;
     }
 
+    events.state(UploadState.committing);
     await api.edits.commit(packageName, editId);
     editId = null;
-    stdout.writeln(
+    say(
       '==> committed — ${released.isEmpty ? "store listing updated" : released}',
+    );
+    // Last, and only here: a `result` line means the run finished, so it is
+    // written after the one call that makes any of this real.
+    events.result(
+      packageName: packageName,
+      track: track,
+      versionName: versionName,
+      versionCode: landedVersionCode,
+      committed: true,
     );
 
     // **No data safety POST here, and that is the change.** It used to sit
@@ -1909,7 +1999,7 @@ Future<void> runPlay(
     if (editId != null) {
       try {
         await api.edits.delete(packageName, editId);
-        stdout.writeln('==> abandoned edit $editId');
+        say('==> abandoned edit $editId');
       } catch (_) {
         // Losing the cleanup is not worth masking the original failure.
       }
@@ -1926,16 +2016,29 @@ Future<void> runPlay(
 /// for the second case keeps the `finally` at the call site identical, which
 /// is the point — a cleanup that only runs on one of two paths is the shape
 /// that leaves edits open.
+///
+/// [events] is where the byte progress of a resumable upload comes from, and
+/// it reaches it by wrapping the HTTP client this builds — because the chunk
+/// acknowledgements it reads are the transport's and the generated API neither
+/// exposes nor knows about them. See `ResumableChunkObserver`.
+///
+/// **A supplied [androidPublisher] is not wrapped, and cannot be**: it arrives
+/// holding a client this function has no route to. A caller that wants the
+/// progress lines through that seam wraps its own client on the way in, which
+/// is what `play_upload_events_test.dart` does — and is the only reason that
+/// suite can drive googleapis' real uploader.
 Future<(AndroidPublisherApi, void Function())> _openPlay(
-  AndroidPublisherApi? androidPublisher,
-) async {
+  AndroidPublisherApi? androidPublisher, {
+  PlayUploadEvents? events,
+}) async {
   if (androidPublisher != null) {
     return (androidPublisher, () {});
   }
   final client = await clientViaServiceAccount(_loadCredentials(), [
     AndroidPublisherApi.androidpublisherScope,
   ]);
-  return (AndroidPublisherApi(client), client.close);
+  final observed = events?.observeChunks(client) ?? client;
+  return (AndroidPublisherApi(observed), client.close);
 }
 
 /// What is about to happen, in the terms the caller will recognise.

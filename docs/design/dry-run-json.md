@@ -65,7 +65,11 @@ this paragraph would have justified a much larger change.
 
 ## Proposed: `upload --dry-run --json`
 
-**`--json` only with `--dry-run`, and refused without it.** Every other `--json`
+**`--json` only with `--dry-run`, and refused without it.** *(Since lifted —
+`upload --json` is an event stream now, and the paragraph under* Deliberately
+not proposed *at the end of this document says how. What follows is the
+argument as it stood, because it is the argument that produced the stream.)*
+Every other `--json`
 command in this package is a read. An `upload` that writes is not, and a
 document describing writes that already happened is a different artifact with
 different failure modes — it would have to say what *did* happen, including
@@ -211,6 +215,19 @@ as an addition rather than a replacement.
 **`--json` on a real `upload`.** See the refusal above. If somebody wants a
 receipt of what a publish did, that is a different document — it has to
 describe partial success, which an intention never does.
+
+> **Since built, and this paragraph is what built it.** Every clause above is
+> still true and turned out to be the argument *for* the thing it declines: a
+> partial upload is exactly what an event **stream** is for, so what could not
+> be a document is not one — it is a sequence of lines, one per state change
+> and one per chunk the store acknowledges. `upload --json` writes that;
+> `upload --dry-run --json` still prints the `appstore.listing-diff` document
+> below, byte for byte, because a dry run transfers nothing and a stream of it
+> would report states nothing entered. Two kinds, one stdout, and the mode
+> chooses. [upload-events.md](upload-events.md) carries the whole argument.
+>
+> The sentence left in place above is the one that was right and was read as
+> refusing more than it said. It refused a *document*, and it was correct to.
 
 **A `--check` exit code, like `flatten --check`'s 2.** Tempting, and wrong for
 the same reason 4 was not allowed to be reused: `matches: false` is not a

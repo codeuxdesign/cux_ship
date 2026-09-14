@@ -1685,11 +1685,19 @@ class BuildProcessingProgress {
 /// starts, one when it ends successfully, nothing in between.
 ///
 /// A fresh closure per wait, because "have I announced yet" is per-wait state.
-void Function(BuildProcessingProgress) printProcessingProgress() {
+///
+/// [out] is where those two lines go, or null for [stdout]. **`upload --json`
+/// passes [stderr]**, because this is the only reporting inside the longest
+/// phase of an upload and stdout is carrying the event stream by then. It is a
+/// sink rather than a flag for the reason [BuildProcessingProgress] exists at
+/// all: a caller that wants the wait reported its own way passes its own
+/// closure, and a caller that only wants it on the other stream should not
+/// have to write one.
+void Function(BuildProcessingProgress) printProcessingProgress({IOSink? out}) {
   var announced = false;
   return (progress) {
     if (progress.state == 'VALID') {
-      stdout.writeln(
+      (out ?? stdout).writeln(
         '==> build ${progress.buildNumber} has finished processing',
       );
       return;
@@ -1698,7 +1706,7 @@ void Function(BuildProcessingProgress) printProcessingProgress() {
     // "waiting for Apple to process" printed immediately above it describes
     // something that is not about to happen.
     if (!announced && !progress.terminal) {
-      stdout.writeln(
+      (out ?? stdout).writeln(
         '==> waiting for Apple to process build ${progress.buildNumber} '
         '(usually 5–15 minutes)',
       );
@@ -4076,6 +4084,14 @@ Future<void> uploadPackage({
   required String buildNumber,
   required AscCredentials credentials,
   required bool dryRun,
+
+  /// Where this function's lines go, including altool's own output.
+  ///
+  /// **altool's stdout is the reason this parameter exists.** It is relayed
+  /// verbatim — tens of lines of Apple's own reporting — and under `--json`
+  /// every one of them would land among the events and make the whole stream
+  /// unparseable. Defaulting to [stdout] keeps an ordinary run byte-identical.
+  IOSink? out,
 }) async {
   final arguments = [
     'altool',
@@ -4115,13 +4131,15 @@ Future<void> uploadPackage({
   ];
 
   if (dryRun) {
-    stdout.writeln('    would upload: xcrun ${arguments.join(" ")}');
+    (out ?? stdout).writeln('    would upload: xcrun ${arguments.join(" ")}');
     return;
   }
 
-  stdout.writeln('==> uploading ${ipa.lengthSync()} bytes with altool');
+  (out ?? stdout).writeln(
+    '==> uploading ${ipa.lengthSync()} bytes with altool',
+  );
   final result = await Process.run('xcrun', arguments);
-  stdout.write(result.stdout);
+  (out ?? stdout).write(result.stdout);
   if (result.exitCode != 0) {
     stderr.write(result.stderr);
     throw AscApiException(result.exitCode, [
