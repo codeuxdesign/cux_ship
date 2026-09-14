@@ -55,6 +55,19 @@ on the App Store. The `result` line is the one that says a run finished.
 `package:cux_ship/documents.dart` gains `PlayUploadEvent`, `PlayUploadResult`,
 `AppStoreUploadEvent`, `AppStoreUploadResult`, `UploadEvent` and `UploadState`.
 
+**`upload --json --beta-group` was putting prose in the middle of its own
+stream.** `releaseToBetaGroup` wrote four lines straight to stdout — the
+external-group notice, the beta description, the beta review, and the
+build-state read-back — which was correct for every caller that existed until
+`upload` grew a stdout carrying JSON. They go through the sink `AppStore`
+already holds now. Found in review of this change.
+
+**`appstore.upload` and `play.upload` announce `accepting` once, however many
+attempts the final chunk takes.** googleapis answers a 5xx by sending that
+chunk again, and the state is written before the request — so a retry
+announced the same wait per attempt, and a consumer treating a transition as an
+edge would see the upload re-enter a state it never left. Also found in review.
+
 **`docs/design/dry-run-json.md` said `Status: proposed. Nothing here is built`
 about `upload --dry-run --json` and `verify --json`, which shipped in
 4.5.0-dev.3.**

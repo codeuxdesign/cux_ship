@@ -22,6 +22,15 @@
 // emitter; what no test here covers is that the CLI calls it at the right
 // moment. Written down rather than papered over — `upload_phases_test.dart`
 // has the same shape of hole for the same reason, and says so too.
+//
+// **`--beta-group`'s lines are pinned in `beta_release_test.dart`, not here**,
+// and that is where the claim is exact rather than where it is convenient.
+// Review found `releaseToBetaGroup` writing four lines straight to stdout, so
+// a real `upload --json --beta-group` put prose in the middle of the stream;
+// the fix routed them through the sink `AppStore` already holds. Driving that
+// from here would mean teaching this file's fake the beta-group reads and both
+// writes, to assert something the suite that owns the flow asserts against a
+// fake built for it.
 import 'dart:convert';
 import 'dart:io';
 

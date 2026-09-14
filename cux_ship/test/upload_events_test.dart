@@ -58,13 +58,25 @@ class _Capture implements IOSink {
 /// range back would let a reader believe the observer parses one, and the
 /// resume case below would prove nothing.
 class _PlayTransport extends http.BaseClient {
-  _PlayTransport({this.failFirstChunkWith, this.onFinalChunkRequest});
+  _PlayTransport({
+    this.failFirstChunkWith,
+    this.failFinalChunkWith,
+    this.onFinalChunkRequest,
+  });
 
   /// A status to answer the first chunk with before accepting it, or null.
   ///
   /// 500 rather than 403: the uploader retries the first family and raises on
   /// the second, and the case this exists for is a chunk that is *re-sent*.
   final int? failFirstChunkWith;
+
+  /// The same, for the **final** chunk, which is a different case entirely.
+  ///
+  /// The final chunk is the one the `accepting` announcement is written
+  /// before, so a retry of *this* chunk sends the request again — and the
+  /// announcement with it, unless the observer holds a flag. Failing the first
+  /// chunk cannot reach that: `accepting` is never written for it.
+  final int? failFinalChunkWith;
 
   /// Every request, as `METHOD path` — so a case can say what was not sent.
   final calls = <String>[];
@@ -79,6 +91,7 @@ class _PlayTransport extends http.BaseClient {
   final void Function()? onFinalChunkRequest;
 
   var _failed = false;
+  var _failedFinal = false;
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
@@ -102,6 +115,13 @@ class _PlayTransport extends http.BaseClient {
 
     if (end + 1 == total) {
       onFinalChunkRequest?.call();
+      if (failFinalChunkWith != null && !_failedFinal) {
+        _failedFinal = true;
+        return http.StreamedResponse(
+          const Stream<List<int>>.empty(),
+          failFinalChunkWith!,
+        );
+      }
     }
 
     if (failFirstChunkWith != null && !_failed) {
@@ -237,6 +257,35 @@ void main() {
         hasLength(1),
       );
       expect(_sent(capture.lines).last, _chunk * 2 + 1);
+    });
+
+    test('and a retried final chunk does not announce the wait twice', () async {
+      // **The case the ordering makes possible.** `accepting` is written
+      // *before* the request, which is the whole point of it — and googleapis
+      // answers a 5xx by sending the same final chunk again. Without a flag on
+      // the observer that is two `accepting` lines for one wait, and a
+      // consumer that treats a state transition as an edge sees the upload
+      // re-enter a state it never left.
+      //
+      // **Failing the *first* chunk cannot reach this**, which is why the
+      // retry case further down did not catch it: `accepting` is never written
+      // for a chunk that is not the last.
+      final transport = _PlayTransport(failFinalChunkWith: 500);
+      final lines = await _upload(
+        _chunk * 2 + 1,
+        transport: transport,
+        options: ResumableUploadOptions(backoffFunction: (_) => Duration.zero),
+      );
+
+      expect(
+        transport.calls.where((c) => c.startsWith('PUT')),
+        hasLength(4),
+        reason: 'the fake must actually have been asked twice for the last one',
+      );
+      expect(lines.where((l) => l.contains('"accepting"')), hasLength(1));
+      // And the transfer still completes, so this is not passing because the
+      // upload died before a second announcement could happen.
+      expect(_sent(lines).last, _chunk * 2 + 1);
     });
 
     test('and a one-chunk artifact still gets one', () async {

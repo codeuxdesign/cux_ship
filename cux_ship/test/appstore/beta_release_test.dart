@@ -187,21 +187,35 @@ Directory _tree(String description) {
 ///
 /// Resolution happens first and separately, exactly as the CLI now does it —
 /// offline, before anything has touched the fake network.
+/// [out] is where [AppStore] is told to put its lines, or null for [stdout].
+///
+/// **`upload --json` passes [stderr] for the whole class**, so every line this
+/// flow prints has to go through that sink rather than around it — which four
+/// of them did not until review found it. The captured stdout is returned
+/// either way, so a case passing [out] asserts on what did *not* land there.
 Future<(String, bool)> _release(
   _FakeClient client, {
   required bool dryRun,
   String? metadataPath,
   String? descriptionPath,
+  IOSink? out,
 }) async {
   final description = resolveBetaDescription(
     optionPath: descriptionPath,
     metadataPath: metadataPath,
     locale: 'en-US',
   );
+  // **Both, exactly as `cli.dart` sets them.** `Writer` announces every write
+  // it makes — `added to beta group`, `submitted for beta review` — and those
+  // are as much this flow's output as the `==>` lines are. Giving the sink to
+  // `AppStore` alone was the first version of this harness, and the case below
+  // failed on precisely those three lines, which is the harness diverging from
+  // the call site rather than a defect in the flow.
   final store = AppStore(
     client,
-    Writer(client, dryRun: dryRun),
+    Writer(client, dryRun: dryRun, out: out),
     platform: AscPlatform.ios,
+    out: out,
   );
   final captured = _MemoryStdout();
   final internal = await IOOverrides.runZoned(
@@ -637,6 +651,88 @@ void main() {
           ),
         ),
       );
+    });
+  });
+
+  group('every line goes through the sink the class holds', () {
+    // **Found by review of `upload --json`, and it is the fourth round of the
+    // same lesson.** These four lines were written straight to [stdout], which
+    // was correct for every caller that existed — and `--beta-group` is an
+    // `upload` option, so the moment `upload` grew a stdout carrying
+    // newline-delimited JSON they started landing in the middle of it and made
+    // the whole stream unparseable from that line on.
+    //
+    // The comment beside `AppStore`'s construction in `cli.dart` predicted
+    // exactly this: routing the reachable lines had been tried three times,
+    // each round covered what was reachable *then*, and the next flag to reach
+    // a new block undid it. So the fix is not a fifth parameter — the class
+    // already holds the sink, and this pins that the flow uses it.
+
+    /// The acceptance case's fixture, which is the one that prints every line.
+    _FakeClient externalRelease() => _FakeClient(
+      collections: {
+        '/v1/betaGroups': [_group(internal: false)],
+        '/v1/apps/APP/betaAppLocalizations': [_localization('older text')],
+        '/v1/betaAppReviewSubmissions': const [],
+      },
+      resources: {
+        '/v1/builds/B1/buildBetaDetail': {
+          'data': {
+            'id': 'D1',
+            'attributes': {'externalBuildState': 'WAITING_FOR_BETA_REVIEW'},
+          },
+        },
+      },
+    );
+
+    test(
+      'the external fork puts nothing on stdout when a sink is set',
+      () async {
+        final tree = _tree('What the beta is for.\n');
+        final elsewhere = _MemoryStdout();
+
+        final (onStdout, internal) = await _release(
+          externalRelease(),
+          dryRun: false,
+          metadataPath: tree.path,
+          out: elsewhere,
+        );
+        await elsewhere.close();
+        final said = elsewhere.buffer.toString();
+
+        expect(
+          internal,
+          isFalse,
+          reason: 'the internal fork prints almost none',
+        );
+        // The claim: nothing on stdout at all, which is what keeps an NDJSON
+        // stream parseable past the first `--beta-group` line.
+        expect(onStdout, isEmpty);
+        // And not because the flow went quiet — every line is named, because a
+        // run that had simply stopped printing them would satisfy the assertion
+        // above and would have taken the human log with it.
+        expect(said, contains('is an external group'));
+        expect(said, contains('==> beta app description'));
+        expect(said, contains('==> beta review'));
+        expect(said, contains('external build state: WAITING_FOR_BETA_REVIEW'));
+      },
+    );
+
+    test('and with no sink they are on stdout, exactly as before', () async {
+      // The other half. Without it, a build that sent these lines nowhere at
+      // all would satisfy the case above while silencing every caller that
+      // does not pass a sink — which is every caller but one.
+      final tree = _tree('What the beta is for.\n');
+
+      final (onStdout, _) = await _release(
+        externalRelease(),
+        dryRun: false,
+        metadataPath: tree.path,
+      );
+
+      expect(onStdout, contains('is an external group'));
+      expect(onStdout, contains('==> beta app description'));
+      expect(onStdout, contains('==> beta review'));
     });
   });
 }

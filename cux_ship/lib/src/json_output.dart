@@ -106,6 +106,26 @@ void writeJsonDocument(Object document) {
 /// through a stream leaves whole lines and no `result` line — which is exactly
 /// what happened, said in the format's own vocabulary.
 ///
+/// **No flush, and that was measured rather than assumed.** Review asked for
+/// one on the reasonable-sounding grounds that `IOSink.writeln` only queues
+/// bytes, so a piped consumer might see nothing until the buffer filled or the
+/// process exited — which would defeat the whole point of a live stream. Dart's
+/// `stdout` does not behave that way. A child writing a line and then sleeping
+/// three seconds:
+///
+///     parent saw {"line":1} after  249ms
+///     parent saw {"line":2} after 3244ms
+///
+/// and the same from async code between awaits, one line per second, arriving
+/// one second apart. Both through a pipe, on the runtime this is pinned to.
+///
+/// A flush would also not be free: it returns a `Future`, so either every
+/// caller becomes async — they are synchronous closures inside the upload
+/// paths — or the lint that forbids a dropped future gets suppressed. Paying
+/// that for a buffer that does not exist is the shape `docs/CONTRIBUTING.md`
+/// argues against, and the measurement is here so the next reader meets it
+/// rather than the belief.
+///
 /// [out] rather than [stdout] directly so a test can read the stream back
 /// without an `IOOverrides` zone around every assertion; production passes
 /// [stdout].

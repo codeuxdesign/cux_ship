@@ -196,18 +196,30 @@ final _contentRange = RegExp(r'^bytes (\d+)-(\d+)/(\d+)$');
 /// bundle is about sixty-eight lines — tens rather than thousands — with no
 /// threshold of this package's own to pick, tune, or get wrong.
 ///
-/// **There is no de-duplication here, and that was checked rather than
-/// assumed.** A guard against reporting one range twice was written first, and
-/// nothing can reach it: googleapis retries a chunk only on `500`, `502` and
-/// `503`, which the status check below already drops, so a range that is
-/// re-sent was never acknowledged in the first place. A guard no test can
-/// observe failing is a guard that rots, and `docs/CONTRIBUTING.md` says so in
-/// as many words.
+/// **A progress line needs no de-duplication and the `accepting` line does,
+/// and the difference is which side of the request each is written on.**
+/// googleapis retries a chunk only on `500`, `502` and `503`, which the status
+/// check below already drops — so a *progress* line, written after the
+/// response, cannot report one range twice. A guard for that was written first
+/// and removed, because nothing could reach it.
+///
+/// [UploadState.accepting] is written **before** the request, which is the
+/// whole point of it, and a retry sends the final chunk again: without
+/// [_announcedAccepting] a 5xx on that chunk announces the same wait two or
+/// three times. [UploadEvent.result]'s contract says a state transition
+/// arrives once, and this is what keeps that true on the one path where it
+/// would not be.
+///
+/// The two guards look alike and are not: the removed one was over a value
+/// that could not repeat, and this one is over an announcement that can.
 class ResumableChunkObserver extends http.BaseClient {
   ResumableChunkObserver(this._inner, this._events);
 
   final http.Client _inner;
   final PlayUploadEvents _events;
+
+  /// Whether the wait for the store's answer has already been named.
+  var _announcedAccepting = false;
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
@@ -229,7 +241,10 @@ class ResumableChunkObserver extends http.BaseClient {
     // `Bundle` it read out of the artifact, and it validates the artifact
     // before answering — so by the time this method has a response the wait a
     // reader wanted named is already over.
-    if (sent == total) {
+    //
+    // Once, however many attempts the final chunk takes — see the class doc.
+    if (sent == total && !_announcedAccepting) {
+      _announcedAccepting = true;
       _events.state(UploadState.accepting);
     }
 

@@ -178,6 +178,51 @@ waiting for it. What it carries instead is `bytesTotal` on the `transferring`
 line: "sending 28 MB" beside a spinner tells a reader something true, where a
 bar that cannot fill does not.
 
+### Two things review found, and one it was wrong about
+
+**`--beta-group` was putting prose in the middle of the stream.**
+`releaseToBetaGroup` wrote four lines straight to `stdout` — *is an external
+group*, *beta app description*, *beta review*, and the build-state read-back —
+and `--beta-group` is an `upload` option, so a real `upload --json
+--beta-group` made its own stdout unparseable from that line on. They go
+through `store.say` now, which is the sink the class already holds.
+
+**That is the fourth round of the same lesson**, and `cli.dart` predicted it
+beside `AppStore`'s construction in as many words: routing the reachable lines
+had been tried three times, each round covered what was reachable *then*, and
+the next flag to reach a new block undid it. This flag is that next flag. The
+answer is not a fifth parameter — it is that a line belongs to the object's
+sink rather than to whichever stream was right when it was written.
+
+The test for it went one better and found three more: `Writer` announces every
+write it makes, and the first harness gave the sink to `AppStore` alone. Those
+were already routed in production; what was wrong was the harness diverging
+from the call site, which is its own small lesson about fakes.
+
+**`accepting` could be announced twice.** It is written *before* the request,
+which is the whole point of it — and googleapis answers a 5xx by sending the
+same final chunk again, so a retry there announced the same wait per attempt. A
+consumer treating a state transition as an edge would see the upload re-enter a
+state it never left. There is a flag on the observer now.
+
+This is the guard whose sibling was deleted two sections up, and the two are
+genuinely different: the removed one was over a *value* that could not repeat,
+because a retried chunk was never acknowledged. This one is over an
+*announcement* that can, because it is made before the answer exists. The
+retry case that exists — a 5xx on the **first** chunk — could not reach it, and
+there is one on the final chunk now.
+
+**And one thing review had wrong, recorded because it sounds right.** It asked
+for a flush after each event, on the grounds that `IOSink.writeln` only queues
+bytes and a piped consumer might see nothing until the process exits. Measured,
+through a pipe, on the pinned runtime: a line written and followed by a
+three-second sleep arrives at 249 ms, and lines written from async code between
+awaits arrive one second apart. There is no buffer to flush, and a flush is not
+free — it returns a future, so either every caller becomes async or the lint
+against a dropped one is suppressed. The measurement is in
+`json_output.dart`'s dartdoc, beside the function, so the next reader meets it
+rather than the belief.
+
 ## No `display`, which is a departure and is the point of one
 
 Every other kind here carries the rendered lines under `display`, because
