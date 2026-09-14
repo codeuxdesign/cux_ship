@@ -1872,18 +1872,61 @@ class AppStore {
 
   /// Every build App Store Connect holds for [app] on this platform, newest
   /// first.
-  Future<List<Map<String, dynamic>>> builds(App app) async {
-    final builds = await client.getAll(
-      '/v1/builds',
-      query: {
-        'filter[app]': app.id,
-        ..._platformFilter,
-        'sort': '-version',
-        'limit': '200',
-      },
-    );
-    return builds;
-  }
+  ///
+  /// [buildsWithIncluded] without the sideloaded resources, which is the same
+  /// arrangement [AscClient.getAll] has over [AscClient.getAllWithIncluded]
+  /// and exists for the same reason: the callers that want a build number and
+  /// nothing else should not have to name a map they drop.
+  Future<List<Map<String, dynamic>>> builds(App app) async =>
+      (await buildsWithIncluded(app)).data;
+
+  /// [builds], and the beta groups and beta detail that came beside them.
+  ///
+  /// **The `include` is what separates internal testers from external ones,
+  /// and it costs no second request.** A build's attributes say whether Apple
+  /// finished processing it; they say nothing about who can install it. Two
+  /// relationships carry that, and both are includable on this endpoint:
+  ///
+  ///  - `betaGroups` names the groups the build is attached to, and each
+  ///    included `betaGroups` resource carries `isInternalGroup` — which is
+  ///    what [betaGroupKind] reads.
+  ///  - `buildBetaDetail` carries `externalBuildState`, which is the only
+  ///    field that separates *external testers have this* from *this is
+  ///    sitting in beta review*. [reportExternalBuildState] already reads it,
+  ///    one build at a time, through `/v1/builds/<id>/buildBetaDetail`.
+  ///
+  /// **One request with includes, not a follow-up per build.** The alternative
+  /// is a GET per build against a listing with no cap — the consumer this was
+  /// added for reads three builds on each of two platforms, so six extra round
+  /// trips to answer a question Apple will put in the first response. That is
+  /// the same trade [appStoreVersions] made for `include=build` and the same
+  /// one `printBuildNumber` did not have to make, and it is why
+  /// [AscClient.getAllWithIncluded] merges `included` across pages rather than
+  /// answering for the last one.
+  ///
+  /// **Not measured against a live account.** [appStoreVersions] records that
+  /// its include was, and this one says the opposite out loud rather than
+  /// inheriting that sentence by sitting next to it: the shapes below are read
+  /// from Apple's published schema, and the parsing treats every absence as
+  /// *not known* rather than as a fact about the build — see
+  /// [AppStoreBuild.externalBuildState] and [BetaGroupKind.unknown], neither of
+  /// which guesses.
+  Future<
+    ({
+      List<Map<String, dynamic>> data,
+      Map<String, Map<String, dynamic>> included,
+    })
+  >
+  buildsWithIncluded(App app) => client.getAllWithIncluded(
+    '/v1/builds',
+    query: {
+      'filter[app]': app.id,
+      ..._platformFilter,
+      'sort': '-version',
+      'limit': '200',
+      'include': 'betaGroups,buildBetaDetail',
+    },
+  );
 
   /// Restricts a build query to the platform this instance was built for.
   ///

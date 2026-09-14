@@ -40,6 +40,27 @@ import 'app_store.dart';
 Map<String, dynamic> _attributes(Map<String, dynamic> resource) =>
     (resource['attributes'] as Map<String, dynamic>?) ?? const {};
 
+/// One TestFlight group a build is attached to.
+///
+/// **A name and a kind, because the name alone is not the answer.** Whether a
+/// group's testers already have the build depends entirely on which kind it
+/// is: Apple hands every processed build to every internal group within
+/// minutes, and an external group receives nothing until beta review passes.
+/// A group called "External Testers" is evidence of somebody's naming habit
+/// rather than of Apple's answer, which is [BetaGroupKind]'s whole argument.
+class AppStoreBetaGroup {
+  const AppStoreBetaGroup({required this.name, required this.kind});
+
+  /// Apple's `name` attribute, or `(unnamed)` when the resource carried none —
+  /// the same fallback the app lookup takes, so a group Apple did not name is
+  /// still counted rather than dropped on the way in.
+  final String name;
+
+  /// Internal, external, or that the response did not say. See [betaGroupKind],
+  /// which refuses to guess and says why the two defaults are not symmetric.
+  final BetaGroupKind kind;
+}
+
 /// One build App Store Connect holds.
 class AppStoreBuild {
   const AppStoreBuild({
@@ -48,6 +69,8 @@ class AppStoreBuild {
     required this.uploadedDate,
     required this.uploadedAt,
     required this.expired,
+    required this.betaGroups,
+    required this.externalBuildState,
   });
 
   /// `CFBundleVersion` — Apple calls this attribute `version`, which reads
@@ -72,6 +95,76 @@ class AppStoreBuild {
   /// TestFlight builds expire after 90 days. An expired build is still listed
   /// and can no longer be given to a group.
   final bool expired;
+
+  /// The TestFlight groups this build is attached to, or null when the
+  /// response did not say.
+  ///
+  /// **Null and empty are different answers and the difference is the whole
+  /// point of the field.** Empty is Apple saying *this build is attached to
+  /// nothing*; null is this package not having asked — a read that did not
+  /// send `include=betaGroups`. Collapsing them would report *no external
+  /// testers have this build* for a request that never enquired, which is the
+  /// one wrong answer a caller cannot detect: it is also the true answer most
+  /// of the time, so it reads as correct until the day it is not.
+  ///
+  /// That is [BetaGroupKind.unknown]'s rule one level up — a reader that
+  /// cannot read must not report a reading — applied to the list rather than
+  /// to a group's kind.
+  final List<AppStoreBetaGroup>? betaGroups;
+
+  /// `buildBetaDetail.externalBuildState`, or null when the response did not
+  /// carry it.
+  ///
+  /// **The only field that separates *external testers have this* from *this
+  /// is sitting in beta review*.** [processingState] answers a different
+  /// question — whether Apple finished ingesting the binary — and a build can
+  /// be `VALID` for a week without one external tester being able to install
+  /// it. Apple's values include `READY_FOR_BETA_SUBMISSION`,
+  /// `WAITING_FOR_BETA_REVIEW`, `IN_BETA_REVIEW`, `BETA_REJECTED`,
+  /// `BETA_APPROVED` and `IN_BETA_TESTING`.
+  ///
+  /// **Carried raw rather than as an enum, on purpose.** The list above is
+  /// Apple's published one and this package has been surprised by that list
+  /// before; a member per state would make an unrecognized value either a
+  /// parse failure or a silent fallback, and both are worse than handing the
+  /// caller the word Apple used. [inExternalTesting] is the one reading this
+  /// package commits to, and it is a single `==`.
+  final String? externalBuildState;
+
+  /// The attached groups Apple said were internal, or null when [betaGroups]
+  /// is null.
+  ///
+  /// A group whose kind Apple did not report appears in neither this nor
+  /// [externalGroups] — see [hasUnknownGroupKind], which is how a caller
+  /// notices rather than being quietly told there are none.
+  List<AppStoreBetaGroup>? get internalGroups => betaGroups
+      ?.where((group) => group.kind == BetaGroupKind.internal)
+      .toList();
+
+  /// The attached groups Apple said were external, or null when [betaGroups]
+  /// is null. See [internalGroups].
+  List<AppStoreBetaGroup>? get externalGroups => betaGroups
+      ?.where((group) => group.kind == BetaGroupKind.external)
+      .toList();
+
+  /// Whether any attached group came back without [BetaGroupKind].
+  ///
+  /// **False for a build whose groups were never read**, which is the one
+  /// reading this getter deliberately does not offer: null [betaGroups] is not
+  /// an unknown *kind*, it is an unread relationship, and a caller conflating
+  /// the two would report a refusal as a quirk of one group. Check [betaGroups]
+  /// for null first — the two questions have two answers because they have two
+  /// remedies.
+  bool get hasUnknownGroupKind =>
+      betaGroups?.any((group) => group.kind == BetaGroupKind.unknown) ?? false;
+
+  /// Whether external testers can install this build now.
+  ///
+  /// True only for Apple's `IN_BETA_TESTING`. Null when [externalBuildState]
+  /// is — *not known* rather than *no*, for the reason that field states.
+  bool? get inExternalTesting => externalBuildState == null
+      ? null
+      : externalBuildState == 'IN_BETA_TESTING';
 
   /// [buildNumber] read as an integer, or null when it is not one.
   ///
@@ -98,11 +191,47 @@ class AppStoreBuild {
   bool get usable => processingState == 'VALID' && !expired;
 
   /// The line `cux_ship appstore builds` prints for this build.
+  ///
+  /// The audience half is appended only when [betaGroups] was read, so a
+  /// listing from a request that did not ask prints exactly what it always
+  /// printed rather than a row of confident `none`s.
   String get line =>
       '  build $buildNumber  '
       '$processingState  '
       'uploaded $uploadedDate'
-      '${expired ? '  (expired)' : ''}';
+      '${expired ? '  (expired)' : ''}'
+      '$_audienceSuffix';
+
+  /// `  internal: Team  external: Public Beta (IN_BETA_TESTING)`, or empty.
+  ///
+  /// **Both halves are always named once either is**, including the empty
+  /// ones. A line that omits `external:` when no external group is attached
+  /// makes the commonest state — a build processed and given to nobody
+  /// outside — look like a line that forgot to mention it, which is the
+  /// reading this whole field exists to prevent.
+  String get _audienceSuffix {
+    final groups = betaGroups;
+    if (groups == null) {
+      return '';
+    }
+    final unknown = groups
+        .where((group) => group.kind == BetaGroupKind.unknown)
+        .map((group) => group.name);
+    return <String>[
+      '  internal: ${_names(internalGroups!)}',
+      '  external: ${_names(externalGroups!)}'
+          // The state is printed beside the external groups whether or not
+          // there are any: `none (WAITING_FOR_BETA_REVIEW)` is a real and
+          // confusing moment — submitted for review, not yet attached — and
+          // hiding the state behind a group being present is how it would go
+          // unexplained.
+          '${externalBuildState == null ? '' : ' ($externalBuildState)'}',
+      if (unknown.isNotEmpty) '  kind not reported: ${unknown.join(', ')}',
+    ].join();
+  }
+
+  static String _names(List<AppStoreBetaGroup> groups) =>
+      groups.isEmpty ? 'none' : groups.map((group) => group.name).join(', ');
 }
 
 /// Every build App Store Connect holds for one app on one platform.
@@ -185,26 +314,112 @@ class AppStoreBuilds {
 int _byBuildNumberDescending(AppStoreBuild a, AppStoreBuild b) =>
     (b.buildNumberAsInt ?? -1).compareTo(a.buildNumberAsInt ?? -1);
 
-/// One `builds` resource, as sent.
-AppStoreBuild appStoreBuildFrom(Map<String, dynamic> resource) {
+/// The resources a to-many relationship names, resolved through [included].
+///
+/// Null when the relationship carries no `data` key — which is what a request
+/// that did not send the matching `include=` gets back, measured on
+/// `relationships.build` and recorded at `_buildNumberOf`. That is a different
+/// fact from an empty `data` list, which is Apple saying the relationship is
+/// genuinely empty, and this returns `[]` for it.
+///
+/// A named resource that is missing from [included] is skipped rather than
+/// faked: it cannot be described, and a placeholder would be a group with no
+/// kind, which is the one thing [BetaGroupKind] refuses to invent.
+List<Map<String, dynamic>>? _relatedMany(
+  Map<String, dynamic> resource,
+  String relationship,
+  Map<String, Map<String, dynamic>> included,
+) {
+  final relationships = resource['relationships'];
+  if (relationships is! Map<String, dynamic>) {
+    return null;
+  }
+  final named = relationships[relationship];
+  if (named is! Map<String, dynamic>) {
+    return null;
+  }
+  final data = named['data'];
+  if (data is! List) {
+    return null;
+  }
+  return <Map<String, dynamic>>[
+    for (final entry in data.whereType<Map<String, dynamic>>())
+      if (entry['type'] case final String type)
+        if (entry['id'] case final String id)
+          if (included['$type:$id'] case final Map<String, dynamic> found)
+            found,
+  ];
+}
+
+/// The single resource a to-one relationship names, resolved through
+/// [included]. Null for every way of not knowing — see [_relatedMany], which
+/// draws the same distinctions on the many side.
+Map<String, dynamic>? _relatedOne(
+  Map<String, dynamic> resource,
+  String relationship,
+  Map<String, Map<String, dynamic>> included,
+) {
+  final relationships = resource['relationships'];
+  if (relationships is! Map<String, dynamic>) {
+    return null;
+  }
+  final named = relationships[relationship];
+  if (named is! Map<String, dynamic>) {
+    return null;
+  }
+  final data = named['data'];
+  if (data is! Map<String, dynamic>) {
+    return null;
+  }
+  if (data['type'] case final String type) {
+    if (data['id'] case final String id) {
+      return included['$type:$id'];
+    }
+  }
+  return null;
+}
+
+/// One `builds` resource, as sent, with the groups and beta detail that came
+/// beside it.
+AppStoreBuild appStoreBuildFrom(
+  Map<String, dynamic> resource, [
+  Map<String, Map<String, dynamic>> included = const {},
+]) {
   final attributes = _attributes(resource);
   final uploadedDate = attributes['uploadedDate'] as String?;
+  final groups = _relatedMany(resource, 'betaGroups', included);
+  final detail = _relatedOne(resource, 'buildBetaDetail', included);
   return AppStoreBuild(
     buildNumber: '${attributes['version']}',
     processingState: attributes['processingState'] as String?,
     uploadedDate: uploadedDate,
     uploadedAt: uploadedDate == null ? null : DateTime.tryParse(uploadedDate),
     expired: attributes['expired'] == true,
+    betaGroups: groups == null
+        ? null
+        : <AppStoreBetaGroup>[
+            for (final group in groups)
+              AppStoreBetaGroup(
+                name: '${_attributes(group)['name'] ?? '(unnamed)'}',
+                kind: betaGroupKind(group),
+              ),
+          ],
+    externalBuildState: detail == null
+        ? null
+        : _attributes(detail)['externalBuildState'] as String?,
   );
 }
 
-/// A `GET /v1/builds` payload, sorted newest first.
+/// A `GET /v1/builds` payload, sorted newest first, and the `included`
+/// resources beside it.
 AppStoreBuilds appStoreBuildsFrom(
   List<Map<String, dynamic>> payload,
-  AscPlatform platform,
-) {
-  final builds = payload.map(appStoreBuildFrom).toList()
-    ..sort(_byBuildNumberDescending);
+  AscPlatform platform, {
+  Map<String, Map<String, dynamic>> included = const {},
+}) {
+  final builds =
+      payload.map((resource) => appStoreBuildFrom(resource, included)).toList()
+        ..sort(_byBuildNumberDescending);
   return AppStoreBuilds(platform: platform, builds: builds);
 }
 
@@ -397,7 +612,12 @@ AppStoreVersions appStoreVersionsFrom(
 /// arrow points one way, from what the API can be asked to do towards how a
 /// listing is rendered, and [AppStore] therefore does not import this file.
 Future<void> printBuilds(AppStore store, App app, {bool json = false}) async {
-  final listing = appStoreBuildsFrom(await store.builds(app), store.platform);
+  final payload = await store.buildsWithIncluded(app);
+  final listing = appStoreBuildsFrom(
+    payload.data,
+    store.platform,
+    included: payload.included,
+  );
   if (json) {
     writeJsonDocument(appStoreBuildsDocument(listing, bundleId: app.bundleId));
     return;

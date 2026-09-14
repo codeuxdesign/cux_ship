@@ -604,6 +604,157 @@ AscPlatform _platformFromJson(String api) {
   throw ArgumentError.value(api, 'platform', 'not an App Store platform');
 }
 
+/// Which kind of TestFlight audience a group carries.
+///
+/// **The distinction is the whole reason this vocabulary exists**, because the
+/// two kinds are not two flavors of the same thing. Apple hands every
+/// processed build to every *internal* group automatically and within minutes
+/// — an explicit assignment to one is refused, `422 Builds cannot be assigned
+/// to this internal group`. An *external* group receives nothing at all until
+/// the build has been submitted for beta review and Apple has passed it. So a
+/// build attached to both is available to one audience and not the other, and
+/// a reader that counts groups without reading their kind reports the wrong
+/// one.
+@JsonEnum(valueField: 'wire')
+enum BetaGroupKindEntry {
+  /// Apple's testers-on-the-team group. Has the build as soon as it processes.
+  internal('internal'),
+
+  /// A group that receives the build only after beta review passes. See
+  /// [AppStoreBuildEntry.externalBuildState], which is what says whether it
+  /// has.
+  external('external'),
+
+  /// **Apple did not say which kind this group is.**
+  ///
+  /// A value rather than a hole, on [ProcessingState.unknown]'s terms — but
+  /// unlike that one it is not a vocabulary gap: `isInternalGroup` is a
+  /// boolean with no room for a state this package has not met, so this means
+  /// the attribute was *absent*. A sparse `fields[betaGroups]` query or an API
+  /// change, not a new kind of group.
+  ///
+  /// **Never resolved to a default, in either direction.** The two guesses are
+  /// not symmetric and `beta_release.dart` refuses for that reason: guessing
+  /// external submits an internal group for beta review, which is wrong and
+  /// fails where somebody sees it; guessing internal reports an external group
+  /// as already delivered, which is wrong and looks exactly like success. A
+  /// consumer meeting this should say it does not know.
+  unknown('unknown');
+
+  const BetaGroupKindEntry(this.wire);
+
+  /// The value carried in the document's `kind` field.
+  final String wire;
+}
+
+/// One TestFlight group a build is attached to.
+@JsonSerializable(explicitToJson: true)
+class BetaGroupEntry {
+  const BetaGroupEntry({required this.name, required this.kind});
+
+  factory BetaGroupEntry.fromJson(Map<String, dynamic> json) =>
+      _$BetaGroupEntryFromJson(json);
+
+  /// Apple's name for the group, or `(unnamed)` when it carried none.
+  ///
+  /// **For showing, never for deciding.** A group called "External Testers"
+  /// may be internal; the name is whatever somebody typed into App Store
+  /// Connect. [kind] is the answer.
+  final String name;
+
+  /// Internal, external, or that Apple did not say. See [BetaGroupKindEntry].
+  @JsonKey(unknownEnumValue: BetaGroupKindEntry.unknown)
+  final BetaGroupKindEntry kind;
+
+  Map<String, dynamic> toJson() => _$BetaGroupEntryToJson(this);
+}
+
+/// This package's vocabulary for Apple's `externalBuildState`.
+///
+/// **A build's processing state and its external state answer different
+/// questions**, and conflating them is the defect this vocabulary was added
+/// for: a consumer showed one TestFlight number per platform, so a build that
+/// had merely finished processing rendered identically to one external testers
+/// actually had. [ProcessingState.valid] means Apple finished ingesting the
+/// binary. This says who can install it.
+///
+/// The members are what this package names, not what Apple has — see
+/// [ProcessingState], whose argument this follows exactly.
+/// [AppStoreBuildEntry.externalBuildStateRaw] carries Apple's own word.
+@JsonEnum(valueField: 'wire')
+enum ExternalBuildState {
+  /// Apple is still processing the upload, so no audience has it yet.
+  processing('processing', 'PROCESSING'),
+
+  /// Processing ended in an error. Terminal.
+  processingException('processingException', 'PROCESSING_EXCEPTION'),
+
+  /// The build cannot be submitted until export compliance is answered.
+  missingExportCompliance(
+    'missingExportCompliance',
+    'MISSING_EXPORT_COMPLIANCE',
+  ),
+
+  /// Apple is reviewing the export compliance answer.
+  inExportComplianceReview(
+    'inExportComplianceReview',
+    'IN_EXPORT_COMPLIANCE_REVIEW',
+  ),
+
+  /// **Processed, and never submitted for beta review.** The state a build
+  /// sits in after an upload that was not followed by a beta release — which
+  /// is the ordinary state of the newest build most of the time, and the one
+  /// most easily mistaken for "the testers have it".
+  readyForBetaSubmission('readyForBetaSubmission', 'READY_FOR_BETA_SUBMISSION'),
+
+  /// Submitted, and Apple has not started the review.
+  waitingForBetaReview('waitingForBetaReview', 'WAITING_FOR_BETA_REVIEW'),
+
+  /// Apple is reviewing it now.
+  inBetaReview('inBetaReview', 'IN_BETA_REVIEW'),
+
+  /// **Apple refused the build for external testing.** Terminal: the API never
+  /// carries the reason, which arrives by e-mail and in App Store Connect.
+  betaRejected('betaRejected', 'BETA_REJECTED'),
+
+  /// Review passed. Not the same as [inBetaTesting] — approval is Apple's
+  /// verdict, delivery is the group assignment.
+  betaApproved('betaApproved', 'BETA_APPROVED'),
+
+  /// Apple reports the build ready to give to external testers.
+  readyForBetaTesting('readyForBetaTesting', 'READY_FOR_BETA_TESTING'),
+
+  /// **External testers can install this build now.** The one state that
+  /// answers yes.
+  inBetaTesting('inBetaTesting', 'IN_BETA_TESTING'),
+
+  /// The build's ninety days are up.
+  expired('expired', 'EXPIRED'),
+
+  /// Apple sent a state this version does not name. What Apple said is in
+  /// [AppStoreBuildEntry.externalBuildStateRaw]. See [ProcessingState.unknown].
+  unknown('unknown', null);
+
+  const ExternalBuildState(this.wire, this.appleValue);
+
+  /// This package's spelling, and what the document carries.
+  final String wire;
+
+  /// Apple's spelling, or null for [unknown], which Apple has no word for.
+  final String? appleValue;
+
+  /// Apple's [appleValue] read as a member: [unknown] for a value this version
+  /// does not name, null when Apple sent nothing. See [ProcessingState.read],
+  /// which says why reading to a member first is what makes the branches
+  /// exhaustive.
+  static ExternalBuildState? read(String? appleValue) => appleValue == null
+      ? null
+      : values.firstWhere(
+          (s) => s.appleValue == appleValue,
+          orElse: () => unknown,
+        );
+}
+
 /// One build App Store Connect holds, as `appstore builds --json` prints it.
 @JsonSerializable(explicitToJson: true)
 class AppStoreBuildEntry {
@@ -616,6 +767,10 @@ class AppStoreBuildEntry {
     required this.expired,
     required this.usable,
     required this.needsNewUpload,
+    required this.betaGroups,
+    required this.externalBuildState,
+    required this.externalBuildStateRaw,
+    required this.inExternalTesting,
     required this.display,
   });
 
@@ -715,6 +870,48 @@ class AppStoreBuildEntry {
   /// and *expired* are not the same sentence, and this pair alone cannot say
   /// which. Read [expired] when the wording matters.
   final bool? needsNewUpload;
+
+  /// The TestFlight groups this build is attached to, **or null when the read
+  /// did not ask**.
+  ///
+  /// **Null and `[]` are different answers, and a consumer that treats them
+  /// alike reports the wrong one confidently.** `[]` is Apple saying the build
+  /// is attached to no group; null is this package not having sent
+  /// `include=betaGroups`, which every read before schema 2 did. The second
+  /// renders as *no external testers have this* — true most of the time, which
+  /// is exactly why it goes unnoticed when it is not.
+  ///
+  /// Internal and external groups are both here and are told apart by
+  /// [BetaGroupEntry.kind], never by counting or by name.
+  final List<BetaGroupEntry>? betaGroups;
+
+  /// **This package's reading of [externalBuildStateRaw]**, or null when Apple
+  /// sent nothing. See [ExternalBuildState], and see [processingState], whose
+  /// relationship to its own raw field this mirrors exactly.
+  @JsonKey(unknownEnumValue: ExternalBuildState.unknown)
+  final ExternalBuildState? externalBuildState;
+
+  /// **Apple's `externalBuildState`, exactly as sent — the authoritative
+  /// value.** Null when Apple sent none, which includes a read that did not
+  /// ask for `include=buildBetaDetail`.
+  final String? externalBuildStateRaw;
+
+  /// Whether external testers can install this build now, or null when that
+  /// cannot be said.
+  ///
+  /// **Nullable rather than false-by-default, and the choice is the one
+  /// [usable] argues in the other direction.** That flag gates an *action* —
+  /// releasing a build whose state is not understood — so failing closed to
+  /// `false` is a refusal and is safe. This one gates a *report*: `false`
+  /// here is the claim *external testers do not have this build*, and making
+  /// an unread relationship or an unnamed state say it out loud is the defect
+  /// this field was added to fix rather than a safe default. Null says the
+  /// question was not answered, which is what a consumer should show.
+  ///
+  /// True only for [ExternalBuildState.inBetaTesting].
+  /// [ExternalBuildState.betaApproved] is Apple's verdict and not delivery, so
+  /// it is not true here.
+  final bool? inExternalTesting;
 
   /// The lines `cux_ship appstore builds` prints for this build.
   ///

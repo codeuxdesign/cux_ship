@@ -90,28 +90,48 @@ class _FakeClient implements AscClient {
         'reading this in a signing error, one now does.',
   );
 
+  /// Delegates the way the real client does, so the listing reaches one
+  /// implementation whichever of the two it calls.
   @override
   Future<List<Map<String, dynamic>>> getAll(
     String path, {
     Map<String, String>? query,
-  }) async {
+  }) async => (await getAllWithIncluded(path, query: query)).data;
+
+  /// Sideloads nothing, which is the read this file is about: these builds
+  /// carry no `relationships`, so the audience fields come out null and the
+  /// document under test is the one a store with nothing attached produces.
+  @override
+  Future<
+    ({
+      List<Map<String, dynamic>> data,
+      Map<String, Map<String, dynamic>> included,
+    })
+  >
+  getAllWithIncluded(String path, {Map<String, String>? query}) async {
     if (path == '/v1/apps') {
-      return [
-        {
-          'type': 'apps',
-          'id': 'app-1',
-          'attributes': {
-            'name': 'Example',
-            'bundleId': query?['filter[bundleId]'],
+      return (
+        data: [
+          {
+            'type': 'apps',
+            'id': 'app-1',
+            'attributes': {
+              'name': 'Example',
+              'bundleId': query?['filter[bundleId]'],
+            },
           },
-        },
-      ];
+        ],
+        included: const <String, Map<String, dynamic>>{},
+      );
     }
     expect(path, '/v1/builds');
     final platform = query?['filter[preReleaseVersion.platform]'];
-    return builds
-        .where((b) => platform == null || b['_platform'] == platform)
-        .toList();
+    return (
+      data: builds
+          .where((b) => platform == null || b['_platform'] == platform)
+          .toList(),
+      included: const <String, Map<String, dynamic>>{},
+    );
   }
 
   @override
@@ -343,6 +363,10 @@ void main() {
           'expired',
           'usable',
           'needsNewUpload',
+          'betaGroups',
+          'externalBuildState',
+          'externalBuildStateRaw',
+          'inExternalTesting',
           'display',
         },
       );

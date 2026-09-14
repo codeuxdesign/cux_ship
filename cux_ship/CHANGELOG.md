@@ -85,6 +85,52 @@ script's own header names, since a stale index of open questions is believed.
 Found by a consumer following this flag's help text to a document saying the
 thing they had just used does not exist.
 
+### Added
+
+**`appstore builds` says which TestFlight audience holds a build.** Each build
+in `--json` now carries `betaGroups`, `externalBuildState`,
+`externalBuildStateRaw` and `inExternalTesting`, and the printed line carries
+an `internal: … external: …` half. `appstore.builds` is at **schema 2**.
+
+The listing could only say whether Apple had finished *processing* a build, so
+a consumer showing one TestFlight column per platform rendered a build that had
+merely processed identically to one external testers actually had. Those are
+different facts: Apple hands every processed build to every internal group
+automatically — an explicit assignment to one is refused, `422 Builds cannot be
+assigned to this internal group` — while an external group receives nothing
+until a beta release has submitted the build and Apple's beta review has passed
+it.
+
+**One request, not a follow-up per build.** `include=betaGroups,buildBetaDetail`
+goes on the existing `/v1/builds` read, so the audience costs no extra round
+trip; the alternative was a GET per build against a listing with no cap, which
+for the consumer that asked for this is six extra calls per run.
+`AscClient.getAllWithIncluded` already merged `included` across pages, so
+pagination needed nothing.
+
+**Absence is a value here, in three places.** `betaGroups` is null for a read
+that did not send the include and `[]` for a build Apple says is attached to
+nothing — collapsing them would report *no external testers have this* about a
+question nobody asked, which is the true answer often enough to go unnoticed on
+the day it is not. `inExternalTesting` is nullable for the reason `usable` is
+not: that flag gates a release and fails closed safely, this one gates a
+sentence and `false` is a claim rather than a refusal. A group whose
+`isInternalGroup` Apple withheld stays `BetaGroupKindEntry.unknown` and counts
+as neither kind, which is `beta_release.dart`'s stance — it refuses to guess
+because the two guesses are not symmetric.
+
+`BetaGroupEntry`, `BetaGroupKindEntry` and `ExternalBuildState` are exported
+from `documents.dart`. The change is additive — a reader ignoring unknown keys
+decodes a schema 2 document unchanged — and the counter is bumped anyway,
+because a consumer that *wants* the audience needs to tell *Apple said nothing*
+from *this document predates the question*, and a null field alone cannot say
+which.
+
+**Not measured against a live account.** The wire shapes are read from Apple's
+published schema rather than observed, which is the opposite of what
+`appStoreVersions`' `include=build` can say, and it is stated out loud rather
+than left to be inferred from the code sitting next to that one.
+
 ### Breaking
 
 **`package:cux_ship/read.dart` is removed**, with `AppStoreReads` and

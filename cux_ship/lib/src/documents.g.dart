@@ -6,6 +6,28 @@ part of 'documents.dart';
 // JsonSerializableGenerator
 // **************************************************************************
 
+BetaGroupEntry _$BetaGroupEntryFromJson(Map<String, dynamic> json) =>
+    BetaGroupEntry(
+      name: json['name'] as String,
+      kind: $enumDecode(
+        _$BetaGroupKindEntryEnumMap,
+        json['kind'],
+        unknownValue: BetaGroupKindEntry.unknown,
+      ),
+    );
+
+Map<String, dynamic> _$BetaGroupEntryToJson(BetaGroupEntry instance) =>
+    <String, dynamic>{
+      'name': instance.name,
+      'kind': _$BetaGroupKindEntryEnumMap[instance.kind]!,
+    };
+
+const _$BetaGroupKindEntryEnumMap = {
+  BetaGroupKindEntry.internal: 'internal',
+  BetaGroupKindEntry.external: 'external',
+  BetaGroupKindEntry.unknown: 'unknown',
+};
+
 AppStoreBuildEntry _$AppStoreBuildEntryFromJson(Map<String, dynamic> json) =>
     AppStoreBuildEntry(
       buildNumber: json['buildNumber'] as String,
@@ -20,6 +42,16 @@ AppStoreBuildEntry _$AppStoreBuildEntryFromJson(Map<String, dynamic> json) =>
       expired: json['expired'] as bool,
       usable: json['usable'] as bool,
       needsNewUpload: json['needsNewUpload'] as bool?,
+      betaGroups: (json['betaGroups'] as List<dynamic>?)
+          ?.map((e) => BetaGroupEntry.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      externalBuildState: $enumDecodeNullable(
+        _$ExternalBuildStateEnumMap,
+        json['externalBuildState'],
+        unknownValue: ExternalBuildState.unknown,
+      ),
+      externalBuildStateRaw: json['externalBuildStateRaw'] as String?,
+      inExternalTesting: json['inExternalTesting'] as bool?,
       display: (json['display'] as List<dynamic>)
           .map((e) => e as String)
           .toList(),
@@ -35,6 +67,11 @@ Map<String, dynamic> _$AppStoreBuildEntryToJson(AppStoreBuildEntry instance) =>
       'expired': instance.expired,
       'usable': instance.usable,
       'needsNewUpload': instance.needsNewUpload,
+      'betaGroups': instance.betaGroups?.map((e) => e.toJson()).toList(),
+      'externalBuildState':
+          _$ExternalBuildStateEnumMap[instance.externalBuildState],
+      'externalBuildStateRaw': instance.externalBuildStateRaw,
+      'inExternalTesting': instance.inExternalTesting,
       'display': instance.display,
     };
 
@@ -44,6 +81,22 @@ const _$ProcessingStateEnumMap = {
   ProcessingState.failed: 'failed',
   ProcessingState.invalid: 'invalid',
   ProcessingState.unknown: 'unknown',
+};
+
+const _$ExternalBuildStateEnumMap = {
+  ExternalBuildState.processing: 'processing',
+  ExternalBuildState.processingException: 'processingException',
+  ExternalBuildState.missingExportCompliance: 'missingExportCompliance',
+  ExternalBuildState.inExportComplianceReview: 'inExportComplianceReview',
+  ExternalBuildState.readyForBetaSubmission: 'readyForBetaSubmission',
+  ExternalBuildState.waitingForBetaReview: 'waitingForBetaReview',
+  ExternalBuildState.inBetaReview: 'inBetaReview',
+  ExternalBuildState.betaRejected: 'betaRejected',
+  ExternalBuildState.betaApproved: 'betaApproved',
+  ExternalBuildState.readyForBetaTesting: 'readyForBetaTesting',
+  ExternalBuildState.inBetaTesting: 'inBetaTesting',
+  ExternalBuildState.expired: 'expired',
+  ExternalBuildState.unknown: 'unknown',
 };
 
 AppStoreBuildsDocument _$AppStoreBuildsDocumentFromJson(
