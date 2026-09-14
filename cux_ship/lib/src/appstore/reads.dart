@@ -40,6 +40,27 @@ import 'app_store.dart';
 Map<String, dynamic> _attributes(Map<String, dynamic> resource) =>
     (resource['attributes'] as Map<String, dynamic>?) ?? const {};
 
+/// One TestFlight group a build is attached to.
+///
+/// **A name and a kind, because the name alone is not the answer.** Whether a
+/// group's testers already have the build depends entirely on which kind it
+/// is: Apple hands every processed build to every internal group within
+/// minutes, and an external group receives nothing until beta review passes.
+/// A group called "External Testers" is evidence of somebody's naming habit
+/// rather than of Apple's answer, which is [BetaGroupKind]'s whole argument.
+class AppStoreBetaGroup {
+  const AppStoreBetaGroup({required this.name, required this.kind});
+
+  /// Apple's `name` attribute, or `(unnamed)` when the resource carried none —
+  /// the same fallback the app lookup takes, so a group Apple did not name is
+  /// still counted rather than dropped on the way in.
+  final String name;
+
+  /// Internal, external, or that the response did not say. See [betaGroupKind],
+  /// which refuses to guess and says why the two defaults are not symmetric.
+  final BetaGroupKind kind;
+}
+
 /// One build App Store Connect holds.
 class AppStoreBuild {
   const AppStoreBuild({
@@ -48,6 +69,10 @@ class AppStoreBuild {
     required this.uploadedDate,
     required this.uploadedAt,
     required this.expired,
+    required this.betaGroups,
+    required this.unresolvedBetaGroups,
+    required this.externalBuildState,
+    required this.unresolvedBuildBetaDetail,
   });
 
   /// `CFBundleVersion` — Apple calls this attribute `version`, which reads
@@ -71,20 +96,328 @@ class AppStoreBuild {
 
   /// TestFlight builds expire after 90 days. An expired build is still listed
   /// and can no longer be given to a group.
+  ///
+  /// **The ninety days is measured rather than quoted, and nothing here
+  /// depends on it.** Every one of 72 macOS builds carries an
+  /// `expirationDate`, and `expirationDate - uploadedDate` is ninety days on
+  /// all of them without exception — a fact about Apple's policy on
+  /// 2026-09-14, not a rule this package applies. **This field is Apple's own
+  /// boolean**, so a changed retention period is reported correctly without
+  /// any arithmetic of ours, and nothing in this package computes with ninety.
+  /// That matters because **nothing would notice if it changed**: no test can
+  /// assert against Apple's policy, and a number stated in prose that no
+  /// reader can disprove is the shape `sort=-version` was wrong in for
+  /// thirty-nine days.
+  ///
+  /// **`expirationDate` is on the wire and is not parsed here.** Nothing has
+  /// asked *how long until this build expires*; the field is one line away if
+  /// something does, and reading Apple's date is the answer rather than adding
+  /// ninety to [uploadedDate]. `appstore beta-release` reports it verbatim
+  /// when it refuses an expired build, having previously told the operator the
+  /// ninety days as a fact.
+  ///
+  /// **"Still listed" is the half that is not measured.** No build on the
+  /// account this package reads has ever expired — it was thirty days old when
+  /// this was written, and the first expiry falls on 2026-11-14. Until then
+  /// that clause is Apple's documentation rather than an observation, which is
+  /// worth knowing before anything is built on it.
   final bool expired;
+
+  /// The TestFlight groups this build is attached to, or null when the
+  /// response did not say.
+  ///
+  /// **Null and empty are different answers and the difference is the whole
+  /// point of the field.** Empty is Apple saying *this build is attached to
+  /// nothing*; null is this package not having asked — a read that did not
+  /// send `include=betaGroups`. Collapsing them would report *no external
+  /// testers have this build* for a request that never enquired, which is the
+  /// one wrong answer a caller cannot detect: it is also the true answer most
+  /// of the time, so it reads as correct until the day it is not.
+  ///
+  /// That is [BetaGroupKind.unknown]'s rule one level up — a reader that
+  /// cannot read must not report a reading — applied to the list rather than
+  /// to a group's kind.
+  ///
+  /// **Incomplete rather than wrong when [unresolvedBetaGroups] is positive.**
+  /// Every group here is one Apple both named and sent; a group it named and
+  /// truncated out of `included` is counted there instead of being invented.
+  /// So this list is a lower bound in that case, and the emptiness of
+  /// [externalGroups] stops being evidence — which is the reading
+  /// [inExternalTesting] makes.
+  final List<AppStoreBetaGroup>? betaGroups;
+
+  /// How many attached groups this listing did not receive, by either of the
+  /// two ways that happens.
+  ///
+  /// **The difference between *attached to nothing* and *we could not see what
+  /// it is attached to*.** A `relationships.betaGroups.data` entry names a
+  /// `type` and an `id` whether or not the matching resource reaches
+  /// `included`, so a truncated response still says how many attachments there
+  /// were. Without this count [betaGroups] would read `[]` for a build Apple
+  /// named three groups for — a positive claim built out of a shortfall, and
+  /// the one shape this field exists to make impossible.
+  ///
+  /// **Two caps, one number.** Apple truncates `included` at 50 resources per
+  /// relationship per response, which is [AppStore.buildsWithIncluded]'s page
+  /// size; and the relationship's own `data` is separately paginated, measured
+  /// at a default `limit` of 10, with the true count stated beside it as
+  /// `meta.paging.total`. A build attached to twelve groups therefore sends ten
+  /// ids and a total of twelve, and a count that looked only at unresolved ids
+  /// would read that as whole. Both are counted here because both mean the same
+  /// thing to a caller — the list is short by this many — and neither is a fact
+  /// about the build.
+  ///
+  /// Zero for a read that did not ask, which is [betaGroups]'s null and not a
+  /// shortfall: nothing was named, so nothing went missing.
+  ///
+  /// **`betaGroups` does not reach Apple's cap on any account measured** —
+  /// `included` holds *distinct* resources and an account has a handful of
+  /// groups, where the build detail is one resource per build and reaches it
+  /// at build 51. This is here because the cap is a property of the response
+  /// rather than of the relationship, and a reader that trusts the list only
+  /// because today's accounts are small is trusting the wrong thing.
+  final int unresolvedBetaGroups;
+
+  /// `buildBetaDetail.externalBuildState`, or null when the response did not
+  /// carry it.
+  ///
+  /// **The only field that separates *external testers have this* from *this
+  /// is sitting in beta review*.** [processingState] answers a different
+  /// question — whether Apple finished ingesting the binary — and a build can
+  /// be `VALID` for a week without one external tester being able to install
+  /// it. Apple's values include `READY_FOR_BETA_SUBMISSION`,
+  /// `WAITING_FOR_BETA_REVIEW`, `IN_BETA_REVIEW`, `BETA_REJECTED`,
+  /// `BETA_APPROVED` and `IN_BETA_TESTING`.
+  ///
+  /// **Carried raw rather than as an enum, on purpose.** The list above is
+  /// Apple's published one and this package has been surprised by that list
+  /// before; a member per state would make an unrecognized value either a
+  /// parse failure or a silent fallback, and both are worse than handing the
+  /// caller the word Apple used. [inExternalTesting] is the one reading this
+  /// package commits to, and it deliberately reads this field *and*
+  /// [externalGroups] rather than this one alone.
+  ///
+  /// **Null means Apple had nothing to say, and no longer doubles as *the
+  /// response was truncated*.** Those were the same null until
+  /// [unresolvedBuildBetaDetail] existed, which made a read that had merely
+  /// run past the size of one response indistinguishable from an answer — the
+  /// exact conflation the rest of this class refuses one field at a time. Read
+  /// that flag before showing this one's absence as a fact about the build.
+  ///
+  /// **Observed 2026-09-14** on `design.codeux.howitwent`: 36 builds
+  /// `READY_FOR_BETA_SUBMISSION`, 14 `BETA_APPROVED`, and one build whose
+  /// `buildBetaDetail` resolved to nothing at all — which was read at the time
+  /// as this field's null arriving from a live account rather than from a
+  /// fixture. It was not: it was the 51st build of a 51-build listing falling
+  /// off the end of a capped `included`, and re-reading the same account a page
+  /// at a time resolves all 51. See [AppStore.buildsWithIncluded].
+  final String? externalBuildState;
+
+  /// Whether Apple named a `buildBetaDetail` for this build and did not send
+  /// it.
+  ///
+  /// **True is a statement about the response, not about the build**: the
+  /// relationship named an id, the resource did not arrive in `included`, and
+  /// [externalBuildState] is therefore null for a reason that has nothing to
+  /// do with what Apple knows. A caller rendering that null as *not known* is
+  /// right; one rendering it as *nobody outside has this* is wrong, and
+  /// [inExternalTesting] is null in this case for that reason.
+  ///
+  /// **It should never be true, and that is the point of keeping it.**
+  /// [AppStore.buildsWithIncluded] asks for a page of exactly the cap, so a
+  /// page cannot name more details than one response can carry. This is what
+  /// notices if that ever stops holding — Apple lowering the ceiling, or a
+  /// third include arriving that costs a second resource per build — instead
+  /// of the listing quietly going back to answering null for a fifth of its
+  /// builds, which is how the defect went unseen the first time.
+  final bool unresolvedBuildBetaDetail;
+
+  /// The attached groups Apple said were internal, or null when [betaGroups]
+  /// is null.
+  ///
+  /// A group whose kind Apple did not report appears in neither this nor
+  /// [externalGroups] — see [hasUnknownGroupKind], which is how a caller
+  /// notices rather than being quietly told there are none.
+  List<AppStoreBetaGroup>? get internalGroups => betaGroups
+      ?.where((group) => group.kind == BetaGroupKind.internal)
+      .toList();
+
+  /// The attached groups Apple said were external, or null when [betaGroups]
+  /// is null. See [internalGroups].
+  List<AppStoreBetaGroup>? get externalGroups => betaGroups
+      ?.where((group) => group.kind == BetaGroupKind.external)
+      .toList();
+
+  /// Whether any attached group came back without [BetaGroupKind].
+  ///
+  /// **False for a build whose groups were never read**, which is the one
+  /// reading this getter deliberately does not offer: null [betaGroups] is not
+  /// an unknown *kind*, it is an unread relationship, and a caller conflating
+  /// the two would report a refusal as a quirk of one group. Check [betaGroups]
+  /// for null first — the two questions have two answers because they have two
+  /// remedies.
+  bool get hasUnknownGroupKind =>
+      betaGroups?.any((group) => group.kind == BetaGroupKind.unknown) ?? false;
+
+  /// Apple's external states in which a build has cleared beta review and is
+  /// deliverable. Approval, not delivery — see [inExternalTesting].
+  static const _clearedBetaReview = <String>{
+    'BETA_APPROVED',
+    'READY_FOR_BETA_TESTING',
+    'IN_BETA_TESTING',
+  };
+
+  /// Every external state this version has a word for — Apple's published
+  /// vocabulary, the same list [ExternalBuildState] carries.
+  ///
+  /// **Not in [_clearedBetaReview]'s complement, and the difference is a
+  /// reading.** *This state has not cleared review* and *this version does not
+  /// know this state* are different facts, and subtracting one set from the
+  /// other collapses them: a value Apple adds tomorrow is simply not in the
+  /// cleared set, and [inExternalTesting] would answer a confident `false`
+  /// about a build it cannot read the state of. That is the same conflation
+  /// [BetaGroupKind.unknown] refuses one field over, and the same one
+  /// [ExternalBuildState.unknown] exists for in the published document.
+  static const _knownExternalStates = <String>{
+    'PROCESSING',
+    'PROCESSING_EXCEPTION',
+    'MISSING_EXPORT_COMPLIANCE',
+    'IN_EXPORT_COMPLIANCE_REVIEW',
+    'READY_FOR_BETA_SUBMISSION',
+    'WAITING_FOR_BETA_REVIEW',
+    'IN_BETA_REVIEW',
+    'BETA_REJECTED',
+    'BETA_APPROVED',
+    'READY_FOR_BETA_TESTING',
+    'IN_BETA_TESTING',
+    'EXPIRED',
+  };
+
+  /// Whether external testers can install this build now.
+  ///
+  /// **Two facts, because Apple splits the answer across two of them and
+  /// neither one is sufficient.** A build is installable by an external tester
+  /// only when it has cleared beta review *and* is attached to an external
+  /// group. The state alone says Apple would allow it; the attachment alone
+  /// says somebody asked for it while review may still be pending.
+  ///
+  /// **This read as `externalBuildState == 'IN_BETA_TESTING'` and that is a
+  /// constant `false` against a real account.** Measured 2026-09-14 over 51
+  /// iOS builds of `design.codeux.howitwent`: Apple's terminal external state
+  /// after review is `BETA_APPROVED` (14 builds, every one of them attached to
+  /// the external group `Beta Testers`), `READY_FOR_BETA_SUBMISSION` for the
+  /// 36 nobody submitted, and `IN_BETA_TESTING` never once. Builds 178–180
+  /// were demonstrably installable by external testers and this getter said
+  /// they were not — the same defect one layer inside the fix for it, and the
+  /// reason `false` here is held to the standard [AppStoreBuildEntry.usable]
+  /// is not: it is a claim rather than a refusal.
+  ///
+  /// `IN_BETA_TESTING` and `READY_FOR_BETA_TESTING` stay in
+  /// [_clearedBetaReview] because Apple publishes them and this account is one
+  /// account — an unobserved state is not an impossible one.
+  ///
+  /// **Null wherever an input is missing rather than false**, which is three
+  /// cases: Apple sent no [externalBuildState], the read did not ask for
+  /// [betaGroups], or the only attached group came back with a kind Apple
+  /// withheld — that last one is [hasUnknownGroupKind]'s stake, because
+  /// counting it out of [externalGroups] and then answering `false` would
+  /// report the refusal as a delivery answer.
+  ///
+  /// **A truncated group list is a fourth null and not a `false`.**
+  /// [_relatedMany] resolves a named group through `included` and cannot
+  /// describe one that did not arrive, so a build whose groups Apple named and
+  /// truncated has an [externalGroups] that is empty for a reason that is not
+  /// about the build. Answering `false` from that emptiness is the same
+  /// mistake as answering it from [hasUnknownGroupKind], one shortfall further
+  /// out, so [unresolvedBetaGroups] is read in the same breath.
+  ///
+  /// **Empty and non-empty are not symmetric here**, which is why the check is
+  /// where it is rather than at the top: one *resolved* external group is
+  /// enough to answer `true` however many others were truncated, because the
+  /// missing ones could only add attachments. It is only the empty list that a
+  /// shortfall makes uninformative.
+  ///
+  /// **This rule is implemented twice and the compiler connects neither copy.**
+  /// `cycling_storyteller`'s `status_test` fixture derives delivery rather than
+  /// stating it — so that a fixture cannot assert a delivery this encoder would
+  /// never emit — which means it mirrors the predicate above by hand. It was
+  /// still mirroring the superseded `externalBuildState == 'IN_BETA_TESTING'`
+  /// after this getter moved to two facts, and the drift was invisible because
+  /// the old rule only ever produced `false`, which stays plausible. So a
+  /// change here is a change there: the guard against fixtures inventing
+  /// impossible states is itself capable of generating them.
+  bool? get inExternalTesting {
+    // **Expiry settles it before any of the rest, and this did not check it.**
+    // An expired build that cleared review and is attached to an external
+    // group answered `true` — *external testers can install this now* about a
+    // build TestFlight has withdrawn. Both inputs were right and the reading
+    // over them was missing a third fact that [expired] already carries.
+    //
+    // `false` rather than null: expiry is knowable from an attribute Apple
+    // sends on every build, without the state or the groups, so this is a
+    // refusal shaped like [usable]'s rather than a claim. It is also the one
+    // arm that does not depend on the audience having been read at all.
+    if (expired) {
+      return false;
+    }
+    final state = externalBuildState;
+    if (state == null) {
+      return null;
+    }
+    if (!_knownExternalStates.contains(state)) {
+      // **A state this version has no word for is unanswered, not denied.**
+      // Falling through to the `false` below would treat every value Apple
+      // adds after this release as *external testers do not have this build* —
+      // a claim about a build whose state could not be read, which is the
+      // shape this getter is nullable to avoid. `externalBuildStateRaw` is
+      // then the whole of what is known, and the published document says so by
+      // mapping it to `ExternalBuildState.unknown`.
+      return null;
+    }
+    if (!_clearedBetaReview.contains(state)) {
+      // Not cleared is knowable from the state alone: no group assignment
+      // makes a build in review installable, so the groups need not be read.
+      return false;
+    }
+    final external = externalGroups;
+    if (external == null) {
+      return null;
+    }
+    if (external.isNotEmpty) {
+      return true;
+    }
+    if (hasUnknownGroupKind || unresolvedBetaGroups > 0) {
+      return null;
+    }
+    return false;
+  }
 
   /// [buildNumber] read as an integer, or null when it is not one.
   ///
   /// **The form to compare and to order by.** A build number is a string here
   /// because `CFBundleVersion` is one and Apple will accept `1.2.3`, but
   /// comparing two of them as strings is wrong the moment they differ in
-  /// width: `"9"` sorts above `"10"`. That mistake has now been made twice
-  /// against this data — once inside this package, where the build listing
-  /// trusted Apple's lexical `sort=-version` while `build-number` sorted
-  /// numerically beside it, and once in a consumer comparing
-  /// [AppStoreBuilds.newestBuildNumber] against an integer out of a git tag.
-  /// Both were invisible while every build number had the same number of
-  /// digits, and both would have surfaced at 1000.
+  /// width: `"9"` sorts above `"10"`. That was made against this data by a
+  /// consumer comparing [AppStoreBuilds.newestBuildNumber] against an integer
+  /// out of a git tag — invisible while every build number had the same number
+  /// of digits, and waiting at 1000.
+  ///
+  /// **A second instance used to be claimed here and it was not one.** This
+  /// said the listing had trusted Apple's *lexical* `sort=-version` while
+  /// `build-number` sorted numerically beside it, so the two commands could
+  /// name different builds. Apple's sort is **numeric** — measured 2026-09-14
+  /// over 72 integer build numbers, where lexical ordering would have put 98
+  /// and 94 above 100 and did not — so for integer build numbers the two
+  /// commands could not in fact disagree. See
+  /// `docs/design/testflight-audience.md` §4, and [AppStoreBuilds.builds] for
+  /// why the client-side sort stays anyway.
+  ///
+  /// **That claim was this comment's own trap sprung one field over**, which is
+  /// why it is worth the paragraph. A *marketing* version does sort wrongly as
+  /// text — `1.0.10` below `1.0.9`, which is why `release.dart` parses semver —
+  /// and Apple's `sort=-version` orders [buildNumber], which is not a marketing
+  /// version. The hazard belonging to one was written down about the other, and
+  /// it read as obvious because the hazard is real where it belongs.
   ///
   /// Null rather than a fallback, so a version string that is not a single
   /// integer is a case the caller has to answer rather than one silently
@@ -98,11 +431,60 @@ class AppStoreBuild {
   bool get usable => processingState == 'VALID' && !expired;
 
   /// The line `cux_ship appstore builds` prints for this build.
+  ///
+  /// The audience half is appended only when [betaGroups] was read, so a
+  /// listing from a request that did not ask prints exactly what it always
+  /// printed rather than a row of confident `none`s.
   String get line =>
       '  build $buildNumber  '
       '$processingState  '
       'uploaded $uploadedDate'
-      '${expired ? '  (expired)' : ''}';
+      '${expired ? '  (expired)' : ''}'
+      '$_audienceSuffix';
+
+  /// `  internal: Team  external: Public Beta (IN_BETA_TESTING)`, or empty.
+  ///
+  /// **Both halves are always named once either is**, including the empty
+  /// ones. A line that omits `external:` when no external group is attached
+  /// makes the commonest state — a build processed and given to nobody
+  /// outside — look like a line that forgot to mention it, which is the
+  /// reading this whole field exists to prevent.
+  String get _audienceSuffix {
+    final groups = betaGroups;
+    if (groups == null) {
+      // **A shortfall still gets said, because it is not an audience half.**
+      // The silence above is for a read that did not ask; a detail Apple named
+      // and did not send is a read that asked and was answered short, and the
+      // two would otherwise print the same nothing.
+      return unresolvedBuildBetaDetail ? '  state not sent' : '';
+    }
+    final unknown = groups
+        .where((group) => group.kind == BetaGroupKind.unknown)
+        .map((group) => group.name);
+    return <String>[
+      '  internal: ${_names(internalGroups!)}',
+      '  external: ${_names(externalGroups!)}'
+          // The state is printed beside the external groups whether or not
+          // there are any: `none (WAITING_FOR_BETA_REVIEW)` is a real and
+          // confusing moment — submitted for review, not yet attached — and
+          // hiding the state behind a group being present is how it would go
+          // unexplained.
+          '${externalBuildState == null ? '' : ' ($externalBuildState)'}',
+      if (unknown.isNotEmpty) ...['  kind not reported: ${unknown.join(', ')}'],
+      // **Said out loud, because the alternative is a shorter line that is
+      // wrong.** A truncated group list renders as `external: none` — the
+      // commonest and least remarkable half of this line — so without this
+      // the one case where the listing does not know reads as the one case
+      // everybody expects.
+      if (unresolvedBetaGroups > 0) ...[
+        '  groups not sent: $unresolvedBetaGroups',
+      ],
+      if (unresolvedBuildBetaDetail) ...['  state not sent'],
+    ].join();
+  }
+
+  static String _names(List<AppStoreBetaGroup> groups) =>
+      groups.isEmpty ? 'none' : groups.map((group) => group.name).join(', ');
 }
 
 /// Every build App Store Connect holds for one app on one platform.
@@ -116,11 +498,22 @@ class AppStoreBuilds {
 
   /// Newest first, by build number read as an integer.
   ///
-  /// **Not the order Apple returned.** Apple's `sort=-version` is lexical, so
-  /// build 9 comes back above build 10, and this package has always sorted
-  /// numerically before answering "the newest" — it just did it in
-  /// `build-number` and not in the listing beside it, which is how the two
-  /// could name different builds.
+  /// **Sorted here rather than trusted, and the stated reason for that was
+  /// wrong.** This said Apple's `sort=-version` is lexical, so build 9 comes
+  /// back above build 10. It is not: measured 2026-09-14 over 72 integer build
+  /// numbers, Apple returns strict numeric descending — under a lexical sort
+  /// `98`, `94` and `75` would have led the response and they sat at positions
+  /// 51 to 53, below `100` and `101`.
+  ///
+  /// **The sort stays, for a reason that is now the real one.** What was
+  /// disproved is *lexical for integer build numbers*, and `CFBundleVersion`
+  /// need not be an integer — Apple accepts `1.2.3`, and how it orders those
+  /// against each other is untested on any account. A package that dropped
+  /// this on the strength of one measurement would be trusting an ordering it
+  /// has only ever seen the easy case of. See
+  /// `docs/design/testflight-audience.md` §4, which also records that Apple
+  /// validates sort keys and answers `400` naming an unknown one, so this is a
+  /// key it genuinely applies rather than one it ignores.
   final List<AppStoreBuild> builds;
 
   /// The newest build Apple holds, whatever state it is in.
@@ -185,26 +578,199 @@ class AppStoreBuilds {
 int _byBuildNumberDescending(AppStoreBuild a, AppStoreBuild b) =>
     (b.buildNumberAsInt ?? -1).compareTo(a.buildNumberAsInt ?? -1);
 
-/// One `builds` resource, as sent.
-AppStoreBuild appStoreBuildFrom(Map<String, dynamic> resource) {
+/// The resources a to-many relationship names, resolved through [included].
+///
+/// Null when the relationship carries no `data` key — which is what a request
+/// that did not send the matching `include=` gets back, measured on
+/// `relationships.build` and recorded at `_buildNumberOf`. That is a different
+/// fact from an empty `data` list, which is Apple saying the relationship is
+/// genuinely empty, and this returns `[]` for it.
+///
+/// A named resource that is missing from [included] is **counted rather than
+/// faked or forgotten**. It cannot be described — a placeholder would be a
+/// group with no kind, which is the one thing [BetaGroupKind] refuses to
+/// invent — but dropping it silently makes a short response look like a
+/// complete one: three groups named and none sent would return `[]`, which
+/// reads as *attached to nothing*, a positive claim assembled entirely out of
+/// what is missing.
+///
+/// So the answer is two numbers rather than one list, and a caller that wants
+/// the old reading takes `.resolved` and has to walk past `.unresolved` to do
+/// it.
+///
+/// An entry naming no `type` or no `id` counts as unresolved too, and so does
+/// one that is not an object at all. Neither is a resource this can find, and
+/// neither is one Apple left out either — but of the two ways to be wrong
+/// about it, counting it is the one that makes a reader say *I do not know*
+/// instead of *there are none*. Discarding it is the way that produces a short
+/// list describing itself as whole.
+({List<Map<String, dynamic>> resolved, int unresolved})? _relatedMany(
+  Map<String, dynamic> resource,
+  String relationship,
+  Map<String, Map<String, dynamic>> included,
+) {
+  final relationships = resource['relationships'];
+  if (relationships is! Map<String, dynamic>) {
+    return null;
+  }
+  final named = relationships[relationship];
+  if (named is! Map<String, dynamic>) {
+    return null;
+  }
+  final data = named['data'];
+  if (data is! List) {
+    return null;
+  }
+  final resolved = <Map<String, dynamic>>[];
+  var unresolved = 0;
+  // **`data` directly rather than `whereType`, and the filter's absence is the
+  // point.** Filtering dropped a non-object entry before the loop could count
+  // it, while the paging comparison below measures against the *unfiltered*
+  // `data.length` — so a `data` of three carrying one piece of garbage
+  // resolved two, counted no shortfall, and matched its total exactly. A list
+  // short by one reporting itself whole, which is the sentence this field's
+  // own doc comment calls impossible.
+  //
+  // Removing the filter fixes it without a branch: a non-object falls through
+  // to the same `found == null` arm that already catches a map missing its
+  // `type` or `id`, and the loop's idea of how many entries there were now
+  // agrees with the comparison's.
+  for (final entry in data) {
+    // `identifier` rather than a second `named`: the outer one is the
+    // *relationship*, and `named['meta']` below reads its paging total, so one
+    // word for both the relationship and an entry inside its `data` costs a
+    // reader a double-take in the function where that distinction is the
+    // subject.
+    final identifier = entry is Map<String, dynamic> ? entry : null;
+    final type = identifier?['type'];
+    final id = identifier?['id'];
+    final found = type is String && id is String ? included['$type:$id'] : null;
+    if (found == null) {
+      unresolved += 1;
+    } else {
+      resolved.add(found);
+    }
+  }
+  // **A second cap, under the one that produced this helper.** The
+  // relationship's own `data` is paginated — measured at a default `limit` of
+  // 10 — and Apple states the true count beside it, so a build attached to
+  // twelve groups sends ten ids and `"meta":{"paging":{"total":12,"limit":10}}`.
+  // Counting only ids that failed to resolve would read that as complete:
+  // ten named, ten resolved, nothing missing, and a confident answer about a
+  // list two short.
+  //
+  // Both causes land in one number because they have one consequence — the
+  // list is short by this many — and the caller's question is whether it is
+  // whole. `limit[betaGroups]` may raise the inner cap and is untested; the
+  // count is what makes its absence visible rather than silent, which is §3's
+  // order of operations applied a second time.
+  final meta = named['meta'];
+  final paging = meta is Map<String, dynamic> ? meta['paging'] : null;
+  final total = paging is Map<String, dynamic> ? paging['total'] : null;
+  // **Only ever upwards.** A total below the number of ids beside it is
+  // incoherent and Apple has never sent one — but without the comparison the
+  // arithmetic is `unresolved += total - data.length`, which for such a
+  // response *subtracts*, and can take a real shortfall from `included` back
+  // down to zero. A malformed count would then erase the evidence of a
+  // truncation rather than add to it, which is the one direction this whole
+  // field exists to prevent.
+  if (total is int && total > data.length) {
+    unresolved += total - data.length;
+  }
+  return (resolved: resolved, unresolved: unresolved);
+}
+
+/// The single resource a to-one relationship names, resolved through
+/// [included], and whether the relationship named one at all.
+///
+/// **`named` is the whole reason this is a record.** A null [resolved] used to
+/// mean four things at once — no `relationships` block, no such relationship,
+/// a `data` key Apple did not send, and a resource named but truncated out of
+/// `included` — and only the last of those is a defect rather than an answer.
+/// `named: true, resolved: null` is that one, said out loud.
+///
+/// The three ways of not asking all give `named: false`, because a caller
+/// cannot act on the difference: there is no follow-up request that turns *you
+/// did not send the include* into data. See [_relatedMany], which draws the
+/// same line on the many side and counts rather than flags, a to-many
+/// relationship being able to be short without being empty.
+///
+/// A `data` object carrying no `type` or no `id` is `named: true` for
+/// [_relatedMany]'s reason: it is a relationship saying something this cannot
+/// read, which is nearer to *truncated* than to *absent*.
+({bool named, Map<String, dynamic>? resolved}) _relatedOne(
+  Map<String, dynamic> resource,
+  String relationship,
+  Map<String, Map<String, dynamic>> included,
+) {
+  const notNamed = (named: false, resolved: null);
+  final relationships = resource['relationships'];
+  if (relationships is! Map<String, dynamic>) {
+    return notNamed;
+  }
+  final named = relationships[relationship];
+  if (named is! Map<String, dynamic>) {
+    return notNamed;
+  }
+  final data = named['data'];
+  if (data is! Map<String, dynamic>) {
+    return notNamed;
+  }
+  final type = data['type'];
+  final id = data['id'];
+  return (
+    named: true,
+    resolved: type is String && id is String ? included['$type:$id'] : null,
+  );
+}
+
+/// One `builds` resource, as sent, with the groups and beta detail that came
+/// beside it.
+AppStoreBuild appStoreBuildFrom(
+  Map<String, dynamic> resource, [
+  Map<String, Map<String, dynamic>> included = const {},
+]) {
   final attributes = _attributes(resource);
   final uploadedDate = attributes['uploadedDate'] as String?;
+  final groups = _relatedMany(resource, 'betaGroups', included);
+  final detail = _relatedOne(resource, 'buildBetaDetail', included);
   return AppStoreBuild(
     buildNumber: '${attributes['version']}',
     processingState: attributes['processingState'] as String?,
     uploadedDate: uploadedDate,
     uploadedAt: uploadedDate == null ? null : DateTime.tryParse(uploadedDate),
     expired: attributes['expired'] == true,
+    betaGroups: groups == null
+        ? null
+        : <AppStoreBetaGroup>[
+            for (final group in groups.resolved) ...[
+              AppStoreBetaGroup(
+                name: '${_attributes(group)['name'] ?? '(unnamed)'}',
+                kind: betaGroupKind(group),
+              ),
+            ],
+          ],
+    // **Zero when the relationship was never read**, which is [betaGroups]'s
+    // null rather than a shortfall: a read that asked for nothing cannot have
+    // been answered short.
+    unresolvedBetaGroups: groups?.unresolved ?? 0,
+    externalBuildState: detail.resolved == null
+        ? null
+        : _attributes(detail.resolved!)['externalBuildState'] as String?,
+    unresolvedBuildBetaDetail: detail.named && detail.resolved == null,
   );
 }
 
-/// A `GET /v1/builds` payload, sorted newest first.
+/// A `GET /v1/builds` payload, sorted newest first, and the `included`
+/// resources beside it.
 AppStoreBuilds appStoreBuildsFrom(
   List<Map<String, dynamic>> payload,
-  AscPlatform platform,
-) {
-  final builds = payload.map(appStoreBuildFrom).toList()
-    ..sort(_byBuildNumberDescending);
+  AscPlatform platform, {
+  Map<String, Map<String, dynamic>> included = const {},
+}) {
+  final builds =
+      payload.map((resource) => appStoreBuildFrom(resource, included)).toList()
+        ..sort(_byBuildNumberDescending);
   return AppStoreBuilds(platform: platform, builds: builds);
 }
 
@@ -257,8 +823,8 @@ class AppStoreVersion {
   /// [buildNumber] read as an integer, or null when it is absent or not one.
   ///
   /// The form to compare, for the reason [AppStoreBuild.buildNumberAsInt] gives
-  /// at length: `"9"` sorts above `"10"`, and that mistake has been made twice
-  /// against this data already.
+  /// at length: `"9"` sorts above `"10"`, and a consumer has already made that
+  /// mistake against this data.
   int? get buildNumberAsInt {
     final number = buildNumber;
     return number == null ? null : int.tryParse(number);
@@ -397,7 +963,12 @@ AppStoreVersions appStoreVersionsFrom(
 /// arrow points one way, from what the API can be asked to do towards how a
 /// listing is rendered, and [AppStore] therefore does not import this file.
 Future<void> printBuilds(AppStore store, App app, {bool json = false}) async {
-  final listing = appStoreBuildsFrom(await store.builds(app), store.platform);
+  final payload = await store.buildsWithIncluded(app);
+  final listing = appStoreBuildsFrom(
+    payload.data,
+    store.platform,
+    included: payload.included,
+  );
   if (json) {
     writeJsonDocument(appStoreBuildsDocument(listing, bundleId: app.bundleId));
     return;

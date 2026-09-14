@@ -600,6 +600,40 @@ String? unusableBuildState({
       'it does.';
 }
 
+/// The refusal `beta-release` prints for a build TestFlight has expired, or
+/// null when it has not.
+///
+/// **A function beside [unusableBuildState] rather than a `fail` inline, for
+/// that one's stated reason**: the branch is unreachable in practice, so it is
+/// tested rather than trusted. A build must be ninety days old to reach it,
+/// and the account this package is read against is younger than that — the
+/// earliest anyone could see this message is 2026-11-14. It was an inline
+/// string until its wording changed and nothing could check the change.
+///
+/// **It reports Apple's date instead of asserting the retention period.** The
+/// wording was *TestFlight builds last 90 days*, a constant told to an
+/// operator that no test reads and no reader can disprove — the shape
+/// `sort=-version` was wrong in for thirty-nine days. `expirationDate` arrives
+/// on the same build in the same response, so a changed period corrects
+/// itself and this says only what Apple said.
+///
+/// [expirationDate] is nullable because a response that did not carry it is a
+/// response that did not carry it: the sentence degrades rather than inventing
+/// a date, which is [AppStoreBuild.unresolvedBuildBetaDetail]'s rule in one
+/// line of prose.
+String? expiredBuildRefusal({
+  required String buildNumber,
+  required bool expired,
+  required String? expirationDate,
+}) {
+  if (!expired) {
+    return null;
+  }
+  return 'build $buildNumber has expired'
+      '${expirationDate == null ? '' : ', Apple gives its expiry as $expirationDate'}'
+      ' — upload a new one.';
+}
+
 /// The commands that finish an `upload --skip-waiting`, one per line.
 ///
 /// **Split out because its two callers are unalike and both are easy to get
@@ -2555,11 +2589,13 @@ Future<void> runAsc(
       if (unusable != null) {
         fail(unusable);
       }
-      if (attributes?['expired'] == true) {
-        fail(
-          'build $buildNumber has expired — TestFlight builds last 90 days, '
-          'so upload a new one.',
-        );
+      final expiredRefusal = expiredBuildRefusal(
+        buildNumber: buildNumber,
+        expired: attributes?['expired'] == true,
+        expirationDate: attributes?['expirationDate'] as String?,
+      );
+      if (expiredRefusal != null) {
+        fail(expiredRefusal);
       }
 
       say('==> giving build $buildNumber to "$betaGroup"');

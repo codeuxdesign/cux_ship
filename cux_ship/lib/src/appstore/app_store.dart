@@ -1872,18 +1872,157 @@ class AppStore {
 
   /// Every build App Store Connect holds for [app] on this platform, newest
   /// first.
-  Future<List<Map<String, dynamic>>> builds(App app) async {
-    final builds = await client.getAll(
-      '/v1/builds',
-      query: {
-        'filter[app]': app.id,
-        ..._platformFilter,
-        'sort': '-version',
-        'limit': '200',
-      },
-    );
-    return builds;
-  }
+  ///
+  /// **The same read as [buildsWithIncluded] without the TestFlight audience,
+  /// and it no longer delegates to it.** It did, which was the arrangement
+  /// [AscClient.getAll] has over [AscClient.getAllWithIncluded] and cost only
+  /// a wider response body — until the audience read had to drop to 50 builds
+  /// a page to stay under Apple's `included` cap. That made the delegation
+  /// four times the round trips for a caller that discards every sideloaded
+  /// resource. **Both its callers discard them**: `appstore promote`, which
+  /// reads the listing to decide which build goes to review, and
+  /// [printBuildNumber], whose output a shell script captures to name a
+  /// release. Neither wants the audience and both are on a release path.
+  ///
+  /// So the two reads differ in the include *and* the page size, which is why
+  /// [_buildsQuery] holds both rather than each spelling its own literal.
+  Future<List<Map<String, dynamic>>> builds(App app) =>
+      client.getAll('/v1/builds', query: _buildsQuery(app, audience: false));
+
+  /// [builds], and the beta groups and beta detail that came beside them.
+  ///
+  /// **The `include` is what separates internal testers from external ones,
+  /// and it costs no request per build.** A build's attributes say whether
+  /// Apple finished processing it; they say nothing about who can install it.
+  /// Two
+  /// relationships carry that, and both are includable on this endpoint:
+  ///
+  ///  - `betaGroups` names the groups the build is attached to, and each
+  ///    included `betaGroups` resource carries `isInternalGroup` — which is
+  ///    what [betaGroupKind] reads.
+  ///  - `buildBetaDetail` carries `externalBuildState`, which is the only
+  ///    field that separates *external testers have this* from *this is
+  ///    sitting in beta review*. [reportExternalBuildState] already reads it,
+  ///    one build at a time, through `/v1/builds/<id>/buildBetaDetail`.
+  ///
+  /// **Includes on the listing, not a follow-up per build.** The alternative
+  /// is a GET per build — the consumer this was added for reads three builds
+  /// on each of two platforms, so six extra round trips to answer a question
+  /// Apple will put beside the listing. That is the same trade
+  /// [appStoreVersions] made for `include=build` and the same one
+  /// `printBuildNumber` did not have to make.
+  ///
+  /// **It is a page per 50 builds rather than literally one request**, which
+  /// [AscClient.getAllWithIncluded] already handled: it merges `included`
+  /// across pages instead of answering for the last one, and that is why the
+  /// cap being per response rather than per query makes a smaller page a
+  /// complete fix. The cost scales with the account and not with the question
+  /// — two requests for the 72-build account measured — where a GET per build
+  /// scales with the number of builds a caller wants to *ask about*, which is
+  /// three.
+  ///
+  /// **Measured against a live account on 2026-09-14.** Apple accepts both
+  /// includes on one request, resolves `betaGroups` for every build, and sends
+  /// `isInternalGroup` on every group — so the audience split itself is
+  /// confirmed on the wire. The one naming asymmetry worth writing down is
+  /// that `include=buildBetaDetail` is singular and sideloads resources of
+  /// type `buildBetaDetails`; the relationship name and the resource type
+  /// differ on this one and not on `betaGroups`, and the fake in
+  /// `build_listing_test.dart` carries that mapping for the same reason.
+  ///
+  /// **`included` is capped at 50 resources per relationship, and this read
+  /// asks for exactly 50 builds a page for that reason** — see [_buildsQuery],
+  /// which holds the page size, the measurement behind it, and why the two
+  /// numbers being equal is deliberate.
+  ///
+  /// **It did not, and the bug that produced was invisible from inside.** At
+  /// `limit: '200'` the same request resolved exactly 50 `buildBetaDetails` on
+  /// a 72-build account and left 22 builds answering null. **The two
+  /// relationships in one `include=` behave completely differently at scale,
+  /// which is why spot-checking either one looked correct**: `included` holds
+  /// *distinct* resources, and an account has a handful of beta groups against
+  /// one build detail per build — so `betaGroups` resolved for all 123 builds
+  /// measured while `buildBetaDetail` passed the cap at build 51.
+  ///
+  /// **Nor was the truncation at the end of the listing.** On macOS the
+  /// absences fell at positions 1, 5, 6, 13 … 71 of a newest-first read, four
+  /// of them attached to the external group and one of them the second-newest
+  /// build — so the answer a reader most wants was as likely to be missing as
+  /// any other. That is an observation about a response Apple no longer sends
+  /// this code, kept because it is the reason the remedy is a page size rather
+  /// than *read the first N and stop*.
+  ///
+  /// **What made it a defect rather than a limit** was that
+  /// [AppStoreBuild.externalBuildState] documents its null as *not known*, so
+  /// a truncated detail and a build Apple holds no detail for arrived as the
+  /// same null — absence and failure wearing each other's clothes, which is
+  /// the conflation this file refuses one field at a time everywhere else. The
+  /// information to separate them was on the wire and thrown away: a truncated
+  /// relationship still names an id in its `data`, and only the resource is
+  /// missing from `included`. [AppStoreBuild.unresolvedBuildBetaDetail] is
+  /// that information kept, and it is the guard that would catch this
+  /// happening again rather than a leftover of the fix.
+  Future<
+    ({
+      List<Map<String, dynamic>> data,
+      Map<String, Map<String, dynamic>> included,
+    })
+  >
+  buildsWithIncluded(App app) => client.getAllWithIncluded(
+    '/v1/builds',
+    query: _buildsQuery(app, audience: true),
+  );
+
+  /// Apple's ceiling on `included`, and therefore the page size of any read
+  /// that sideloads one resource per build.
+  ///
+  /// **A named constant because the two numbers have to be equal and the
+  /// equality is invisible at the call site.** `limit: '50'` beside
+  /// `include: …` reads as a page size somebody picked, and a later reader
+  /// with a profiler open raises it to Apple's maximum of 200 — which is what
+  /// this code did, and it silently truncated a fifth of a 72-build listing.
+  static const _includedCap = 50;
+
+  /// The `/v1/builds` query, with or without the TestFlight audience.
+  ///
+  /// **The include and the page size travel together, which is the whole
+  /// reason this is one function rather than two literals.** `included` is
+  /// capped at [_includedCap] resources per relationship *per response*, and
+  /// `buildBetaDetail` is one resource per build — so a read that sideloads it
+  /// must not ask for more builds in one page than the cap will carry back.
+  /// A read that sideloads nothing has no such ceiling and takes Apple's
+  /// maximum, which is four times fewer round trips for the same listing.
+  ///
+  /// **Measured against a live account on 2026-09-14**
+  /// (`design.codeux.howitwent`), the same request at the two page sizes:
+  ///
+  /// | platform | builds | resolved at 200 | resolved at 50 |
+  /// |---|---|---|---|
+  /// | ios | 51 | 50 | **51** |
+  /// | macos | 72 | 50 | **72** |
+  ///
+  /// So the cap is **per response and not per query**, and
+  /// [AscClient.getAllWithIncluded] merging `included` across pages is what
+  /// makes a smaller page the whole fix. It also pins the cap as inclusive: 72
+  /// builds is a first page of exactly 50 and a second of 22, and all 50 of
+  /// that first page's details came back, so 50 is a size that fits rather
+  /// than one that just fails to.
+  ///
+  /// **The page size now sits exactly on the ceiling, which is correct and
+  /// thin.** Nothing in the request tells Apple the two are meant to be equal,
+  /// so a lowered ceiling — or a third include costing a second resource per
+  /// build — starts truncating again with nothing to notice it. What notices
+  /// is [AppStoreBuild.unresolvedBuildBetaDetail]: the parser now counts what
+  /// a response named and did not send, so the next time this goes wrong the
+  /// listing says *state not sent* instead of answering null for a fifth of
+  /// its builds. Adding an include here means lowering this number.
+  Map<String, String> _buildsQuery(App app, {required bool audience}) => {
+    'filter[app]': app.id,
+    ..._platformFilter,
+    'sort': '-version',
+    'limit': audience ? '$_includedCap' : '200',
+    if (audience) ...{'include': 'betaGroups,buildBetaDetail'},
+  };
 
   /// Restricts a build query to the platform this instance was built for.
   ///
@@ -4055,8 +4194,11 @@ class AppStore {
         'no processed, unexpired build to promote',
       ], request: 'GET /v1/builds');
     }
-    // Sorted numerically here rather than trusting the API's `-version` sort,
-    // which is lexical: "9" sorts above "10".
+    // Sorted numerically here rather than trusting the API's `-version` sort.
+    // That used to say "which is lexical: 9 sorts above 10", and Apple's sort
+    // is in fact numeric — measured 2026-09-14 over 72 integer build numbers.
+    // It stays because `CFBundleVersion` need not be an integer and nobody has
+    // tested how Apple orders `1.2.3`; see `AppStoreBuilds.builds`.
     usable.sort((a, b) {
       final left = int.tryParse('${_attributes(a)['version']}') ?? -1;
       final right = int.tryParse('${_attributes(b)['version']}') ?? -1;

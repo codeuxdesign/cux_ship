@@ -35,7 +35,17 @@ import 'play/reads.dart';
 /// `kind`.** A single number shared by three shapes would bump this one when
 /// `play.tracks` changed, and a reader that refuses an unrecognized `schema`
 /// would then refuse a document that had not changed.
-const appStoreBuildsSchema = 1;
+///
+/// **2 adds the TestFlight audience**: `betaGroups`, `externalBuildState`,
+/// `externalBuildStateRaw`, `inExternalTesting`, `unresolvedBetaGroups` and
+/// `unresolvedBuildBetaDetail` on each build. The change
+/// is additive — a reader that ignores unknown keys decodes a schema 2
+/// document exactly as it decoded a schema 1 one — and it is bumped anyway,
+/// because the number names the shape rather than the compatibility. The
+/// consumer that wants the audience needs to tell *Apple said nothing* from
+/// *this document predates the question*, and a null field alone cannot say
+/// which. `schema` is where that answer lives.
+const appStoreBuildsSchema = 2;
 
 /// The schema `appstore versions` declares. See [appStoreBuildsSchema].
 const appStoreVersionsSchema = 1;
@@ -275,6 +285,36 @@ AppStoreBuildEntry _build(AppStoreBuild build) {
       state,
       expired: build.expired,
     ),
+    // **`?.map(...).toList()` and not `[for (...)]`, because the null has to
+    // survive.** A collection-for over a null list is a compile error and the
+    // obvious repair — `?? const []` — is the bug this field exists to
+    // prevent: it would encode *the read did not ask* as *attached to no
+    // group*, which is the same sentence one layer down that
+    // `AppStoreBuild.betaGroups` refuses to say.
+    betaGroups: build.betaGroups
+        ?.map(
+          (group) => BetaGroupEntry(
+            name: group.name,
+            kind: switch (group.kind) {
+              BetaGroupKind.internal => BetaGroupKindEntry.internal,
+              BetaGroupKind.external => BetaGroupKindEntry.external,
+              BetaGroupKind.unknown => BetaGroupKindEntry.unknown,
+            },
+          ),
+        )
+        .toList(),
+    // **Carried rather than derived here for `betaGroups`' own reason**: the
+    // shortfall is a fact about the response the model parsed, and this file
+    // cannot see the response. A count re-derived from `betaGroups.length`
+    // could only ever say zero.
+    unresolvedBetaGroups: build.unresolvedBetaGroups,
+    externalBuildState: ExternalBuildState.read(build.externalBuildState),
+    externalBuildStateRaw: build.externalBuildState,
+    unresolvedBuildBetaDetail: build.unresolvedBuildBetaDetail,
+    // **Derived on the model, not re-derived here**, so the printed line and
+    // the document cannot come to different conclusions about who has the
+    // build — this file's stated job being the mapping and nothing else.
+    inExternalTesting: build.inExternalTesting,
     display: <String>[build.line],
   );
 }

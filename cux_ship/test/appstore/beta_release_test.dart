@@ -14,6 +14,7 @@ import 'dart:io';
 import 'package:cux_ship/src/appstore/app_store.dart';
 import 'package:cux_ship/src/appstore/asc_client.dart';
 import 'package:cux_ship/src/appstore/beta_release.dart';
+import 'package:cux_ship/src/appstore/cli.dart' show expiredBuildRefusal;
 import 'package:cux_ship/src/release.dart' show ReleaseException;
 import 'package:test/test.dart';
 
@@ -733,6 +734,58 @@ void main() {
       expect(onStdout, contains('is an external group'));
       expect(onStdout, contains('==> beta app description'));
       expect(onStdout, contains('==> beta review'));
+    });
+  });
+
+  group('refusing an expired build', () {
+    // **Unreachable in practice, and tested for that reason** — the same
+    // argument `unusableBuildState`'s `PROCESSING` branch is kept on. A build
+    // must be ninety days old to reach this, and the account this package is
+    // read against is younger than that, so the earliest anyone could meet
+    // this message is 2026-11-14. It was an inline `fail` until its wording
+    // changed and nothing could check the change.
+
+    test('reports Apple\'s date rather than the retention period', () {
+      // The wording was *TestFlight builds last 90 days* — a constant told to
+      // an operator that no test read and no reader could disprove, which is
+      // the shape `sort=-version` was wrong in for thirty-nine days. Apple
+      // sends the date on the same build in the same response.
+      final refusal = expiredBuildRefusal(
+        buildNumber: '122',
+        expired: true,
+        expirationDate: '2026-11-26T00:59:46-08:00',
+      );
+
+      expect(refusal, contains('build 122 has expired'));
+      expect(refusal, contains('2026-11-26T00:59:46-08:00'));
+      expect(refusal, contains('upload a new one'));
+      expect(refusal, isNot(contains('90 days')));
+    });
+
+    test('and says only that it expired when Apple sent no date', () {
+      // The sentence degrades rather than inventing a date, which is the
+      // whole branch's rule in one line of prose: do not assert what was not
+      // received.
+      final refusal = expiredBuildRefusal(
+        buildNumber: '122',
+        expired: true,
+        expirationDate: null,
+      );
+
+      expect(refusal, 'build 122 has expired — upload a new one.');
+    });
+
+    test('and is silent for a build that has not expired', () {
+      // The null arm, so the two above cannot be satisfied by a function that
+      // refuses every build it is shown.
+      expect(
+        expiredBuildRefusal(
+          buildNumber: '180',
+          expired: false,
+          expirationDate: '2026-12-12T23:17:41-08:00',
+        ),
+        isNull,
+      );
     });
   });
 }

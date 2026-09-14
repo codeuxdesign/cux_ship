@@ -37,6 +37,8 @@ Map<String, dynamic> _build(
   bool expired = false,
   String? uploaded = '2026-09-04T09:12:33-07:00',
   String platform = 'IOS',
+  List<String>? groupIds,
+  String? detailId,
 }) => {
   'type': 'builds',
   'id': 'build-$platform-$version',
@@ -47,6 +49,37 @@ Map<String, dynamic> _build(
     'expired': expired,
     'uploadedDate': uploaded,
   },
+  // Omitted entirely when null, which is what a read that did not send
+  // `include=betaGroups` gets back — and the state the encoder has to carry
+  // through as null rather than flatten into an empty list.
+  if (groupIds != null || detailId != null)
+    'relationships': <String, dynamic>{
+      if (groupIds != null)
+        'betaGroups': {
+          'data': [
+            for (final id in groupIds) {'type': 'betaGroups', 'id': id},
+          ],
+        },
+      if (detailId != null)
+        'buildBetaDetail': {
+          'data': {'type': 'buildBetaDetails', 'id': detailId},
+        },
+    },
+};
+
+/// A `betaGroups` resource as Apple sends one.
+Map<String, dynamic> _group(String id, {String? name, bool? internal}) => {
+  'type': 'betaGroups',
+  'id': id,
+  'attributes': {'name': name, 'isInternalGroup': internal},
+};
+
+/// A `buildBetaDetails` resource as Apple sends one — note the plural type
+/// against the singular `include=buildBetaDetail`.
+Map<String, dynamic> _detail(String id, {String? externalState}) => {
+  'type': 'buildBetaDetails',
+  'id': id,
+  'attributes': {'externalBuildState': externalState},
 };
 
 Map<String, dynamic> _version(
@@ -90,28 +123,48 @@ class _FakeClient implements AscClient {
         'reading this in a signing error, one now does.',
   );
 
+  /// Delegates the way the real client does, so the listing reaches one
+  /// implementation whichever of the two it calls.
   @override
   Future<List<Map<String, dynamic>>> getAll(
     String path, {
     Map<String, String>? query,
-  }) async {
+  }) async => (await getAllWithIncluded(path, query: query)).data;
+
+  /// Sideloads nothing, which is the read this file is about: these builds
+  /// carry no `relationships`, so the audience fields come out null and the
+  /// document under test is the one a store with nothing attached produces.
+  @override
+  Future<
+    ({
+      List<Map<String, dynamic>> data,
+      Map<String, Map<String, dynamic>> included,
+    })
+  >
+  getAllWithIncluded(String path, {Map<String, String>? query}) async {
     if (path == '/v1/apps') {
-      return [
-        {
-          'type': 'apps',
-          'id': 'app-1',
-          'attributes': {
-            'name': 'Example',
-            'bundleId': query?['filter[bundleId]'],
+      return (
+        data: [
+          {
+            'type': 'apps',
+            'id': 'app-1',
+            'attributes': {
+              'name': 'Example',
+              'bundleId': query?['filter[bundleId]'],
+            },
           },
-        },
-      ];
+        ],
+        included: const <String, Map<String, dynamic>>{},
+      );
     }
     expect(path, '/v1/builds');
     final platform = query?['filter[preReleaseVersion.platform]'];
-    return builds
-        .where((b) => platform == null || b['_platform'] == platform)
-        .toList();
+    return (
+      data: builds
+          .where((b) => platform == null || b['_platform'] == platform)
+          .toList(),
+      included: const <String, Map<String, dynamic>>{},
+    );
   }
 
   @override
@@ -249,8 +302,22 @@ void main() {
   Map<String, dynamic> playTracksJson(PlayTracks tracks) =>
       playTracksDocument(tracks).toJson();
 
-  AppStoreBuilds buildsOf(List<Map<String, dynamic>> payload) =>
-      appStoreBuildsFrom(payload, AscPlatform.ios);
+  /// [included] keyed the way `AscClient.getAllWithIncluded` keys it, so the
+  /// encoder can be handed a build whose groups and detail actually resolved.
+  /// That is the only way the mapping body runs at all: with nothing
+  /// sideloaded every audience field is null, and the group mapping is
+  /// reachable from no test in the package.
+  AppStoreBuilds buildsOf(
+    List<Map<String, dynamic>> payload, {
+    List<Map<String, dynamic>> included = const [],
+  }) => appStoreBuildsFrom(
+    payload,
+    AscPlatform.ios,
+    included: <String, Map<String, dynamic>>{
+      for (final resource in included)
+        '${resource['type']}:${resource['id']}': resource,
+    },
+  );
 
   AppStoreVersions versionsOf(List<Map<String, dynamic>> payload) =>
       appStoreVersionsFrom(payload, AscPlatform.ios);
@@ -290,6 +357,261 @@ void main() {
 
       expect(document['schema'], appStoreBuildsSchema);
       expect(document['kind'], 'appstore.builds');
+    });
+
+    test('and the counters are pinned as literals, not to themselves', () {
+      // **`document['schema'] == appStoreBuildsSchema` compares the constant
+      // to itself** and passes for every value it could hold — so reverting
+      // the builds counter from 2 to 1 passed every test in this package.
+      // Found by making that change. These numbers are a published wire
+      // contract that a consumer refuses a mismatch on, which makes a silent
+      // move the expensive kind: the consumer stops reading rather than
+      // misreading, but it stops reading for a reason nothing here reports.
+      //
+      // A literal is the only assertion that can go red, and writing the
+      // number twice is the point rather than a smell.
+      expect(appStoreBuildsSchema, 2, reason: 'the TestFlight audience');
+      expect(appStoreVersionsSchema, 1);
+      expect(appStorePreviewsSchema, 1);
+      expect(playTracksSchema, 1);
+      expect(verifySchema, 1);
+      expect(appStoreListingDiffSchema, 1);
+    });
+
+    test('and an unread relationship survives the encoder as null', () {
+      // **The mapping this file's own header says is the whole of its job, on
+      // the one field where a null has to stay a null.** `?? const []` in the
+      // encoder is the obvious repair for a nullable list and is the bug the
+      // comment beside it warns about: it turns *the read did not ask* into
+      // *attached to no group*, which renders as "no external testers have
+      // this" about a question nobody put. Making exactly that change passed
+      // every other test in this file and in documents_test — those hand-build
+      // entries and never run the encoder — so this is the only thing standing
+      // between the two readings.
+      final entry =
+          (appStoreBuildsJson(
+                        buildsOf([_build('169')]),
+                        bundleId: 'x',
+                      )['builds']
+                      as List)
+                  .single
+              as Map;
+
+      expect(entry['betaGroups'], isNull);
+      expect(entry['inExternalTesting'], isNull);
+      expect(entry['externalBuildState'], isNull);
+    });
+
+    test('and a build Apple attached to nothing encodes as an empty list', () {
+      // The other half, so the one above cannot be satisfied by an encoder
+      // that answers null for everything.
+      final entry =
+          (appStoreBuildsJson(
+                        buildsOf([_build('169', groupIds: const [])]),
+                        bundleId: 'x',
+                      )['builds']
+                      as List)
+                  .single
+              as Map;
+
+      expect(entry['betaGroups'], isEmpty);
+      expect(entry['betaGroups'], isNotNull);
+      // And *attached to nothing* is said with a zero shortfall beside it,
+      // which is what makes it a claim rather than a silence.
+      expect(entry['unresolvedBetaGroups'], 0);
+    });
+
+    test('and a truncated response reaches the document as a shortfall', () {
+      // **The document is where the consumer reads this, so it is where the
+      // distinction has to survive.** Apple named three groups and a detail
+      // and sent one group; without these two keys the entry is
+      // indistinguishable from a build genuinely attached to one group with
+      // no detail, and the consumer renders a shortfall as a fact.
+      //
+      // The encoder carries them rather than deriving them — a count taken
+      // from `betaGroups.length` here could only ever be zero, because by
+      // this point the resources that did not arrive are gone.
+      final entry =
+          (appStoreBuildsJson(
+                        buildsOf(
+                          [
+                            _build(
+                              '169',
+                              groupIds: const ['g-int', 'g-gone', 'g-also'],
+                              detailId: 'd-gone',
+                            ),
+                          ],
+                          included: [
+                            _group('g-int', name: 'Team', internal: true),
+                          ],
+                        ),
+                        bundleId: 'x',
+                      )['builds']
+                      as List)
+                  .single
+              as Map;
+
+      expect(entry['unresolvedBetaGroups'], 2);
+      expect(entry['unresolvedBuildBetaDetail'], isTrue);
+      // The fields those shortfalls explain, so a reader can see that the
+      // nulls beside them are about the response.
+      expect(entry['externalBuildStateRaw'], isNull);
+      expect(entry['inExternalTesting'], isNull);
+    });
+
+    test('and a complete response says so rather than saying nothing', () {
+      // The other half: two booleans that are only ever true are two
+      // booleans nobody can trust, so the false case is asserted too.
+      final entry =
+          (appStoreBuildsJson(
+                        buildsOf(
+                          [
+                            _build(
+                              '169',
+                              groupIds: const ['g-ext'],
+                              detailId: 'd-1',
+                            ),
+                          ],
+                          included: [
+                            _group(
+                              'g-ext',
+                              name: 'Beta Testers',
+                              internal: false,
+                            ),
+                            _detail('d-1', externalState: 'BETA_APPROVED'),
+                          ],
+                        ),
+                        bundleId: 'x',
+                      )['builds']
+                      as List)
+                  .single
+              as Map;
+
+      expect(entry['unresolvedBetaGroups'], 0);
+      expect(entry['unresolvedBuildBetaDetail'], isFalse);
+      expect(entry['inExternalTesting'], isTrue);
+    });
+
+    test('and a resolved group carries its name and its kind through', () {
+      // **The encoder's group mapping ran in no test in this package.** Every
+      // build here either omitted the relationship or named groups nothing
+      // sideloaded, so the list was always null or empty and the `switch` that
+      // translates `BetaGroupKind` to `BetaGroupKindEntry` was never executed.
+      // Collapsing all three arms to `internal` passed all 1046 tests.
+      //
+      // Both kinds, on one build, because a mapping that answers `internal`
+      // for everything satisfies either one alone. The external group is named
+      // as though it were internal for the reason the model states: the name
+      // is somebody's typing and `isInternalGroup` is the answer.
+      final entry =
+          (appStoreBuildsJson(
+                        buildsOf(
+                          [
+                            _build('169', groupIds: const ['g-int', 'g-ext']),
+                          ],
+                          included: [
+                            _group('g-int', name: 'Team', internal: true),
+                            _group(
+                              'g-ext',
+                              name: 'Internal-ish',
+                              internal: false,
+                            ),
+                          ],
+                        ),
+                        bundleId: 'x',
+                      )['builds']
+                      as List)
+                  .single
+              as Map;
+
+      expect(entry['betaGroups'], [
+        {'name': 'Team', 'kind': 'internal'},
+        {'name': 'Internal-ish', 'kind': 'external'},
+      ]);
+    });
+
+    test('and a group whose kind Apple withheld encodes as unknown', () {
+      // The third arm of the same `switch`, which `internal` or `external`
+      // would both have swallowed.
+      final entry =
+          (appStoreBuildsJson(
+                        buildsOf(
+                          [
+                            _build('169', groupIds: const ['g-?']),
+                          ],
+                          included: [_group('g-?', name: 'Mystery')],
+                        ),
+                        bundleId: 'x',
+                      )['builds']
+                      as List)
+                  .single
+              as Map;
+
+      expect(entry['betaGroups'], [
+        {'name': 'Mystery', 'kind': 'unknown'},
+      ]);
+    });
+
+    test('and the external state arrives as both our word and Apple\'s', () {
+      // The same gap one field over: with nothing sideloaded the state was
+      // always null, so hardcoding *both* of these to null passed every test.
+      // The pair is the point — `externalBuildState` is this package's
+      // vocabulary and `externalBuildStateRaw` is what Apple said, and a
+      // mapping that dropped either one was invisible.
+      //
+      // `BETA_APPROVED` rather than `IN_BETA_TESTING` because that is what a
+      // live account actually returns; see `AppStoreBuild.inExternalTesting`.
+      final entry =
+          (appStoreBuildsJson(
+                        buildsOf(
+                          [
+                            _build(
+                              '169',
+                              groupIds: const ['g-ext'],
+                              detailId: 'd-1',
+                            ),
+                          ],
+                          included: [
+                            _group(
+                              'g-ext',
+                              name: 'Beta Testers',
+                              internal: false,
+                            ),
+                            _detail('d-1', externalState: 'BETA_APPROVED'),
+                          ],
+                        ),
+                        bundleId: 'x',
+                      )['builds']
+                      as List)
+                  .single
+              as Map;
+
+      expect(entry['externalBuildState'], 'betaApproved');
+      expect(entry['externalBuildStateRaw'], 'BETA_APPROVED');
+      // And the derived reading is carried from the model rather than
+      // recomputed here, so the document and the printed line cannot disagree.
+      expect(entry['inExternalTesting'], isTrue);
+    });
+
+    test('and an unrecognized external state keeps Apple\'s word beside it', () {
+      // `ExternalBuildState.unknown` is a member of our vocabulary rather than
+      // a hole in it, and the raw field is what makes it recoverable.
+      final entry =
+          (appStoreBuildsJson(
+                        buildsOf(
+                          [_build('169', detailId: 'd-1')],
+                          included: [
+                            _detail('d-1', externalState: 'SOMETHING_NEW'),
+                          ],
+                        ),
+                        bundleId: 'x',
+                      )['builds']
+                      as List)
+                  .single
+              as Map;
+
+      expect(entry['externalBuildState'], 'unknown');
+      expect(entry['externalBuildStateRaw'], 'SOMETHING_NEW');
     });
 
     test('and the three kinds version independently', () {
@@ -343,6 +665,12 @@ void main() {
           'expired',
           'usable',
           'needsNewUpload',
+          'betaGroups',
+          'unresolvedBetaGroups',
+          'externalBuildState',
+          'externalBuildStateRaw',
+          'inExternalTesting',
+          'unresolvedBuildBetaDetail',
           'display',
         },
       );

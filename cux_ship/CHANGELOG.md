@@ -85,6 +85,135 @@ script's own header names, since a stale index of open questions is believed.
 Found by a consumer following this flag's help text to a document saying the
 thing they had just used does not exist.
 
+### Added
+
+**`appstore builds` says which TestFlight audience holds a build.** Each build
+in `--json` now carries `betaGroups`, `externalBuildState`,
+`externalBuildStateRaw` and `inExternalTesting`, and the printed line carries
+an `internal: … external: …` half. `appstore.builds` is at **schema 2**.
+
+The listing could only say whether Apple had finished *processing* a build, so
+a consumer showing one TestFlight column per platform rendered a build that had
+merely processed identically to one external testers actually had. Those are
+different facts: Apple hands every processed build to every internal group
+automatically — an explicit assignment to one is refused, `422 Builds cannot be
+assigned to this internal group` — while an external group receives nothing
+until a beta release has submitted the build and Apple's beta review has passed
+it.
+
+**Includes on the listing, not a follow-up per build.**
+`include=betaGroups,buildBetaDetail` goes on the existing `/v1/builds` read, so
+the audience costs no request per build; the alternative was a GET per build,
+which for the consumer that asked for this is six extra calls per run.
+`AscClient.getAllWithIncluded` already merged `included` across pages, which
+turned out to matter for a reason nobody had in mind when it was written.
+
+**The listing reads 50 builds a page, because `included` is capped at 50
+resources per relationship *per response*.** `betaGroups` never approaches
+that — `included` holds *distinct* resources and an account has a handful of
+groups — but `buildBetaDetail` is one resource per build and passes it at build
+51. **The two relationships in one `include=` behave completely differently at
+scale, which is why spot-checking either one looked correct.** At the old page
+size of 200, measured against a live account on 2026-09-14:
+
+| platform | builds | resolved at `limit: 200` | resolved at `limit: 50` |
+|---|---|---|---|
+| ios | 51 | 50 | **51** |
+| macos | 72 | 50 | **72** |
+
+22 of 72 macOS builds came back with no external state, the absences scattered
+through the listing rather than at its tail — four of them attached to the
+external group, one of them the second-newest build. Since the cap is per
+response and pages are merged, asking for 50 at a time resolves everything for
+one extra round trip per platform.
+
+**Each build now says what its response failed to carry**, which is the part
+worth reading twice. `unresolvedBetaGroups` and `unresolvedBuildBetaDetail`
+report resources this listing did not receive — a truncated relationship still
+carries the id in its `data`, and only the resource is missing.
+
+**`unresolvedBetaGroups` counts two caps, because there are two.** Beside the
+50-resource `included` ceiling, a build's `betaGroups` relationship is itself
+paginated — measured at a default `limit` of 10 — with the true count stated
+as `meta.paging.total`. A build attached to twelve groups therefore sends ten
+ids and a total of twelve, and a count that looked only at ids which failed to
+resolve would read that as whole: ten named, ten resolved, nothing missing.
+Both causes are counted, because both mean the same thing to a caller — the
+list is short by this many — and neither is a fact about the build. Without
+them a truncated detail and a build Apple holds no detail for were the same
+null, and a truncated group list read as `[]`, *attached to nothing*: a
+positive claim assembled entirely out of what was missing, which
+`inExternalTesting` then answered `false` from. It answers null instead, and
+the printed line says `groups not sent: 2` or `state not sent`.
+
+They should always be `0` and `false`. They are published anyway, because the
+page size and the cap are now the same number with nothing in the request
+saying so — if Apple lowers the ceiling, or a third sideloaded resource is
+added here, this is what says so instead of a fifth of the listing quietly
+going null again.
+
+**`appstore promote` does not pay for any of this.** `AppStore.builds` used to
+delegate to the audience read and drop the sideloaded map, which cost only a
+wider body — until the page size dropped to 50, which would have made it four
+times the round trips on the release path to protect an `included` that path
+never reads. It builds its own query now, with no include and Apple's maximum
+page.
+
+**Absence is a value here, in three places.** `betaGroups` is null for a read
+that did not send the include and `[]` for a build Apple says is attached to
+nothing — collapsing them would report *no external testers have this* about a
+question nobody asked, which is the true answer often enough to go unnoticed on
+the day it is not. `inExternalTesting` is nullable for the reason `usable` is
+not: that flag gates a release and fails closed safely, this one gates a
+sentence and `false` is a claim rather than a refusal. A group whose
+`isInternalGroup` Apple withheld stays `BetaGroupKindEntry.unknown` and counts
+as neither kind, which is `beta_release.dart`'s stance — it refuses to guess
+because the two guesses are not symmetric.
+
+`BetaGroupEntry`, `BetaGroupKindEntry` and `ExternalBuildState` are exported
+from `documents.dart`. The change is additive for a *reader* — one ignoring
+unknown keys decodes a schema 2 document unchanged — and the counter is bumped
+anyway,
+because a consumer that *wants* the audience needs to tell *Apple said nothing*
+from *this document predates the question*, and a null field alone cannot say
+which.
+
+**`AppStoreBuildEntry.fromJson` requires `unresolvedBetaGroups` and
+`unresolvedBuildBetaDetail`**, so a hand-written or captured document lacking
+them is refused rather than decoded. They are non-nullable on purpose: a
+default of `0` and `false` would read a document's silence as *nothing was
+missing*, which is the failure the fields exist to prevent, applied to
+themselves. Anyone holding a schema 2 fixture captured before this change has
+to add the two keys — the number did not move, because schema 2 has not
+shipped.
+
+**`inExternalTesting` reads two facts, not one.** It is true when the build has
+cleared beta review *and* is attached to at least one external group. Apple's
+approval is not delivery and an attachment made while review is pending is not
+delivery either, so neither half answers alone.
+
+**And it is false for an expired build whatever those two say.** TestFlight
+withdraws a build after ninety days, so one that cleared review and is attached
+to an external group is still a build nobody can install — and this answered
+`true` for exactly that combination. Both inputs were read correctly; the
+reading over them was missing a third fact `expired` already carried. Found in
+review, and unreachable on the account this was measured against until
+2026-11-14, which is the first day anything on it expires.
+
+**Measured against a live account on 2026-09-14**, which corrected two things
+the published schema had suggested. Apple's terminal external state after
+review is `BETA_APPROVED`; `IN_BETA_TESTING` did not occur once in 123 builds,
+so reading that state alone — this field's first shape — was a constant
+`false`, and said so about fourteen builds external testers demonstrably had.
+
+**And it retracts a measurement this entry made.** One iOS build reported no
+`externalBuildState` at all and was recorded as a live instance of that field's
+null — Apple simply holding no detail for it. It was not: at a page of 50 it
+resolves like the other 50, and its null was the cap. There is now **no
+observed case** in 123 builds of a build Apple genuinely holds no beta detail
+for, so that null is defensive rather than evidenced. It stays, because Apple
+documents the relationship as optional and one account is one account.
+
 ### Breaking
 
 **`package:cux_ship/read.dart` is removed**, with `AppStoreReads` and
