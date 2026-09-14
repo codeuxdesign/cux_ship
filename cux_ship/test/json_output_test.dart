@@ -37,6 +37,7 @@ Map<String, dynamic> _build(
   bool expired = false,
   String? uploaded = '2026-09-04T09:12:33-07:00',
   String platform = 'IOS',
+  List<String>? groupIds,
 }) => {
   'type': 'builds',
   'id': 'build-$platform-$version',
@@ -47,6 +48,17 @@ Map<String, dynamic> _build(
     'expired': expired,
     'uploadedDate': uploaded,
   },
+  // Omitted entirely when null, which is what a read that did not send
+  // `include=betaGroups` gets back — and the state the encoder has to carry
+  // through as null rather than flatten into an empty list.
+  if (groupIds != null)
+    'relationships': <String, dynamic>{
+      'betaGroups': {
+        'data': [
+          for (final id in groupIds) {'type': 'betaGroups', 'id': id},
+        ],
+      },
+    },
 };
 
 Map<String, dynamic> _version(
@@ -310,6 +322,65 @@ void main() {
 
       expect(document['schema'], appStoreBuildsSchema);
       expect(document['kind'], 'appstore.builds');
+    });
+
+    test('and the counters are pinned as literals, not to themselves', () {
+      // **`document['schema'] == appStoreBuildsSchema` compares the constant
+      // to itself** and passes for every value it could hold — so reverting
+      // the builds counter from 2 to 1 passed every test in this package.
+      // Found by making that change. These numbers are a published wire
+      // contract that a consumer refuses a mismatch on, which makes a silent
+      // move the expensive kind: the consumer stops reading rather than
+      // misreading, but it stops reading for a reason nothing here reports.
+      //
+      // A literal is the only assertion that can go red, and writing the
+      // number twice is the point rather than a smell.
+      expect(appStoreBuildsSchema, 2, reason: 'the TestFlight audience');
+      expect(appStoreVersionsSchema, 1);
+      expect(appStorePreviewsSchema, 1);
+      expect(playTracksSchema, 1);
+      expect(verifySchema, 1);
+      expect(appStoreListingDiffSchema, 1);
+    });
+
+    test('and an unread relationship survives the encoder as null', () {
+      // **The mapping this file's own header says is the whole of its job, on
+      // the one field where a null has to stay a null.** `?? const []` in the
+      // encoder is the obvious repair for a nullable list and is the bug the
+      // comment beside it warns about: it turns *the read did not ask* into
+      // *attached to no group*, which renders as "no external testers have
+      // this" about a question nobody put. Making exactly that change passed
+      // every other test in this file and in documents_test — those hand-build
+      // entries and never run the encoder — so this is the only thing standing
+      // between the two readings.
+      final entry =
+          (appStoreBuildsJson(
+                        buildsOf([_build('169')]),
+                        bundleId: 'x',
+                      )['builds']
+                      as List)
+                  .single
+              as Map;
+
+      expect(entry['betaGroups'], isNull);
+      expect(entry['inExternalTesting'], isNull);
+      expect(entry['externalBuildState'], isNull);
+    });
+
+    test('and a build Apple attached to nothing encodes as an empty list', () {
+      // The other half, so the one above cannot be satisfied by an encoder
+      // that answers null for everything.
+      final entry =
+          (appStoreBuildsJson(
+                        buildsOf([_build('169', groupIds: const [])]),
+                        bundleId: 'x',
+                      )['builds']
+                      as List)
+                  .single
+              as Map;
+
+      expect(entry['betaGroups'], isEmpty);
+      expect(entry['betaGroups'], isNotNull);
     });
 
     test('and the three kinds version independently', () {

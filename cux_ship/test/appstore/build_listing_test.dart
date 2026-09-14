@@ -34,6 +34,7 @@ Map<String, dynamic> _build(
   String platform = 'IOS',
   List<String>? groupIds,
   String? detailId,
+  bool groupsLinksOnly = false,
 }) => {
   'type': 'builds',
   'id': 'build-$platform-$version',
@@ -49,13 +50,24 @@ Map<String, dynamic> _build(
   // request that did not ask — measured on `relationships.build` and recorded
   // at `_buildNumberOf` — so a fixture that always carried an empty `data`
   // could never produce the null the model uses to mean *not asked*.
-  if (groupIds != null || detailId != null)
+  if (groupIds != null || detailId != null || groupsLinksOnly)
     'relationships': <String, dynamic>{
       if (groupIds != null)
         'betaGroups': {
           'data': [
             for (final id in groupIds) {'type': 'betaGroups', 'id': id},
           ],
+        }
+      // **Apple's shape for a relationship the request did not include**:
+      // `links` and no `data` key at all, measured on `relationships.build`
+      // and recorded at `_buildNumberOf`. Distinct from omitting the whole
+      // `relationships` block, which is what a build carrying *no* asked-for
+      // relationship looks like — and the distinction is not academic: the
+      // two land on different guards in `_relatedMany`, and only this one
+      // reaches the arm that a real read missing `include=betaGroups` takes.
+      else if (groupsLinksOnly)
+        'betaGroups': {
+          'links': {'self': '/v1/builds/b/relationships/betaGroups'},
         },
       if (detailId != null)
         'buildBetaDetail': {
@@ -452,6 +464,34 @@ void main() {
       expect(build.internalGroups, isNull);
       expect(build.externalGroups, isNull);
       expect(build.inExternalTesting, isNull);
+    });
+
+    test('and stays null when the relationship carries links and no data', () {
+      // **The arm a real un-included read takes, and it was reachable from no
+      // test.** Three different shapes mean *not asked* and they land on three
+      // different guards: no `relationships` block at all, a block without
+      // this relationship, and — the one Apple actually sends — the
+      // relationship present carrying `links` and no `data` key. The first two
+      // return early, so making the third arm answer `[]` instead of null
+      // passed all 35 tests. Found by making exactly that mutation.
+      final build = listingWith(
+        _build('180', groupsLinksOnly: true, detailId: 'd-1'),
+        [_detail('d-1', externalState: 'IN_BETA_TESTING')],
+      ).newest!;
+
+      expect(build.betaGroups, isNull);
+      expect(build.externalGroups, isNull);
+      // And the line says nothing about an audience it did not read, even
+      // though the detail beside it came back.
+      expect(build.line, isNot(contains('external:')));
+    });
+
+    test('and a relationships block naming neither is null too', () {
+      final build = listingWith(_build('180', detailId: 'd-1'), [
+        _detail('d-1', externalState: 'IN_BETA_TESTING'),
+      ]).newest!;
+
+      expect(build.betaGroups, isNull);
     });
 
     test('is empty when Apple says the build is attached to nothing', () {
