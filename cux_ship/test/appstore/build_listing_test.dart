@@ -3,11 +3,14 @@
 // The build listing became a value a caller reads rather than lines a caller
 // greps, and the two claims that carries are both about *ordering*.
 //
-// Apple's `sort=-version` is lexical: build 9 comes back above build 10. This
-// package has always known that — `appstore build-number` sorts numerically
-// before answering — and the listing beside it did not, so the two commands
-// could name different builds from the same account. One comparator now,
-// tested here.
+// This package sorts build numbers numerically rather than trusting the order
+// Apple returned, and it used to say that was because `sort=-version` is
+// lexical — build 9 above build 10. It is not: Apple's sort is numeric,
+// measured 2026-09-14 over 72 integer build numbers. The sort stays because
+// `CFBundleVersion` need not be an integer and how Apple orders `1.2.3` is
+// untested, so what these tests pin is *this package's* comparator, which is
+// the only ordering it can promise. One comparator, used by the listing and by
+// `appstore build-number`, so the two commands cannot name different builds.
 //
 // The second claim is that "newest" and "newest usable" are different
 // questions. A build uploaded four minutes ago is the newest and cannot be

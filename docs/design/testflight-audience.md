@@ -136,6 +136,30 @@ first N and stop*. Had the truncation been a tail, a listing that asked about
 the newest few builds would have been correct by accident, and the page size
 would have been an optimisation rather than a fix.
 
+**`included` is not the first 50 of `data`, and that is now proven rather than
+suspected.** Apple's `data` order under `sort=-version` is strict numeric
+descending — measured, see §4 — so "the first 50 of `data`" is a well-defined
+set, and the 22 holes are not its complement: **16 of the 22 sat inside Apple's
+first 50**, build 179 among them, second in the response, while builds far
+below it got their details.
+
+So whatever selects the 50 that arrive, it is not position in the listing.
+
+**What that does and does not rule out**, because it is easy to take too far.
+It does not say a page can come back holed while it is *under* the cap: 50
+builds naming 50 details resolved all 50, and the 72-build read at a page of 50
+resolved all 72. Demand within the ceiling has never been observed to be
+truncated. What it rules out is the weaker-looking move of keeping the large
+page and reading only the top of it — the sideloads do not line up with the
+front of `data`, so the builds a reader asked about are not the builds whose
+resources arrived.
+
+And it makes the parser change the load-bearing half of this section rather
+than its preliminary. The page size stops the holes at today's sizes; nothing
+but [AppStoreBuild.unresolvedBuildBetaDetail] would notice if that stopped
+being true, and since the selection rule is unknown, "it stopped being true"
+is not something that could be predicted from the request.
+
 **Why this was worse than a missing feature.** `AppStoreBuild.externalBuildState`
 documents its null as *not known*, and a build Apple holds no detail for and a
 build whose detail was truncated out of the response arrived as the same null.
@@ -191,3 +215,209 @@ it was harmless; a page size of 50 would have made it four times the round
 trips on the release path to protect an `included` that path does not read. So
 `builds` now builds its own query, and `_buildsQuery` holds the include and the
 page size together because they are one decision.
+
+## 4. How much of the listing a read needs
+
+Status: **open**. Nothing here is built, and the recommendation is that nothing
+here is built yet — this section exists so the next person starts from the
+measurements rather than from the question.
+
+§3 made each response smaller. It did not make the *listing* smaller: every
+`appstore builds` run still reads every build App Store Connect holds for the
+app on that platform, following `links.next` to exhaustion. Asked whether that
+could be avoided by caching.
+
+### The listing does not shrink, and the account is too young to prove it
+
+**An expired build stays listed** — `AppStoreBuild.expired`'s own dartdoc says
+so, and it is a flag rather than a removal — so the row count is the account's
+whole upload history and grows at the upload cadence forever.
+
+Measured 2026-09-14 on `design.codeux.howitwent`, both platforms:
+
+| | |
+|---|---|
+| builds | 51 ios, 72 macos |
+| expired | **zero, on both** |
+| oldest upload | 2026-08-16 |
+| newest upload | 2026-09-14 |
+
+The account is thirty days old and TestFlight expires at ninety, so nothing on
+it *can* have expired yet. Two things follow, and the second is the
+uncomfortable one:
+
+- **`filter[expired]=false` would cut nothing today.** It is a real future
+  lever — from roughly 2026-11-16 it would hold the listing to ninety days of
+  uploads instead of all of them — and there is currently no account to
+  measure it against. Whether Apple accepts the parameter at all is still
+  unanswered.
+- **"an expired build is still listed" has never been observed.** It is this
+  package's belief, stated in a dartdoc, and the first opportunity to check it
+  is that same November date. The whole of this section's *growth* argument
+  rests on it, so it is worth checking before acting on it: if Apple in fact
+  drops expired builds from the listing, the listing plateaus on its own at
+  ninety days of cadence and the growth problem does not exist.
+
+At 72 builds in 30 days and a page size of 50, today's cost is **two requests
+per platform**. A year of the same cadence is roughly 850 builds and seventeen.
+The problem is real and it is not yet urgent, which is the honest summary.
+
+### Caching is the wrong shape, and it is the shape §3 is about
+
+The fields worth reading — `processingState`, `expired`, `betaGroups`,
+`externalBuildState` — are exactly the mutable ones; they are what the listing
+is *for*. A cached row is stale data indistinguishable from fresh data, which
+is §3's conflation with *stale* wearing *current*'s clothes rather than
+*truncated* wearing *absent*'s.
+
+Nor is there a cheap way to keep one honest. App Store Connect publishes no
+`ETag` or `If-Modified-Since` on these collections to revalidate against, and
+no `uploadedDate` range filter to fetch only what is new — so a cache would
+need an invalidation rule of its own invention. The one class of build that is
+safely frozen (past its ninety-day expiry) is derivable locally from the
+immutable `uploadedDate` and saves no request, because the request is what
+would tell you the rest.
+
+### Apple's ordering, measured — and two of this package's claims were wrong
+
+Measured 2026-09-14 by overriding the sort key on a throwaway branch and
+printing the raw `data` order to stderr, which is the only way to see it: the
+model sorts the payload before any caller does, and `--json` takes no sort
+override.
+
+**`sort=-version` is numeric, not lexical.** Strict numeric descending over all
+72 macOS builds — under a lexical sort `98`, `94` and `75` would have led the
+response, and they sat at positions 51 to 53, below `100` and `101`. Three
+comments in this package said otherwise, one of them citing it as a
+twice-made mistake; they are corrected, and `read-api.md` carries a dated note
+because it argued from the same belief.
+
+**Where the lexical claim came from, because it is instructive.** It entered in
+`02aa183` (6 August 2026, "Add tool/asc_upload, an App Store Connect client"),
+as an inline comment beside a defensive client-side sort in `printBuildNumber`
+— in the same commit that wrote the client by hand over `package:http`. It
+cites no response and no account. It is an assumption written in the voice of
+an observation, which is the form that survives review, and `8356844` then
+promoted it to a twice-made mistake and copied it into `read-api.md` and
+`AppStoreBuilds.builds`. Nothing measured it until 2026-09-14, thirty-nine days
+later.
+
+**And it is almost certainly a confusion between two different version
+numbers** — the one this repository names as *the single easiest thing to get
+wrong here*, at [AppStoreBuild.buildNumber]. Two adjacent facts are true:
+
+- a marketing version sorts wrongly as a string — `1.0.10` below `1.0.9` —
+  which is why `release.dart` parses semver rather than comparing text;
+- comparing `CFBundleVersion`s as Dart strings is wrong — `"9"` above `"10"` —
+  which is the bug a consumer actually shipped.
+
+Neither is a fact about Apple's sorting. `sort=-version` on `/v1/builds` orders
+`attributes.version`, which is `CFBundleVersion` — the `180` in `1.1.7+180`,
+assigned by `cux_buildnumber` and not by Apple, and a bare integer on every
+account this package has read. The hazard that belongs to the *marketing*
+version was carried onto a field that is not one, and Apple sorts it as the
+number it is. So the false step was inferring a remote system's behaviour from
+a local type's, and the local type's hazard is real, which is what made it
+sound.
+
+**The client-side numeric sort stays, and its real justification is narrower
+than its old one.** What was disproved is *lexical for integer build numbers*.
+`CFBundleVersion` need not be an integer — Apple accepts `1.2.3` — and how
+Apple orders those against each other is untested on any account, so a package
+that deleted the comparator on the strength of this would be trusting an
+ordering it has only ever seen the easy case of.
+
+**`sort=-uploadedDate` is accepted, and genuinely applied.** That it returned
+the same order as `-version` proves nothing on an account where build numbers
+rise with upload time — an ignored parameter looks identical — so two further
+requests settled it: `sort=uploadedDate` returns the exact reverse of all 72,
+and `sort=nonsenseKey` returns
+
+```
+400 … 'nonsenseKey' is not a valid sort value — (sort)
+```
+
+Apple validates sort keys and refuses unknown ones by name, so a key that
+passes validation *and* inverts under a sign change is one it applies. A
+bounded read can therefore order server-side, by either key.
+
+### So a bounded listing is viable, and the reason not to build it is not correctness
+
+With the ordering measured, `sort=-version&limit=N` returns the newest `N`
+builds by build number, server-side, in one request — and for `N` at or below
+the cap the sideloads all arrive, so the audience comes with it. That is
+**one request per platform at any account size**, against `ceil(B / 50)` today:
+two now, seventeen at a year of this cadence.
+
+§3's non-positional finding does not block that. It rules out keeping the large
+page and reading the top of it; it says nothing against asking for a small page,
+which is demand inside the ceiling and has never been observed to truncate.
+
+Two things are genuinely owed before it is built, and neither is a blocker so
+much as a thing to be honest about:
+
+- **Dotted build numbers are untested.** The ordering measurement covers 72
+  integers. If Apple orders `1.2.3`-style `CFBundleVersion`s in a way the
+  client-side comparator disagrees with, a bounded read returns the wrong `N`
+  and the local re-sort cannot repair it — it can only reorder what arrived.
+  That is the one case where bounding turns a cosmetic disagreement into a
+  missing build.
+- **It narrows what `appstore.builds` answers**, and that is the real cost.
+  Today the document carries every build Apple holds; bounded, it carries `N`.
+  `newestBuildNumber` and `newest` survive, `newestUsable` survives unless more
+  than `N` consecutive newest builds are unusable, and `build("34")` starts
+  answering null for a build Apple still holds. A consumer asking about an
+  older build would get *no such build* where the truth is *not read*, which
+  is this document's recurring failure with a new face.
+
+### The alternative that narrows less, and costs more
+
+Read the whole listing **without** includes, then ask for the audience of the
+newest few through `/v1/builds/<id>/buildBetaDetail` — a read
+`reportExternalBuildState` already makes one build at a time. The listing stays
+complete, so every accessor keeps answering what it answers now and only the
+*audience* is bounded, which is a narrowing the model can already express:
+`betaGroups: null` means *this read did not ask*.
+
+| | requests |
+|---|---|
+| today | `ceil(B / 50)` |
+| bounded listing | `1` |
+| bounded enrichment | `ceil(B / 200) + N` |
+
+At 72 builds and `N` of 20 that is 2, 1 and 21. Bounded enrichment is the worst
+of the three on requests at every size this account will reach, and it is
+listed because it is the only one that costs nothing semantically — which is
+the trade to revisit if the narrowing above turns out to matter more than the
+round trips.
+
+### What would have to be true
+
+The bounded listing is the answer if this is ever worth doing. It is not worth
+doing yet, and the reason is size rather than doubt:
+
+1. **An account where it matters.** The whole saving today is one request per
+   platform. Revisit when a real account crosses roughly 200 builds — four
+   pages — or when a run is observably slow rather than theoretically so.
+2. **Somebody who wants the narrowing, or does not mind it.** `appstore builds`
+   currently answers *every build Apple holds*, and a bound makes it answer
+   *the newest N*. That is a change to what the document means, so it wants a
+   caller asking for it rather than a round-trip count justifying it. The
+   consumer this package serves renders three builds per platform, so it would
+   almost certainly not mind — but it has not been asked.
+3. **A dotted `CFBundleVersion` somewhere to measure.** Bounding hands Apple
+   the ordering decision, and Apple's ordering is measured only over integers.
+
+**`filter[expired]` is the cheapest lever of all and is simply too early.** It
+needs only that the account reach ninety days, from which point it would hold
+the listing to ninety days of uploads rather than all of them — and it narrows
+nothing a caller wants, since `usable` already excludes what it would remove.
+Whether Apple accepts the parameter is still unmeasured, and there would be
+nothing to observe if it did.
+
+The reason to write all this down rather than act on it is the one §3 earned
+the hard way: the previous change to this request was made against a
+measurement, and the measurement is what made it right. The measurements here
+say the option exists and that it is not yet worth taking — which is a smaller
+claim than the ones above, and the one thing in this section that would change
+on its own, without anybody touching the code.

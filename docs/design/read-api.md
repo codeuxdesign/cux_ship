@@ -128,18 +128,30 @@ labelling problem — see [json-output.md](json-output.md).
 
 ## What the export fixed on the way
 
-`appstore builds` sorted the way Apple returned, and Apple's `sort=-version` is
-lexical: build 9 above build 10. `appstore build-number` has always sorted
-numerically before answering, so the two commands could name different builds
-from the same account. The listing now uses that comparator too. It is a change
-to printed output, and it is the change that makes "newest first" true.
+`appstore builds` sorted the way Apple returned, and Apple's `sort=-version`
+was believed to be lexical: build 9 above build 10. `appstore build-number` has
+always sorted numerically before answering, so the two commands were thought to
+be able to name different builds from the same account. The listing now uses
+that comparator too. It is a change to printed output, and it is the change
+that makes "newest first" true.
+
+> **Corrected 2026-09-14.** Apple's `sort=-version` is **numeric**, measured
+> over 72 integer build numbers — so the two commands could not in fact have
+> disagreed about an integer build number, and this paragraph's justification
+> was wrong where its conclusion was right. The comparator stays, because
+> `CFBundleVersion` need not be an integer and Apple's ordering of `1.2.3` is
+> untested. See [testflight-audience.md](testflight-audience.md) §4. Left in
+> place rather than rewritten, for the reason this whole document is kept: what
+> was believed at the time is the part with value.
 
 `AppStoreBuilds` answers two questions that were one: `newest` is the highest
 build Apple holds, and `newestUsable` is the highest that is processed and
 unexpired. A build uploaded four minutes ago is the first and not the second,
 and "which build does the store hold" wants the first.
 
-**And the same lexical mistake turned out to be waiting one layer up.** A build
+**And a real string-comparison mistake turned out to be waiting one layer up**
+— this one against Dart's ordering rather than Apple's, so the correction above
+does not touch it. A build
 number is a `String` here because `CFBundleVersion` is one and Apple accepts
 `1.2.3`. The first consumer's `status` compared what this command printed
 against an integer out of a git tag — correct only while every build number has

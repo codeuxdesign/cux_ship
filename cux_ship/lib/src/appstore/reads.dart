@@ -312,13 +312,27 @@ class AppStoreBuild {
   /// **The form to compare and to order by.** A build number is a string here
   /// because `CFBundleVersion` is one and Apple will accept `1.2.3`, but
   /// comparing two of them as strings is wrong the moment they differ in
-  /// width: `"9"` sorts above `"10"`. That mistake has now been made twice
-  /// against this data — once inside this package, where the build listing
-  /// trusted Apple's lexical `sort=-version` while `build-number` sorted
-  /// numerically beside it, and once in a consumer comparing
-  /// [AppStoreBuilds.newestBuildNumber] against an integer out of a git tag.
-  /// Both were invisible while every build number had the same number of
-  /// digits, and both would have surfaced at 1000.
+  /// width: `"9"` sorts above `"10"`. That was made against this data by a
+  /// consumer comparing [AppStoreBuilds.newestBuildNumber] against an integer
+  /// out of a git tag — invisible while every build number had the same number
+  /// of digits, and waiting at 1000.
+  ///
+  /// **A second instance used to be claimed here and it was not one.** This
+  /// said the listing had trusted Apple's *lexical* `sort=-version` while
+  /// `build-number` sorted numerically beside it, so the two commands could
+  /// name different builds. Apple's sort is **numeric** — measured 2026-09-14
+  /// over 72 integer build numbers, where lexical ordering would have put 98
+  /// and 94 above 100 and did not — so for integer build numbers the two
+  /// commands could not in fact disagree. See
+  /// `docs/design/testflight-audience.md` §4, and [AppStoreBuilds.builds] for
+  /// why the client-side sort stays anyway.
+  ///
+  /// **That claim was this comment's own trap sprung one field over**, which is
+  /// why it is worth the paragraph. A *marketing* version does sort wrongly as
+  /// text — `1.0.10` below `1.0.9`, which is why `release.dart` parses semver —
+  /// and Apple's `sort=-version` orders [buildNumber], which is not a marketing
+  /// version. The hazard belonging to one was written down about the other, and
+  /// it read as obvious because the hazard is real where it belongs.
   ///
   /// Null rather than a fallback, so a version string that is not a single
   /// integer is a case the caller has to answer rather than one silently
@@ -399,11 +413,22 @@ class AppStoreBuilds {
 
   /// Newest first, by build number read as an integer.
   ///
-  /// **Not the order Apple returned.** Apple's `sort=-version` is lexical, so
-  /// build 9 comes back above build 10, and this package has always sorted
-  /// numerically before answering "the newest" — it just did it in
-  /// `build-number` and not in the listing beside it, which is how the two
-  /// could name different builds.
+  /// **Sorted here rather than trusted, and the stated reason for that was
+  /// wrong.** This said Apple's `sort=-version` is lexical, so build 9 comes
+  /// back above build 10. It is not: measured 2026-09-14 over 72 integer build
+  /// numbers, Apple returns strict numeric descending — under a lexical sort
+  /// `98`, `94` and `75` would have led the response and they sat at positions
+  /// 51 to 53, below `100` and `101`.
+  ///
+  /// **The sort stays, for a reason that is now the real one.** What was
+  /// disproved is *lexical for integer build numbers*, and `CFBundleVersion`
+  /// need not be an integer — Apple accepts `1.2.3`, and how it orders those
+  /// against each other is untested on any account. A package that dropped
+  /// this on the strength of one measurement would be trusting an ordering it
+  /// has only ever seen the easy case of. See
+  /// `docs/design/testflight-audience.md` §4, which also records that Apple
+  /// validates sort keys and answers `400` naming an unknown one, so this is a
+  /// key it genuinely applies rather than one it ignores.
   final List<AppStoreBuild> builds;
 
   /// The newest build Apple holds, whatever state it is in.
@@ -667,8 +692,8 @@ class AppStoreVersion {
   /// [buildNumber] read as an integer, or null when it is absent or not one.
   ///
   /// The form to compare, for the reason [AppStoreBuild.buildNumberAsInt] gives
-  /// at length: `"9"` sorts above `"10"`, and that mistake has been made twice
-  /// against this data already.
+  /// at length: `"9"` sorts above `"10"`, and a consumer has already made that
+  /// mistake against this data.
   int? get buildNumberAsInt {
     final number = buildNumber;
     return number == null ? null : int.tryParse(number);

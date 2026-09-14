@@ -4193,8 +4193,11 @@ class AppStore {
         'no processed, unexpired build to promote',
       ], request: 'GET /v1/builds');
     }
-    // Sorted numerically here rather than trusting the API's `-version` sort,
-    // which is lexical: "9" sorts above "10".
+    // Sorted numerically here rather than trusting the API's `-version` sort.
+    // That used to say "which is lexical: 9 sorts above 10", and Apple's sort
+    // is in fact numeric — measured 2026-09-14 over 72 integer build numbers.
+    // It stays because `CFBundleVersion` need not be an integer and nobody has
+    // tested how Apple orders `1.2.3`; see `AppStoreBuilds.builds`.
     usable.sort((a, b) {
       final left = int.tryParse('${_attributes(a)['version']}') ?? -1;
       final right = int.tryParse('${_attributes(b)['version']}') ?? -1;
