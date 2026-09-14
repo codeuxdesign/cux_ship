@@ -121,10 +121,17 @@ void writeJsonDocument(Object document) {
 ///
 /// A flush would also not be free: it returns a `Future`, so either every
 /// caller becomes async — they are synchronous closures inside the upload
-/// paths — or the lint that forbids a dropped future gets suppressed. Paying
-/// that for a buffer that does not exist is the shape `docs/CONTRIBUTING.md`
-/// argues against, and the measurement is here so the next reader meets it
-/// rather than the belief.
+/// paths, one of them inside an `http.BaseClient.send` override — or the lint
+/// that forbids a dropped future gets suppressed at each site. Paying that for
+/// a buffer that does not exist is the shape `docs/CONTRIBUTING.md` argues
+/// against, and the measurement is here so the next reader meets it rather
+/// than the belief.
+///
+/// **If those numbers ever stop holding** — a different runtime, or Dart
+/// changing how it opens fd 1 for a pipe — the remedy is a line-flushed sink
+/// chosen once where the emitter is built, not a flush per event. That keeps
+/// every caller synchronous, which is the property that makes the cost above a
+/// real one rather than a stylistic objection.
 ///
 /// [out] rather than [stdout] directly so a test can read the stream back
 /// without an `IOOverrides` zone around every assertion; production passes
