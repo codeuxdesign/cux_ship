@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+**`AppStoreBuildEntry.inExternalTesting`'s published dartdoc said the opposite
+of what the code does, in the case a reader meets first.** It read *null when
+this listing was answered short*, unqualified. A build with a **resolved**
+external group and a shortfall beside it answers `true` — the groups that did
+not arrive could only have added attachments, so a shortfall makes an *empty*
+external list uninformative, not a non-empty one. The sentence now carries the
+qualifier. Nothing about the field's behaviour changed; 4.5.0-dev.4 shipped
+with the wrong description of it.
+
+`docs/design/testflight-audience.md` §2 had the matching gap: it listed three
+arms of a predicate that has five, never having gained the *expired* and
+*state this version cannot read* ones. It lists all five now, in the order they
+are asked.
+
+**And the vocabulary that predicate turns on is tested.** `inExternalTesting`
+compares Apple's `externalBuildState` against two hand-written sets, and nine
+of the twelve states in them were exercised by nothing that could tell a
+correct set from a wrong one — so removing a state from the recognized set, or
+moving one into the cleared-review set, passed every test. The second is the
+one that matters: it would report a build Apple is still *processing* as one
+external testers have. Both edits now fail a test. No shipped behaviour was
+wrong; the guard against it was missing.
+
 ## 4.5.0-dev.4
 
 **`play upload` and `appstore upload` take `--json`, and it is a stream rather
