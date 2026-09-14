@@ -121,7 +121,8 @@ class AppStoreBuild {
   /// [inExternalTesting] makes.
   final List<AppStoreBetaGroup>? betaGroups;
 
-  /// How many attached groups Apple named and did not send.
+  /// How many attached groups this listing did not receive, by either of the
+  /// two ways that happens.
   ///
   /// **The difference between *attached to nothing* and *we could not see what
   /// it is attached to*.** A `relationships.betaGroups.data` entry names a
@@ -130,6 +131,16 @@ class AppStoreBuild {
   /// were. Without this count [betaGroups] would read `[]` for a build Apple
   /// named three groups for — a positive claim built out of a shortfall, and
   /// the one shape this field exists to make impossible.
+  ///
+  /// **Two caps, one number.** Apple truncates `included` at 50 resources per
+  /// relationship per response, which is [AppStore.buildsWithIncluded]'s page
+  /// size; and the relationship's own `data` is separately paginated, measured
+  /// at a default `limit` of 10, with the true count stated beside it as
+  /// `meta.paging.total`. A build attached to twelve groups therefore sends ten
+  /// ids and a total of twelve, and a count that looked only at unresolved ids
+  /// would read that as whole. Both are counted here because both mean the same
+  /// thing to a caller — the list is short by this many — and neither is a fact
+  /// about the build.
   ///
   /// Zero for a read that did not ask, which is [betaGroups]'s null and not a
   /// shortfall: nothing was named, so nothing went missing.
@@ -545,6 +556,32 @@ int _byBuildNumberDescending(AppStoreBuild a, AppStoreBuild b) =>
     } else {
       resolved.add(found);
     }
+  }
+  // **A second cap, under the one that produced this helper.** The
+  // relationship's own `data` is paginated — measured at a default `limit` of
+  // 10 — and Apple states the true count beside it, so a build attached to
+  // twelve groups sends ten ids and `"meta":{"paging":{"total":12,"limit":10}}`.
+  // Counting only ids that failed to resolve would read that as complete:
+  // ten named, ten resolved, nothing missing, and a confident answer about a
+  // list two short.
+  //
+  // Both causes land in one number because they have one consequence — the
+  // list is short by this many — and the caller's question is whether it is
+  // whole. `limit[betaGroups]` may raise the inner cap and is untested; the
+  // count is what makes its absence visible rather than silent, which is §3's
+  // order of operations applied a second time.
+  final meta = named['meta'];
+  final paging = meta is Map<String, dynamic> ? meta['paging'] : null;
+  final total = paging is Map<String, dynamic> ? paging['total'] : null;
+  // **Only ever upwards.** A total below the number of ids beside it is
+  // incoherent and Apple has never sent one — but without the comparison the
+  // arithmetic is `unresolved += total - data.length`, which for such a
+  // response *subtracts*, and can take a real shortfall from `included` back
+  // down to zero. A malformed count would then erase the evidence of a
+  // truncation rather than add to it, which is the one direction this whole
+  // field exists to prevent.
+  if (total is int && total > data.length) {
+    unresolved += total - data.length;
   }
   return (resolved: resolved, unresolved: unresolved);
 }

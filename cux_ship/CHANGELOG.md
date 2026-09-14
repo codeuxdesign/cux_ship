@@ -129,8 +129,17 @@ one extra round trip per platform.
 
 **Each build now says what its response failed to carry**, which is the part
 worth reading twice. `unresolvedBetaGroups` and `unresolvedBuildBetaDetail`
-report resources Apple *named* and did not send — a truncated relationship
-still carries the id in its `data`, and only the resource is missing. Without
+report resources this listing did not receive — a truncated relationship still
+carries the id in its `data`, and only the resource is missing.
+
+**`unresolvedBetaGroups` counts two caps, because there are two.** Beside the
+50-resource `included` ceiling, a build's `betaGroups` relationship is itself
+paginated — measured at a default `limit` of 10 — with the true count stated
+as `meta.paging.total`. A build attached to twelve groups therefore sends ten
+ids and a total of twelve, and a count that looked only at ids which failed to
+resolve would read that as whole: ten named, ten resolved, nothing missing.
+Both causes are counted, because both mean the same thing to a caller — the
+list is short by this many — and neither is a fact about the build. Without
 them a truncated detail and a build Apple holds no detail for were the same
 null, and a truncated group list read as `[]`, *attached to nothing*: a
 positive claim assembled entirely out of what was missing, which

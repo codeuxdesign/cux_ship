@@ -467,6 +467,36 @@ per-platform**: this account has exactly two, and both platforms' builds
 reference the same two, so a four-column `internal × platform` grid cannot come
 from groups — the platform split has to come from the builds.
 
+**And the universal attachment has a declarative cause, which turns a repeated
+claim into data.** The sideloaded `betaGroups` resource carries
+`hasAccessToAllBuilds: true` on the internal group and `null` — not `false` —
+on the external one. So *Apple hands every processed build to every internal
+group*, a sentence this package has been repeating from Apple's documentation
+since the audience work began, is a flag on the wire that could be read. It is
+not read today and nothing needs it; it is recorded because the next person to
+want the internal column has a better answer available than an empirical 72 of
+72, and because `null` rather than `false` on the group that does not have it
+is this document's own distinction appearing in Apple's data.
+
+### What else the group resource carries
+
+`cux_ship` keeps a group's `name` and `isInternalGroup` and discards the rest
+at parse time, so the narrowing is this package's rather than the wire's. What
+Apple actually sends, measured 2026-09-14: `createdDate`, `feedbackEnabled`,
+`hasAccessToAllBuilds`, `iosBuildsAvailableForAppleSiliconMac`,
+`iosBuildsAvailableForAppleVision`, and a public-link family
+(`publicLinkEnabled`, `publicLinkId`, `publicLinkLimitEnabled`,
+`publicLinkLimit`, `publicLink`). The group's `relationships` — `app`,
+`builds`, `betaTesters`, `betaRecruitmentCriteria` — are links-only with no
+`data`.
+
+**Nothing dates a delivery.** `createdDate` is the group's own, and there is no
+per-build timestamp on the group or on a build's `betaGroups` relationship. So
+*when did external testers get this* cannot be answered from the read this
+package already makes, and adding it would be a new question rather than a free
+field — which is what the probe was for, and the answer being no is worth the
+same as the answer being yes.
+
 **Caching belongs to the consumer, for a better reason than statelessness.**
 The argument against it here was staleness, and opt-in caching with a stated
 age answers that. What does not survive the move is *invalidation*: a

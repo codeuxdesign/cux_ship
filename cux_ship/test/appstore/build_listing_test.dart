@@ -39,6 +39,13 @@ Map<String, dynamic> _build(
   String? detailId,
   bool groupsLinksOnly = false,
   bool detailLinksOnly = false,
+  // **Apple's own count of the attachments, beside a `data` it has already
+  // paginated.** Measured 2026-09-14: a build's `betaGroups` relationship
+  // carries `"meta":{"paging":{"total":2,"limit":10}}`, so `data` is capped at
+  // ten ids independently of the 50-resource `included` cap — and a build
+  // attached to twelve groups names ten and states twelve. Defaults to
+  // [groupIds]'s length, which is what Apple sends when nothing was cut.
+  int? groupsTotal,
 }) => {
   'type': 'builds',
   'id': 'build-$platform-$version',
@@ -61,6 +68,9 @@ Map<String, dynamic> _build(
     'relationships': <String, dynamic>{
       if (groupIds != null)
         'betaGroups': {
+          'meta': {
+            'paging': {'total': groupsTotal ?? groupIds.length, 'limit': 10},
+          },
           'data': [
             for (final id in groupIds) {'type': 'betaGroups', 'id': id},
           ],
@@ -878,6 +888,83 @@ void main() {
         expect(build.line, contains('groups not sent: 2'));
       },
     );
+
+    test('and groups Apple never named are counted too, from its own total', () {
+      // **A second cap, under the one `unresolvedBetaGroups` was built for**,
+      // and the detector could not see it. The relationship's `data` is itself
+      // paginated at a default of 10 — measured 2026-09-14, where a build
+      // carries `"meta":{"paging":{"total":2,"limit":10}}` — so a build
+      // attached to twelve groups names ten ids and states twelve.
+      //
+      // Every named id resolves, so counting unresolved ids alone answers
+      // zero: complete, ten groups, nothing missing. Apple's own total is the
+      // only thing on the wire that contradicts it.
+      final build = listingWith(
+        _build('180', groupIds: const ['g-int'], groupsTotal: 11),
+        [_group('g-int', name: 'Team', internal: true)],
+      ).newest!;
+
+      expect(build.betaGroups, hasLength(1));
+      expect(build.unresolvedBetaGroups, 10);
+      expect(build.line, contains('groups not sent: 10'));
+    });
+
+    test('and the two ways of coming up short add rather than replace', () {
+      // Three named of five total, and one of the three truncated out of
+      // `included`: two never named, one named and unsent. A count that took
+      // the larger of the two causes, or only the later one, reads 2 or 1.
+      final build = listingWith(
+        _build(
+          '180',
+          groupIds: const ['g-int', 'g-gone', 'g-also'],
+          groupsTotal: 5,
+        ),
+        [_group('g-int', name: 'Team', internal: true)],
+      ).newest!;
+
+      expect(build.betaGroups!.map((g) => g.name), ['Team']);
+      expect(build.unresolvedBetaGroups, 4);
+    });
+
+    test('and a total that contradicts its own ids never lowers the count', () {
+      // **Found by a mutation that survived.** Dropping the `total >
+      // data.length` comparison passed every test above, because a coherent
+      // total contributes exactly zero either way. What it changes is the
+      // incoherent case: the arithmetic is `+= total - data.length`, so a
+      // total *below* the ids beside it subtracts, and here it would take a
+      // real shortfall — two groups named and truncated out of `included` —
+      // back down to none.
+      //
+      // Apple has never sent such a response. The point is the direction: a
+      // malformed count must not be able to erase the evidence of a
+      // truncation, which is the one way this field could report *nothing is
+      // missing* about a list that is missing something.
+      final build = listingWith(
+        _build(
+          '180',
+          groupIds: const ['g-int', 'g-gone', 'g-also'],
+          groupsTotal: 1,
+        ),
+        [_group('g-int', name: 'Team', internal: true)],
+      ).newest!;
+
+      expect(build.unresolvedBetaGroups, 2);
+    });
+
+    test('and a complete relationship counts nothing from its total', () {
+      // The false case, so the two above cannot be satisfied by a count that
+      // always adds something. Apple states a total for every relationship,
+      // including the ones it did not cut.
+      final build =
+          listingWith(_build('180', groupIds: const ['g-int', 'g-ext']), [
+            _group('g-int', name: 'Team', internal: true),
+            _group('g-ext', name: 'Beta Testers', internal: false),
+          ]).newest!;
+
+      expect(build.betaGroups, hasLength(2));
+      expect(build.unresolvedBetaGroups, 0);
+      expect(build.line, isNot(contains('groups not sent')));
+    });
 
     test('and a read that asked for nothing counts no shortfall', () {
       // Zero rather than "unknown": nothing was named, so nothing went
