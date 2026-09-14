@@ -1879,9 +1879,10 @@ class AppStore {
   /// a wider response body — until the audience read had to drop to 50 builds
   /// a page to stay under Apple's `included` cap. That made the delegation
   /// four times the round trips for a caller that discards every sideloaded
-  /// resource, on the one path where it matters: `appstore promote` is this
-  /// method's only caller, and it reads the listing to decide which build goes
-  /// to review.
+  /// resource. **Both its callers discard them**: `appstore promote`, which
+  /// reads the listing to decide which build goes to review, and
+  /// [printBuildNumber], whose output a shell script captures to name a
+  /// release. Neither wants the audience and both are on a release path.
   ///
   /// So the two reads differ in the include *and* the page size, which is why
   /// [_buildsQuery] holds both rather than each spelling its own literal.

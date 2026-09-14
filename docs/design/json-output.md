@@ -250,7 +250,7 @@ it is the one that gets a test observed failing with it removed.
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,
   "kind": "appstore.builds",
   "platform": "IOS",
   "bundleId": "design.codeux.example",
@@ -264,12 +264,26 @@ it is the one that gets a test observed failing with it removed.
       "uploadedDate": "2026-09-09T14:02:11-07:00",
       "expired": false,
       "usable": true,
-      "display": ["  build 169  VALID  uploaded 2026-09-09T14:02:11-07:00"]
+      "needsNewUpload": false,
+      "betaGroups": [{"name": "Team", "kind": "internal"}],
+      "unresolvedBetaGroups": 0,
+      "externalBuildState": "readyForBetaSubmission",
+      "externalBuildStateRaw": "READY_FOR_BETA_SUBMISSION",
+      "inExternalTesting": false,
+      "unresolvedBuildBetaDetail": false,
+      "display": ["  build 169  VALID  uploaded 2026-09-09T14:02:11-07:00  internal: Team  external: none (READY_FOR_BETA_SUBMISSION)"]
     }
   ],
-  "display": ["  build 169  VALID  uploaded 2026-09-09T14:02:11-07:00"]
+  "display": ["  build 169  VALID  uploaded 2026-09-09T14:02:11-07:00  internal: Team  external: none (READY_FOR_BETA_SUBMISSION)"]
 }
 ```
+
+**Schema 2, and every key is present because `fromJson` requires them.**
+`unresolvedBetaGroups` and `unresolvedBuildBetaDetail` are non-nullable with no
+default — a document omitting them is refused rather than read as *nothing was
+missing*, which is the reading they exist to prevent. This example carried the
+schema 1 shape until review noticed that the package would now reject its own
+published example.
 
 One build is the smallest example and the most misleading one: the two
 `display` arrays come out identical here and are not the same rendering. Past

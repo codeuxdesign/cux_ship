@@ -208,9 +208,14 @@ observed, not assumed.
 **The trap, which was real and narrower than it looked.** `AppStore.builds`
 delegated to `buildsWithIncluded` and dropped the map, which is the arrangement
 `getAll` has over `getAllWithIncluded`. It is also what `appstore promote`
-reads to decide which build goes to review — and `promote` is its only caller,
-`findBuild` and therefore `awaitProcessing` having always gone to `getAll`
-directly with their own query. While the delegation cost a wider response body
+reads to decide which build goes to review. It has **two** callers and both
+discard the sideloaded map — that one, and `printBuildNumber`, whose output a
+shell script captures to name a release; `findBuild` and therefore
+`awaitProcessing` have always gone to `getAll` directly with their own query.
+So both callers of the plain read are on a release path and neither wants the
+audience, which is a better reason for the split than *promote is the only
+one*, and is what that sentence said until review caught it. While the
+delegation cost a wider response body
 it was harmless; a page size of 50 would have made it four times the round
 trips on the release path to protect an `included` that path does not read. So
 `builds` now builds its own query, and `_buildsQuery` holds the include and the
@@ -256,7 +261,8 @@ it *can* have expired yet. Two things follow, and the second is the
 uncomfortable one:
 
 - **`filter[expired]=false` would cut nothing today.** It is a real future
-  lever — from roughly 2026-11-16 it would hold the listing to ninety days of
+  lever — from 2026-11-14, the account's first expiry, it would hold the
+  listing to ninety days of
   uploads instead of all of them — and there is currently no account to
   measure it against. Whether Apple accepts the parameter at all is still
   unanswered.

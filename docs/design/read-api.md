@@ -136,13 +136,24 @@ that comparator too. It is a change to printed output, and it is the change
 that makes "newest first" true.
 
 > **Corrected 2026-09-14.** Apple's `sort=-version` is **numeric**, measured
-> over 72 integer build numbers — so the two commands could not in fact have
-> disagreed about an integer build number, and this paragraph's justification
-> was wrong where its conclusion was right. The comparator stays, because
-> `CFBundleVersion` need not be an integer and Apple's ordering of `1.2.3` is
-> untested. See [testflight-audience.md](testflight-audience.md) §4. Left in
-> place rather than rewritten, for the reason this whole document is kept: what
-> was believed at the time is the part with value.
+> over 72 integer build numbers, so this paragraph's justification was wrong
+> where its conclusion was right: **sort order is not a way these two commands
+> can disagree about an integer build number.**
+>
+> Narrowed deliberately, because the first draft of this note said they *could
+> not have disagreed at all* and that is a different and false claim. They
+> still can, for a reason that has nothing to do with ordering: `appstore
+> build-number` filters to processed, unexpired builds before sorting, while
+> `AppStoreBuilds.newest` is the newest build Apple holds in any state. A build
+> uploaded four minutes ago makes them name different numbers correctly — which
+> is the distinction `newest` and `newestUsable` exist to carry, two paragraphs
+> down.
+>
+> The comparator stays, because `CFBundleVersion` need not be an integer and
+> Apple's ordering of `1.2.3` is untested. See
+> [testflight-audience.md](testflight-audience.md) §4. Left in place rather
+> than rewritten, for the reason this whole document is kept: what was believed
+> at the time is the part with value.
 
 `AppStoreBuilds` answers two questions that were one: `newest` is the highest
 build Apple holds, and `newestUsable` is the highest that is processed and

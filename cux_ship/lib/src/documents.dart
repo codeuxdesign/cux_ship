@@ -724,8 +724,20 @@ enum ExternalBuildState {
   /// Apple reports the build ready to give to external testers.
   readyForBetaTesting('readyForBetaTesting', 'READY_FOR_BETA_TESTING'),
 
-  /// **External testers can install this build now.** The one state that
-  /// answers yes.
+  /// **Beta review has cleared and Apple describes the build as in testing.**
+  ///
+  /// **Not sufficient on its own, and this used to say it was.** It read *the
+  /// one state that answers yes*, which contradicted
+  /// [AppStoreBuildEntry.inExternalTesting] once that moved to two facts:
+  /// delivery is this state *or* [betaApproved] *or* [readyForBetaTesting],
+  /// **and** an attached external group. A state says Apple would allow it; an
+  /// attachment says somebody asked for it. Read that field rather than
+  /// comparing against this member.
+  ///
+  /// It is also the state Apple did not once use across 123 builds measured
+  /// 2026-09-14 — [betaApproved] is the terminal one after review — so a
+  /// predicate written against this member alone is a constant `false`, which
+  /// is the defect `inExternalTesting` was changed to fix.
   inBetaTesting('inBetaTesting', 'IN_BETA_TESTING'),
 
   /// The build's ninety days are up.
