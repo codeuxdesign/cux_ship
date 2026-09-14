@@ -37,7 +37,24 @@
 # for the entire five-step suite over all three members. Doubling the loop to
 # ask a question that only moves when a doc comment is edited is a bad trade
 # for the loop; skipping the question entirely is a bad trade for the docs. So
-# CI always asks it and a contributor asks it when they have touched dartdoc.
+# CI always asks it.
+#
+# **And locally, nobody asks it — that rule used to be "ask when you have
+# touched dartdoc" and it does not survive contact with a session.** The
+# condition has to be re-evaluated every single run and nothing re-triggers it:
+# one change that legitimately touches a doc comment puts `--docs` into a shell
+# history, and it then rides every run after, including the design-document and
+# test-only ones where it cannot go red. A session on 2026-09-14 ran it on all
+# twelve commits of one branch; about half could not have been red, and it went
+# unnoticed because the cost is invisible — green looks identical either way,
+# and ninety-five seconds does not feel like spending when nobody is watching a
+# clock.
+#
+# The flag stays for the rare deliberate case and for `--docs-only`, which is
+# what CI calls. But the documented loop is the bare command, and a dartdoc
+# reference that does not resolve is caught on the push rather than before it —
+# which costs one red board and no judgement, against a rule that asks for
+# judgement on every invocation and gets it on the first.
 #
 # **It is written here rather than in the workflow so that the asymmetry is
 # *when* it runs and not *where* it is written.** ci.yaml calls
