@@ -274,8 +274,12 @@ uncomfortable one:
   ninety days of cadence and the growth problem does not exist.
 
 At 72 builds in 30 days and a page size of 50, today's cost is **two requests
-per platform**. A year of the same cadence is roughly 850 builds and seventeen.
-The problem is real and it is not yet urgent, which is the honest summary.
+per platform**. That cadence is 2.4 builds a day, so **a year from now** the
+account holds roughly 950 — the 72 it has plus 876 more — and the listing costs
+**nineteen** requests per platform per run. Every figure in this section counts
+that way: *in a year* means the total the account has reached, not one year's
+uploads on their own. The problem is real and it is not yet urgent, which is
+the honest summary.
 
 ### Caching is the wrong shape, and it is the shape §3 is about
 

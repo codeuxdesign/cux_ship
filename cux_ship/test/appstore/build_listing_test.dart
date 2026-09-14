@@ -1104,6 +1104,37 @@ void main() {
       expect(build.inExternalTesting, isNull);
     });
 
+    test('and null for a state this version has no word for', () {
+      // **Not-cleared and not-recognized are different facts**, and the
+      // complement of the cleared set collapses them: a value Apple adds after
+      // this release is simply not in it, and the `false` below would then say
+      // *external testers do not have this build* about a build whose state
+      // could not be read. `externalBuildStateRaw` is the whole of what is
+      // known there, which is what `ExternalBuildState.unknown` says in the
+      // published document.
+      final build = deliveryOf(
+        groupIds: const ['g-ext'],
+        groups: [_group('g-ext', name: 'Beta Testers', internal: false)],
+        externalState: 'SOMETHING_APPLE_ADDED_LATER',
+      );
+
+      expect(build.externalBuildState, 'SOMETHING_APPLE_ADDED_LATER');
+      expect(build.inExternalTesting, isNull);
+    });
+
+    test('and false for a known state that has not cleared review', () {
+      // The other side of the same guard, so the test above cannot be
+      // satisfied by a getter that answers null for every state it is shown.
+      // `IN_BETA_REVIEW` is Apple's and this version knows it.
+      final build = deliveryOf(
+        groupIds: const ['g-ext'],
+        groups: [_group('g-ext', name: 'Beta Testers', internal: false)],
+        externalState: 'IN_BETA_REVIEW',
+      );
+
+      expect(build.inExternalTesting, isFalse);
+    });
+
     test('and false for an expired build, whatever the other two say', () {
       // **Found in review, and both inputs were right.** An expired build that
       // cleared beta review and is attached to an external group answered

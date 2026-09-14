@@ -267,6 +267,32 @@ class AppStoreBuild {
     'IN_BETA_TESTING',
   };
 
+  /// Every external state this version has a word for — Apple's published
+  /// vocabulary, the same list [ExternalBuildState] carries.
+  ///
+  /// **Not in [_clearedBetaReview]'s complement, and the difference is a
+  /// reading.** *This state has not cleared review* and *this version does not
+  /// know this state* are different facts, and subtracting one set from the
+  /// other collapses them: a value Apple adds tomorrow is simply not in the
+  /// cleared set, and [inExternalTesting] would answer a confident `false`
+  /// about a build it cannot read the state of. That is the same conflation
+  /// [BetaGroupKind.unknown] refuses one field over, and the same one
+  /// [ExternalBuildState.unknown] exists for in the published document.
+  static const _knownExternalStates = <String>{
+    'PROCESSING',
+    'PROCESSING_EXCEPTION',
+    'MISSING_EXPORT_COMPLIANCE',
+    'IN_EXPORT_COMPLIANCE_REVIEW',
+    'READY_FOR_BETA_SUBMISSION',
+    'WAITING_FOR_BETA_REVIEW',
+    'IN_BETA_REVIEW',
+    'BETA_REJECTED',
+    'BETA_APPROVED',
+    'READY_FOR_BETA_TESTING',
+    'IN_BETA_TESTING',
+    'EXPIRED',
+  };
+
   /// Whether external testers can install this build now.
   ///
   /// **Two facts, because Apple splits the answer across two of them and
@@ -336,6 +362,16 @@ class AppStoreBuild {
     }
     final state = externalBuildState;
     if (state == null) {
+      return null;
+    }
+    if (!_knownExternalStates.contains(state)) {
+      // **A state this version has no word for is unanswered, not denied.**
+      // Falling through to the `false` below would treat every value Apple
+      // adds after this release as *external testers do not have this build* —
+      // a claim about a build whose state could not be read, which is the
+      // shape this getter is nullable to avoid. `externalBuildStateRaw` is
+      // then the whole of what is known, and the published document says so by
+      // mapping it to `ExternalBuildState.unknown`.
       return null;
     }
     if (!_clearedBetaReview.contains(state)) {
