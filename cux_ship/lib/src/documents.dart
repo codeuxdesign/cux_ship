@@ -973,10 +973,17 @@ class AppStoreBuildEntry {
   /// `BETA_APPROVED` and `IN_BETA_TESTING` did not occur once, so fourteen
   /// builds external testers demonstrably had reported that they did not.
   ///
-  /// Null also when this listing was answered short — see
-  /// [unresolvedBetaGroups] and [unresolvedBuildBetaDetail], which say which
-  /// of the two inputs went missing and are `0` and `false` on a complete
-  /// read.
+  /// **Null when this listing was answered short *and* the missing part could
+  /// have changed the answer** — see [unresolvedBetaGroups] and
+  /// [unresolvedBuildBetaDetail], which say which of the two inputs went
+  /// missing and are `0` and `false` on a complete read.
+  ///
+  /// The qualifier is load-bearing and this said *null when answered short*
+  /// without it, which is wrong in the one case a reader would hit first: a
+  /// build with a resolved external group and a shortfall beside it answers
+  /// `true`, because the groups that did not arrive could only have added
+  /// attachments. A shortfall makes an *empty* external list uninformative,
+  /// not a non-empty one.
   final bool? inExternalTesting;
 
   /// Whether Apple named a build beta detail for this build and did not send

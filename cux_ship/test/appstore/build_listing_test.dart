@@ -331,6 +331,12 @@ enum _Groups {
   truncatedNoneResolved,
   externalAndTruncated,
   internalAndTruncated,
+
+  /// Apple's own `meta.paging.total` exceeds the ids it sent — the
+  /// relationship's own pagination, which is a second and separate way for the
+  /// list to come up short from `included` being truncated. Every id present
+  /// resolves, so a count of unresolved ids alone reads this as complete.
+  totalBeyondTheIdsSent,
 }
 
 ({List<String>? ids, int? total, List<Map<String, dynamic>> resources})
@@ -374,6 +380,11 @@ _shapeOf(_Groups groups) {
     _Groups.internalAndTruncated => (
       ids: const ['g-int', 'g-gone'],
       total: null,
+      resources: [internal],
+    ),
+    _Groups.totalBeyondTheIdsSent => (
+      ids: const ['g-int'],
+      total: 3,
       resources: [internal],
     ),
   };
@@ -572,42 +583,127 @@ const _deliveryPrecedence =
         groups: _Groups.internalAndTruncated,
         expected: null,
       ),
-
-      // ---- cleared, nothing missing, nobody outside ----
       (
-        name: 'internal only, nothing missing, is a false nobody has to guess',
+        name: 'a paging total beyond the ids sent beats the terminal false',
         expired: false,
         state: 'BETA_APPROVED',
-        groups: _Groups.internalOnly,
+        groups: _Groups.totalBeyondTheIdsSent,
+        expected: null,
+      ),
+    ];
+
+/// The answer for each state Apple names, and for the two group shapes that
+/// end in a plain `false`. **Not precedence rows** — no later guard would have
+/// answered differently — so they are here rather than padding the table above
+/// with rows that prove nothing about order.
+///
+/// **This is the guard the first draft of these tests left open.** Three of the
+/// twelve states in `_knownExternalStates` were exercised by nothing at all, so
+/// dropping one from the set — or promoting one into `_clearedBetaReview` —
+/// passed all 1148 tests. A vocabulary nothing checks is the defect this whole
+/// branch keeps finding, and it was written three commits after the last one
+/// while fixing a different instance of it.
+///
+/// Each state is asked **with an external group attached and unexpired**, which
+/// is the one shape where all three answers are reachable: a state that has
+/// cleared review answers `true` there, one that has not answers `false`, and
+/// one the set does not name answers `null`. So a single row per state catches
+/// both directions of a vocabulary edit.
+const _deliveryVocabulary =
+    <({String name, String? state, _Groups groups, bool? expected})>[
+      // Not cleared. Every one of these answers `false` because the state says
+      // so, before the attached external group is even looked at.
+      (
+        name: 'PROCESSING has not cleared review',
+        state: 'PROCESSING',
+        groups: _Groups.externalAttached,
         expected: false,
       ),
       (
-        name: 'attached to nothing, nothing missing, is the same false',
-        expired: false,
-        state: 'BETA_APPROVED',
-        groups: _Groups.none,
+        name: 'PROCESSING_EXCEPTION has not cleared review',
+        state: 'PROCESSING_EXCEPTION',
+        groups: _Groups.externalAttached,
+        expected: false,
+      ),
+      (
+        name: 'MISSING_EXPORT_COMPLIANCE has not cleared review',
+        state: 'MISSING_EXPORT_COMPLIANCE',
+        groups: _Groups.externalAttached,
+        expected: false,
+      ),
+      (
+        name: 'IN_EXPORT_COMPLIANCE_REVIEW has not cleared review',
+        state: 'IN_EXPORT_COMPLIANCE_REVIEW',
+        groups: _Groups.externalAttached,
+        expected: false,
+      ),
+      (
+        name: 'READY_FOR_BETA_SUBMISSION has not cleared review',
+        state: 'READY_FOR_BETA_SUBMISSION',
+        groups: _Groups.externalAttached,
+        expected: false,
+      ),
+      (
+        name: 'WAITING_FOR_BETA_REVIEW has not cleared review',
+        state: 'WAITING_FOR_BETA_REVIEW',
+        groups: _Groups.externalAttached,
+        expected: false,
+      ),
+      (
+        name: 'IN_BETA_REVIEW has not cleared review',
+        state: 'IN_BETA_REVIEW',
+        groups: _Groups.externalAttached,
+        expected: false,
+      ),
+      (
+        name: 'BETA_REJECTED has not cleared review',
+        state: 'BETA_REJECTED',
+        groups: _Groups.externalAttached,
+        expected: false,
+      ),
+      (
+        name: 'EXPIRED, the state, has not cleared review',
+        state: 'EXPIRED',
+        groups: _Groups.externalAttached,
         expected: false,
       ),
 
-      // ---- the other two states the cleared set names ----
-      //
-      // Neither was observed once across 123 builds — `BETA_APPROVED` is
-      // Apple's terminal state after review — so these rows are the whole of
-      // what holds them in the set, and the set is what makes them not a
-      // constant `false` the way the first shape of this getter was.
+      // Cleared. `BETA_APPROVED` is the only one of the three observed across
+      // 123 builds — Apple's terminal state after review — so these rows are
+      // the whole of what holds the other two in the set, and the set is what
+      // keeps this getter from being the constant `false` its first shape was.
       (
-        name: 'ready for beta testing clears review too',
-        expired: false,
+        name: 'BETA_APPROVED has cleared review',
+        state: 'BETA_APPROVED',
+        groups: _Groups.externalAttached,
+        expected: true,
+      ),
+      (
+        name: 'READY_FOR_BETA_TESTING has cleared review',
         state: 'READY_FOR_BETA_TESTING',
         groups: _Groups.externalAttached,
         expected: true,
       ),
       (
-        name: 'and so does in beta testing, which Apple has never sent here',
-        expired: false,
+        name: 'IN_BETA_TESTING has cleared review, and Apple never sends it',
         state: 'IN_BETA_TESTING',
         groups: _Groups.externalAttached,
         expected: true,
+      ),
+
+      // The two shapes that reach the terminal `false`: cleared review, nothing
+      // missing, and nobody outside.
+      (
+        name: 'cleared review with an internal group only is a plain false',
+        state: 'BETA_APPROVED',
+        groups: _Groups.internalOnly,
+        expected: false,
+      ),
+      (
+        name: 'cleared review attached to nothing is the same plain false',
+        state: 'BETA_APPROVED',
+        groups: _Groups.none,
+        expected: false,
       ),
     ];
 
@@ -1577,6 +1673,22 @@ void main() {
           reason:
               'expired=${row.expired} state=${row.state} '
               'groups=${row.groups.name}',
+        );
+      });
+    }
+  });
+
+  group('external delivery, one answer for every state Apple names', () {
+    for (final row in _deliveryVocabulary) {
+      test(row.name, () {
+        expect(
+          _deliveryOf(
+            expired: false,
+            state: row.state,
+            groups: row.groups,
+          ).inExternalTesting,
+          row.expected,
+          reason: 'state=${row.state} groups=${row.groups.name}',
         );
       });
     }
