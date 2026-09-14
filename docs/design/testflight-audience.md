@@ -218,14 +218,23 @@ page size together because they are one decision.
 
 ## 4. How much of the listing a read needs
 
-Status: **open**. Nothing here is built, and the recommendation is that nothing
-here is built yet — this section exists so the next person starts from the
-measurements rather than from the question.
+Status: **decided**, and the decision is that the listing stays whole and
+nothing is built. Kept because the measurements are what settled it, and
+because the same question will be asked again the next time somebody counts the
+round trips.
 
 §3 made each response smaller. It did not make the *listing* smaller: every
 `appstore builds` run still reads every build App Store Connect holds for the
-app on that platform, following `links.next` to exhaustion. Asked whether that
-could be avoided by caching.
+app on that platform, following `links.next` to exhaustion — and §3 made that
+four times as many requests, since the page size went from 200 to 50. Asked
+whether that could be avoided by caching, or by reading fewer builds.
+
+**The short answer is that the listing's callers need the listing.** The
+consumer's grid is a join over every version ever uploaded, not a snapshot of
+the current one, and paging at the cap is the cheapest *correct* read of that
+question — every scheme that keeps the larger page and repairs it afterwards
+costs more. What did come out of asking is two corrections to what this package
+says about Apple, below, which is the better half of the section.
 
 ### The listing does not shrink, and the account is too young to prove it
 
@@ -341,13 +350,24 @@ Apple validates sort keys and refuses unknown ones by name, so a key that
 passes validation *and* inverts under a sign change is one it applies. A
 bounded read can therefore order server-side, by either key.
 
-### So a bounded listing is viable, and the reason not to build it is not correctness
+### A bounded listing is technically possible and is ruled out on the consumer's numbers
 
 With the ordering measured, `sort=-version&limit=N` returns the newest `N`
 builds by build number, server-side, in one request — and for `N` at or below
 the cap the sideloads all arrive, so the audience comes with it. That is
 **one request per platform at any account size**, against `ceil(B / 50)` today:
-two now, seventeen at a year of this cadence.
+two now, nineteen at a year of this cadence.
+
+**It is still wrong, and the margin is two days.** The consumer's grid is not a
+snapshot; it is a join of the whole listing against every `uploaded/vX.Y.Z+N`
+tag in its repository — 108 tags, nine rendered rows, back to version 1.1.0.
+The oldest build it needs is 122, which is rank 26 of 51 on iOS and **rank 45
+of 72 on macOS**. At `limit: 50` that is five builds of headroom, and at the
+measured 2.4 builds a day it runs out in about two days. The row would then go
+blank rather than error — *no build for this version* wearing the clothes of
+*I did not read far enough*, which is §3's defect reappearing in the consumer.
+
+That is the argument that bites; the one below is the general one.
 
 §3's non-positional finding does not block that. It rules out keeping the large
 page and reading the top of it; it says nothing against asking for a small page,
@@ -379,41 +399,94 @@ complete, so every accessor keeps answering what it answers now and only the
 *audience* is bounded, which is a narrowing the model can already express:
 `betaGroups: null` means *this read did not ask*.
 
-| | requests |
-|---|---|
-| today | `ceil(B / 50)` |
-| bounded listing | `1` |
-| bounded enrichment | `ceil(B / 200) + N` |
+Every option counted the same way, at 72 builds with `N` of 20:
 
-At 72 builds and `N` of 20 that is 2, 1 and 21. Bounded enrichment is the worst
-of the three on requests at every size this account will reach, and it is
-listed because it is the only one that costs nothing semantically — which is
-the trade to revisit if the narrowing above turns out to matter more than the
-round trips.
+| | requests | now | in a year |
+|---|---|---|---|
+| **today** — page at the cap | `ceil(B / 50)` | **2** | 19 |
+| the old, wrong page size | `ceil(B / 200)` | 1 | 5 |
+| bounded listing | `1` | 1 | 1 |
+| bounded enrichment | `ceil(B / 200) + N` | 21 | 25 |
+| large page, backfill the holes | `ceil(B / 200) + holes` | 23 | — |
+| detail only where an external group is attached | `ceil(B / 200) + 14` | 15 | — |
 
-### What would have to be true
+**Only the bounded listing beats paging at the cap, and it is the one that is
+wrong.** Every scheme that keeps the 200-build page and repairs the truncation
+afterwards costs an order more, because a repair is a request per build and a
+page is a request per fifty. That is worth having in a table: 4× the round
+trips of a wrong answer looks like something to optimise until the alternatives
+are counted.
 
-The bounded listing is the answer if this is ever worth doing. It is not worth
-doing yet, and the reason is size rather than doubt:
+Bounded enrichment is kept in the list because it is the only one that costs
+nothing semantically — the listing stays complete and only the *audience* is
+bounded, which the model can already express, `betaGroups: null` meaning *this
+read did not ask*. It is simply not worth 21 requests.
 
-1. **An account where it matters.** The whole saving today is one request per
-   platform. Revisit when a real account crosses roughly 200 builds — four
-   pages — or when a run is observably slow rather than theoretically so.
-2. **Somebody who wants the narrowing, or does not mind it.** `appstore builds`
-   currently answers *every build Apple holds*, and a bound makes it answer
-   *the newest N*. That is a change to what the document means, so it wants a
-   caller asking for it rather than a round-trip count justifying it. The
-   consumer this package serves renders three builds per platform, so it would
-   almost certainly not mind — but it has not been asked.
-3. **A dotted `CFBundleVersion` somewhere to measure.** Bounding hands Apple
-   the ordering decision, and Apple's ordering is measured only over integers.
+### The general argument, which outlives this consumer's tag list
 
-**`filter[expired]` is the cheapest lever of all and is simply too early.** It
-needs only that the account reach ninety days, from which point it would hold
-the listing to ninety days of uploads rather than all of them — and it narrows
-nothing a caller wants, since `usable` already excludes what it would remove.
-Whether Apple accepts the parameter is still unmeasured, and there would be
-nothing to observe if it did.
+*Which build does each testing group have* looks like a question a small read
+could answer, and a bounded listing cannot answer it even when the caller wants
+only that. Delivery to an external group is not recent by construction: if
+nobody has shipped externally for three months, that group's current build is
+two hundred rows down. A newest-`N` read finds nothing attached and the column
+renders empty — *nobody outside has anything*, where the truth is *I did not
+read far enough*.
+
+**Bounding is only safe for a question whose answer is guaranteed to sit near
+the top of the ordering being bounded, and neither question here is.** The
+consumer's is anchored to a tag list going back nine versions; the general one
+is anchored to whenever somebody last shipped. That is the durable form of the
+two-day number above, and it is why this is decided rather than deferred.
+
+### Decided: nothing is built, and the listing keeps its price
+
+`appstore builds` goes on answering *every build Apple holds* at
+`ceil(B / 50)`. That is the honest price of the question, and §3 is why it is
+not `ceil(B / 200)`: the cheaper page returned a wrong answer for 22 of 72
+builds. The alternatives that keep the larger page and repair it afterwards are
+worse anyway — backfilling the 22 missing details is 23 requests against 2, and
+fetching `buildBetaDetail` only for the 14 builds with an external group is 15.
+**Paging at the cap is the cheapest correct read of this question**, which is
+worth stating because 4× the round trips of a wrong answer invites a second
+look that this saves.
+
+**A per-group read would be an addition with no caller, so it is not built
+either.** It is a genuinely better answer to *who has what right now* — roughly
+`1 + (external groups)` requests, flat in build count — but the consumer that
+prompted this needs the historical join and would still read the full listing,
+so it would save nobody anything today. `read-api.md` records what this package
+does with a surface that has no known caller, and it is not to keep it.
+
+Two measurements make the shape of that read cheaper to revisit, so they are
+recorded rather than discarded. **Internal attachment is universal**: 51 of 51
+iOS builds and 72 of 72 macOS builds carry the internal group, so
+*the internal group's current build* is not a group question at all — it is the
+newest processed build. External attachment is real data, 14 builds on each
+platform, spanning 53 to 180. And **beta groups are app-wide, not
+per-platform**: this account has exactly two, and both platforms' builds
+reference the same two, so a four-column `internal × platform` grid cannot come
+from groups — the platform split has to come from the builds.
+
+**Caching belongs to the consumer, for a better reason than statelessness.**
+The argument against it here was staleness, and opt-in caching with a stated
+age answers that. What does not survive the move is *invalidation*: a
+per-read spawned CLI can only invalidate on age, which is the weakest rule
+available, while the caller that just ran an upload knows it invalidated the
+store. The cache belongs where the writes are, not where the reads are.
+
+**Progress reporting would report on the part that is not slow.** A `status`
+run spawns five reads and takes about 50 seconds, most of it Dart startup
+rather than HTTP. If it is ever built, the requirement is already fixed: `==> `
+prose on stderr, which is this package's existing convention and which the
+consumer's panel already parses as a phase milestone, with the document
+untouched on stdout. NDJSON would need a parser on both sides to be no better.
+
+**`filter[expired]` survives as the one lever still worth having**, and it is
+simply too early: it needs only that the account reach ninety days, from which
+point it would hold the listing to ninety days of uploads rather than all of
+them, and it narrows nothing a caller wants since `usable` already excludes
+what it would remove. Whether Apple accepts the parameter is unmeasured, and
+there would be nothing to observe if it did.
 
 The reason to write all this down rather than act on it is the one §3 earned
 the hard way: the previous change to this request was made against a
