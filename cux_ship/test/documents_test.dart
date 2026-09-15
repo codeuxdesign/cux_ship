@@ -389,6 +389,7 @@ void main() {
         PlayTracksDocument,
         VerifyDocument,
         AppStoreListingDiffDocument,
+        StorefrontReleasedDocument,
         // **Two kinds whose "document" is one line of a stream.** The rule the
         // length assertion below states is about *nameability* — a kind a
         // consumer cannot decode into a type is a kind it cannot read — and
@@ -408,6 +409,11 @@ void main() {
         PlayTrackEntry,
         VerifyCheck,
         ListingChangeSet,
+        // **The only one of these that is nullable on its document**, because
+        // the storefront not holding an app is an answer rather than an empty
+        // list. A consumer still has to be able to name the type to write the
+        // null check, which is what this list is about.
+        StorefrontAppEntry,
         PlayUploadResult,
         AppStoreUploadResult,
       ];

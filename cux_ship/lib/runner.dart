@@ -43,6 +43,7 @@ import 'src/project.dart';
 import 'src/provenance.dart';
 import 'src/release.dart';
 import 'src/secrets.dart';
+import 'src/storefront/cli.dart';
 
 /// Builds the whole command tree.
 CommandRunner<void> buildRunner() {
@@ -82,6 +83,7 @@ CommandRunner<void> buildRunner() {
   return runner
     ..addCommand(_AppstoreCommand())
     ..addCommand(_PlayCommand())
+    ..addCommand(_StorefrontCommand())
     ..addCommand(_ReleaseCommand())
     ..addCommand(_ManifestCommand())
     ..addCommand(_ScreenshotsCommand())
@@ -831,6 +833,69 @@ class _ManifestWriteCommand extends Command<void> {
       stderr.writeln('cux_ship manifest write: ${e.message}');
       exitCode = 1;
     }
+  }
+}
+
+// ------------------------------------------------------------- storefront
+
+/// The public App Store storefront, which is a different Apple product from
+/// App Store Connect and is deliberately not under `appstore`.
+///
+/// Every `appstore` subcommand loads an App Store Connect key. Nothing here
+/// does, and the consuming release train must not wrap this in
+/// `secrets exec --only …` — which is a property read off a command line in a
+/// log, so the command line is where it is visible.
+class _StorefrontCommand extends Command<void> {
+  _StorefrontCommand() {
+    for (final cmd in StorefrontCommand.values) {
+      addSubcommand(_StorefrontSubcommand(cmd));
+    }
+  }
+
+  @override
+  String get name => 'storefront';
+
+  @override
+  String get description =>
+      "Apple's public App Store, read without a credential. Not Google Play: "
+      'a Play listing shows an update date only as HTML, and the Play '
+      'Developer API carries no release timestamp at all.';
+}
+
+class _StorefrontSubcommand extends Command<void> {
+  _StorefrontSubcommand(this.cmd) : argParser = buildStorefrontParser(cmd);
+
+  final StorefrontCommand cmd;
+
+  @override
+  final ArgParser argParser;
+
+  @override
+  String get name => cmd.name;
+
+  @override
+  String get description => switch (cmd) {
+    StorefrontCommand.released =>
+      'Print what the public App Store is showing for an app, and when that '
+          'version reached it — which App Store Connect cannot say. Describes '
+          'an app rather than a platform, and exits 6 for an app the '
+          'storefront does not hold.',
+  };
+
+  @override
+  Future<void> run() {
+    // **The project is read only when it has to be**, so this command works
+    // from anywhere with an explicit `--bundle-id`. Every other read here
+    // reaches a store the project also has to name; this one is answerable
+    // about any app on the store.
+    final bundleId = argResults!.option('bundle-id');
+    return runStorefront(
+      cmd,
+      argResults!,
+      defaults: bundleId != null
+          ? StorefrontDefaults.none
+          : StorefrontDefaults(bundleId: _project(this).bundleIdFor('ios')),
+    );
   }
 }
 

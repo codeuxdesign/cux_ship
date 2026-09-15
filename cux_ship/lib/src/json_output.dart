@@ -28,6 +28,7 @@ import 'appstore/cli.dart';
 import 'appstore/reads.dart';
 import 'documents.dart';
 import 'play/reads.dart';
+import 'storefront/reads.dart';
 
 /// The schema `appstore builds` declares.
 ///
@@ -60,6 +61,16 @@ const appStorePreviewsSchema = 1;
 
 /// The schema `play tracks` declares. See [appStoreBuildsSchema].
 const playTracksSchema = 1;
+
+/// The schema `storefront released` declares.
+///
+/// **A counter of its own is the whole argument for this document existing
+/// separately**, rather than a consequence of the per-kind rule. The
+/// storefront is undocumented and can move without notice; sharing
+/// [appStoreVersionsSchema] would mean the day it does, a consumer of the
+/// authenticated versions read is told to re-read a document that did not
+/// change. See docs/design/storefront-release-date.md.
+const storefrontReleasedSchema = 1;
 
 /// The schema `verify` declares. See [appStoreBuildsSchema].
 const verifySchema = 1;
@@ -484,5 +495,51 @@ PlayReleaseEntry _release(PlayTrackRelease release, String track) {
     // tracks and the rendering says which track it is on, so the line needs
     // an argument the object does not carry.
     display: <String>[release.lineOn(track)],
+  );
+}
+
+/// `cux_ship storefront released --json`.
+///
+/// **No `platform` argument, because there is no platform to pass.** Every
+/// other App Store document in this file takes one; the storefront answers per
+/// app, measured, so a platform here would be a value the caller chose rather
+/// than one the store said — which is the shape a consumer would then key two
+/// grid columns on. See docs/design/storefront-release-date.md.
+///
+/// **`app` is null and `display` is a sentence when the storefront knows no
+/// such app**, rather than the document being withheld: absence is an answer
+/// and belongs in the document, and the exit code is what says which answer it
+/// was. The alternative — prose on stderr and an empty stdout — would leave
+/// the consumer composing its own "not released yet" line, which is exactly
+/// what `display` exists to stop.
+StorefrontReleasedDocument storefrontReleasedDocument(
+  StorefrontRelease release,
+) {
+  final app = release.app;
+  return StorefrontReleasedDocument(
+    schema: storefrontReleasedSchema,
+    kind: DocumentKind.storefrontReleased,
+    bundleId: release.bundleId,
+    country: release.country,
+    app: app == null
+        ? null
+        : StorefrontAppEntry(
+            appleId: app.appleId,
+            appName: app.appName,
+            // Apple's word, unchanged and with no vocabulary of ours beside
+            // it — the one deliberate exception in these documents, argued at
+            // [StorefrontAppEntry.productKind]: ours would be a vocabulary of
+            // platforms, and the storefront does not answer per platform.
+            productKind: app.productKind,
+            version: app.version,
+            versionReleasedDate: app.versionReleasedDate,
+            firstReleasedDate: app.firstReleasedDate,
+            storeUrl: app.storeUrl,
+            display: app.lines,
+          ),
+    // Not the concatenation of the app's `display`: this carries a heading
+    // naming what was asked and which storefront answered, and for an app the
+    // storefront does not know it is the only thing carrying meaning at all.
+    display: release.lines,
   );
 }
