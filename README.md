@@ -27,6 +27,13 @@ history: `git blame` is usually the only way to recover why a line exists.
 command tree, monorepo layouts, credentials and sops, pinned `sops`/`age`
 binaries, and the Apple and Play behavior each command works around.
 
+**Why the shape around it is what it is: [`docs/ADOPTING.md`](docs/ADOPTING.md)** —
+the arguments one project arrived at while composing a pipeline out of these
+packages. Why not fastlane, why a pinned wrapper rather than a bare command
+name, why the verify half has no dependencies, and why regenerated store media
+belongs in a manifest rather than in git. Reasoning rather than a setup guide;
+the guide gets written during the first migration onto it, not before.
+
 ## For agents
 
 [`skills/cux-ship-releasing`](cux_ship/skills/cux-ship-releasing/SKILL.md) is a skill for an AI agent setting
