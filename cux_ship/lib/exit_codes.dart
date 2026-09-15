@@ -42,3 +42,4 @@ export 'src/appstore/app_store.dart'
     show noSuchVersionExit, previewsPendingExit;
 export 'src/appstore/flatten_cli.dart' show needsFlatteningExit;
 export 'src/provenance.dart' show uploadCollisionExit;
+export 'src/storefront/cli.dart' show notOnStorefrontExit;

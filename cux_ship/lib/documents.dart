@@ -81,6 +81,8 @@ export 'src/documents.dart'
         PlayUploadResult,
         ProcessingState,
         ReleaseType,
+        StorefrontAppEntry,
+        StorefrontReleasedDocument,
         UploadEvent,
         UploadState,
         VerifyCheck,

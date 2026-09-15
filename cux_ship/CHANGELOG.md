@@ -1,5 +1,57 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+**`cux_ship storefront released` — when a version actually reached the public.**
+Its own command group, its own `storefront.released` document kind and schema
+counter, and exit code **6** for an app the storefront does not hold.
+`docs/design/storefront-release-date.md` is the argument and the measurements.
+
+App Store Connect cannot answer this. `appStoreVersions` carries `createdDate`,
+which is when somebody first typed a version number into the console, and
+`earliestReleaseDate`, which is null for every manual release — and nothing in
+this package read a date on a version at all.
+`appStoreVersionPhasedRelease.startDate` exists only under `--phased`. Apple's
+own forum thread has the gap unresolved with a filed feedback against it.
+
+The public storefront does answer it, unauthenticated — so this command
+**consumes no credential**, which is why it is not a subcommand of `appstore`:
+every member of that group loads an App Store Connect key, and a credential-free
+read placed among them reads, from a log, like one that had not got to the auth
+step yet. It must not be wrapped in `secrets exec`.
+
+**Its own kind rather than a field on `appstore versions`, and that is the
+load-bearing decision.** The storefront is a different Apple product:
+undocumented, rate-limited, with no published schema and reported cases of the
+date disagreeing with the console. Behind one `schema` promise with the
+authenticated read, the day it drifts it takes that read down too.
+
+**It describes an app, not a platform, and the document has no `platform`
+field.** Measured rather than assumed: `/lookup` ignores `entity` and answers
+one record for a universal purchase, and a `/search` restricted to
+`macSoftware` returns that same record — same id, same version, same date. A
+consumer therefore cannot fill two per-platform columns from one of these,
+because there is nothing in it to key them on. `--bundle-id` defaults to the
+*iOS* identifier, which is the one a universal purchase is filed under.
+
+`--country` chooses which storefront answers and defaults to `us`, not to
+anything read off the machine. An app that is not sold on that storefront
+answers exactly like one that has never been released, which is why the flag
+exists rather than the value being a constant.
+
+**Apple's two date names do not survive into the document.** `releaseDate`
+means the app's *first ever* release while reading as the answer, so the fields
+are `versionReleasedDate` (Apple's `currentVersionReleaseDate`) and
+`firstReleasedDate`, each naming Apple's key in its own dartdoc. That rename is
+the one this release would most regret getting wrong: swapped, every app older
+than its current version reports a plausible, silent, wrong date.
+
+**Not invented for Google Play, deliberately.** `TrackRelease` carries no
+timestamp on any field and the Edits API cannot list past edits; the public
+listing's "Updated on" is HTML only.
+
 ## 4.5.0-dev.5
 
 ### Fixed

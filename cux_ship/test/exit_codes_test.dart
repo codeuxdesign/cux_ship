@@ -24,6 +24,7 @@ import 'package:cux_ship/src/appstore/app_store.dart'
 import 'package:cux_ship/src/appstore/flatten_cli.dart'
     show needsFlatteningExit;
 import 'package:cux_ship/src/provenance.dart' show uploadCollisionExit;
+import 'package:cux_ship/src/storefront/cli.dart' show notOnStorefrontExit;
 import 'package:test/test.dart';
 
 import 'cli_snapshot.dart';
@@ -231,11 +232,13 @@ void main() {
     expect(public.uploadCollisionExit, uploadCollisionExit);
     expect(public.previewsPendingExit, previewsPendingExit);
     expect(public.noSuchVersionExit, noSuchVersionExit);
+    expect(public.notOnStorefrontExit, notOnStorefrontExit);
 
     expect(needsFlatteningExit, 2);
     expect(uploadCollisionExit, 3);
     expect(previewsPendingExit, 4);
     expect(noSuchVersionExit, 5);
+    expect(notOnStorefrontExit, 6);
 
     // And no two of them are the same, which is the property the numbers
     // exist for: one code per distinct condition. Written as a set so adding
@@ -248,6 +251,7 @@ void main() {
       uploadCollisionExit,
       previewsPendingExit,
       noSuchVersionExit,
+      notOnStorefrontExit,
       64,
     ];
     expect(all.toSet(), hasLength(all.length));

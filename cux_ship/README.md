@@ -37,7 +37,7 @@ cux_ship appstore upload            play upload            release finish
          appstore what-to-test      play listing           verify
          appstore beta-groups       play version-code      secrets add
          appstore builds            play data-safety       secrets check
-         appstore versions                                 secrets list
+         appstore versions          storefront released    secrets list
          appstore screenshot-types                         secrets remove
          appstore build-number                             secrets exec
          appstore wait                                     secrets place
@@ -643,6 +643,7 @@ means two things:
 | **3** | upload collision | Apple or Play already holds this build number |
 | **4** | previews still ingesting | `appstore wait-previews` reached its deadline |
 | **5** | no such version | Apple holds no version by the name that was asked for |
+| **6** | not on the storefront | the public App Store holds no such app — `storefront released` |
 | **64** | the parser refused | an unknown option, a missing value, an unknown command |
 | **255** | a crash | an exception nothing named — the stack trace is the report |
 
@@ -680,7 +681,13 @@ and it holds *by command*: within `appstore`, `play`, `screenshots` and
 `release`, the table is exact. Anything wrapping `exec` must read the status as
 the child's.
 
-**2, 3, 4 and 5 are not failures**, in the sense that the command did what it
+**6 is the rule being spent again**, and the pair is worth reading together: 5
+is *App Store Connect holds no version called 1.1.8*, and 6 is *the public
+storefront has never heard of this app*. One number over both would report a
+version nobody has created yet and an app that has never shipped as the same
+event, and they have different next actions.
+
+**2, 3, 4, 5 and 6 are not failures**, in the sense that the command did what it
 could and the answer is the exit status — but *that property is not what any of
 the numbers means*, and a caller must not treat "non-1 and non-0" as a category.
 255 and the `exec` pass-through above are the proof of that: both are non-zero,
@@ -701,7 +708,7 @@ left a caller matching prose to tell the commonest path from the failures.
 
 **The rule for anything added later, so a caller can size its risk:** an
 existing code never changes meaning, and a new condition takes a new number
-rather than joining an old one. So a future waiting command would exit 6, not 4
+rather than joining an old one. So a future waiting command would exit 7, not 4
 — even though "a wait did not finish" describes both. Conflating two conditions
 under one number is the thing this vocabulary exists to prevent, and it applies
 to the future as much as to the past.
@@ -829,6 +836,65 @@ the same as `unknown`.
 
 This adds nothing to what the command does: these are value types over what it
 printed.
+
+### When the public actually got a version
+
+**`storefront released` answers the one thing App Store Connect cannot.**
+`appStoreVersions` carries `createdDate` — when somebody first typed a version
+number into the console — and `earliestReleaseDate`, which is null for every
+manual release. Neither is the day the app went out.
+
+```bash
+cux_ship storefront released --bundle-id design.codeux.howitwent --json \
+  | jq -r '.app.versionReleasedDate'
+```
+
+**It takes no credential, and that is the point of it being its own command.**
+Every `appstore` subcommand loads an App Store Connect key; this reads the
+public storefront, so it must not be wrapped in `secrets exec` — a
+credential-free read placed by a credential placer is indistinguishable, from a
+log, from one that needs the key.
+
+**It describes an app, not a platform, and there is no `--platform` to pass.**
+The storefront returns one record for a universal purchase: `/lookup` ignores
+`entity`, and a search restricted to `macSoftware` comes back with that same
+record, the same id, the same version and the same date. So **do not fill two
+per-platform columns from one of these.** A project that lists its Mac app under
+its own bundle identifier has two records and can ask twice; `--bundle-id`
+defaults to the *iOS* identifier, which is the one a universal purchase is filed
+under.
+
+**`--country` chooses which storefront answers, and defaults to `us`.** It is
+not inferred from the machine, because the same command would then answer
+differently on a laptop and in CI. An app that is **not sold** on that
+storefront answers exactly like one that has never been released — so a project
+that does not sell in the US has to set this.
+
+**An app the storefront does not hold is an answer, not a failure**: the
+document is still printed with `"app": null` and a `display` sentence saying so,
+and the command exits **6**. Print the sentence rather than composing one.
+
+**Two dates, and the names are ours rather than Apple's.**
+`versionReleasedDate` is when the public got the version now showing, and
+`firstReleasedDate` is when the app first shipped at all — Apple calls those
+`currentVersionReleaseDate` and `releaseDate`, and that second name reads as the
+answer while meaning launch day. Compare `version` against what you believe is
+live before trusting the date: if the storefront still shows the previous
+version, the date is the previous version's.
+
+**It is the storefront, not App Store Connect.** Undocumented, rate-limited, and
+with reported cases of the date disagreeing with the console — which is why it
+carries its own `kind` and its own `schema` counter rather than joining
+`appstore.versions`, so the day it drifts it cannot take the authenticated read
+down with it. Put the two side by side: one says which version is
+`READY_FOR_SALE`, the other says when the public got it.
+[docs/design/storefront-release-date.md](https://github.com/codeuxdesign/cux_ship/blob/main/docs/design/storefront-release-date.md)
+is the argument, and the measurements.
+
+**Google Play has no equivalent and none is invented here.** `TrackRelease`
+carries no timestamp on any field, and the Edits API cannot list past edits; the
+public listing's "Updated on" is HTML. A Play release date would have to be
+scraped, so this command group is Apple's alone.
 
 ### Watching an upload as JSON
 

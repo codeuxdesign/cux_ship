@@ -138,6 +138,7 @@ const _$DocumentKindEnumMap = {
   DocumentKind.playTracks: 'play.tracks',
   DocumentKind.appStoreListingDiff: 'appstore.listing-diff',
   DocumentKind.verify: 'verify',
+  DocumentKind.storefrontReleased: 'storefront.released',
   DocumentKind.playUpload: 'play.upload',
   DocumentKind.appStoreUpload: 'appstore.upload',
 };
@@ -567,4 +568,54 @@ Map<String, dynamic> _$AppStoreUploadResultToJson(
   'versionName': ?instance.versionName,
   'buildNumber': ?instance.buildNumber,
   'waitedForProcessing': instance.waitedForProcessing,
+};
+
+StorefrontAppEntry _$StorefrontAppEntryFromJson(Map<String, dynamic> json) =>
+    StorefrontAppEntry(
+      appleId: (json['appleId'] as num?)?.toInt(),
+      appName: json['appName'] as String?,
+      productKind: json['productKind'] as String?,
+      version: json['version'] as String?,
+      versionReleasedDate: json['versionReleasedDate'] as String?,
+      firstReleasedDate: json['firstReleasedDate'] as String?,
+      storeUrl: json['storeUrl'] as String?,
+      display: (json['display'] as List<dynamic>)
+          .map((e) => e as String)
+          .toList(),
+    );
+
+Map<String, dynamic> _$StorefrontAppEntryToJson(StorefrontAppEntry instance) =>
+    <String, dynamic>{
+      'appleId': instance.appleId,
+      'appName': instance.appName,
+      'productKind': instance.productKind,
+      'version': instance.version,
+      'versionReleasedDate': instance.versionReleasedDate,
+      'firstReleasedDate': instance.firstReleasedDate,
+      'storeUrl': instance.storeUrl,
+      'display': instance.display,
+    };
+
+StorefrontReleasedDocument _$StorefrontReleasedDocumentFromJson(
+  Map<String, dynamic> json,
+) => StorefrontReleasedDocument(
+  schema: (json['schema'] as num).toInt(),
+  kind: $enumDecode(_$DocumentKindEnumMap, json['kind']),
+  bundleId: json['bundleId'] as String,
+  country: json['country'] as String,
+  app: json['app'] == null
+      ? null
+      : StorefrontAppEntry.fromJson(json['app'] as Map<String, dynamic>),
+  display: (json['display'] as List<dynamic>).map((e) => e as String).toList(),
+);
+
+Map<String, dynamic> _$StorefrontReleasedDocumentToJson(
+  StorefrontReleasedDocument instance,
+) => <String, dynamic>{
+  'schema': instance.schema,
+  'kind': _$DocumentKindEnumMap[instance.kind]!,
+  'bundleId': instance.bundleId,
+  'country': instance.country,
+  'app': instance.app?.toJson(),
+  'display': instance.display,
 };

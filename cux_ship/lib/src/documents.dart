@@ -88,6 +88,19 @@ enum DocumentKind {
   /// it is not `appstore.verify`.
   verify('verify'),
 
+  /// **Its own kind rather than a field on [appStoreVersions], and the
+  /// separation is the point.** This comes from the public storefront, which
+  /// is a different Apple product from App Store Connect: undocumented,
+  /// rate-limited, unauthenticated, with no published schema and known cases
+  /// of the date being wrong. Behind one `schema` promise with the
+  /// authenticated read, the day it drifts it would take that read down too.
+  /// Its own kind fails in its own lane.
+  ///
+  /// **It describes an app, not a platform's release**, which is why
+  /// [StorefrontReleasedDocument] is the one App Store document with no
+  /// `platform` — measured, in docs/design/storefront-release-date.md.
+  storefrontReleased('storefront.released'),
+
   /// One line of `play upload --json`, which is a **stream** rather than a
   /// document — see [PlayUploadEvent].
   playUpload('play.upload'),
@@ -2123,4 +2136,149 @@ class AppStoreUploadResult {
   final bool waitedForProcessing;
 
   Map<String, dynamic> toJson() => _$AppStoreUploadResultToJson(this);
+}
+
+/// One app, as the public App Store storefront holds it.
+///
+/// **Apple's key names are not kept here, which is the opposite of
+/// [AppStorePreviewEntry] and is argued rather than inconsistent.** That class
+/// keeps Apple's names so a reader can put the document beside Apple's API
+/// reference; this endpoint is undocumented and has no reference page to put
+/// it beside. What it has instead is legacy iTunes Store vocabulary — an app
+/// is a "track" — and in `releaseDate` a name that reads as the answer and is
+/// not. Each field below names Apple's own key.
+@JsonSerializable(explicitToJson: true)
+class StorefrontAppEntry {
+  const StorefrontAppEntry({
+    required this.appleId,
+    required this.appName,
+    required this.productKind,
+    required this.version,
+    required this.versionReleasedDate,
+    required this.firstReleasedDate,
+    required this.storeUrl,
+    required this.display,
+  });
+
+  factory StorefrontAppEntry.fromJson(Map<String, dynamic> json) =>
+      _$StorefrontAppEntryFromJson(json);
+
+  /// Apple's `trackId` — the numeric app id App Store Connect calls the Apple
+  /// ID.
+  final int? appleId;
+
+  /// Apple's `trackName`.
+  final String? appName;
+
+  /// Apple's `kind`: `software` or `mac-software`, exactly as sent.
+  ///
+  /// **It names the record's product type, not a platform.** A universal
+  /// purchase that runs on iOS *and* macOS answers `software`; a Mac-only
+  /// listing answers `mac-software`. Reading this as "the iOS release" is
+  /// wrong for precisely the case it looks right for, which is why this
+  /// document has no `platform` field for it to appear to qualify.
+  ///
+  /// **Raw, with no closed vocabulary of ours beside it**, and that is the one
+  /// deliberate exception in these classes to *a store's vocabulary arrives
+  /// twice*. An enum of ours over this field would be an enum of platforms,
+  /// and there is no platform here to name — so the honest shape is Apple's
+  /// word and a doc comment, rather than a vocabulary that would be read as an
+  /// answer to a question the storefront does not take.
+  final String? productKind;
+
+  /// The version string the storefront is showing, such as `1.1.6`.
+  ///
+  /// **Compare it against the version you are asking about.**
+  /// [versionReleasedDate] is the date of *this* version, so a caller asking
+  /// "when did 1.1.7 go out" while the storefront still shows 1.1.6 has been
+  /// handed 1.1.6's date — and this field is the only thing that says so.
+  final String? version;
+
+  /// Apple's `currentVersionReleaseDate`: when the public got [version].
+  ///
+  /// **The answer.** ISO-8601 as Apple spells it, and a string rather than a
+  /// `DateTime` for the reason `uploadedDate` is one.
+  final String? versionReleasedDate;
+
+  /// Apple's `releaseDate`: when the app was **first ever** released.
+  ///
+  /// Renamed because Apple's name is a trap — "the release date" reads as the
+  /// date of the release in front of you, and this is the app's launch day.
+  /// A consumer rendering it per version would show a plausible wrong answer
+  /// with nothing looking broken.
+  final String? firstReleasedDate;
+
+  /// Apple's `trackViewUrl`: the public page, `uo=4` and all, unchanged.
+  final String? storeUrl;
+
+  /// What the app's two lines of `cux_ship storefront released` say. Display
+  /// text.
+  final List<String> display;
+
+  Map<String, dynamic> toJson() => _$StorefrontAppEntryToJson(this);
+}
+
+/// What `storefront released --json` prints.
+///
+/// **No `platform`, and its absence is the specification.** The storefront
+/// answers per app: `/lookup` ignores `entity`, a universal purchase returns
+/// one record covering iOS and macOS, and a `/search` restricted to
+/// `macSoftware` returns that same record. A consumer therefore cannot fill
+/// two per-platform columns from one of these, because there is nothing here
+/// to key them on. docs/design/storefront-release-date.md carries the
+/// measurement.
+///
+/// **This is the storefront, not App Store Connect.** Undocumented,
+/// rate-limited, and with reported cases of the date disagreeing with the
+/// console. Put it beside an [AppStoreVersionsDocument] rather than instead of
+/// one: that says which version is `READY_FOR_SALE`, and this says when the
+/// public got it.
+@JsonSerializable(explicitToJson: true)
+class StorefrontReleasedDocument {
+  const StorefrontReleasedDocument({
+    required this.schema,
+    required this.kind,
+    required this.bundleId,
+    required this.country,
+    required this.app,
+    required this.display,
+  });
+
+  factory StorefrontReleasedDocument.fromJson(Map<String, dynamic> json) =>
+      _$StorefrontReleasedDocumentFromJson(json);
+
+  /// This kind's schema number. Refuse one you do not recognize.
+  final int schema;
+
+  final DocumentKind kind;
+
+  /// The bundle identifier that was looked up.
+  final String bundleId;
+
+  /// The two-letter storefront that answered, as asked for — `us` unless
+  /// `--country` said otherwise. The storefront is per region and this is
+  /// which region's answer this is.
+  final String country;
+
+  /// Null when the storefront knows no such app.
+  ///
+  /// **Absence is an answer, not a failure**, and the command still exits
+  /// non-zero to say which answer it was — `notOnStorefrontExit`, 6. A caller
+  /// reading this document therefore has both halves: the status to branch on,
+  /// and [display] to print.
+  ///
+  /// **A nullable object rather than a `found` flag beside flat fields**, so a
+  /// release date cannot be read without the null having been dealt with.
+  ///
+  /// **Two facts arrive here as one, and that is the endpoint's doing**: an
+  /// app that has never been released and an app that is not sold on
+  /// [country]'s storefront both answer with no results. It is why `--country`
+  /// is a flag rather than a constant.
+  final StorefrontAppEntry? app;
+
+  /// What `cux_ship storefront released` prints, and never empty — the absent
+  /// case is a sentence rather than nothing. Display text.
+  final List<String> display;
+
+  Map<String, dynamic> toJson() => _$StorefrontReleasedDocumentToJson(this);
 }
