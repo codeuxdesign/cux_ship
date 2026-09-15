@@ -299,6 +299,59 @@ shape is what a reader of this document will reach for next, and
 `docs/CONTRIBUTING.md` §"A claim about both stores is checked against both" is
 the rule that says to check it rather than assume it.
 
+## The consumer's answer to the per-platform question
+
+Asked and answered after this shipped, and recorded because §"It answers per
+app, not per platform" proves what the *storefront* does and this is what the
+consumer does about it.
+
+**One universal purchase, one bundle id** — `design.codeux.howitwent` for both
+platforms. The train passes one identifier and puts `--platform ios|macos`
+beside it, which is an App Store Connect axis this endpoint does not have. So
+the release date **gets its own group with a single column**, and the
+per-platform App Store columns carry nothing. Someone who later wants to split
+it has to delete a group rather than edit a cell.
+
+That is the absence of `platform` doing the work it was left out to do: the
+grid's shape carries *per app, not per platform* structurally, rather than as a
+judgment call somebody re-makes.
+
+## No `readAt`, and the staleness it would not have fixed
+
+Apple's lookup is CDN-cached, so version 1.1.6 twenty minutes after 1.1.7 went
+live is indistinguishable from 1.1.7 not being out yet. A timestamp saying when
+*this* read happened was considered and is **not** carried.
+
+**The half that had to be in the document already is.** `version` says which
+version the date belongs to, which makes misattributing 1.1.6's date to 1.1.7
+impossible rather than merely unlikely — see [StorefrontAppEntry.version]'s
+doc comment. What is left is a *rendering* decision about how confidently to
+show a cached answer, and that belongs to whoever draws the cell: the consumer
+shows the read's own elapsed time beside it. A `readAt` here would be this
+package restating something the caller already knows — it spawned the process.
+
+## One app may have several store listings
+
+Raised while this was in review, and recorded as a constraint on future change
+rather than as work: one app can need **several store listings** — a beta
+listing beside a production one, as separate console entries under separate
+identifiers.
+
+`storefront released` is already right for that, and the reason is worth
+naming so it is not lost: **the identifier is an argument, and a caller can
+loop.** Nothing here is keyed by *project*.
+
+So the shape not to add later:
+
+- **No inferred single bundle id that cannot be overridden.** The `--bundle-id`
+  default reads one from the project as a convenience, and the flag wins — that
+  stays the relationship. A default that a caller could not step around would
+  make "the app" a property of the repository, which is the assumption this
+  section exists to refuse.
+- **No document-level cache keyed by project.** A cache keyed by identifier is
+  fine in principle; one keyed by project would answer the second listing with
+  the first's record, which is the failure this is written down to prevent.
+
 ## What this does not decide
 
 **Whether the date is ever wrong, and what to do about it.**
