@@ -315,6 +315,14 @@ needs a per-locale completeness rule — push a locale only when complete and
 skip-and-report otherwise, or something else, but *decided* rather than
 whatever the loader happens to do.
 
+**For release notes, the version-grain answer is taken** (29 September 2026,
+[locale-release-notes.md](locale-release-notes.md)): a locale with no
+`CHANGELOG.<locale>.md` gets `CHANGELOG.md`'s notes, and a locale file's
+section is complete or it is empty — nothing is merged entry by entry across
+files, so German readers of a release with two German bullets and three English
+ones get two. The finer grain, per entry, is still undecided, and so is the
+listing text this paragraph was first about.
+
 **The ownership rule needs its grain stated.** *Present means owned, absent
 means left alone* — per store, per locale, or per field per locale? At 23
 locales there will eventually be console-managed locales beside repo-managed

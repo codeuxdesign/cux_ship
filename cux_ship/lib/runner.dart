@@ -36,6 +36,7 @@ import 'src/documents.dart';
 import 'src/json_output.dart';
 import 'src/keychain.dart';
 import 'src/listing_requirements.dart';
+import 'src/locale_notes.dart';
 import 'src/manifest_cli.dart';
 import 'src/placed.dart';
 import 'src/play/cli.dart';
@@ -2189,6 +2190,21 @@ class VerifyCommand extends Command<void> {
       appStoreTrees = project.appStoreTrees(platform: platform);
     }
 
+    // **Which locales get release notes**, the way the uploaders decide it:
+    // every locale either store block declares, and en-US — what both fall
+    // back to — when neither declares any. `CHANGELOG.<locale>.md` is that
+    // locale's notes and `CHANGELOG.md` everyone else's; see
+    // `locale_notes.dart`. From the config alone, not `--require-locale`,
+    // because that flag changes what a listing is required to carry and the
+    // uploaders never read it.
+    final notesLocales = <String>{
+      ...?config.appstore?.locales,
+      ...?config.play?.locales,
+    };
+    if (notesLocales.isEmpty) {
+      notesLocales.add('en-US');
+    }
+
     final problems = <ReleaseProblem>[
       ..._declarationProblems(
         config,
@@ -2207,6 +2223,18 @@ class VerifyCommand extends Command<void> {
         ?changelogSectionProblem(
           changelog: changelog,
           version: project.versionName!,
+        ),
+      // **Every locale file, by the same rules, and the ones nothing reads.**
+      // A German file missing this version's section, over Play's cap, named
+      // for a locale nobody declares, or a link to nothing — each is a store
+      // showing the wrong text with the run having said nothing. A declared
+      // locale with no file is not among them: it takes CHANGELOG.md, which
+      // the `checked` lines below say on every run.
+      if (changelog != null)
+        ...checkLocaleChangelogs(
+          changelog,
+          locales: notesLocales,
+          version: project.versionName,
         ),
       for (final MapEntry(key: platform, value: tree)
           in appStoreTrees.entries) ...[
@@ -2274,6 +2302,15 @@ class VerifyCommand extends Command<void> {
           where: '${project.versionName} (pubspec.yaml)',
         ),
       ],
+      // One per locale, naming the file its notes come from — and for a
+      // locale on the default, the file that would change that. The same
+      // words an upload prints, so the choice is read on every push rather
+      // than made once and forgotten.
+      if (changelog != null) ...[
+        for (final line in localeNotesSourceLines(changelog, notesLocales)) ...[
+          VerifyCheck(what: 'notes', where: line),
+        ],
+      ],
       for (final tree in appStoreTrees.entries) ...[
         VerifyCheck(what: 'appstore', where: '${tree.value} (${tree.key})'),
       ],
@@ -2296,11 +2333,18 @@ class VerifyCommand extends Command<void> {
     // and `section` is skipped for a reason of its own — there is a changelog
     // but nothing in pubspec.yaml saying which version to look for.
     final skipped = <VerifyCheck>[
-      if (changelog == null)
-        const VerifyCheck(
+      if (changelog == null) ...const [
+        VerifyCheck(
           what: 'changelog',
           why: 'no CHANGELOG.md was found, and none was named with --changelog',
         ),
+        VerifyCheck(
+          what: 'notes',
+          why:
+              'no CHANGELOG.md, so no locale has release notes to look for — '
+              'CHANGELOG.<locale>.md files are found beside it',
+        ),
+      ],
       if (changelog != null && project.versionName == null)
         const VerifyCheck(
           what: 'section',

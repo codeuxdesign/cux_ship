@@ -4,6 +4,8 @@
 // page, and several of them are invisible when they misfire: a swallowed
 // continuation line, a prefix that was not stripped, a fallback that reached
 // too far back. Each one is pinned here.
+import 'dart:io';
+
 import 'package:cux_ship_verify/release_notes.dart';
 import 'package:test/test.dart';
 
@@ -172,6 +174,200 @@ void main() {
       final notes =
           changelogNotes(midSentence, '1.0.0', platform: 'ios') as NotesText;
       expect(notes.text, '- Fixed [android] in the docs');
+    });
+  });
+
+  group('checkPlatformNames', () {
+    // App Review Guideline 2.3.10 rejects metadata naming another mobile
+    // platform, and an entry with no prefix reaches every store. An unscoped
+    // "Drag files in on Android" reached two uploaded builds of one consumer.
+
+    test('an unscoped entry naming Android is a problem for both Apple '
+        'platforms, once', () {
+      final problems = checkPlatformNames(
+        '## 1.1.9\n\n- Drag files in on Android\n',
+      );
+
+      expect(problems, hasLength(1));
+      expect(problems.single.where, 'CHANGELOG.md § 1.1.9 → ios, macos');
+      expect(problems.single.message, contains('"- Drag files in on Android"'));
+      expect(problems.single.message, contains('2.3.10'));
+      expect(problems.single.message, contains('[android]'));
+    });
+
+    test('an [android] entry naming Android is no problem', () {
+      expect(
+        checkPlatformNames(
+          '## 1.1.9\n\n- [android] Drag files in on Android\n',
+        ),
+        isEmpty,
+      );
+    });
+
+    test('it reads the filtered text, per platform', () {
+      // A [macos] entry reaches macOS alone, so reporting it against iOS would
+      // send somebody to fix a store it never reaches.
+      final problems = checkPlatformNames(
+        '## 1.1.9\n\n- [macos] Like the Android app, now on the Mac\n',
+      );
+
+      expect(problems.single.where, 'CHANGELOG.md § 1.1.9 → macos');
+    });
+
+    test('the other store names count, in any case', () {
+      for (final entry in [
+        '- Now on Google Play',
+        '- Rate us on the play store',
+        '- ANDROID parity',
+      ]) {
+        expect(
+          checkPlatformNames('## 1.0.0\n\n$entry\n'),
+          hasLength(1),
+          reason: entry,
+        );
+      }
+    });
+
+    test('the match is word-bounded', () {
+      // "Play" alone is a verb in half of all release notes.
+      for (final entry in [
+        '- Androids dream of electric sheep',
+        '- Play your ride back',
+        '- Autoplay stops at the end',
+      ]) {
+        expect(
+          checkPlatformNames('## 1.0.0\n\n$entry\n'),
+          isEmpty,
+          reason: entry,
+        );
+      }
+    });
+
+    test('a hit on a continuation line quotes that line', () {
+      // Quoting the entry's first line would show text without the word the
+      // problem is about.
+      final problems = checkPlatformNames(
+        '## 1.1.9\n\n- Drag files in from anywhere,\n  including an Android '
+        'phone\n',
+      );
+
+      expect(
+        problems.single.message,
+        startsWith('"including an Android phone" names Android'),
+      );
+    });
+
+    test('every section, since the fallback can publish an older one', () {
+      final problems = checkPlatformNames(
+        '## 1.1.9\n\n## 1.1.8\n\n- Faster on Android\n',
+      );
+
+      expect(problems.single.where, startsWith('CHANGELOG.md § 1.1.8'));
+    });
+  });
+
+  group('localeChangelogPath', () {
+    test('puts the locale before the extension, beside the changelog', () {
+      expect(
+        localeChangelogPath('CHANGELOG.md', 'de-DE'),
+        'CHANGELOG.de-DE.md',
+      );
+      expect(
+        localeChangelogPath('docs/CHANGELOG.md', 'zh-Hans'),
+        'docs/CHANGELOG.zh-Hans.md',
+      );
+    });
+
+    test('appends to a name with no .md', () {
+      expect(localeChangelogPath('NOTES', 'pt-BR'), 'NOTES.pt-BR');
+    });
+
+    test('a dot in a directory is not the extension', () {
+      // A worktree lives under `.claude/`, and a release branch directory is
+      // `v1.2/` — cutting at the first `.` would put the locale mid-path.
+      expect(
+        localeChangelogPath('/w/.claude/v1.2/CHANGELOG.md', 'de-DE'),
+        '/w/.claude/v1.2/CHANGELOG.de-DE.md',
+      );
+      expect(localeChangelogPath('v1.2/NOTES', 'de-DE'), 'v1.2/NOTES.de-DE');
+    });
+  });
+
+  group('localeNotesSource', () {
+    late Directory root;
+    late String changelog;
+
+    setUp(() {
+      root = Directory.systemTemp.createTempSync('locale_notes_source');
+      changelog = '${root.path}/CHANGELOG.md';
+      File(changelog).writeAsStringSync('## 1.0.0\n\n- Hello\n');
+    });
+
+    tearDown(() => root.deleteSync(recursive: true));
+
+    test('a locale with its own file reads it', () {
+      File('${root.path}/CHANGELOG.de-DE.md').writeAsStringSync('## 1.0.0\n');
+
+      expect(
+        localeNotesSource(changelog, 'de-DE'),
+        isA<OwnFile>().having(
+          (s) => s.path,
+          'path',
+          '${root.path}/CHANGELOG.de-DE.md',
+        ),
+      );
+    });
+
+    test('a locale without one takes the changelog', () {
+      expect(
+        localeNotesSource(changelog, 'de-DE'),
+        isA<DefaultFile>().having((s) => s.path, 'path', changelog),
+      );
+    });
+
+    test('a link to nothing is its own case, not "no file"', () {
+      // `File.existsSync` follows the link and says false, so without the
+      // `typeSync` probe this is a DefaultFile — and the German translation
+      // somebody linked in is replaced by the English notes in silence.
+      Link(
+        '${root.path}/CHANGELOG.de-DE.md',
+      ).createSync('${root.path}/translations/de.md');
+
+      expect(localeNotesSource(changelog, 'de-DE'), isA<DanglingLink>());
+    });
+
+    test('a link that resolves is simply the locale\'s file', () {
+      Link('${root.path}/CHANGELOG.de-DE.md').createSync(changelog);
+
+      expect(localeNotesSource(changelog, 'de-DE'), isA<OwnFile>());
+    });
+  });
+
+  group('localeChangelogsBeside', () {
+    late Directory root;
+
+    setUp(() {
+      root = Directory.systemTemp.createTempSync('locale_changelogs_beside');
+      File('${root.path}/CHANGELOG.md').writeAsStringSync('## 1.0.0\n');
+    });
+
+    tearDown(() => root.deleteSync(recursive: true));
+
+    test('finds each locale file by the locale its name carries', () {
+      File('${root.path}/CHANGELOG.de-DE.md').writeAsStringSync('');
+      File('${root.path}/CHANGELOG.de.md').writeAsStringSync('');
+      Link('${root.path}/CHANGELOG.fr-FR.md').createSync('${root.path}/gone');
+      // Not locale files: another stem, and a nested extension.
+      File('${root.path}/CHANGES.de-DE.md').writeAsStringSync('');
+      File('${root.path}/CHANGELOG.de-DE.md.bak').writeAsStringSync('');
+      // Not locale-shaped, so somebody's own file rather than a misspelling.
+      File('${root.path}/CHANGELOG.archive.md').writeAsStringSync('');
+
+      expect(localeChangelogsBeside('${root.path}/CHANGELOG.md').keys.toSet(), {
+        'de-DE',
+        'de',
+        'fr-FR',
+      });
     });
   });
 

@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased
+
+**Release notes per locale, by filename.** `CHANGELOG.<locale>.md` beside the
+changelog is that locale's notes, with the same grammar, and a locale without
+one takes `CHANGELOG.md`'s. A consumer's App Store submission was refused
+because a listing had gained a German localization and the notes went to
+`en-US` alone. Apple requires "What's New" on every localization of an update,
+and nothing here could say which locales would get notes.
+
+- `localeChangelogPath` says where a locale's file is: `CHANGELOG.de-DE.md`,
+  beside the changelog.
+- `localeNotesSource` says which file a locale reads, as a sealed `OwnFile` /
+  `DefaultFile` / `DanglingLink`. The third is its own case because
+  `File.existsSync` reports a link to nothing as absent, and absent now means
+  "take the default".
+- `localeChangelogsBeside` finds the locale files that exist — by a
+  locale-shaped name, so `CHANGELOG.archive.md` is not one.
+- `checkLocaleChangelogs` reports a locale file missing the shipping version's
+  section, one over a cap, one for a locale nothing declares, and a dangling
+  link. A declared locale with no file is not a problem: that is how a listing
+  gains a language for free.
+- `checkChangelog` and `checkChangelogFile` take a `name`, so a locale file's
+  problems name that file rather than `CHANGELOG.md`. The default is unchanged.
+
+The `[android]` / `[ios, macos]` scope-prefix grammar is documented at the top
+of `release_notes.dart`, for the first time anywhere public.
+
+**`checkChangelog` refuses an entry that reaches an Apple store naming
+Android.** An unscoped *"Drag files in on Android"* reached two uploaded builds
+of one consumer before a reader caught it; App Review Guideline 2.3.10 rejects
+metadata naming other mobile platforms, and an entry without a prefix reaches
+every store. `checkPlatformNames` reads the text each Apple platform would
+actually get — so `[android]` entries pass — and matches Android, Google Play
+and the Play Store word-bounded, in every section, since the fallback can
+publish an older one. **A changelog that passed before may not now**: an old
+unscoped entry about Android is reported like a new one, and the fix is the
+same `[android]` prefix. `otherStoreNamed` is the match on its own, for an
+uploader refusing text that has already been filtered.
+
 ## 1.11.0-dev.2
 
 **A preview with no stereo audio track is refused offline.** Apple rejects one

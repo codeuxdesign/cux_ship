@@ -76,7 +76,7 @@ import 'package:googleapis_auth/auth_io.dart';
 import '../documents.dart' show UploadState;
 import '../json_output.dart';
 import '../listing_requirements.dart';
-import '../notes_source.dart';
+import '../locale_notes.dart';
 import '../upload_events.dart';
 import 'credentials.dart';
 import 'reads.dart';
@@ -367,8 +367,7 @@ Future<void> _assignToTrack(
   required int versionCode,
   required String? status,
   required double? userFraction,
-  required String? notes,
-  required String notesLanguage,
+  required LocaleNotes? notes,
   required IOSink out,
 }) async {
   await api.edits.tracks.update(
@@ -380,13 +379,21 @@ Future<void> _assignToTrack(
           versionCodes: ['$versionCode'],
           status: status,
           userFraction: userFraction,
-          // Whatever the metadata tree declares as the listing's default
-          // language, so the notes cannot end up in a locale the listing does
-          // not have. Hardcoding one is how they were left in en-GB after the
-          // listing itself moved to en-US.
+          // One element per language, each a language the listing has: the
+          // declared `play.locales`, which `checkPlayTree` requires the tree to
+          // carry, plus the listing's default language. Hardcoding one is how
+          // they were left in en-GB after the listing itself moved to en-US.
+          // A `Map` key is unique, so no language repeats — Play answers a
+          // duplicate with "Release notes are badly constructed or have
+          // duplicates".
           releaseNotes: notes == null
               ? null
-              : [LocalizedText(language: notesLanguage, text: notes)],
+              : [
+                  for (final MapEntry(key: language, value: text)
+                      in notes.byLocale.entries) ...[
+                    LocalizedText(language: language, text: text),
+                  ],
+                ],
         ),
       ],
     ),
@@ -1580,54 +1587,39 @@ Future<void> runPlay(
   // know its version until Play has said what is on the source track. Called
   // from inside the transaction guard instead — still before anything is
   // uploaded, so a changelog missing a section costs an edit and no bytes.
-  String? notesFor(String forVersion) {
+  //
+  // Per language, through [resolveLocaleNotes], which the App Store shares.
+  //
+  // **Which languages: the listing's default, then every declared
+  // `play.locales`.** The default is read from the tree when there is one —
+  // Play rejects release notes in a locale the listing does not have, so this
+  // follows the listing rather than being chosen separately — and a promote
+  // loads no tree, so it is en-US there, as it always was. The declared ones
+  // are languages `checkPlayTree` requires the listing to carry. Nothing
+  // declared is one element, the default, byte-identical to every release
+  // before locales could be declared; declared is one element each, which is
+  // what a listing with a German translation shows German readers.
+  final notesLanguages = <String>{
+    metadata?.details['defaultLanguage'] ?? 'en-US',
+    ...?defaults.listingRequirements?.locales,
+  };
+  LocaleNotes? notesFor(String forVersion) {
     if (changelogPath == null) {
-      return releaseNotes;
+      return releaseNotes == null
+          ? null
+          : LocaleNotes.literal(releaseNotes, notesLanguages);
     }
-    requireCommittedNotes([changelogPath]);
-    final notes = changelogNotesOf(
-      changelogPath,
-      forVersion,
+    return resolveLocaleNotes(
+      changelog: changelogPath,
+      version: forVersion,
       platform: _platform,
+      locales: notesLanguages,
+      limit: playReleaseNotesLimit,
+      store: 'Play',
+      fail: (message) => throw _Abort(message),
+      say: say,
     );
-    switch (notes) {
-      case NoSection():
-        throw _Abort(
-          '$changelogPath has no section for $forVersion.\n'
-          '  Add one. Empty is a fine answer — it publishes the newest older\n'
-          '  version that did change something here, or\n'
-          '  "$noUserVisibleChanges" if there is none. Absent is not the same\n'
-          '  answer as empty.',
-        );
-      case NotesText(:final text, :final fromVersion):
-        if (text.length > playReleaseNotesLimit) {
-          throw _Abort(
-            "$changelogPath's $fromVersion section is ${text.length} "
-            'characters once filtered to $_platform; Play allows '
-            '$playReleaseNotesLimit',
-          );
-        }
-        // Said out loud: publishing one version's notes under another
-        // version's name should never happen quietly.
-        if (fromVersion.isEmpty) {
-          say(
-            '==> nothing at or below $forVersion is user-visible on '
-            '$_platform — publishing "$text"',
-          );
-        } else if (fromVersion != forVersion) {
-          say(
-            '==> $forVersion changes nothing on $_platform — publishing '
-            "$fromVersion's notes instead",
-          );
-        }
-        return text;
-    }
   }
-
-  // The listing's default language, when the tree declares one. Play rejects
-  // release notes in a locale the listing does not have, so this follows the
-  // listing rather than being chosen separately.
-  final notesLanguage = metadata?.details['defaultLanguage'] ?? 'en-US';
 
   // Printed here rather than where the check ran, so it follows every local
   // refusal instead of preceding some of them: a run that dies on
@@ -1655,6 +1647,13 @@ Future<void> runPlay(
         aabPath: aabPath,
         metadataPath: metadataPath,
         changelogPath: changelogPath,
+        // Only where a release is assigned — a listing-only push writes no
+        // release notes, so naming languages there would claim a write.
+        notesLanguages:
+            (aabPath != null || promoteFrom != null) &&
+                (changelogPath != null || notesPath != null)
+            ? notesLanguages.join(', ')
+            : null,
         deleteLocales: deleteLocales,
         rollout: opt('rollout'),
       ),
@@ -1793,7 +1792,6 @@ Future<void> runPlay(
         status: releaseStatus,
         userFraction: userFraction,
         notes: notes,
-        notesLanguage: notesLanguage,
         out: jsonOutput ? stderr : stdout,
       );
       landedVersionCode = versionCode;
@@ -1858,7 +1856,6 @@ Future<void> runPlay(
         status: releaseStatus,
         userFraction: userFraction,
         notes: notes,
-        notesLanguage: notesLanguage,
         out: jsonOutput ? stderr : stdout,
       );
       landedVersionCode = promotedCode;
@@ -2055,6 +2052,7 @@ String _summarizePlay({
   required String? aabPath,
   required String? metadataPath,
   required String? changelogPath,
+  required String? notesLanguages,
   required List<String> deleteLocales,
   required String? rollout,
 }) {
@@ -2070,6 +2068,7 @@ String _summarizePlay({
     'artifact': aabPath,
     'listing': metadataPath,
     'notes from': changelogPath,
+    'notes in': notesLanguages,
     'removing': deleteLocales.isEmpty ? null : deleteLocales.join(', '),
     'rollout': rollout == null ? null : '$rollout of users',
   };

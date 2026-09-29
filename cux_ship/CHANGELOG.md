@@ -1,5 +1,79 @@
 # Changelog
 
+## Unreleased
+
+**Needs the unreleased `cux_ship_verify` API below** — `checkLocaleChangelogs`,
+`localeNotesSource` and its `NotesSource` cases, `localeChangelogPath`, and
+`otherStoreNamed`. The constraint is raised on the release branch, per
+docs/RELEASING.md, and until then this branch's *Resolve as a git dependency*
+check is red for exactly that reason.
+
+### Fixed
+
+**Release notes are written to every locale, not to one.** An App Store
+submission was refused on 29 September 2026 with `409 … appStoreVersions … is
+not in valid state`: the listing had gained a German localization, the notes
+went to `--locale`, which defaulted to `en-US`, and Apple requires "What's New"
+on every localization of an update. It was released after a second run with
+`--locale de-DE` wrote the English notes there by hand, and `verify` was green
+throughout.
+
+Now "What's New" goes to every localization Apple holds for the version,
+TestFlight "What to Test" to every locale in `appstore.locales` (`en-US` when
+none is declared), and Play's
+release notes to the listing's default language and every locale in
+`play.locales` — one `LocalizedText` each. `CHANGELOG.<locale>.md` beside the
+changelog is that locale's notes; a locale without one gets `CHANGELOG.md`'s,
+which is also what both stores fall back to, so a listing gaining a language
+needs nothing but the declaration. No configuration key: the locale set is
+already declared, and the file's presence is the override.
+`docs/design/locale-release-notes.md` has the alternatives turned down.
+
+**`promote` writes "What's New" after its listing publish, not before.** The
+listing publish is what creates a newly declared locale's localization, so
+before it the German record did not exist yet and got no notes.
+
+### Changed
+
+**`--locale` has no default.** Unset means every locale above, and a run that
+publishes to more than one names each and the file it came from. Passed, it
+keeps its old meaning: that one locale — on `promote` still checked against no
+declaration, as it never was. It still chooses the Beta App Description's
+locale, which is `en-US` without it.
+
+**What a run with nothing declared and no locale files writes is unchanged when
+Apple holds exactly the tree's localizations** — the common case. When Apple
+holds one more, it now gets "What's New" too, where it used to be left empty;
+that is the fix working, and the next paragraph's.
+
+**`--release-notes <file>` goes to every locale.** It is for a repository that
+keeps one file of notes, which has made no per-locale decision to honour.
+
+**A localization Apple holds that nothing declares gets the default notes,
+loudly.** A localization with no "What's New" cannot be submitted; one with
+the default text is merely untranslated, and the line says which to declare or
+remove.
+
+**`verify` names every locale's notes source**, one `checked notes` line each —
+`de-DE ← CHANGELOG.md (no CHANGELOG.de-DE.md)` — and refuses a locale file
+missing the shipping version's section, one over a store's cap, one for a
+locale no store declares, and a dangling symlink where a locale file would be.
+`--json` carries the lines as `notes` checks.
+
+**The dirty-file guard refuses a symlink to nothing** rather than skipping it
+as absent — absent now means "publish the default", so a linked translation
+would have been replaced by English in silence.
+
+**`verify` and every App Store command that writes notes — "What's New" and
+TestFlight "What to Test" alike — refuse a changelog entry that would reach an
+Apple store naming Android**, Google Play or the Play Store. An unscoped entry
+reaches every store, and App Review Guideline 2.3.10 rejects metadata naming
+other mobile platforms — an unscoped *"Drag files in on Android"* reached two
+uploaded builds before a reader caught it. Prefix it `[android]`. `verify`
+checks every section, so a changelog that passed before may report an old
+entry; the uploaders check the text they are about to publish, including a
+`--release-notes` file.
+
 ## 4.5.0-dev.6
 
 ### Added

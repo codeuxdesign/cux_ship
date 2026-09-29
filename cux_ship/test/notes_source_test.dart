@@ -94,6 +94,49 @@ void main() {
     expect(() => requireCommittedNotes([path]), returnsNormally);
   });
 
+  test('a dirty locale file beside a clean changelog is refused, by name', () {
+    // The per-locale shape: German notes mid-edit while the English ones are
+    // committed. With several files a refusal that did not say which one
+    // would leave somebody diffing all of them.
+    final english = _changelog('# Changelog\n\n## 1.0.0\n\n- Something\n');
+    final german = '${_root.path}/CHANGELOG.de-DE.md';
+    File(german).writeAsStringSync('## 1.0.0\n\n- Etwas\n');
+    _git.run(['add', '-A']);
+    _git.run(['commit', '-q', '-m', 'notes']);
+    File(german).writeAsStringSync('## 1.0.0\n\n- Etwas Halb');
+
+    expect(
+      () => requireCommittedNotes([english, german]),
+      throwsA(
+        isA<ReleaseException>().having(
+          (e) => e.toString(),
+          'message',
+          allOf(contains('CHANGELOG.de-DE.md'), contains('Commit it first')),
+        ),
+      ),
+    );
+  });
+
+  test('a symlink to nothing is refused, not skipped as absent', () {
+    // `File.existsSync` follows the link and answers false, which is the
+    // absent case below — and under the locale convention absent means
+    // "publish the default", so a linked translation would be replaced by
+    // English with no word said.
+    final link = Link('${_root.path}/CHANGELOG.de-DE.md')
+      ..createSync('translations/de.md');
+
+    expect(
+      () => requireCommittedNotes([link.path]),
+      throwsA(
+        isA<ReleaseException>().having(
+          (e) => e.toString(),
+          'message',
+          allOf(contains('CHANGELOG.de-DE.md'), contains('symlink to nothing')),
+        ),
+      ),
+    );
+  });
+
   test('a path that does not exist is not this check\'s business', () {
     // Absent is a different failure with a better message elsewhere; refusing
     // here would report a missing changelog as a dirty one.

@@ -78,7 +78,7 @@ import '../asc_platforms.dart';
 import '../documents.dart' show UploadState;
 import '../json_output.dart';
 import '../listing_requirements.dart';
-import '../notes_source.dart';
+import '../locale_notes.dart';
 import '../reachable.dart';
 import '../release.dart' show ReleaseException;
 import '../upload_events.dart';
@@ -318,16 +318,31 @@ ArgParser buildAscParser(AscCommand cmd) {
 
   parser
     ..addOption('version-name', help: 'CFBundleShortVersionString.')
-    ..addOption('locale', defaultsTo: _defaultLocale)
+    // **No default, and that is the fix.** It defaulted to en-US, which made
+    // one locale the whole of what a release wrote — and a listing that gained
+    // a second localization could then not be submitted.
+    ..addOption(
+      'locale',
+      help:
+          'Write the release notes to this one locale only. Without it, every '
+          'locale in appstore.locales gets them (en-US when none is declared), '
+          'and "What\'s New" goes to every localization Apple holds for the '
+          'version — each from CHANGELOG.<locale>.md beside the changelog when '
+          'that exists, and from the changelog otherwise. Also the locale of '
+          'the Beta App Description, which is en-US without it.',
+    )
     ..addOption(
       'changelog',
       help:
           'CHANGELOG.md to take the release notes from, using the section for '
-          'the version being released.',
+          'the version being released. CHANGELOG.<locale>.md beside it, when '
+          'it exists, is that locale\'s notes.',
     )
     ..addOption(
       'release-notes',
-      help: 'File whose contents become the notes. Alternative to --changelog.',
+      help:
+          'File whose contents become the notes, in every locale. Alternative '
+          'to --changelog.',
     )
     ..addFlag('dry-run', negatable: false, help: 'Every read, no writes.');
 
@@ -822,17 +837,31 @@ ListingPublish listingPublish({
 /// `PREPARE_FOR_SUBMISSION` with none: the write lands and Apple says nothing.
 /// So the version being editable is the whole condition, which is what the
 /// refusal branch below is left guarding.
+///
+/// **Every localization Apple holds for the version gets notes**, which is
+/// the rule the 409 of 29 September 2026 enforced: Apple requires "What's
+/// New" on each localization of an update, so a listing that gained de-DE and
+/// got notes for en-US alone could not be submitted. Apple's own record is
+/// what the submission is checked against, so it is what the write agrees
+/// with — read here, after the listing publish that creates a declared
+/// locale's record, which is why the promote path calls this after that
+/// publish rather than before it.
 Future<void> publishReleaseNotes(
   AppStore store,
   App app,
   Map<String, dynamic> version,
-  String locale,
-  String? notes,
+  LocaleNotes? notes,
   String? versionName, {
 
-  /// The locales the metadata tree carries, when there is a tree. Empty means
-  /// "do not check" — `promote --changelog` with no `--metadata` publishes
-  /// notes against a listing this run never read.
+  /// `--locale`, when it was passed: then this is one write, to that locale,
+  /// exactly as it always was — a script that names a locale gets what it
+  /// always got.
+  String? onlyLocale,
+
+  /// The locales the repository declares — the metadata tree's and
+  /// `appstore.locales` — when there is anything to read them from. Empty
+  /// means "do not check": `promote --changelog` with neither publishes notes
+  /// against a listing this run never read.
   Set<String> declaredLocales = const {},
 }) async {
   if (notes == null) {
@@ -847,36 +876,108 @@ Future<void> publishReleaseNotes(
     );
     return;
   }
-  // **Only for a locale the listing actually has.** The notes go to the CLI's
-  // `--locale`, which defaults to en-US, while the tree declares its own — so
-  // a `listings/de-DE/`-only tree published without `--locale de-DE` would
-  // POST a *new* en-US version localization carrying release notes and no
-  // description. `writeVersionLocalization` creates the record when none
-  // exists, and that record is one nothing else in the tree owns.
-  //
-  // Skipped loudly rather than quietly: this is a listing that will not carry
-  // its notes, which is the thing this whole function exists to stop happening
-  // in silence.
-  if (declaredLocales.isNotEmpty && !declaredLocales.contains(locale)) {
+
+  final existing = await store.versionLocalizations(version);
+  final held = <String>[
+    for (final l in existing) ...[
+      if ((l['attributes'] as Map<String, dynamic>?)?['locale']
+          case final String locale)
+        locale,
+    ],
+  ];
+
+  // **Only for a locale the listing actually has**, when there is no record
+  // to agree with. `writeVersionLocalization` creates the record when none
+  // exists, so notes sent to a locale the tree does not declare POST a *new*
+  // version localization carrying release notes and no description — a
+  // record nothing else in the tree owns. A `listings/de-DE/`-only tree
+  // published with `--locale en-US` is the case, and it is skipped loudly
+  // rather than quietly: this is a listing that will not carry its notes,
+  // which is the thing this whole function exists to stop happening in
+  // silence.
+  // **A dry run's empty reading is its own, not Apple's.** The listing publish
+  // before this is what creates the tree's localizations, and on a dry run it
+  // wrote nothing — so advising `--locale` here, as the branch below would,
+  // contradicts the real run, which finds the records and writes to them.
+  if (onlyLocale == null && held.isEmpty && store.writer.dryRun) {
     store.say(
-      '==> release notes skipped: this tree declares '
-      '${declaredLocales.join(", ")} and the notes would go to $locale.\n'
-      '    Pass --locale ${declaredLocales.first} to publish them there.',
+      '==> release notes: Apple holds no localization of '
+      '${versionName ?? 'this version'} yet, so this dry run writes no notes '
+      '— on a real run a listing publish creates the tree\'s first, and the '
+      'notes go to each',
     );
     return;
   }
+  final List<String> targets;
+  if (onlyLocale != null || held.isEmpty) {
+    final wanted = onlyLocale == null ? notes.byLocale.keys : [onlyLocale];
+    targets = [
+      for (final locale in wanted) ...[
+        if (declaredLocales.isEmpty || declaredLocales.contains(locale)) locale,
+      ],
+    ];
+    if (targets.isEmpty) {
+      store.say(
+        '==> release notes skipped: this repository declares '
+        '${declaredLocales.join(", ")} and the notes would go to '
+        '${wanted.join(", ")}.\n'
+        '    Pass --locale ${declaredLocales.first} to publish them there.',
+      );
+      return;
+    }
+  } else {
+    targets = held;
+    for (final locale in declaredLocales) {
+      if (!held.contains(locale)) {
+        // Not created here: the listing publish is what makes a declared
+        // locale's record, with its description, and a record carrying
+        // "What's New" and nothing else is the one the branch above exists to
+        // prevent. On a dry run that publish wrote nothing, so the absence is
+        // this run's own and says so.
+        store.say(
+          '==> release notes: Apple holds no $locale localization of '
+          '${versionName ?? 'this version'}, so none is written there'
+          '${store.writer.dryRun ? ' — on a real run the listing publish '
+                    'creates it first' : ''}',
+        );
+      }
+    }
+  }
 
   store.say('==> release notes');
-  var releaseNotes = notes;
-  if (needsStrippingForApple(notes)) {
-    releaseNotes = stripForApple(notes);
-    store.say(
-      '    the App Store rejects emoji in "What\'s New", so these are '
-      'stripped:\n'
-      '      ${_removedCharacters(notes, releaseNotes)}\n'
-      '    what ships here differs from CHANGELOG.md; Play publishes it '
-      'verbatim',
-    );
+  // **Undeclared, and written anyway, loudly.** A localization Apple holds
+  // with no "What's New" blocks the submission outright, while one carrying
+  // the default notes is merely untranslated — so keeping the release
+  // submittable wins over "present means owned", and the line says which
+  // locale, so it can be declared or removed deliberately.
+  if (declaredLocales.isNotEmpty) {
+    for (final locale in targets) {
+      if (!declaredLocales.contains(locale)) {
+        store.say(
+          '    $locale: Apple holds a localization this repository does not '
+          'declare —\n'
+          '      publishing the default notes there, since a localization '
+          "without What's New\n"
+          '      cannot be submitted. Declare it in appstore.locales, or '
+          'remove it in App Store Connect.',
+        );
+      }
+    }
+  }
+
+  final stripped = <String, String>{};
+  for (final text in {for (final locale in targets) notes.textFor(locale)}) {
+    stripped[text] = text;
+    if (needsStrippingForApple(text)) {
+      stripped[text] = stripForApple(text);
+      store.say(
+        '    the App Store rejects emoji in "What\'s New", so these are '
+        'stripped:\n'
+        '      ${_removedCharacters(text, stripped[text]!)}\n'
+        '    what ships here differs from CHANGELOG.md; Play publishes it '
+        'verbatim',
+      );
+    }
   }
   // Not compared, unlike the listing text: these notes are per-release and
   // come from CHANGELOG.md, so "unchanged since last time" is not a state a
@@ -899,9 +1000,49 @@ Future<void> publishReleaseNotes(
   // `PREPARE_FOR_SUBMISSION` with no build, the write lands, exit 0, no
   // refusal. So the remaining cause is a version locked by review, which
   // `ensureVersion` usually refuses first.
-  await store.writeVersionLocalization(version, locale, {
-    'whatsNew': releaseNotes,
-  }, existing: await store.versionLocalizations(version));
+  //
+  // One write per locale, each against the same reading, so every POST or
+  // PATCH is chosen from the records Apple held when this began.
+  for (final locale in targets) {
+    await store.writeVersionLocalization(version, locale, {
+      'whatsNew': stripped[notes.textFor(locale)]!,
+    }, existing: existing);
+  }
+}
+
+/// Writes the TestFlight "What to Test" of [build] in every locale [notes]
+/// carries.
+///
+/// One `betaBuildLocalizations` record per locale, which is how Apple models
+/// it. Apple does not gate a beta on every locale having one, so this is
+/// consistency rather than a submission requirement: a German tester reads
+/// what a German shopper will, rather than whatever Apple shows a locale with
+/// no record.
+///
+/// TestFlight refuses emoji, which a changelog is full of by design — said
+/// once, out loud, because what testers read then differs from what Play
+/// users read.
+Future<void> _setWhatToTest(
+  AppStore store,
+  Map<String, dynamic> build,
+  LocaleNotes notes,
+  void Function(String) say,
+) async {
+  var announced = false;
+  for (final MapEntry(key: locale, value: text) in notes.byLocale.entries) {
+    var sent = text;
+    if (needsStrippingForApple(text)) {
+      sent = stripForApple(text);
+      if (!announced) {
+        announced = true;
+        say(
+          '    TestFlight rejects emoji, so they are stripped from the notes\n'
+          '    (Play publishes them verbatim)',
+        );
+      }
+    }
+    await store.setWhatToTest(build, locale, sent);
+  }
 }
 
 /// What a listing publish wrote, or under `--dry-run` would have written.
@@ -1523,7 +1664,24 @@ Future<void> runAsc(
     }
   }
 
-  final locale = opt('locale') ?? _defaultLocale;
+  // `--locale` when it was passed, and null for "every locale" — which is what
+  // a release writes notes to unless somebody names one.
+  final onlyLocale = opt('locale');
+  // The Beta App Description is still one locale, and still defaults to en-US:
+  // a flag's file written into every localization would overwrite a
+  // description somebody maintains per language in App Store Connect. See
+  // docs/design/locale-release-notes.md.
+  final locale = onlyLocale ?? _defaultLocale;
+  // Where release notes go: the named locale, else what appstore.locales
+  // declares, else en-US — which is byte-identical to every run before
+  // locales could be declared.
+  final declaredLocales =
+      defaults.listingRequirements?.locales ?? const <String>{};
+  final notesLocales = onlyLocale != null
+      ? {onlyLocale}
+      : declaredLocales.isNotEmpty
+      ? declaredLocales
+      : const {_defaultLocale};
   final dryRun = flag('dry-run');
 
   // **`--json` without `--dry-run` is the event stream; with it, the listing
@@ -1819,6 +1977,12 @@ Future<void> runAsc(
         'allows $appStoreReleaseNotesLimit',
       );
     }
+    refuseLiteralNotesNamingOtherStores(
+      literalNotes,
+      path: notesPath,
+      platform: platform.changelog,
+      fail: fail,
+    );
   }
 
   // The beta app description, resolved offline exactly like the notes above —
@@ -2024,88 +2188,35 @@ Future<void> runAsc(
   /// written and two find it with writes already made. Said here rather than
   /// only there, so somebody reading the old path learns the better shape
   /// exists instead of finding it by grep.
-  String? notesFor(String forVersion) {
+  ///
+  /// **Per locale, through [resolveLocaleNotes]**, which both stores share —
+  /// the per-file branching this closure used to carry lives there now.
+  ///
+  /// [missingSectionIsError] is false for the listing-only publish alone. That
+  /// used to be a second closure, `notesIfPresent`, identical but for one
+  /// branch: the two answer different questions and only one of them is "what
+  /// did the caller ask for", so the over-limit and uncommitted-changes
+  /// refusals are kept on both — those are wrong *files*, not absent ones.
+  LocaleNotes? notesFor(
+    String forVersion, {
+    bool missingSectionIsError = true,
+  }) {
     if (changelogPath == null) {
-      return literalNotes;
+      return literalNotes == null
+          ? null
+          : LocaleNotes.literal(literalNotes, notesLocales);
     }
-    requireCommittedNotes([changelogPath]);
-    final notes = changelogNotesOf(
-      changelogPath,
-      forVersion,
+    return resolveLocaleNotes(
+      changelog: changelogPath,
+      version: forVersion,
       platform: platform.changelog,
+      locales: notesLocales,
+      limit: appStoreReleaseNotesLimit,
+      store: 'the App Store',
+      fail: fail,
+      say: say,
+      missingSectionIsError: missingSectionIsError,
     );
-    switch (notes) {
-      case NoSection():
-        fail(
-          '$changelogPath has no section for $forVersion.\n'
-          '  Add one. Empty is a fine answer — it publishes the newest older\n'
-          '  version that did change something here, or\n'
-          '  "$noUserVisibleChanges" if there is none. Absent is not the same\n'
-          '  answer as empty.',
-        );
-      case NotesText(:final text, :final fromVersion):
-        if (text.length > appStoreReleaseNotesLimit) {
-          fail(
-            "$changelogPath's $fromVersion section is ${text.length} "
-            'characters once filtered to ${platform.changelog}; the App Store '
-            'allows $appStoreReleaseNotesLimit',
-          );
-        }
-        // Said out loud: publishing one version's notes under another
-        // version's name should never happen quietly.
-        if (fromVersion.isEmpty) {
-          say(
-            '==> nothing at or below $forVersion is user-visible on '
-            '${platform.changelog} — publishing "$text"',
-          );
-        } else if (fromVersion != forVersion) {
-          say(
-            '==> $forVersion changes nothing on ${platform.changelog} — '
-            "publishing $fromVersion's notes instead",
-          );
-        }
-        return text;
-    }
-  }
-
-  // **Resolved here rather than late, which is what the closure above says it
-  // should have been all along.** Its own doc calls moving the changelog read
-  // into the offline phase "the better fix" and does not do it, because the
-  // paths that came first would change behaviour. This one is new, so it can
-  // start where the rest of the offline work is: an absent CHANGELOG.md
-  // section is the ordinary mistake, and finding it before a credential is
-  // loaded costs nothing and leaves nothing behind.
-  // The notes when the changelog has a section for this version, and null
-  // when it does not — as opposed to [notesFor], which refuses.
-  //
-  // Its own closure rather than a flag on `notesFor`, because the two answer
-  // different questions and only one of them is "what did the caller ask for".
-  // The over-limit refusal and the uncommitted-changes refusal are kept: those
-  // are wrong *files*, not absent ones, and a run that publishes a listing
-  // from a changelog it cannot read should say so however it was pointed at
-  // one.
-  String? notesIfPresent(String forVersion) {
-    if (changelogPath == null) {
-      return literalNotes;
-    }
-    requireCommittedNotes([changelogPath]);
-    final notes = changelogNotesOf(
-      changelogPath,
-      forVersion,
-      platform: platform.changelog,
-    );
-    if (notes is! NotesText) {
-      return null;
-    }
-    if (notes.text.length > appStoreReleaseNotesLimit) {
-      fail(
-        "$changelogPath's ${notes.fromVersion} section is "
-        '${notes.text.length} characters once filtered to '
-        '${platform.changelog}; the App Store allows '
-        '$appStoreReleaseNotesLimit',
-      );
-    }
-    return notes.text;
   }
 
   // **The listing's release notes, resolved before anything is written.**
@@ -2125,18 +2236,16 @@ Future<void> runAsc(
   // requirement. When `--changelog` or `--release-notes` was passed the notes
   // *are* what was asked for, and an absent section stays an error, because
   // "absent is not the same answer as empty" is the rule that flag carries.
-  String? listingReleaseNotes;
+  LocaleNotes? listingReleaseNotes;
   if (publish == ListingPublish.shared &&
       metadata != null &&
       versionName != null &&
       listingNeedsVersion(metadata)) {
     final named = opt('changelog') != null || notesPath != null;
-    listingReleaseNotes = named
-        ? notesFor(versionName)
-        : notesIfPresent(versionName);
+    listingReleaseNotes = notesFor(versionName, missingSectionIsError: named);
   }
 
-  String? whatToTestNotes;
+  LocaleNotes? whatToTestNotes;
   if (cmd == AscCommand.whatToTest) {
     whatToTestNotes = notesFor(versionName!);
     if (whatToTestNotes == null) {
@@ -2167,7 +2276,7 @@ Future<void> runAsc(
         metadataPath: metadataPath,
         betaGroup: betaGroup,
         changelogPath: changelogPath,
-        locale: locale,
+        locales: notesLocales.join(', '),
         phased: flag('phased'),
         releaseType: releaseType,
       ),
@@ -2666,24 +2775,13 @@ Future<void> runAsc(
       }
 
       say('==> TestFlight notes for build $buildNumber');
-      // The same announcement the upload path makes, for the same reason: what
-      // testers read then differs from what Play users read, and that is said
-      // out loud rather than done quietly.
-      var text = whatToTestNotes!;
-      if (needsStrippingForApple(text)) {
-        text = stripForApple(text);
-        say(
-          '    TestFlight rejects emoji, so they are stripped from the notes\n'
-          '    (Play publishes them verbatim)',
-        );
-      }
       // **Called unconditionally, including under `--dry-run`, and that is
       // not the bug it looks like.** `Writer(client, dryRun: dryRun)` is what
       // makes the run honest: the POST and the PATCH inside are suppressed
       // there and it prints its own `would update: what to test (<locale>)`
       // instead. Written down because a reader meeting "call the writer, then
       // print nothing was written" re-checks it — one already has.
-      await store.setWhatToTest(build, locale, text);
+      await _setWhatToTest(store, build, whatToTestNotes!, say);
       say(dryRun ? '==> dry run — nothing was written' : '==> done');
       return;
     }
@@ -2784,19 +2882,7 @@ Future<void> runAsc(
         final notes = notesFor(versionName!);
         if (notes != null) {
           say('==> TestFlight notes');
-          // TestFlight refuses emoji, which CHANGELOG.md is full of by design.
-          // Said out loud rather than done quietly, because what testers read
-          // then differs from what Play users read.
-          var testFlightNotes = notes;
-          if (needsStrippingForApple(notes)) {
-            testFlightNotes = stripForApple(notes);
-            say(
-              '    TestFlight rejects emoji, so they are stripped from the '
-              'notes\n'
-              '    (Play publishes them verbatim)',
-            );
-          }
-          await store.setWhatToTest(build, locale, testFlightNotes);
+          await _setWhatToTest(store, build, notes, say);
         }
         if (betaGroup != null) {
           say('==> beta group');
@@ -2909,11 +2995,12 @@ Future<void> runAsc(
           store,
           app,
           versionRecord,
-          locale,
           listingReleaseNotes,
           versionName,
+          onlyLocale: onlyLocale,
           declaredLocales: {
             for (final l in metadata.locales) ...{l.locale},
+            ...declaredLocales,
           },
         );
       }
@@ -3100,14 +3187,13 @@ Future<void> runAsc(
         }
         await store.attachBuild(version, chosen);
 
-        await publishReleaseNotes(
-          store,
-          app,
-          version,
-          locale,
-          notesFor(versionName),
-          versionName,
-        );
+        // Resolved here, where a missing section has always been refused on
+        // this path, and **written below, after the listing publish** — which
+        // is what creates a newly declared locale's localization. Written
+        // before it, as it was, a listing that gained de-DE in this very
+        // promote got its German record *after* the notes went out, and the
+        // submission refused a localization with no "What's New".
+        final promoteNotes = notesFor(versionName);
         if (flag('phased')) {
           say('==> phased release');
           await store.enablePhasedRelease(version);
@@ -3145,6 +3231,32 @@ Future<void> runAsc(
             reportReleaseType: false,
           );
         }
+
+        await publishReleaseNotes(
+          store,
+          app,
+          version,
+          promoteNotes,
+          versionName,
+          onlyLocale: onlyLocale,
+          // **An explicit `--locale` on promote is checked against nothing,
+          // as it always was.** Promote never passed a declared set, so
+          // `promote --locale fr-FR` wrote fr-FR whatever the tree said.
+          // Folding the declaration in turned that into "skipped" — and the
+          // promote then submitted a localization with no "What's New", which
+          // is the 409 this change exists to remove, reached by the flag that
+          // was supposed to keep its meaning. Without `--locale` the set never
+          // skips a localization Apple holds; it only names the ones it does
+          // not declare.
+          declaredLocales: onlyLocale != null
+              ? const {}
+              : {
+                  if (metadata != null) ...{
+                    for (final l in metadata.locales) ...{l.locale},
+                  },
+                  ...declaredLocales,
+                },
+        );
 
         say('==> submitting for review');
         await store.submitForReview(app, version);
@@ -3422,7 +3534,7 @@ String _summarizeAsc({
   required String? metadataPath,
   required String? betaGroup,
   required String? changelogPath,
-  required String locale,
+  required String locales,
   required bool phased,
   required String? releaseType,
 }) {
@@ -3440,7 +3552,9 @@ String _summarizeAsc({
     'listing': metadataPath,
     'beta group': betaGroup,
     'notes from': changelogPath,
-    'locale': locale,
+    // Plural, because a release writes every one of them — the prompt is
+    // the last place to notice a locale that is about to get notes, or not.
+    'locales': locales,
     'phased': phased ? 'yes — over Apple\'s seven-day schedule' : null,
     // Null when unset, like every other row: nothing changes, so there is
     // nothing for the summary to say. The effective value is printed later,
