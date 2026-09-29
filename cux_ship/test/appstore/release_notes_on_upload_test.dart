@@ -663,6 +663,51 @@ void main() {
         greaterThan(writes.lastIndexOf('/v1/appStoreVersionLocalizations')),
       );
     });
+
+    test('promote --locale writes that locale, whatever is declared', () async {
+      // Promote never checked `--locale` against a declaration, so
+      // `promote --locale fr-FR` wrote fr-FR. Folding the declared set into
+      // the guard turned it into "skipped" — and the promote then submitted
+      // fr-FR with no "What's New", the 409 this change exists to remove.
+      final client = _FakeClient(
+        versions: [_version('old', '1.1.5')],
+        heldLocales: ['en-US', 'de-DE', 'fr-FR'],
+      );
+
+      final said = await _run(
+        AscCommand.promote,
+        client,
+        declared: {'en-US', 'de-DE'},
+        ['--metadata', '${_root.path}/store/appstore', '--locale', 'fr-FR'],
+      );
+
+      expect(_whatsNewByLocale(client), [('fr-FR', '- A shorter tour intro')]);
+      expect(said, isNot(contains('release notes skipped')));
+    });
+
+    test('a dry run with nothing held yet says what the real run does', () {
+      // Apple holds no localization of an editable version; on a real run the
+      // listing publish creates the tree's first, so advising `--locale` here
+      // would contradict it.
+      final client = _FakeClient(
+        versions: [
+          {
+            'type': 'appStoreVersions',
+            'id': 'existing',
+            'attributes': {
+              'versionString': '1.1.6',
+              'appStoreState': 'PREPARE_FOR_SUBMISSION',
+            },
+          },
+          _version('old', '1.1.5'),
+        ],
+      );
+
+      return _upload(client, extra: ['--dry-run']).then((said) {
+        expect(said, contains('on a real run the listing publish creates'));
+        expect(said, isNot(contains('Pass --locale')));
+      });
+    });
   });
 
   group('TestFlight "What to Test" goes to every declared locale', () {
@@ -692,6 +737,29 @@ void main() {
         ('en-US', '- A shorter tour intro'),
         ('de-DE', '- Ein kürzeres Intro'),
       ]);
+    });
+
+    test('emoji are stripped in every locale', () async {
+      // TestFlight refuses them, so what is written must not carry one.
+      _write(
+        'CHANGELOG.md',
+        '## 1.1.6\n\n- 🚴 A shorter tour intro\n\n## 1.1.5\n\n- Older\n',
+      );
+      _write('CHANGELOG.de-DE.md', '## 1.1.6\n\n- 🚴 Ein kürzeres Intro\n');
+      final client = _FakeClient();
+
+      final said = await _run(
+        AscCommand.whatToTest,
+        client,
+        declared: {'en-US', 'de-DE'},
+        ['--build-number', '7'],
+      );
+
+      expect(whatToTest(client), hasLength(2));
+      for (final (locale, text) in whatToTest(client)) {
+        expect(text, isNot(contains('🚴')), reason: locale);
+      }
+      expect(said, contains('TestFlight rejects emoji'));
     });
 
     test('with --locale, only that one', () async {

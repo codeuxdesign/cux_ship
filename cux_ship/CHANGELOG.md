@@ -3,7 +3,8 @@
 ## Unreleased
 
 **Needs the unreleased `cux_ship_verify` API below** — `checkLocaleChangelogs`,
-`localeNotesSource`. The constraint is raised on the release branch, per
+`localeNotesSource` and its `NotesSource` cases, `localeChangelogPath`, and
+`otherStoreNamed`. The constraint is raised on the release branch, per
 docs/RELEASING.md, and until then this branch's *Resolve as a git dependency*
 check is red for exactly that reason.
 
@@ -18,7 +19,8 @@ on every localization of an update. It was released after a second run with
 throughout.
 
 Now "What's New" goes to every localization Apple holds for the version,
-TestFlight "What to Test" to every locale in `appstore.locales`, and Play's
+TestFlight "What to Test" to every locale in `appstore.locales` (`en-US` when
+none is declared), and Play's
 release notes to the listing's default language and every locale in
 `play.locales` — one `LocalizedText` each. `CHANGELOG.<locale>.md` beside the
 changelog is that locale's notes; a locale without one gets `CHANGELOG.md`'s,
@@ -35,9 +37,14 @@ before it the German record did not exist yet and got no notes.
 
 **`--locale` has no default.** Unset means every locale above, and a run that
 publishes to more than one names each and the file it came from. Passed, it
-keeps its old meaning: that one locale. It still chooses the Beta App
-Description's locale, which is `en-US` without it. With nothing declared and no
-locale files, every write is what it was.
+keeps its old meaning: that one locale — on `promote` still checked against no
+declaration, as it never was. It still chooses the Beta App Description's
+locale, which is `en-US` without it.
+
+**What a run with nothing declared and no locale files writes is unchanged when
+Apple holds exactly the tree's localizations** — the common case. When Apple
+holds one more, it now gets "What's New" too, where it used to be left empty;
+that is the fix working, and the next paragraph's.
 
 **`--release-notes <file>` goes to every locale.** It is for a repository that
 keeps one file of notes, which has made no per-locale decision to honour.
@@ -57,12 +64,14 @@ locale no store declares, and a dangling symlink where a locale file would be.
 as absent — absent now means "publish the default", so a linked translation
 would have been replaced by English in silence.
 
-**`verify` refuses a changelog entry that would reach the App Store naming
-Android.** An unscoped entry reaches every store, and App Review Guideline
-2.3.10 rejects metadata naming other mobile platforms — an unscoped *"Drag
-files in on Android"* reached two uploaded builds before a reader caught it.
-Prefix it `[android]`. Every section is checked, so a changelog that passed
-before may report an old entry.
+**`verify` and the App Store uploader refuse a changelog entry that would reach
+the App Store naming Android**, Google Play or the Play Store. An unscoped entry
+reaches every store, and App Review Guideline 2.3.10 rejects metadata naming
+other mobile platforms — an unscoped *"Drag files in on Android"* reached two
+uploaded builds before a reader caught it. Prefix it `[android]`. `verify`
+checks every section, so a changelog that passed before may report an old
+entry; the uploaders check the text they are about to publish, including a
+`--release-notes` file.
 
 ## 4.5.0-dev.6
 

@@ -205,6 +205,78 @@ void main() {
     ]);
   });
 
+  test('a dirty locale file is refused, through the resolver', () {
+    // **The resolver hands every file it read to the guard**, which is what
+    // this pins: `sources` is only what it reports, and a resolver checking
+    // [changelog] alone would report the same list while publishing an
+    // uncommitted German section. So the repository is real and the German
+    // file is mid-edit beside a committed English one.
+    Process.runSync('git', ['init', '-q'], workingDirectory: _root.path);
+    _write('CHANGELOG.de-DE.md', '## 1.1.9\n\n- Dateien hineinziehen\n');
+    Process.runSync('git', ['add', '-A'], workingDirectory: _root.path);
+    Process.runSync('git', [
+      '-c',
+      'user.email=test@example.com',
+      '-c',
+      'user.name=test',
+      'commit',
+      '-qm',
+      'notes',
+    ], workingDirectory: _root.path);
+    _write('CHANGELOG.de-DE.md', '## 1.1.9\n\n- Dateien hinein');
+
+    expect(
+      () => _resolve({'en-US', 'de-DE'}),
+      _refusal(
+        allOf(contains('CHANGELOG.de-DE.md'), contains('Commit it first')),
+      ),
+    );
+  });
+
+  group('text on its way to Apple that names Android', () {
+    // Refused here as well as by `verify`, because an upload is not always
+    // preceded by one — App Review Guideline 2.3.10.
+    setUp(() {
+      _write('CHANGELOG.md', '## 1.1.9\n\n- Drag files in on Android\n');
+    });
+
+    test('is refused on ios and macos, quoting the line', () {
+      for (final platform in ['ios', 'macos']) {
+        expect(
+          () => _resolve(
+            {'en-US'},
+            platform: platform,
+            limit: appStoreReleaseNotesLimit,
+          ),
+          _refusal(
+            allOf(
+              contains('names Android'),
+              contains('- Drag files in on Android'),
+              contains('2.3.10'),
+            ),
+          ),
+          reason: platform,
+        );
+      }
+    });
+
+    test('is fine on android, where it belongs', () {
+      expect(_resolve({'en-US'})!.byLocale['en-US'], contains('Android'));
+    });
+
+    test('in a literal notes file, too', () {
+      expect(
+        () => refuseLiteralNotesNamingOtherStores(
+          'Now also on Google Play',
+          path: 'notes.txt',
+          platform: 'ios',
+          fail: (message) => throw _Refused(message),
+        ),
+        _refusal(contains('notes.txt names Google Play')),
+      );
+    });
+  });
+
   test('a lone locale on the default says nothing new', () {
     // Every release before locales could be declared.
     final said = <String>[];

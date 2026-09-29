@@ -174,6 +174,12 @@ LocaleNotes? resolveLocaleNotes({
             'characters once filtered to $platform; $store allows $limit',
           );
         }
+        _refuseOtherStoreNames(
+          text,
+          platform: platform,
+          source: "$prefix$path's $fromVersion section",
+          fail: fail,
+        );
         // Said out loud: publishing one version's notes under another
         // version's name should never happen quietly.
         if (fromVersion.isEmpty) {
@@ -231,6 +237,46 @@ LocaleNotes? resolveLocaleNotes({
     fromDefault: fromDefault,
   );
 }
+
+/// Refuses text on its way to an Apple store that names Android.
+///
+/// `verify` reports the same thing from `checkPlatformNames`, but an upload
+/// is not always preceded by one — `appstore upload --changelog` run by hand
+/// would otherwise ship an unscoped "Drag files in on Android" to review,
+/// where App Review Guideline 2.3.10 rejects it. The text here is already
+/// filtered to [platform], so an `[android]` entry never reaches this.
+void _refuseOtherStoreNames(
+  String text, {
+  required String platform,
+  required String source,
+  required Never Function(String) fail,
+}) {
+  if (platform == 'android') {
+    return;
+  }
+  final named = otherStoreNamed(text);
+  if (named != null) {
+    fail(
+      '$source names ${named.name} and would reach the App Store as '
+      '$platform notes:\n'
+      '    ${named.line}\n'
+      '  App Review Guideline 2.3.10 rejects metadata naming other mobile '
+      'platforms. Prefix the entry [android], or reword it.',
+    );
+  }
+}
+
+/// Literal notes — `--release-notes <file>` — refused as [resolveLocaleNotes]
+/// refuses a changelog's, when they would reach an Apple store naming
+/// Android. A literal file has no prefixes to scope it, so the only fix is
+/// the wording.
+void refuseLiteralNotesNamingOtherStores(
+  String text, {
+  required String path,
+  required String platform,
+  required Never Function(String) fail,
+}) =>
+    _refuseOtherStoreNames(text, platform: platform, source: path, fail: fail);
 
 /// One line per locale saying which file its notes come from, by name.
 ///

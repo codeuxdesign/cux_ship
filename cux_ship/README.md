@@ -310,7 +310,7 @@ alone. Now a release writes:
 | | to |
 |---|---|
 | App Store "What's New" | every localization Apple holds for the version |
-| TestFlight "What to Test" | every locale in `appstore.locales` |
+| TestFlight "What to Test" | every locale in `appstore.locales`, or `en-US` when none is declared |
 | Play release notes | the listing's default language and every locale in `play.locales` |
 
 **Adding a language to a listing needs nothing else.** Every declared locale
@@ -353,8 +353,8 @@ start of a bullet scopes it, and is stripped before publishing:
 
 The unscoped case is the one that bites. App Review Guideline 2.3.10 rejects
 metadata naming another mobile platform, so an unscoped entry about Android is
-App Store copy too — and `verify` refuses one: an entry that reaches iOS or
-macOS naming Android, Google Play or the Play Store.
+App Store copy too — and both `verify` and the App Store uploader refuse one: an
+entry that reaches iOS or macOS naming Android, Google Play or the Play Store.
 
 `cux_ship verify` prints one `checked notes` line per declared locale, and
 refuses a locale file missing the shipping version's section, one over a cap,

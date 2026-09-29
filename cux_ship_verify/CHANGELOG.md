@@ -15,7 +15,8 @@ and nothing here could say which locales would get notes.
   `DefaultFile` / `DanglingLink`. The third is its own case because
   `File.existsSync` reports a link to nothing as absent, and absent now means
   "take the default".
-- `localeChangelogsBeside` finds the locale files that exist.
+- `localeChangelogsBeside` finds the locale files that exist — by a
+  locale-shaped name, so `CHANGELOG.archive.md` is not one.
 - `checkLocaleChangelogs` reports a locale file missing the shipping version's
   section, one over a cap, one for a locale nothing declares, and a dangling
   link. A declared locale with no file is not a problem: that is how a listing
@@ -35,7 +36,8 @@ actually get — so `[android]` entries pass — and matches Android, Google Pla
 and the Play Store word-bounded, in every section, since the fallback can
 publish an older one. **A changelog that passed before may not now**: an old
 unscoped entry about Android is reported like a new one, and the fix is the
-same `[android]` prefix.
+same `[android]` prefix. `otherStoreNamed` is the match on its own, for an
+uploader refusing text that has already been filtered.
 
 ## 1.11.0-dev.2
 

@@ -96,8 +96,21 @@ the single write of every earlier release, generalised.
 
 **`--locale` has no default now**, and unset means the sets above. Passed, it
 keeps its old meaning everywhere — one locale, that one — so a script that names
-it gets what it always got. With nothing declared and no locale files, every
-path writes exactly what it wrote before.
+it gets what it always got. That includes `promote`, which never checked
+`--locale` against a declaration: folding the declared set in there (as the
+first version of this did, caught in review) turned `promote --locale fr-FR`
+into "skipped" and then submitted fr-FR with no "What's New" — the 409, reached
+by the flag that was meant to keep its meaning.
+
+**With nothing declared and no locale files, a run writes what it wrote before
+whenever Apple holds exactly the tree's localizations.** When Apple holds one
+more — a localization added in the console — that one now gets "What's New"
+too, where it used to be left empty and the submission refused. That is not
+compatibility, and it is not meant to be.
+
+**A dry run cannot see a localization the listing publish would create**,
+since it wrote nothing, so when Apple holds none yet it says the real run
+creates them first instead of advising `--locale`.
 
 **The listing-only publish is all or nothing.** It is the one path where a
 missing section is not an error — the changelog there is inferred, and an
@@ -188,12 +201,23 @@ this change, only in a private regex's comment.
 
 `checkPlatformNames`, run by `checkChangelog` over every file, reports an entry
 that reaches `ios` or `macos` *after filtering* and names Android, Google Play
-or the Play Store, word-bounded and in any case. So an `[android]` entry is
-fine, a `[macos]` one is reported against macOS alone, and *androids* or a bare
-*Play* are not hits. Every section is checked, not only the newest, because the
-fallback walk can publish an older one. The reverse — an entry reaching Android
-that names iPhone — is allowed by Play, and this tool has no channel for a
-style warning, so it is not checked.
+or the Play Store, word-bounded and in any case, quoting the line the name is
+on. So an `[android]` entry is fine, a `[macos]` one is reported against macOS
+alone, and *androids*, *AndroidX* or a bare *Play* are not hits — though
+*android-style* and `developer.android.com` are, since `-` and `.` are word
+boundaries, and both do name the platform. Every section is checked, including
+ones the fallback walk can no longer reach: stricter than the fallback needs,
+deliberately, since an old section is fixed the same way as a new one.
+
+**The App Store uploader refuses the same thing** on the text it is about to
+publish, changelog or `--release-notes` file, because an upload is not always
+preceded by a `verify` — `appstore upload --changelog` run by hand would
+otherwise ship it to review.
+
+The reverse — an entry reaching Android that names iPhone — is allowed by Play,
+and this tool has no channel for a style warning, so it is not checked. How It
+Went has one such entry (*"Phone to Mac and back"*, 1.1.0), which is fine on
+Play.
 
 ## Open: the Beta App Description is still one locale
 
@@ -212,8 +236,21 @@ when a consumer's external beta meets it.
 
 Status: **open**.
 
-Three things this design depends on less than it would like to, and none is
-documented: what TestFlight shows a tester whose locale has no "What to Test";
+**Whether Apple accepts a `betaBuildLocalizations` POST for a locale with no
+`betaAppLocalization`** is unmeasured: every consumer so far has written
+`en-US` alone, which has one. If Apple refuses it, the first release that
+declares a second App Store locale meets the refusal after the build has
+processed — the TestFlight notes are the write after the wait. Watch the first
+such release.
+
+**`verify` applies every store's cap to every locale file**, so a German file
+for a locale only the App Store declares is still held to Play's 500. That is
+how `CHANGELOG.md` has always been checked — its sections are measured against
+all three platforms whatever a repository publishes — and a per-store split
+would be a new argument for both files at once.
+
+Three more things this design depends on less than it would like to, and none
+is documented: what TestFlight shows a tester whose locale has no "What to Test";
 what Play shows a reader whose language has no `releaseNotes` element; and
 whether Play refuses an element for a *supported* language the listing lacks —
 `play/cli.dart` asserts it, and the only documented refusal is for a language

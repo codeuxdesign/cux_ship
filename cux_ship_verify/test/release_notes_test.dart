@@ -243,6 +243,20 @@ void main() {
       }
     });
 
+    test('a hit on a continuation line quotes that line', () {
+      // Quoting the entry's first line would show text without the word the
+      // problem is about.
+      final problems = checkPlatformNames(
+        '## 1.1.9\n\n- Drag files in from anywhere,\n  including an Android '
+        'phone\n',
+      );
+
+      expect(
+        problems.single.message,
+        startsWith('"including an Android phone" names Android'),
+      );
+    });
+
     test('every section, since the fallback can publish an older one', () {
       final problems = checkPlatformNames(
         '## 1.1.9\n\n## 1.1.8\n\n- Faster on Android\n',
@@ -346,6 +360,8 @@ void main() {
       // Not locale files: another stem, and a nested extension.
       File('${root.path}/CHANGES.de-DE.md').writeAsStringSync('');
       File('${root.path}/CHANGELOG.de-DE.md.bak').writeAsStringSync('');
+      // Not locale-shaped, so somebody's own file rather than a misspelling.
+      File('${root.path}/CHANGELOG.archive.md').writeAsStringSync('');
 
       expect(localeChangelogsBeside('${root.path}/CHANGELOG.md').keys.toSet(), {
         'de-DE',

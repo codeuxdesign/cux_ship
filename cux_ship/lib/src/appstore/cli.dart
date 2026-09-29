@@ -895,6 +895,18 @@ Future<void> publishReleaseNotes(
   // rather than quietly: this is a listing that will not carry its notes,
   // which is the thing this whole function exists to stop happening in
   // silence.
+  // **A dry run's empty reading is its own, not Apple's.** The listing publish
+  // before this is what creates the tree's localizations, and on a dry run it
+  // wrote nothing — so advising `--locale` here, as the branch below would,
+  // contradicts the real run, which finds the records and writes to them.
+  if (onlyLocale == null && held.isEmpty && store.writer.dryRun) {
+    store.say(
+      '==> release notes: Apple holds no localization of '
+      '${versionName ?? 'this version'} yet — on a real run the listing '
+      'publish creates them first, and the notes go to each',
+    );
+    return;
+  }
   final List<String> targets;
   if (onlyLocale != null || held.isEmpty) {
     final wanted = onlyLocale == null ? notes.byLocale.keys : [onlyLocale];
@@ -905,7 +917,7 @@ Future<void> publishReleaseNotes(
     ];
     if (targets.isEmpty) {
       store.say(
-        '==> release notes skipped: this tree declares '
+        '==> release notes skipped: this repository declares '
         '${declaredLocales.join(", ")} and the notes would go to '
         '${wanted.join(", ")}.\n'
         '    Pass --locale ${declaredLocales.first} to publish them there.',
@@ -1964,6 +1976,12 @@ Future<void> runAsc(
         'allows $appStoreReleaseNotesLimit',
       );
     }
+    refuseLiteralNotesNamingOtherStores(
+      literalNotes,
+      path: notesPath,
+      platform: platform.changelog,
+      fail: fail,
+    );
   }
 
   // The beta app description, resolved offline exactly like the notes above —
@@ -3220,12 +3238,23 @@ Future<void> runAsc(
           promoteNotes,
           versionName,
           onlyLocale: onlyLocale,
-          declaredLocales: {
-            if (metadata != null) ...{
-              for (final l in metadata.locales) ...{l.locale},
-            },
-            ...declaredLocales,
-          },
+          // **An explicit `--locale` on promote is checked against nothing,
+          // as it always was.** Promote never passed a declared set, so
+          // `promote --locale fr-FR` wrote fr-FR whatever the tree said.
+          // Folding the declaration in turned that into "skipped" — and the
+          // promote then submitted a localization with no "What's New", which
+          // is the 409 this change exists to remove, reached by the flag that
+          // was supposed to keep its meaning. Without `--locale` the set never
+          // skips a localization Apple holds; it only names the ones it does
+          // not declare.
+          declaredLocales: onlyLocale != null
+              ? const {}
+              : {
+                  if (metadata != null) ...{
+                    for (final l in metadata.locales) ...{l.locale},
+                  },
+                  ...declaredLocales,
+                },
         );
 
         say('==> submitting for review');

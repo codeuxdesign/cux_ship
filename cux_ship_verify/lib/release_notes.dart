@@ -211,11 +211,28 @@ Notes changelogNotes(
 /// Guideline 2.3.10 refuses metadata naming another mobile platform. Play has
 /// no such rule, so an entry reaching Android that names iPhone is allowed,
 /// and a check for it would be a style warning this package has no channel
-/// for. Word-bounded, so `androids` and a bare `Play` are not hits.
+/// for. Word-bounded, so `androids`, `AndroidX` and a bare `Play` are not
+/// hits — but a `-` or `.` is a boundary, so `android-style` and
+/// `developer.android.com` are, and both do name the platform.
 final _otherStoreNames = RegExp(
   r'\b(android|google play|play store)\b',
   caseSensitive: false,
 );
+
+/// The line of [text] that names another store, and the name, or null.
+///
+/// Public so an uploader can refuse text on its way to Apple rather than
+/// relying on `verify` having run first — the text it has is already
+/// filtered to the platform, which is the only text this question is about.
+({String line, String name})? otherStoreNamed(String text) {
+  for (final line in const LineSplitter().convert(text)) {
+    final match = _otherStoreNames.firstMatch(line);
+    if (match != null) {
+      return (line: line.trim(), name: match.group(0)!);
+    }
+  }
+  return null;
+}
 
 /// Entries that would reach an Apple store naming Android.
 ///
@@ -226,9 +243,12 @@ final _otherStoreNames = RegExp(
 /// get, after filtering: an `[android]` entry is fine, and a `[macos]` one
 /// is reported against macOS alone.
 ///
-/// Every section, not only the newest, because the fallback walk can publish
-/// an older one. One problem per entry, naming each Apple platform it reaches.
-/// [name] is what the problems call the file.
+/// **Every section, including ones the fallback walk can no longer reach** —
+/// stricter than the fallback strictly needs, deliberately: which sections are
+/// reachable depends on which versions will ever be released again, and an
+/// old section is fixed with the same prefix as a new one. One problem per
+/// entry, naming each Apple platform it reaches and quoting the line with the
+/// name in it. [name] is what the problems call the file.
 List<ReleaseProblem> checkPlatformNames(
   String markdown, {
   String name = 'CHANGELOG.md',
@@ -237,25 +257,23 @@ List<ReleaseProblem> checkPlatformNames(
   for (final section in _sections(markdown)) {
     for (final entry in section.entries) {
       final reaches = <String>[];
-      String? named;
+      ({String line, String name})? named;
       for (final platform in const ['ios', 'macos']) {
         final kept = _forPlatform([entry], platform);
-        final match = kept.isEmpty
-            ? null
-            : _otherStoreNames.firstMatch(kept.single);
-        if (match != null) {
+        final found = kept.isEmpty ? null : otherStoreNamed(kept.single);
+        if (found != null) {
           reaches.add(platform);
-          named = match.group(0);
+          named = found;
         }
       }
-      if (reaches.isEmpty) {
+      if (named == null) {
         continue;
       }
-      final text = entry.split('\n').first.trim();
       problems.add(
         ReleaseProblem(
           '$name § ${section.version} → ${reaches.join(', ')}',
-          '"$text" names $named and reaches the App Store — App Review '
+          '"${named.line}" names ${named.name} and reaches the App Store — '
+              'App Review '
               'Guideline 2.3.10 rejects metadata naming other mobile platforms. '
               'Prefix it [android], or reword it',
         ),
@@ -370,6 +388,12 @@ NotesSource localeNotesSource(String changelog, String locale) {
 ///
 /// Dangling links are included, since they are exactly what somebody meant
 /// to be a locale file.
+///
+/// **Only a locale-shaped name counts**: a two- or three-letter language,
+/// then any `-` subtags — `de`, `de-DE`, `zh-Hans`, `es-419`. So
+/// `CHANGELOG.archive.md` is somebody's file and not a misspelt locale; a
+/// three-letter word like `CHANGELOG.old.md` is still read as one, and says
+/// so by name.
 Map<String, String> localeChangelogsBeside(String changelog) {
   final (:directory, :stem, :extension) = _splitChangelog(changelog);
   final dir = Directory(directory.isEmpty ? '.' : directory);
@@ -377,7 +401,8 @@ Map<String, String> localeChangelogsBeside(String changelog) {
     return const {};
   }
   final pattern = RegExp(
-    '^${RegExp.escape(stem)}\\.([^./\\\\]+)${RegExp.escape(extension)}\$',
+    '^${RegExp.escape(stem)}\\.([a-zA-Z]{2,3}(?:-[A-Za-z0-9]{2,8})*)'
+    '${RegExp.escape(extension)}\$',
   );
   final found = <String, String>{};
   for (final entity in dir.listSync(followLinks: false)) {
