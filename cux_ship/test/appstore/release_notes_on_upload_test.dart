@@ -704,7 +704,7 @@ void main() {
       );
 
       return _upload(client, extra: ['--dry-run']).then((said) {
-        expect(said, contains('on a real run the listing publish creates'));
+        expect(said, contains('on a real run a listing publish creates'));
         expect(said, isNot(contains('Pass --locale')));
       });
     });

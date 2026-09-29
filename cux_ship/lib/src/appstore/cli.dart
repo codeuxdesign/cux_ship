@@ -902,8 +902,9 @@ Future<void> publishReleaseNotes(
   if (onlyLocale == null && held.isEmpty && store.writer.dryRun) {
     store.say(
       '==> release notes: Apple holds no localization of '
-      '${versionName ?? 'this version'} yet — on a real run the listing '
-      'publish creates them first, and the notes go to each',
+      '${versionName ?? 'this version'} yet, so this dry run writes no notes '
+      '— on a real run a listing publish creates the tree\'s first, and the '
+      'notes go to each',
     );
     return;
   }
