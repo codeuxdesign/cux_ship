@@ -129,6 +129,19 @@ void main() {
       expect(changelogVersions(markdown), ['1.4.0']);
     });
 
+    test('an unscoped entry naming Android is reported', () {
+      // checkPlatformNames' own cases are in release_notes_test; this is that
+      // checkChangelog — what `verify` and every consumer's suite call — runs
+      // it, and runs it on a locale file under that file's name.
+      final problems = checkChangelog(
+        '## 1.0.0\n\n- Dateien hineinziehen, wie auf Android\n',
+        name: 'CHANGELOG.de-DE.md',
+      );
+
+      expect(problems, hasLength(1));
+      expect(problems.single.where, 'CHANGELOG.de-DE.md § 1.0.0 → ios, macos');
+    });
+
     test('the limits are overridable', () {
       const markdown = '## 1.0.0\n\n- Twelve chars\n';
       expect(checkChangelog(markdown, limits: {'android': 5}), hasLength(1));

@@ -178,6 +178,23 @@ German reader would scroll through, gives a translation tool nothing per-file
 to work on, and `### de-DE` would need a new grammar, since any `##` heading
 already ends a section.
 
+## The platform-name check
+
+A related guard over the same parser, found the same day: an unscoped
+*"Drag files in on Android"* reached two uploaded builds before a reader caught
+it. App Review Guideline 2.3.10 rejects metadata naming other mobile platforms,
+and an entry without a prefix reaches every store — a rule documented, until
+this change, only in a private regex's comment.
+
+`checkPlatformNames`, run by `checkChangelog` over every file, reports an entry
+that reaches `ios` or `macos` *after filtering* and names Android, Google Play
+or the Play Store, word-bounded and in any case. So an `[android]` entry is
+fine, a `[macos]` one is reported against macOS alone, and *androids* or a bare
+*Play* are not hits. Every section is checked, not only the newest, because the
+fallback walk can publish an older one. The reverse — an entry reaching Android
+that names iPhone — is allowed by Play, and this tool has no channel for a
+style warning, so it is not checked.
+
 ## Open: the Beta App Description is still one locale
 
 Status: **open**.

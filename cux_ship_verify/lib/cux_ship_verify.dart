@@ -78,6 +78,9 @@ List<String> changelogVersions(String markdown) =>
 /// * a section that survives filtering for a platform but is longer than that
 ///   store accepts, which the store itself would only say after the upload.
 ///
+/// And a third, of a different kind again: an entry that reaches an Apple
+/// store naming Android, which App Review rejects — see [checkPlatformNames].
+///
 /// A changelog with no version headings is itself a problem: it is far more
 /// likely that the format drifted than that a project has no releases, and
 /// silently checking nothing is the failure this whole function exists to
@@ -132,6 +135,7 @@ List<ReleaseProblem> checkChangelog(
     }
   }
 
+  problems.addAll(checkPlatformNames(markdown, name: name));
   return problems;
 }
 

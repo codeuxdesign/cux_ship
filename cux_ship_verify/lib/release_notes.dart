@@ -36,6 +36,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'release_problem.dart';
+
 /// What ships when neither the version being released nor anything before it
 /// has a word to say about this platform.
 ///
@@ -201,6 +203,66 @@ Notes changelogNotes(
     }
   }
   return const NotesText(noUserVisibleChanges, fromVersion: '');
+}
+
+/// Another store's name, as App Review would read it.
+///
+/// Android's names only, because Apple's is the rule that rejects: App Review
+/// Guideline 2.3.10 refuses metadata naming another mobile platform. Play has
+/// no such rule, so an entry reaching Android that names iPhone is allowed,
+/// and a check for it would be a style warning this package has no channel
+/// for. Word-bounded, so `androids` and a bare `Play` are not hits.
+final _otherStoreNames = RegExp(
+  r'\b(android|google play|play store)\b',
+  caseSensitive: false,
+);
+
+/// Entries that would reach an Apple store naming Android.
+///
+/// An entry with no scope prefix reaches every store, so *"Drag files in on
+/// Android"* written without `[android]` is App Store copy — which is how it
+/// reached two uploaded builds of one consumer on 29 September 2026 before a
+/// reader caught it. Checked on the text each Apple platform would actually
+/// get, after filtering: an `[android]` entry is fine, and a `[macos]` one
+/// is reported against macOS alone.
+///
+/// Every section, not only the newest, because the fallback walk can publish
+/// an older one. One problem per entry, naming each Apple platform it reaches.
+/// [name] is what the problems call the file.
+List<ReleaseProblem> checkPlatformNames(
+  String markdown, {
+  String name = 'CHANGELOG.md',
+}) {
+  final problems = <ReleaseProblem>[];
+  for (final section in _sections(markdown)) {
+    for (final entry in section.entries) {
+      final reaches = <String>[];
+      String? named;
+      for (final platform in const ['ios', 'macos']) {
+        final kept = _forPlatform([entry], platform);
+        final match = kept.isEmpty
+            ? null
+            : _otherStoreNames.firstMatch(kept.single);
+        if (match != null) {
+          reaches.add(platform);
+          named = match.group(0);
+        }
+      }
+      if (reaches.isEmpty) {
+        continue;
+      }
+      final text = entry.split('\n').first.trim();
+      problems.add(
+        ReleaseProblem(
+          '$name § ${section.version} → ${reaches.join(', ')}',
+          '"$text" names $named and reaches the App Store — App Review '
+              'Guideline 2.3.10 rejects metadata naming other mobile platforms. '
+              'Prefix it [android], or reword it',
+        ),
+      );
+    }
+  }
+  return problems;
 }
 
 /// [changelogNotes] against a file on disk.

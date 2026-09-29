@@ -57,6 +57,13 @@ locale no store declares, and a dangling symlink where a locale file would be.
 as absent — absent now means "publish the default", so a linked translation
 would have been replaced by English in silence.
 
+**`verify` refuses a changelog entry that would reach the App Store naming
+Android.** An unscoped entry reaches every store, and App Review Guideline
+2.3.10 rejects metadata naming other mobile platforms — an unscoped *"Drag
+files in on Android"* reached two uploaded builds before a reader caught it.
+Prefix it `[android]`. Every section is checked, so a changelog that passed
+before may report an old entry.
+
 ## 4.5.0-dev.6
 
 ### Added

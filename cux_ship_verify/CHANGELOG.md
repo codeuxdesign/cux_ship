@@ -26,6 +26,17 @@ and nothing here could say which locales would get notes.
 The `[android]` / `[ios, macos]` scope-prefix grammar is documented at the top
 of `release_notes.dart`, for the first time anywhere public.
 
+**`checkChangelog` refuses an entry that reaches an Apple store naming
+Android.** An unscoped *"Drag files in on Android"* reached two uploaded builds
+of one consumer before a reader caught it; App Review Guideline 2.3.10 rejects
+metadata naming other mobile platforms, and an entry without a prefix reaches
+every store. `checkPlatformNames` reads the text each Apple platform would
+actually get — so `[android]` entries pass — and matches Android, Google Play
+and the Play Store word-bounded, in every section, since the fallback can
+publish an older one. **A changelog that passed before may not now**: an old
+unscoped entry about Android is reported like a new one, and the fix is the
+same `[android]` prefix.
+
 ## 1.11.0-dev.2
 
 **A preview with no stereo audio track is refused offline.** Apple rejects one

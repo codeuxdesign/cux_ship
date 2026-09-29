@@ -353,7 +353,8 @@ start of a bullet scopes it, and is stripped before publishing:
 
 The unscoped case is the one that bites. App Review Guideline 2.3.10 rejects
 metadata naming another mobile platform, so an unscoped entry about Android is
-App Store copy too.
+App Store copy too — and `verify` refuses one: an entry that reaches iOS or
+macOS naming Android, Google Play or the Play Store.
 
 `cux_ship verify` prints one `checked notes` line per declared locale, and
 refuses a locale file missing the shipping version's section, one over a cap,

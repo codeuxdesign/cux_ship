@@ -177,6 +177,81 @@ void main() {
     });
   });
 
+  group('checkPlatformNames', () {
+    // App Review Guideline 2.3.10 rejects metadata naming another mobile
+    // platform, and an entry with no prefix reaches every store. An unscoped
+    // "Drag files in on Android" reached two uploaded builds of one consumer.
+
+    test('an unscoped entry naming Android is a problem for both Apple '
+        'platforms, once', () {
+      final problems = checkPlatformNames(
+        '## 1.1.9\n\n- Drag files in on Android\n',
+      );
+
+      expect(problems, hasLength(1));
+      expect(problems.single.where, 'CHANGELOG.md § 1.1.9 → ios, macos');
+      expect(problems.single.message, contains('"- Drag files in on Android"'));
+      expect(problems.single.message, contains('2.3.10'));
+      expect(problems.single.message, contains('[android]'));
+    });
+
+    test('an [android] entry naming Android is no problem', () {
+      expect(
+        checkPlatformNames(
+          '## 1.1.9\n\n- [android] Drag files in on Android\n',
+        ),
+        isEmpty,
+      );
+    });
+
+    test('it reads the filtered text, per platform', () {
+      // A [macos] entry reaches macOS alone, so reporting it against iOS would
+      // send somebody to fix a store it never reaches.
+      final problems = checkPlatformNames(
+        '## 1.1.9\n\n- [macos] Like the Android app, now on the Mac\n',
+      );
+
+      expect(problems.single.where, 'CHANGELOG.md § 1.1.9 → macos');
+    });
+
+    test('the other store names count, in any case', () {
+      for (final entry in [
+        '- Now on Google Play',
+        '- Rate us on the play store',
+        '- ANDROID parity',
+      ]) {
+        expect(
+          checkPlatformNames('## 1.0.0\n\n$entry\n'),
+          hasLength(1),
+          reason: entry,
+        );
+      }
+    });
+
+    test('the match is word-bounded', () {
+      // "Play" alone is a verb in half of all release notes.
+      for (final entry in [
+        '- Androids dream of electric sheep',
+        '- Play your ride back',
+        '- Autoplay stops at the end',
+      ]) {
+        expect(
+          checkPlatformNames('## 1.0.0\n\n$entry\n'),
+          isEmpty,
+          reason: entry,
+        );
+      }
+    });
+
+    test('every section, since the fallback can publish an older one', () {
+      final problems = checkPlatformNames(
+        '## 1.1.9\n\n## 1.1.8\n\n- Faster on Android\n',
+      );
+
+      expect(problems.single.where, startsWith('CHANGELOG.md § 1.1.8'));
+    });
+  });
+
   group('localeChangelogPath', () {
     test('puts the locale before the extension, beside the changelog', () {
       expect(
