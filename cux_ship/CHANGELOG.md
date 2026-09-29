@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 4.5.0-dev.7
 
 **Needs `cux_ship_verify` 1.11.0-dev.3**, for `checkLocaleChangelogs`,
 `localeNotesSource` and its `NotesSource` cases, `localeChangelogPath`, and
