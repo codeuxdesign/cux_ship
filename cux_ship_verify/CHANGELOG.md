@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.11.0-dev.3
 
 **Release notes per locale, by filename.** `CHANGELOG.<locale>.md` beside the
 changelog is that locale's notes, with the same grammar, and a locale without

@@ -2,11 +2,9 @@
 
 ## Unreleased
 
-**Needs the unreleased `cux_ship_verify` API below** — `checkLocaleChangelogs`,
+**Needs `cux_ship_verify` 1.11.0-dev.3**, for `checkLocaleChangelogs`,
 `localeNotesSource` and its `NotesSource` cases, `localeChangelogPath`, and
-`otherStoreNamed`. The constraint is raised on the release branch, per
-docs/RELEASING.md, and until then this branch's *Resolve as a git dependency*
-check is red for exactly that reason.
+`otherStoreNamed`.
 
 ### Fixed
 
