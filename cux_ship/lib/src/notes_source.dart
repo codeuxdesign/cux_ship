@@ -20,6 +20,18 @@
 // locales of them. Naming the file in the rule would mean rewriting the rule
 // the day the second shape arrives.
 //
+// **It has.** `CHANGELOG.<locale>.md` beside the changelog is that locale's
+// notes (see `locale_notes.dart`), so one release now reads several files, and
+// every one of them is handed here. The refusal names the resolved path, which
+// carries the locale — with 23 files, "uncommitted changes in the release
+// notes" would not say which.
+//
+// **A link to nothing is refused, not skipped.** An absent file is skipped
+// because there is nothing to be dirty; under the locale convention an absent
+// file also means "publish the default", and `File.existsSync` answers false
+// for a dangling symlink. Skipping it would let a translation somebody linked
+// in be replaced by the English notes with no word said.
+//
 // **No override.** Committing costs seconds, and an escape hatch here reopens
 // the exact hole — the reason someone reaches for it is always that they are in
 // a hurry, which is when unreviewed text ships.
@@ -43,6 +55,13 @@ void requireCommittedNotes(
   for (final path in paths) {
     final file = File(path);
     if (!file.existsSync()) {
+      if (FileSystemEntity.typeSync(path, followLinks: false) ==
+          FileSystemEntityType.link) {
+        throw ReleaseException(
+          '$what would come from $path, which is a symlink to nothing.\n'
+          'Point it at the file it was meant to name, or delete it.',
+        );
+      }
       continue;
     }
     // Through the symlink, not at it. `git status -- <link>` answers for the

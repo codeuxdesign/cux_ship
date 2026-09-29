@@ -4,6 +4,8 @@
 // page, and several of them are invisible when they misfire: a swallowed
 // continuation line, a prefix that was not stripped, a fallback that reached
 // too far back. Each one is pinned here.
+import 'dart:io';
+
 import 'package:cux_ship_verify/release_notes.dart';
 import 'package:test/test.dart';
 
@@ -172,6 +174,109 @@ void main() {
       final notes =
           changelogNotes(midSentence, '1.0.0', platform: 'ios') as NotesText;
       expect(notes.text, '- Fixed [android] in the docs');
+    });
+  });
+
+  group('localeChangelogPath', () {
+    test('puts the locale before the extension, beside the changelog', () {
+      expect(
+        localeChangelogPath('CHANGELOG.md', 'de-DE'),
+        'CHANGELOG.de-DE.md',
+      );
+      expect(
+        localeChangelogPath('docs/CHANGELOG.md', 'zh-Hans'),
+        'docs/CHANGELOG.zh-Hans.md',
+      );
+    });
+
+    test('appends to a name with no .md', () {
+      expect(localeChangelogPath('NOTES', 'pt-BR'), 'NOTES.pt-BR');
+    });
+
+    test('a dot in a directory is not the extension', () {
+      // A worktree lives under `.claude/`, and a release branch directory is
+      // `v1.2/` — cutting at the first `.` would put the locale mid-path.
+      expect(
+        localeChangelogPath('/w/.claude/v1.2/CHANGELOG.md', 'de-DE'),
+        '/w/.claude/v1.2/CHANGELOG.de-DE.md',
+      );
+      expect(localeChangelogPath('v1.2/NOTES', 'de-DE'), 'v1.2/NOTES.de-DE');
+    });
+  });
+
+  group('localeNotesSource', () {
+    late Directory root;
+    late String changelog;
+
+    setUp(() {
+      root = Directory.systemTemp.createTempSync('locale_notes_source');
+      changelog = '${root.path}/CHANGELOG.md';
+      File(changelog).writeAsStringSync('## 1.0.0\n\n- Hello\n');
+    });
+
+    tearDown(() => root.deleteSync(recursive: true));
+
+    test('a locale with its own file reads it', () {
+      File('${root.path}/CHANGELOG.de-DE.md').writeAsStringSync('## 1.0.0\n');
+
+      expect(
+        localeNotesSource(changelog, 'de-DE'),
+        isA<OwnFile>().having(
+          (s) => s.path,
+          'path',
+          '${root.path}/CHANGELOG.de-DE.md',
+        ),
+      );
+    });
+
+    test('a locale without one takes the changelog', () {
+      expect(
+        localeNotesSource(changelog, 'de-DE'),
+        isA<DefaultFile>().having((s) => s.path, 'path', changelog),
+      );
+    });
+
+    test('a link to nothing is its own case, not "no file"', () {
+      // `File.existsSync` follows the link and says false, so without the
+      // `typeSync` probe this is a DefaultFile — and the German translation
+      // somebody linked in is replaced by the English notes in silence.
+      Link(
+        '${root.path}/CHANGELOG.de-DE.md',
+      ).createSync('${root.path}/translations/de.md');
+
+      expect(localeNotesSource(changelog, 'de-DE'), isA<DanglingLink>());
+    });
+
+    test('a link that resolves is simply the locale\'s file', () {
+      Link('${root.path}/CHANGELOG.de-DE.md').createSync(changelog);
+
+      expect(localeNotesSource(changelog, 'de-DE'), isA<OwnFile>());
+    });
+  });
+
+  group('localeChangelogsBeside', () {
+    late Directory root;
+
+    setUp(() {
+      root = Directory.systemTemp.createTempSync('locale_changelogs_beside');
+      File('${root.path}/CHANGELOG.md').writeAsStringSync('## 1.0.0\n');
+    });
+
+    tearDown(() => root.deleteSync(recursive: true));
+
+    test('finds each locale file by the locale its name carries', () {
+      File('${root.path}/CHANGELOG.de-DE.md').writeAsStringSync('');
+      File('${root.path}/CHANGELOG.de.md').writeAsStringSync('');
+      Link('${root.path}/CHANGELOG.fr-FR.md').createSync('${root.path}/gone');
+      // Not locale files: another stem, and a nested extension.
+      File('${root.path}/CHANGES.de-DE.md').writeAsStringSync('');
+      File('${root.path}/CHANGELOG.de-DE.md.bak').writeAsStringSync('');
+
+      expect(localeChangelogsBeside('${root.path}/CHANGELOG.md').keys.toSet(), {
+        'de-DE',
+        'de',
+        'fr-FR',
+      });
     });
   });
 

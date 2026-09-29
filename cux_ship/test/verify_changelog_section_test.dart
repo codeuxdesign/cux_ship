@@ -106,6 +106,75 @@ void main() {
     expect('${result.stderr}', isNot(contains('9.9.9')));
   });
 
+  group('release notes per locale', () {
+    // A repository declaring two App Store locales, with the tree for them —
+    // the How It Went shape on the day of the 409.
+    setUp(() {
+      _write('pubspec.yaml', 'name: consumer\nversion: 1.0.1+2\n');
+      _write('CHANGELOG.md', _withNext);
+      _write('.cux-ship.yaml', 'appstore:\n  locales: [en-US, de-DE]\n');
+      _write('store/appstore/listings/en-US/description.txt', 'An app.');
+      _write('store/appstore/listings/de-DE/description.txt', 'Eine App.');
+    });
+
+    test('a declared locale with no file is named as taking CHANGELOG.md', () {
+      final result = _verify([]);
+      expect(result.exitCode, 0, reason: '${result.stdout}${result.stderr}');
+      expect(
+        '${result.stdout}',
+        contains(
+          'checked notes       de-DE ← CHANGELOG.md (no CHANGELOG.de-DE.md)',
+        ),
+      );
+      expect(
+        '${result.stdout}',
+        contains(
+          'checked notes       en-US ← CHANGELOG.md (no CHANGELOG.en-US.md)',
+        ),
+      );
+    });
+
+    test('a locale file is named as the source', () {
+      _write('CHANGELOG.de-DE.md', '## 1.0.1\n\n- Weiter\n');
+
+      final result = _verify([]);
+      expect(result.exitCode, 0, reason: '${result.stdout}${result.stderr}');
+      expect(
+        '${result.stdout}',
+        contains('checked notes       de-DE ← CHANGELOG.de-DE.md'),
+      );
+    });
+
+    test('a locale file without the version to ship fails, naming it', () {
+      _write('CHANGELOG.de-DE.md', '## 1.0.0\n\n- Etwas\n');
+
+      final result = _verify([]);
+      expect(result.exitCode, 1, reason: '${result.stdout}${result.stderr}');
+      expect('${result.stderr}', contains('CHANGELOG.de-DE.md § 1.0.1'));
+      expect('${result.stderr}', contains('or delete the file'));
+    });
+
+    test('a locale file no store declares fails', () {
+      // `de` beside `de-DE`: a translation that would publish nowhere.
+      _write('CHANGELOG.de.md', '## 1.0.1\n\n- Weiter\n');
+
+      final result = _verify([]);
+      expect(result.exitCode, 1, reason: '${result.stdout}${result.stderr}');
+      expect('${result.stderr}', contains('no store declares de,'));
+    });
+
+    test('the lines follow the declared set', () {
+      _write('.cux-ship.yaml', 'appstore:\n  locales: [en-US]\n');
+
+      final result = _verify([]);
+      expect(result.exitCode, 0, reason: '${result.stdout}${result.stderr}');
+      expect(
+        RegExp(r'checked notes').allMatches('${result.stdout}'),
+        hasLength(1),
+      );
+    });
+  });
+
   test('no pubspec version means nothing to compare, not a failure', () {
     _write('CHANGELOG.md', _shipped);
 

@@ -38,6 +38,17 @@ void main() {
     expect(checkChangelogFile('CHANGELOG.md'), isEmpty);
   });
 
+  test('every locale file is complete, and one nothing declares is caught', () {
+    expect(
+      checkLocaleChangelogs(
+        'CHANGELOG.md',
+        locales: {'en-US', 'de-DE'},
+        version: '1.2.0',
+      ),
+      isEmpty,
+    );
+  });
+
   test('the committed store tree would be accepted', () {
     expect(
       checkAppStoreTree(
@@ -66,7 +77,7 @@ uploading half of [`cux_ship`](https://pub.dev/packages/cux_ship) reads them too
 
 | Library | What it is |
 |---|---|
-| `package:cux_ship_verify/release_notes.dart` | The `CHANGELOG.md` parser. Finds a version's section and renders it as each store wants it — which is not the same text, because the filtering differs and the caps differ (Play 500, App Store 4000). |
+| `package:cux_ship_verify/release_notes.dart` | The `CHANGELOG.md` parser. Finds a version's section and renders it as each store wants it — which is not the same text, because the filtering differs and the caps differ (Play 500, App Store 4000). And per locale: `CHANGELOG.<locale>.md` beside the changelog is that locale's notes, and a locale without one takes `CHANGELOG.md`'s. |
 | `package:cux_ship_verify/metadata.dart` | Loads and fully validates a `store/appstore/` tree. The standing rule is **present means owned**: a file that exists replaces what App Store Connect holds, one that does not is left alone. That is what makes a partial tree safe to keep in a repository. |
 
 ## Also

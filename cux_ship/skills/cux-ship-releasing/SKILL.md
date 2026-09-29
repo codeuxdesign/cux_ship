@@ -110,6 +110,13 @@ the console owns it and nothing here touches it. Like the changelog, only
 committed text is published — a dirty file is refused, so commit it before
 releasing.
 
+**A listing that gains a language needs nothing but the declaration.** Every
+locale in `appstore.locales` / `play.locales` gets release notes: from
+`CHANGELOG.<locale>.md` beside the changelog when that file exists, and from
+`CHANGELOG.md` otherwise. Add the locale file only when you want translated
+notes. After that, a release its section is missing from is refused. Do not
+pass `--locale` to get more locales: it narrows the notes to that one locale.
+
 Refusals a release runner will actually hit, each meaning what it says:
 
 - **`--skip-waiting` with `--beta-group` is refused.** A build cannot reach a

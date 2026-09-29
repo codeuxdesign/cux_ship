@@ -151,6 +151,110 @@ void main() {
     });
   });
 
+  group('checkLocaleChangelogs', () {
+    // The default changelog is checked by checkChangelogFile and
+    // changelogSectionProblem; these are the four ways a *locale* can reach
+    // a store with the wrong text and nothing having said so.
+    late String changelog;
+
+    setUp(() {
+      write(
+        'CHANGELOG.md',
+        '## 1.1.9\n\n- Drag files in\n\n## 1.1.8\n\n- Old\n',
+      );
+      changelog = '${_root.path}/CHANGELOG.md';
+    });
+
+    test('a declared locale with no file is not a problem', () {
+      // The design, not a gap: a listing that gains a language costs nothing,
+      // and verify names the locale on every run instead.
+      expect(
+        checkLocaleChangelogs(
+          changelog,
+          locales: {'en-US', 'de-DE'},
+          version: '1.1.9',
+        ),
+        isEmpty,
+      );
+    });
+
+    test('a locale file with no section for the version is refused', () {
+      // The "forgot to translate this release" case — the one that ships the
+      // wrong text loudly, because the uploader refuses it at release time.
+      write('CHANGELOG.de-DE.md', '## 1.1.8\n\n- Alt\n');
+
+      final problems = checkLocaleChangelogs(
+        changelog,
+        locales: {'en-US', 'de-DE'},
+        version: '1.1.9',
+      );
+
+      expect(problems, hasLength(1));
+      expect(problems.single.where, 'CHANGELOG.de-DE.md § 1.1.9');
+      expect(problems.single.message, contains('no section'));
+      expect(problems.single.message, contains('or delete the file'));
+    });
+
+    test('a locale file over a cap is reported under its own name', () {
+      // German runs longer than English, so it meets Play's 500 first — and a
+      // problem naming CHANGELOG.md would send somebody to shorten the wrong
+      // file.
+      write('CHANGELOG.de-DE.md', '## 1.1.9\n\n- ${'ü' * 520}\n');
+
+      final problems = checkLocaleChangelogs(
+        changelog,
+        locales: {'de-DE'},
+        version: '1.1.9',
+      );
+
+      expect(problems, hasLength(1));
+      expect(problems.single.where, 'CHANGELOG.de-DE.md § 1.1.9 → android');
+      expect(
+        problems.single.message,
+        contains('shorten it in CHANGELOG.de-DE'),
+      );
+    });
+
+    test('a locale file for a locale nothing declares is refused', () {
+      // The likeliest cause is a misspelt filename, which would otherwise be a
+      // translation silently ignored.
+      write('CHANGELOG.de.md', '## 1.1.9\n\n- Dateien hineinziehen\n');
+
+      final problems = checkLocaleChangelogs(
+        changelog,
+        locales: {'en-US', 'de-DE'},
+        version: '1.1.9',
+      );
+
+      expect(problems, hasLength(1));
+      expect(problems.single.where, endsWith('CHANGELOG.de.md'));
+      expect(problems.single.message, contains('no store declares de'));
+      expect(problems.single.message, contains('de-DE, en-US'));
+    });
+
+    test('a dangling link is refused by name', () {
+      Link(
+        '${_root.path}/CHANGELOG.de-DE.md',
+      ).createSync('${_root.path}/translations/de.md');
+
+      final problems = checkLocaleChangelogs(
+        changelog,
+        locales: {'de-DE'},
+        version: '1.1.9',
+      );
+
+      expect(problems, hasLength(1));
+      expect(problems.single.where, endsWith('CHANGELOG.de-DE.md'));
+      expect(problems.single.message, contains('symlink to nothing'));
+    });
+
+    test('with no version to ship, only the files themselves are checked', () {
+      write('CHANGELOG.de-DE.md', '## 1.1.8\n\n- Alt\n');
+
+      expect(checkLocaleChangelogs(changelog, locales: {'de-DE'}), isEmpty);
+    });
+  });
+
   group('checkAppStoreTree', () {
     test('a well-formed tree has nothing to report', () {
       writeValidTree();

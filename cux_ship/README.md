@@ -291,6 +291,77 @@ nothing asked for a lookup — no `--build-number`, or recording off.
 --no-tag / --no-bump / --no-push / --dry-run
 ```
 
+### Release notes in every locale
+
+**`CHANGELOG.md` is the notes for every locale without a file of its own, and
+`CHANGELOG.<locale>.md` beside it is that locale's.** The locales are what
+`.cux-ship.yaml` already declares; there is nothing else to configure.
+
+```
+CHANGELOG.md          # en-US, and every declared locale with no file
+CHANGELOG.de-DE.md    # de-DE's, when it exists
+```
+
+This exists because Apple requires "What's New" on **every** localization of an
+update, and a listing that gained `de-DE` was refused at submission — `409 …
+appStoreVersions … is not in valid state` — while the notes went to `en-US`
+alone. Now a release writes:
+
+| | to |
+|---|---|
+| App Store "What's New" | every localization Apple holds for the version |
+| TestFlight "What to Test" | every locale in `appstore.locales` |
+| Play release notes | the listing's default language and every locale in `play.locales` |
+
+**Adding a language to a listing needs nothing else.** Every declared locale
+without a file gets `CHANGELOG.md`'s section, and the run names each one:
+
+```
+==> release notes by locale
+    en-US ← CHANGELOG.md (no CHANGELOG.en-US.md)
+    de-DE ← CHANGELOG.md (no CHANGELOG.de-DE.md)
+```
+
+**Translating is a file.** A locale file follows every rule `CHANGELOG.md`
+does — the same `## 1.2.0` headings, the same prefixes below, the same fallback
+through an empty section to the newest older one. The fallback never crosses
+files: an empty German section falls back to the previous German one, not to
+the English. Once the file exists, a release it has no section for is refused,
+exactly like a missing English one; delete the file to go back to the default.
+Each locale is measured against the store's cap on its own, and German runs
+longer than English, so Play's 500 is usually the one it meets.
+
+**`--locale` has no default.** Without it, the notes go to the locales above.
+With it, the notes go to that one locale, as before. It still chooses the Beta
+App Description's locale, which is `en-US` without it. `--release-notes <file>`
+is literal text and goes to every locale.
+
+A localization Apple holds that nothing declares still gets the default notes,
+with a line naming it, because a localization with no "What's New" cannot be
+submitted. Declare it, or remove it in App Store Connect.
+
+**An entry reaches every store unless it says otherwise.** A prefix at the very
+start of a bullet scopes it, and is stripped before publishing:
+
+```markdown
+## 1.1.9
+
+- A shorter tour intro                  ← every store
+- [android] Back gesture no longer eats the editor
+- [ios, macos] Drag files in from Finder
+```
+
+The unscoped case is the one that bites. App Review Guideline 2.3.10 rejects
+metadata naming another mobile platform, so an unscoped entry about Android is
+App Store copy too.
+
+`cux_ship verify` prints one `checked notes` line per declared locale, and
+refuses a locale file missing the shipping version's section, one over a cap,
+one for a locale nothing declares (`CHANGELOG.de.md` beside `de-DE`), and a
+dangling symlink where a locale file would be.
+[docs/design/locale-release-notes.md](https://github.com/codeuxdesign/cux_ship/blob/main/docs/design/locale-release-notes.md)
+has the rest, including what was turned down.
+
 ### `--manifest` — name the build once
 
 If your build script writes a manifest beside its artifact, hand that over

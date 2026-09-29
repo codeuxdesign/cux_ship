@@ -18,6 +18,7 @@ import 'dart:io';
 
 import 'package:cux_ship/src/appstore/asc_client.dart';
 import 'package:cux_ship/src/appstore/cli.dart';
+import 'package:cux_ship/src/listing_requirements.dart';
 import 'package:test/test.dart';
 
 /// Canned App Store Connect for a listing-only publish.
@@ -27,11 +28,37 @@ import 'package:test/test.dart';
 /// first-version branch turns on the answer: a fake returning one version
 /// would send every case down "this app's first", where no notes are written
 /// and this suite would agree with a program that never wrote any.
+///
+/// **And it holds the version localizations a run creates**, because the
+/// notes now go to every localization Apple holds — so which records exist is
+/// the question the tested branch selects on. A fake answering the
+/// localizations listing with nothing, as this one did, would send every run
+/// down the "Apple holds none" branch, and a loop over one locale would be
+/// indistinguishable from a loop over all of them. A POST adds the record,
+/// the listing returns what exists, and `filter[locale]` is honoured where a
+/// caller passes it — each carrying what Apple's collection does.
 class _FakeClient implements AscClient {
-  _FakeClient({this.versions = const []});
+  _FakeClient({
+    this.versions = const [],
+    Iterable<String> heldLocales = const [],
+  }) : _localizations = [
+         for (final locale in heldLocales) ...[_localization(locale)],
+       ];
 
   /// What Apple holds for the platform, before this run.
   final List<Map<String, dynamic>> versions;
+
+  /// The version's `appStoreVersionLocalizations`, held and created.
+  final List<Map<String, dynamic>> _localizations;
+
+  /// Build 7's TestFlight "What to Test" records, as Apple holds them.
+  final betaBuildLocalizations = <Map<String, dynamic>>[];
+
+  static Map<String, dynamic> _localization(String locale) => {
+    'type': 'appStoreVersionLocalizations',
+    'id': 'loc-$locale',
+    'attributes': <String, dynamic>{'locale': locale},
+  };
 
   final posted = <({String path, Map<String, dynamic> body})>[];
   final patched = <({String path, Map<String, dynamic> body})>[];
@@ -73,9 +100,45 @@ class _FakeClient implements AscClient {
           )
           .toList();
     }
-    // No appInfos, no existing localizations: the tree here carries only
-    // version-scoped text, so the app-level half has nothing to compare and
-    // the locale has no record yet.
+    if (path == '/v1/builds') {
+      // One processed build, 7. `filter[version]` is honoured because
+      // `findBuild` asks by number and a fake answering every number would
+      // hide a wrong one.
+      final wanted = query?['filter[version]'];
+      return [
+        if (wanted == null || wanted == '7') ...[
+          {
+            'type': 'builds',
+            'id': 'build-7',
+            'attributes': {'version': '7', 'processingState': 'VALID'},
+          },
+        ],
+      ];
+    }
+    if (path == '/v1/betaBuildLocalizations') {
+      // `filter[locale]` decides between POST and PATCH in `setWhatToTest`, so
+      // it is honoured: a fake returning one record whatever was asked would
+      // PATCH every locale onto the same one.
+      return [
+        for (final l in betaBuildLocalizations) ...[
+          if ((l['attributes'] as Map<String, dynamic>)['locale'] ==
+              query?['filter[locale]'])
+            l,
+        ],
+      ];
+    }
+    if (path.endsWith('/appStoreVersionLocalizations')) {
+      final wanted = query?['filter[locale]'];
+      return [
+        for (final l in _localizations) ...[
+          if (wanted == null ||
+              (l['attributes'] as Map<String, dynamic>)['locale'] == wanted)
+            l,
+        ],
+      ];
+    }
+    // No appInfos: the tree here carries only version-scoped text, so the
+    // app-level half has nothing to compare.
     return const [];
   }
 
@@ -123,6 +186,24 @@ class _FakeClient implements AscClient {
         },
       });
       return {'data': _created.last};
+    }
+    if (path == '/v1/betaBuildLocalizations') {
+      final attributes =
+          (body['data'] as Map<String, dynamic>)['attributes']
+              as Map<String, dynamic>;
+      betaBuildLocalizations.add({
+        'type': 'betaBuildLocalizations',
+        'id': 'beta-${attributes['locale']}',
+        'attributes': {...attributes},
+      });
+      return {'data': betaBuildLocalizations.last};
+    }
+    if (path == '/v1/appStoreVersionLocalizations') {
+      final attributes =
+          (body['data'] as Map<String, dynamic>)['attributes']
+              as Map<String, dynamic>;
+      _localizations.add(_localization(attributes['locale'] as String));
+      return {'data': _localizations.last};
     }
     return {
       'data': {
@@ -210,14 +291,44 @@ List<String> _whatsNewSent(_FakeClient client) => [
   },
 ];
 
-Future<String> _upload(_FakeClient client, {List<String> extra = const []}) {
-  final args = buildAscParser(AscCommand.upload).parse([
+/// Every `whatsNew` this run sent, by the locale it went to.
+///
+/// A POST names its locale in the attributes; a PATCH names only the record,
+/// whose id the fake derives from the locale. A list rather than a map, so a
+/// locale written twice shows up twice.
+List<(String, String)> _whatsNewByLocale(_FakeClient client) => [
+  for (final write in [...client.posted, ...client.patched]) ...[
+    if ((write.body['data'] as Map<String, dynamic>)['attributes']
+        case {'whatsNew': final String text} && final attributes)
+      (
+        attributes['locale'] as String? ??
+            write.path.substring(write.path.lastIndexOf('loc-') + 4),
+        text,
+      ),
+  ],
+];
+
+Future<String> _upload(
+  _FakeClient client, {
+  List<String> extra = const [],
+  Set<String> declared = const {},
+}) => _run(AscCommand.upload, client, declared: declared, [
+  '--metadata',
+  '${_root.path}/store/appstore',
+  ...extra,
+]);
+
+Future<String> _run(
+  AscCommand cmd,
+  _FakeClient client,
+  List<String> extra, {
+  Set<String> declared = const {},
+}) {
+  final args = buildAscParser(cmd).parse([
     '--bundle-id',
     'design.codeux.example',
     '--version-name',
     '1.1.6',
-    '--metadata',
-    '${_root.path}/store/appstore',
     '--changelog',
     '${_root.path}/CHANGELOG.md',
     ...extra,
@@ -228,7 +339,18 @@ Future<String> _upload(_FakeClient client, {List<String> extra = const []}) {
   final captured = _MemoryStdout();
   return IOOverrides.runZoned(
     () async {
-      await runAsc(AscCommand.upload, args, ascClient: client);
+      await runAsc(
+        cmd,
+        args,
+        ascClient: client,
+        // What `.cux-ship.yaml`'s `appstore.locales` hands down, when a case
+        // declares any.
+        defaults: declared.isEmpty
+            ? AscDefaults.none
+            : AscDefaults(
+                listingRequirements: ListingRequirements(locales: declared),
+              ),
+      );
       await captured.close();
       return captured.buffer.toString();
     },
@@ -375,10 +497,10 @@ void main() {
   // `_publishAscListing` had published the entire listing.
 
   test('notes are not written to a locale the tree does not declare', () async {
-    // The notes go to the CLI's `--locale`, which defaults to en-US, while the
-    // tree declares its own. A de-DE-only tree published without
-    // `--locale de-DE` would POST a *new* en-US version localization carrying
-    // release notes and no description — a record nothing in the tree owns.
+    // `--locale en-US` against a de-DE-only tree would POST a *new* en-US
+    // version localization carrying release notes and no description — a
+    // record nothing in the tree owns. Named explicitly, the flag keeps its
+    // one-locale meaning, and this is still refused loudly.
     File(
       '${_root.path}/store/appstore/listings/en-US/description.txt',
     ).deleteSync();
@@ -388,11 +510,210 @@ void main() {
     );
     final client = _FakeClient(versions: [_version('old', '1.1.5')]);
 
-    final said = await _upload(client);
+    final said = await _upload(client, extra: ['--locale', 'en-US']);
 
     expect(_whatsNewSent(client), isEmpty);
     expect(said, contains('release notes skipped'));
     expect(said, contains('--locale de-DE'));
+  });
+
+  test('without --locale, a de-DE-only tree gets its notes in de-DE', () async {
+    // What `--locale`'s en-US default used to get wrong in the other
+    // direction: the notes went nowhere unless somebody named the locale.
+    File(
+      '${_root.path}/store/appstore/listings/en-US/description.txt',
+    ).deleteSync();
+    _write(
+      'store/appstore/listings/de-DE/description.txt',
+      'Eine Simulation, kein Spiel.',
+    );
+    final client = _FakeClient(versions: [_version('old', '1.1.5')]);
+
+    await _upload(client);
+
+    expect(_whatsNewByLocale(client), [('de-DE', '- A shorter tour intro')]);
+  });
+
+  group('every localization Apple holds gets "What\'s New"', () {
+    // The 409 of 29 September 2026: a listing had gained de-DE, the notes went
+    // to en-US alone, and Apple refused the review submission because a
+    // localization of an update had no "What's New".
+    setUp(() {
+      _write(
+        'store/appstore/listings/de-DE/description.txt',
+        'Eine Simulation, kein Spiel.',
+      );
+    });
+
+    test('with no locale file, each gets the changelog', () async {
+      final client = _FakeClient(
+        versions: [_version('old', '1.1.5')],
+        heldLocales: ['en-US', 'de-DE'],
+      );
+
+      await _upload(client, declared: {'en-US', 'de-DE'});
+
+      expect(_whatsNewByLocale(client), [
+        ('en-US', '- A shorter tour intro'),
+        ('de-DE', '- A shorter tour intro'),
+      ]);
+    });
+
+    test('a locale file is that locale\'s, and only that locale\'s', () async {
+      _write(
+        'CHANGELOG.de-DE.md',
+        '## 1.1.6\n\n- Ein kürzeres Intro\n\n## 1.1.5\n\n- Älter\n',
+      );
+      final client = _FakeClient(
+        versions: [_version('old', '1.1.5')],
+        heldLocales: ['en-US', 'de-DE'],
+      );
+
+      final said = await _upload(client, declared: {'en-US', 'de-DE'});
+
+      expect(_whatsNewByLocale(client), [
+        ('en-US', '- A shorter tour intro'),
+        ('de-DE', '- Ein kürzeres Intro'),
+      ]);
+      expect(said, contains('de-DE ← CHANGELOG.de-DE.md'));
+      expect(said, contains('en-US ← CHANGELOG.md (no CHANGELOG.en-US.md)'));
+    });
+
+    test('a locale the listing publish creates gets notes too', () async {
+      // Apple holds only en-US before the run; the tree's de-DE record is
+      // created by the listing publish, and the notes are written after it —
+      // the shape a version gaining a language in the same run has.
+      final client = _FakeClient(
+        versions: [_version('old', '1.1.5')],
+        heldLocales: ['en-US'],
+      );
+
+      await _upload(client, declared: {'en-US', 'de-DE'});
+
+      expect(_whatsNewByLocale(client).map((w) => w.$1).toSet(), {
+        'en-US',
+        'de-DE',
+      });
+    });
+
+    test('a localization nobody declares is written, and named', () async {
+      // A localization with no "What's New" blocks the submission; one with
+      // the default notes is merely untranslated. So it is written — and the
+      // run says which, so it can be declared or removed on purpose.
+      final client = _FakeClient(
+        versions: [_version('old', '1.1.5')],
+        heldLocales: ['en-US', 'de-DE', 'fr-FR'],
+      );
+
+      final said = await _upload(client, declared: {'en-US', 'de-DE'});
+
+      expect(
+        _whatsNewByLocale(client),
+        contains(('fr-FR', '- A shorter tour intro')),
+      );
+      expect(
+        said,
+        contains('fr-FR: Apple holds a localization this repository'),
+      );
+    });
+
+    test('--locale still means that one locale', () async {
+      final client = _FakeClient(
+        versions: [_version('old', '1.1.5')],
+        heldLocales: ['en-US', 'de-DE'],
+      );
+
+      await _upload(
+        client,
+        declared: {'en-US', 'de-DE'},
+        extra: ['--locale', 'de-DE'],
+      );
+
+      expect(_whatsNewByLocale(client), [('de-DE', '- A shorter tour intro')]);
+    });
+
+    test('a promote writes them after the listing creates a locale', () async {
+      // **The order is the fix.** A promote wrote the notes before the listing
+      // publish, so a localization the listing publish created — a language
+      // gained in this very release — had none, and the submission that
+      // follows is exactly the one Apple refused. Apple holds only en-US here
+      // until the listing publishes de-DE.
+      final client = _FakeClient(
+        versions: [_version('old', '1.1.5')],
+        heldLocales: ['en-US'],
+      );
+
+      await _run(
+        AscCommand.promote,
+        client,
+        declared: {'en-US', 'de-DE'},
+        ['--metadata', '${_root.path}/store/appstore'],
+      );
+
+      expect(_whatsNewByLocale(client).map((w) => w.$1).toSet(), {
+        'en-US',
+        'de-DE',
+      });
+      // And before the submission, which is what reads them.
+      final writes = [
+        for (final w in client.posted) ...[w.path],
+      ];
+      expect(
+        writes.indexOf('/v1/reviewSubmissionItems'),
+        greaterThan(writes.lastIndexOf('/v1/appStoreVersionLocalizations')),
+      );
+    });
+  });
+
+  group('TestFlight "What to Test" goes to every declared locale', () {
+    // Not a submission requirement — Apple does not gate a beta on it — but a
+    // German tester should read what a German shopper will.
+    List<(String, String)> whatToTest(_FakeClient client) => [
+      for (final l in client.betaBuildLocalizations) ...[
+        (
+          (l['attributes'] as Map<String, dynamic>)['locale'] as String,
+          (l['attributes'] as Map<String, dynamic>)['whatsNew'] as String,
+        ),
+      ],
+    ];
+
+    test('one record per locale, each with its own text', () async {
+      _write('CHANGELOG.de-DE.md', '## 1.1.6\n\n- Ein kürzeres Intro\n');
+      final client = _FakeClient();
+
+      await _run(
+        AscCommand.whatToTest,
+        client,
+        declared: {'en-US', 'de-DE'},
+        ['--build-number', '7'],
+      );
+
+      expect(whatToTest(client), [
+        ('en-US', '- A shorter tour intro'),
+        ('de-DE', '- Ein kürzeres Intro'),
+      ]);
+    });
+
+    test('with --locale, only that one', () async {
+      final client = _FakeClient();
+
+      await _run(
+        AscCommand.whatToTest,
+        client,
+        declared: {'en-US', 'de-DE'},
+        ['--build-number', '7', '--locale', 'de-DE'],
+      );
+
+      expect(whatToTest(client), [('de-DE', '- A shorter tour intro')]);
+    });
+
+    test('with nothing declared, en-US as always', () async {
+      final client = _FakeClient();
+
+      await _run(AscCommand.whatToTest, client, ['--build-number', '7']);
+
+      expect(whatToTest(client), [('en-US', '- A shorter tour intro')]);
+    });
   });
 
   test('an app-level-only tree says why the notes were skipped', () async {

@@ -76,7 +76,9 @@ void main() {
     final document = _document(_verify());
 
     expect(document['ok'], isTrue);
-    expect(_kinds(document, 'checked'), {'changelog', 'section'});
+    // `notes` because a changelog is release notes for every locale — here
+    // the one en-US both uploaders fall back to, with nothing declared.
+    expect(_kinds(document, 'checked'), {'changelog', 'section', 'notes'});
     expect(_kinds(document, 'skipped'), {
       'appstore',
       'play',

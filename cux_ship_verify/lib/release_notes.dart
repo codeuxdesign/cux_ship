@@ -13,6 +13,25 @@
 // stranger reads on a store page, so it wants tests rather than a careful
 // reading.
 //
+// **The grammar, in one place.** A `## <version>` heading opens a section,
+// newest first. Each `-` or `*` bullet is an entry; indented lines continue it.
+// An entry that begins `[android]`, `[ios]`, `[macos]`, or a comma list of
+// those — `- [ios, macos] Drag files in` — reaches only those platforms and
+// has the prefix stripped; an entry with no prefix reaches every store. That
+// last rule is the one that bites: App Review Guideline 2.3.10 rejects
+// metadata naming another mobile platform, so an unscoped entry about Android
+// is App Store copy too.
+//
+// **And one file per locale, by name.** `CHANGELOG.md` is the notes for every
+// locale that has no file of its own; `CHANGELOG.de-DE.md` beside it is
+// de-DE's, with the same grammar, the same prefixes and the same walk to an
+// older section — which never crosses into another file. No configuration
+// says which locales exist; the stores' own `locales:` declaration does, and
+// the file's presence is the whole of the override. fastlane's `deliver` has
+// the same shape (`metadata/default/` filling every language without its
+// own), and Xcode Cloud puts the locale in the filename, which is where it is
+// here. See docs/design/locale-release-notes.md.
+//
 // No dependencies at all, which is what makes it cheap to share.
 import 'dart:convert';
 import 'dart:io';
@@ -191,6 +210,125 @@ Notes changelogNotesOf(
   required String platform,
 }) =>
     changelogNotes(File(path).readAsStringSync(), version, platform: platform);
+
+/// Where [locale]'s own notes live, beside [changelog].
+///
+/// `CHANGELOG.md` and `de-DE` give `CHANGELOG.de-DE.md`, in the same
+/// directory; a name with no `.md` gets the locale appended, so
+/// `NOTES` gives `NOTES.de-DE`. The locale is spelled exactly as a store
+/// block declares it — `de-DE`, `zh-Hans`, `pt-BR` — because that
+/// declaration is the only list of locales there is, and a second spelling
+/// would be a second list.
+///
+/// Pure: it says where the file would be, not whether it is there. That is
+/// [localeNotesSource]'s question.
+String localeChangelogPath(String changelog, String locale) {
+  final (:directory, :stem, :extension) = _splitChangelog(changelog);
+  return '$directory$stem.$locale$extension';
+}
+
+/// [changelog] as the three parts a locale file is named from.
+///
+/// Split on the last separator of either kind rather than with `dart:io`'s
+/// path handling, which this package does not have: a `.` in a directory
+/// name — `v1.2/CHANGELOG.md`, a worktree under `.claude/` — must not be
+/// taken for the extension.
+({String directory, String stem, String extension}) _splitChangelog(
+  String changelog,
+) {
+  final cut = changelog.lastIndexOf(RegExp(r'[/\\]')) + 1;
+  final directory = changelog.substring(0, cut);
+  final name = changelog.substring(cut);
+  if (name.toLowerCase().endsWith('.md') && name.length > 3) {
+    return (
+      directory: directory,
+      stem: name.substring(0, name.length - 3),
+      extension: name.substring(name.length - 3),
+    );
+  }
+  return (directory: directory, stem: name, extension: '');
+}
+
+/// Which file a locale's notes come from.
+///
+/// Sealed so a caller switches over all three rather than testing a boolean
+/// and forgetting the third — which is the one that matters, because
+/// "absent" now means "take the default", and a link to nothing is not a
+/// decision anybody made.
+sealed class NotesSource {
+  const NotesSource(this.path);
+
+  /// The file the notes are read from, or for [DanglingLink] the link.
+  final String path;
+}
+
+/// The locale has a file of its own, and its notes are that file's.
+final class OwnFile extends NotesSource {
+  const OwnFile(super.path);
+}
+
+/// The locale has no file, so it takes the changelog's — the ordinary case,
+/// and the one that makes a listing gaining a language cost nothing.
+final class DefaultFile extends NotesSource {
+  const DefaultFile(super.path);
+}
+
+/// A symlink where the locale's file would be, pointing at nothing.
+///
+/// `File.existsSync` follows the link and answers false, so without its own
+/// case this reads as [DefaultFile] and the locale silently publishes the
+/// default text — the translation somebody linked in is dropped with no word
+/// said. Refused by every caller, by name.
+final class DanglingLink extends NotesSource {
+  const DanglingLink(super.path);
+}
+
+/// Where [locale]'s notes come from, given [changelog] as the default.
+///
+/// A symlink that resolves is an ordinary [OwnFile] — the same file read
+/// twice, if it points at the default — and needs no case of its own.
+NotesSource localeNotesSource(String changelog, String locale) {
+  final path = localeChangelogPath(changelog, locale);
+  if (File(path).existsSync()) {
+    return OwnFile(path);
+  }
+  if (FileSystemEntity.typeSync(path, followLinks: false) ==
+      FileSystemEntityType.link) {
+    return DanglingLink(path);
+  }
+  return DefaultFile(changelog);
+}
+
+/// Every locale file beside [changelog], by the locale its name carries.
+///
+/// What `verify` compares against the declared locales: a file for a locale
+/// no store declares publishes nowhere, and the likeliest cause is a
+/// misspelling — `CHANGELOG.de.md` beside `locales: [de-DE]` — that would
+/// otherwise be a translation silently ignored.
+///
+/// Dangling links are included, since they are exactly what somebody meant
+/// to be a locale file.
+Map<String, String> localeChangelogsBeside(String changelog) {
+  final (:directory, :stem, :extension) = _splitChangelog(changelog);
+  final dir = Directory(directory.isEmpty ? '.' : directory);
+  if (!dir.existsSync()) {
+    return const {};
+  }
+  final pattern = RegExp(
+    '^${RegExp.escape(stem)}\\.([^./\\\\]+)${RegExp.escape(extension)}\$',
+  );
+  final found = <String, String>{};
+  for (final entity in dir.listSync(followLinks: false)) {
+    final name = entity.path.substring(
+      entity.path.lastIndexOf(RegExp(r'[/\\]')) + 1,
+    );
+    final match = pattern.firstMatch(name);
+    if (match != null) {
+      found[match.group(1)!] = '$directory$name';
+    }
+  }
+  return found;
+}
 
 /// The version name out of a release name this tool wrote, which is
 /// `<versionName> (<versionCode>)`.

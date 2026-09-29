@@ -1621,8 +1621,10 @@ bool isEditableVersionState(String? state) =>
 /// One artifact `verify` looked at, or declined to.
 ///
 /// **`what` is a kind rather than a sentence**, so a caller can branch on it —
-/// `changelog`, `section`, `appstore`, `play`, `data-safety`. [where] says
-/// which one, absent when there was nothing to find.
+/// `changelog`, `section`, `notes`, `appstore`, `play`, `data-safety`. [where]
+/// says which one, absent when there was nothing to find. `notes` appears once
+/// per locale that gets release notes, its [where] naming the file they come
+/// from: `de-DE ← CHANGELOG.md (no CHANGELOG.de-DE.md)`.
 @JsonSerializable(explicitToJson: true)
 class VerifyCheck {
   const VerifyCheck({required this.what, this.where, this.why});

@@ -82,19 +82,25 @@ List<String> changelogVersions(String markdown) =>
 /// likely that the format drifted than that a project has no releases, and
 /// silently checking nothing is the failure this whole function exists to
 /// prevent.
+///
+/// [name] is what the problems call the file. A locale file is checked by the
+/// same rules and has to be named as itself — `CHANGELOG.de-DE.md § 1.1.9 →
+/// android` — because a German section over Play's cap, reported against
+/// `CHANGELOG.md`, sends somebody to shorten the English one.
 List<ReleaseProblem> checkChangelog(
   String markdown, {
   Map<String, int> limits = defaultReleaseNotesLimits,
+  String name = 'CHANGELOG.md',
 }) {
   final problems = <ReleaseProblem>[];
   final versions = changelogVersions(markdown);
 
   if (versions.isEmpty) {
     problems.add(
-      const ReleaseProblem(
-        'CHANGELOG.md',
+      ReleaseProblem(
+        name,
         'no version headings found — expected at least one "## 1.2.3", '
-            'optionally bracketed and dated',
+        'optionally bracketed and dated',
       ),
     );
     return problems;
@@ -102,7 +108,7 @@ List<ReleaseProblem> checkChangelog(
 
   for (final version in versions) {
     for (final limit in limits.entries) {
-      final where = 'CHANGELOG.md § $version → ${limit.key}';
+      final where = '$name § $version → ${limit.key}';
       final notes = changelogNotes(markdown, version, platform: limit.key);
       if (notes is! NotesText) {
         problems.add(
@@ -119,7 +125,7 @@ List<ReleaseProblem> checkChangelog(
             where,
             'filtered to ${notes.text.length} characters, over the '
             '${limit.value} this store accepts — shorten it in '
-            'CHANGELOG.md',
+            '$name',
           ),
         );
       }
@@ -133,13 +139,102 @@ List<ReleaseProblem> checkChangelog(
 List<ReleaseProblem> checkChangelogFile(
   String path, {
   Map<String, int> limits = defaultReleaseNotesLimits,
+  String name = 'CHANGELOG.md',
 }) {
   final file = File(path);
   if (!file.existsSync()) {
     return [ReleaseProblem(path, 'no such file')];
   }
-  return checkChangelog(file.readAsStringSync(), limits: limits);
+  return checkChangelog(file.readAsStringSync(), limits: limits, name: name);
 }
+
+/// Checks the per-locale release notes beside [changelog] against the
+/// [locales] a repository declares.
+///
+/// `CHANGELOG.md` is the notes for every locale without a file of its own,
+/// and `CHANGELOG.<locale>.md` is that locale's — see `release_notes.dart`.
+/// Four things are reported, each a way for a store to show the wrong text
+/// with nothing having said so:
+///
+/// * **a locale file with no section for [version]** — the "forgot to
+///   translate this release" case, refused by the uploaders exactly as the
+///   English one is. Skipped when [version] is null, which is a project that
+///   does not say what it is about to ship;
+/// * **a locale file over a store's cap**, by [checkChangelog] and named as
+///   itself. A German section is routinely longer than its English source,
+///   so it meets Play's 500 first;
+/// * **a locale file for a locale nothing declares**, which publishes nowhere
+///   — most likely a misspelt filename, `CHANGELOG.de.md` beside `de-DE`;
+/// * **a dangling symlink** where a locale file would be, which the
+///   filesystem reports as absent and which would therefore publish the
+///   default text in silence.
+///
+/// **A declared locale with no file is not a problem**, and that is the
+/// design rather than a gap: it is how a listing gaining a language costs
+/// nothing, and the stores themselves fall back the same way. `verify` names
+/// every such locale on every run instead, so the choice stays visible.
+List<ReleaseProblem> checkLocaleChangelogs(
+  String changelog, {
+  required Set<String> locales,
+  String? version,
+  Map<String, int> limits = defaultReleaseNotesLimits,
+}) {
+  final problems = <ReleaseProblem>[];
+  final defaultName = _fileName(changelog);
+
+  for (final locale in locales) {
+    switch (localeNotesSource(changelog, locale)) {
+      case DefaultFile():
+        break;
+      case DanglingLink(:final path):
+        problems.add(
+          ReleaseProblem(
+            path,
+            'is a symlink to nothing, so $locale would silently publish '
+            "$defaultName's notes — point it at a file, or delete it to "
+            'publish those notes deliberately',
+          ),
+        );
+      case OwnFile(:final path):
+        final name = _fileName(path);
+        final markdown = File(path).readAsStringSync();
+        problems.addAll(checkChangelog(markdown, limits: limits, name: name));
+        if (version != null &&
+            changelogNotes(markdown, version, platform: 'ios') is NoSection) {
+          problems.add(
+            ReleaseProblem(
+              '$name § $version',
+              'no section — $name is $locale\'s release notes, and the '
+                  'uploaders refuse this version without one. Add '
+                  '"## $version" (empty if nothing changed for $locale '
+                  "readers), or delete the file to publish $defaultName's "
+                  'notes to $locale',
+            ),
+          );
+        }
+    }
+  }
+
+  final beside = localeChangelogsBeside(changelog);
+  for (final MapEntry(key: locale, value: path) in beside.entries) {
+    if (!locales.contains(locale)) {
+      problems.add(
+        ReleaseProblem(
+          path,
+          'exists and no store declares $locale, so it publishes nowhere — '
+          'rename it to a declared locale '
+          '(${locales.isEmpty ? 'none are declared' : (locales.toList()..sort()).join(', ')}), '
+          'or declare $locale in .cux-ship.yaml',
+        ),
+      );
+    }
+  }
+
+  return problems;
+}
+
+String _fileName(String path) =>
+    path.substring(path.lastIndexOf(RegExp(r'[/\\]')) + 1);
 
 /// Loads the App Store metadata tree at [path] and reports what it refuses.
 ///
