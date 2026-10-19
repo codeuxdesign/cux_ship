@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased
+
+**Needs the next `cux_ship_verify`**, for `LocaleMetadata.creativeAssets`,
+`creativeAssetSpecs` and the placement names. The constraint moves on the
+release branch, per docs/RELEASING.md.
+
+### Added
+
+**`appstore creative-assets` publishes the product page header and the search
+results image** that App Store Connect started accepting on 5 October 2026,
+through the App Asset Library that App Store Connect API 4.5.1 added. They come
+from `listings/<locale>/creative_assets/` in the tree, and `verify` checks them
+offline (see `cux_ship_verify`'s changelog for the rules).
+
+- The image goes into the app's asset library: reserve, upload the parts,
+  commit, then wait for Apple to process it. A wrong size comes back `FAILED`
+  with Apple's reason.
+- **Identical bytes are skipped.** Apple stores no checksum for these assets,
+  so the MD5 is written into the asset's reference name and matched on the next
+  run. A copy that `FAILED` or was never committed is deleted and uploaded
+  again. A copy App Review `REJECTED` stops the run, because the same bytes
+  would be rejected again.
+- `--version-name` places the image on an editable version's localization,
+  replacing what is there. A universal image is placed as both the header and
+  the search results image. The version's editability and its localizations
+  are checked before anything is uploaded.
+- `--submit-for-review` submits the assets to App Review on their own. Without
+  it nothing is ever submitted. An open review submission that already holds
+  other items is refused rather than submitted along with the assets.
+- `--dry-run` does every read and no write. Every run ends with each asset's
+  state, which is also its review state.
+
+`upload` and `promote` leave creative assets alone, and now say so when the
+tree carries some. **Videos are not supported yet.** `docs/design/creative-assets.md`
+records which parts were confirmed against Apple's documentation and which
+were not.
+
 ## 4.5.0-dev.7
 
 **Needs `cux_ship_verify` 1.11.0-dev.3**, for `checkLocaleChangelogs`,

@@ -86,6 +86,7 @@ import 'app_store.dart';
 import 'apple_notes.dart';
 import 'asc_client.dart';
 import 'beta_release.dart';
+import 'creative_assets.dart';
 import 'reads.dart';
 import 'signing_report.dart';
 
@@ -110,6 +111,7 @@ enum AscCommand {
   awaitBuild('wait'),
   awaitPreviews('wait-previews'),
   previews('previews'),
+  creativeAssets('creative-assets'),
   signing('signing');
 
   const AscCommand(this.name);
@@ -249,6 +251,40 @@ ArgParser buildAscParser(AscCommand cmd) {
             'needs and a read does not, because a wait has progress and then '
             'an answer. See docs/design/json-output.md.',
       );
+    return parser;
+  }
+
+  // **Only its own arguments**, like `wait`: no artifact, no notes, no build.
+  // The bytes go into the app's asset library, which no version owns, so the
+  // version is optional and names where to *place* them rather than what they
+  // are.
+  if (cmd == AscCommand.creativeAssets) {
+    parser
+      ..addOption(
+        'metadata',
+        help:
+            'The tree whose listings/<locale>/creative_assets/ to publish. '
+            'Defaults to the project\'s store/appstore tree.',
+      )
+      ..addOption(
+        'version-name',
+        help:
+            'An editable App Store version to place the assets on, one '
+            'placement per locale and slot, replacing what is placed there. '
+            'Deliberately not inferred from pubspec.yaml: placing on a version '
+            'is a write to that version, and the assets upload to the library '
+            'without one.',
+      )
+      ..addFlag(
+        'submit-for-review',
+        negatable: false,
+        help:
+            'Submit the uploaded assets to App Review on their own, '
+            'independent of any version. Without it nothing is ever submitted: '
+            'placed assets are reviewed with the version they are placed on, '
+            'when that version is submitted.',
+      )
+      ..addFlag('dry-run', negatable: false, help: 'Every read, no writes.');
     return parser;
   }
 
@@ -523,6 +559,7 @@ ArgParser buildAscParser(AscCommand cmd) {
     case AscCommand.awaitBuild:
     case AscCommand.awaitPreviews:
     case AscCommand.previews:
+    case AscCommand.creativeAssets:
     case AscCommand.signing:
       throw StateError('unreachable: handled by cmd.isRead or above');
   }
@@ -1841,6 +1878,7 @@ Future<void> runAsc(
   final wantsTree =
       cmd == AscCommand.upload ||
       cmd == AscCommand.promote ||
+      cmd == AscCommand.creativeAssets ||
       cmd == AscCommand.awaitPreviews;
   final metadataPath =
       wantsTree &&
@@ -2107,6 +2145,28 @@ Future<void> runAsc(
       '${metadata.reviewNotes == null ? '' : ', review notes'} validated',
     );
 
+    // **Said rather than skipped.** The listing publish does not touch the
+    // creative assets — they go to the app's asset library, not the version —
+    // so a tree carrying them would otherwise pass through `upload` and
+    // `promote` with no sign anything in it went unpublished.
+    final creative = metadata.locales
+        .where((l) => l.creativeAssets.isNotEmpty)
+        .map((l) => l.locale)
+        .toList();
+    if (cmd != AscCommand.creativeAssets && creative.isNotEmpty) {
+      (jsonOutput ? stderr : stdout).writeln(
+        '==> note: creative assets for ${creative.join(', ')} are in the tree '
+        'and this command does not publish them — `cux_ship appstore '
+        'creative-assets` does',
+      );
+    }
+    if (cmd == AscCommand.creativeAssets && creative.isEmpty) {
+      fail(
+        '$metadataPath carries no listings/<locale>/creative_assets/ — '
+        'nothing to publish',
+      );
+    }
+
     // Reported, never fatal. A URL can be legitimately dead at exactly one
     // release — a policy site deployed after the app it belongs to — and a
     // gate there would fail correctly and teach the bypass. See reachable.dart.
@@ -2147,8 +2207,17 @@ Future<void> runAsc(
   // the commit whose whole purpose was fixing the identical wording in
   // listing_publish_test.dart's header — a fair illustration of why the
   // counting keeps needing an outside reader.
+  // `creative-assets` loads the tree for its `creative_assets/` and nothing
+  // else, so it publishes no listing — and must not resolve release notes,
+  // which would refuse a dirty CHANGELOG.md on a run that never reads it.
+  if (cmd == AscCommand.creativeAssets && metadata == null) {
+    fail(
+      'no App Store metadata tree — none was found at store/appstore, so '
+      'pass --metadata',
+    );
+  }
   final publish = listingPublish(
-    hasMetadata: metadata != null,
+    hasMetadata: metadata != null && cmd != AscCommand.creativeAssets,
     hasArtifact: ipaPath != null,
     promote: promote,
   );
@@ -2270,15 +2339,25 @@ Future<void> runAsc(
         cmd: cmd,
         bundleId: bundleId,
         platform: platform.name,
-        versionName: versionName,
+        // `creative-assets` names a version only to place on, and never
+        // infers one or reads notes — so the rows say what it will touch.
+        versionName: cmd == AscCommand.creativeAssets
+            ? opt('version-name')
+            : versionName,
         buildNumber: buildNumber,
         ipaPath: ipaPath,
         metadataPath: metadataPath,
         betaGroup: betaGroup,
-        changelogPath: changelogPath,
-        locales: notesLocales.join(', '),
+        changelogPath: cmd == AscCommand.creativeAssets ? null : changelogPath,
+        locales: cmd == AscCommand.creativeAssets
+            ? metadata!.locales
+                  .where((l) => l.creativeAssets.isNotEmpty)
+                  .map((l) => l.locale)
+                  .join(', ')
+            : notesLocales.join(', '),
         phased: flag('phased'),
         releaseType: releaseType,
+        submitForReview: flag('submit-for-review'),
       ),
     );
   }
@@ -2414,6 +2493,17 @@ Future<void> runAsc(
 
     if (cmd == AscCommand.buildNumber) {
       await store.printBuildNumber(app);
+      return;
+    }
+    if (cmd == AscCommand.creativeAssets) {
+      await _publishCreativeAssets(
+        store,
+        app,
+        metadata!,
+        versionName: opt('version-name'),
+        submitForReview: flag('submit-for-review'),
+        say: say,
+      );
       return;
     }
     if (cmd == AscCommand.previews) {
@@ -3343,6 +3433,9 @@ Future<void> runAsc(
     stderr.writeln('asc_upload: ${e.message}');
     _reportStateLeftBehind(store);
     exitCode = 1;
+  } on CreativeAssetsRefused catch (e) {
+    stderr.writeln('cux_ship appstore ${cmd.name}: $e');
+    exitCode = 1;
   } catch (_) {
     // Anything not named above — a StateError from a response shaped wrongly,
     // a SocketException mid-promote — still exits having possibly created a
@@ -3358,6 +3451,114 @@ Future<void> runAsc(
     // rather than left to whoever reads the `finally` next.
     releaseClient();
   }
+}
+
+/// `appstore creative-assets`: upload to the library, place on [versionName]
+/// when one is named, submit when asked, and report each asset's state.
+///
+/// **Every refusal that a read can establish comes before the first write.**
+/// A version that is not editable, or one missing a locale the tree carries,
+/// is found before anything is uploaded, so a refused run leaves nothing
+/// behind — the asset library has no edit transaction to discard.
+Future<void> _publishCreativeAssets(
+  AppStore store,
+  App app,
+  AppStoreMetadata metadata, {
+  required String? versionName,
+  required bool submitForReview,
+  required void Function(String line) say,
+}) async {
+  final outcomes = creativeAssetsIn(metadata);
+  final publisher = CreativeAssetPublisher(
+    store.client,
+    store.writer,
+    platform: store.platform,
+    say: say,
+  );
+
+  Map<String, String>? localizationIds;
+  if (versionName != null) {
+    final version = await store.readVersion(app, versionName);
+    final attributes = version['attributes'];
+    final state = attributes is Map<String, dynamic>
+        ? attributes['appStoreState'] as String?
+        : null;
+    // Apple answers a placement on a submitted or approved parent with
+    // `409 STATE_ERROR.INVALID_STATE`, after the uploads; asked here instead.
+    if (state != null && !editableVersionStates.contains(state)) {
+      throw CreativeAssetsRefused(
+        'version $versionName is $state, and Apple accepts a placement only '
+        'while its version is editable.\n'
+        '  Drop --version-name to upload to the asset library alone. A live '
+        'version switches to an approved asset with Publish in App Store '
+        'Connect, which has no API counterpart this tool could find.',
+      );
+    }
+    localizationIds = {
+      for (final localization in await store.versionLocalizations(version))
+        if (localization['attributes'] case {'locale': final String locale})
+          if (localization['id'] case final String id) locale: id,
+    };
+    final missing = {
+      for (final o in outcomes)
+        if (!localizationIds.containsKey(o.locale)) o.locale,
+    };
+    if (missing.isNotEmpty) {
+      throw CreativeAssetsRefused(
+        'version $versionName has no ${missing.join(', ')} localization, so '
+        'there is nothing to place those assets on.\n'
+        '  `cux_ship appstore upload --metadata` creates a localization for '
+        'every locale the listing carries.',
+      );
+    }
+  }
+
+  final libraryId = await publisher.assetLibraryId(app);
+  say('==> asset library $libraryId: ${outcomes.length} creative asset(s)');
+  await publisher.ensureInLibrary(libraryId, outcomes);
+
+  if (localizationIds == null) {
+    for (final o in outcomes) {
+      for (final type in creativeAssetSpecs[o.slot]!.placements) {
+        o.placements[type] = 'not placed';
+      }
+    }
+    say(
+      '==> not placed on any version: pass --version-name to place them on an '
+      'editable one',
+    );
+  } else {
+    say('==> placing on $versionName');
+    for (final o in outcomes) {
+      for (final type in creativeAssetSpecs[o.slot]!.placements) {
+        o.placements[type] = await publisher.place(
+          locale: o.locale,
+          localizationId: localizationIds[o.locale]!,
+          placementType: type,
+          imageId: o.imageId,
+        );
+      }
+    }
+  }
+
+  Future<Map<String, LibraryImage>> readStates() async => {
+    for (final id in {...outcomes.map((o) => o.imageId).nonNulls})
+      if (await publisher.readImage(id) case final LibraryImage image)
+        id: image,
+  };
+
+  var images = await readStates();
+  if (submitForReview) {
+    await publisher.submitForReview(app, images.values.toList());
+    if (!store.writer.dryRun) {
+      images = await readStates();
+    }
+  }
+  for (final o in outcomes) {
+    o.state = images[o.imageId]?.state;
+  }
+  say('==> creative assets');
+  describeCreativeAssets(outcomes).forEach(say);
 }
 
 /// Says whether a category write moved a relationship nobody asked it to.
@@ -3537,6 +3738,7 @@ String _summarizeAsc({
   required String locales,
   required bool phased,
   required String? releaseType,
+  bool submitForReview = false,
 }) {
   final rows = <String, String?>{
     'app': '$bundleId ($platform)',
@@ -3581,6 +3783,11 @@ String _summarizeAsc({
     AscCommand.upload when ipaPath != null =>
       'About to upload a build to TestFlight'
           '${metadataPath == null ? '' : ' and publish the listing'}.',
+    AscCommand.creativeAssets =>
+      'About to upload creative assets to the app\'s asset library'
+          '${versionName == null ? '' : ', placing them on $versionName'}'
+          '${submitForReview ? ', and to submit them to App Review on their '
+                    'own' : '. Nothing is submitted for review'}.',
     _ => 'About to publish the App Store listing.',
   };
 

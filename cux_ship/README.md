@@ -43,8 +43,8 @@ cux_ship appstore upload            play upload            release finish
          appstore wait                                     secrets place
          appstore wait-previews                            secrets clean
          appstore previews                                 secrets pack
-         appstore signing                                  keychain exec
-                                                           deps install
+         appstore creative-assets                          keychain exec
+         appstore signing                                  deps install
                                                            deps check
                                                            manifest write
 ```
@@ -1561,6 +1561,59 @@ publishes an 886×1920 preview, which is no iPhone's screen; iPad is 1200×1600,
 Mac and Apple TV 1920×1080 and landscape only. Capturing at the device's own
 size is the ordinary way to get this wrong, so the refusal says the number
 rather than only that the size is unacceptable.
+
+## Creative assets: the product page header and the search results image
+
+App Store Connect has accepted these since 5 October 2026, shown on iOS 27 /
+iPadOS 27 and later. They are optional — a search result without one falls
+back to previews and screenshots — and they live beside the screenshots, one
+image per slot directory:
+
+```
+<metadata root>/listings/en-US/
+  creative_assets/UNIVERSAL/header.png                      # 5244x2950 PNG, both placements
+  # — or, instead of UNIVERSAL —
+  creative_assets/PRODUCT_PAGE_HEADER_ASSET/header.jpg      # 3840x1646 PNG or JPEG
+  creative_assets/APP_STORE_SEARCH_RESULTS_ASSET/search.png # exactly 3:2, 1920x1280 to 3840x2560
+```
+
+`verify`, and every command that loads the tree, checks the size, the format
+and the alpha channel offline. A dedicated slot also takes the universal
+5244×2950 PNG. `UNIVERSAL` beside a dedicated slot is refused, because that
+would be two images for one placement. **Videos are not supported yet**, and
+one in a slot directory is refused rather than skipped.
+
+They publish with a command of their own, because the bytes do not belong to
+a version. They go into the app's **asset library**, and a version's
+localization then *places* them:
+
+```bash
+cux_ship appstore creative-assets --dry-run                      # what would happen
+cux_ship appstore creative-assets                                # upload to the library only
+cux_ship appstore creative-assets --version-name 1.2.0           # …and place on that version
+cux_ship appstore creative-assets --submit-for-review            # …and submit them on their own
+```
+
+- **Unchanged bytes are never re-uploaded.** Apple keeps no checksum for these
+  assets, so the upload writes the file's MD5 into the asset's reference name,
+  `header.png [md5 …]`, and the next run matches on it. The same image in two
+  locales is uploaded once and placed twice.
+- **`--version-name` places on an editable version only**, one placement per
+  locale and type, and replaces whatever image is placed there. A universal
+  image becomes two placements, `PRODUCT_PAGE_HEADER_ASSET` and
+  `APP_STORE_SEARCH_RESULTS_ASSET`. That is the API form of the console's *Use
+  header asset in search results*, which has no attribute of its own. Placed
+  assets are reviewed with the version when it is submitted.
+- **Nothing is submitted for review without `--submit-for-review`.** With it,
+  the assets that have not been submitted yet go to App Review on their own,
+  in a submission that holds nothing else. An open submission that already
+  holds a version is refused rather than submitted along with them.
+- **Every run ends with each asset's state**, which is its review state too:
+  `PREPARE_FOR_SUBMISSION`, `WAITING_FOR_REVIEW`, `APPROVED`, `REJECTED`.
+
+`upload` and `promote` do not publish creative assets, and say so when the tree
+carries some. Which of this rests on Apple's documentation and which on
+inference is in `docs/design/creative-assets.md`.
 
 ## Not implemented
 

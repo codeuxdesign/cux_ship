@@ -411,6 +411,11 @@ class _AscSubcommand extends Command<void> {
           'ingests far more slowly than a build — reaching the deadline is '
           'reported rather than treated as a failure, and exits its own code. '
           'With --metadata it also asserts the poster frames.',
+    AscCommand.creativeAssets =>
+      'Upload the product page header and search results image from '
+          'creative_assets/ to the app\'s asset library, skipping bytes it '
+          'already holds; with --version-name, place them on that version. '
+          'Submits nothing unless --submit-for-review says so.',
     AscCommand.signing =>
       'Print the certificates, App IDs and profiles the developer account '
           'holds, so drift from automatic signing is visible. Reads only, and '
