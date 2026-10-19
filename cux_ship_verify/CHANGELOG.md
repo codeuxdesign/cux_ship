@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+**App Store creative assets in the metadata tree.** The product page header
+and the search results image App Store Connect started accepting on 5 October
+2026 (iOS 27 / iPadOS 27 and later) live in
+`listings/<locale>/creative_assets/<slot>/`, one image per slot:
+
+- `UNIVERSAL/` — one 5244x2950 PNG, used as both the header and the search
+  results image.
+- `PRODUCT_PAGE_HEADER_ASSET/` — 3840x1646 PNG or JPEG, or the universal size.
+- `APP_STORE_SEARCH_RESULTS_ASSET/` — exactly 3:2 from 1920x1280 to 3840x2560,
+  PNG or JPEG, or the universal size.
+
+`loadMetadata` checks them offline the way it checks screenshots: size,
+format (the extension has to agree with the bytes), and no alpha channel. An
+empty `creative_assets/` or slot directory is an error, so is a second image
+in a slot, and so is `UNIVERSAL/` beside a dedicated slot. **Videos are not
+supported yet**, and one in a slot directory is refused rather than skipped.
+Bit depth is deliberately not checked here: Apple publishes none for these
+assets, and the 16-bit refusal the screenshot rule rests on was observed on
+screenshots. `docs/design/creative-assets.md` has the sources.
+
+- `LocaleMetadata.creativeAssets`, keyed by slot.
+- `creativeAssetSpecs`, `CreativeAssetSpec`, `CreativeImageSize`, and the slot
+  and placement names (`universalCreativeSlot`, `productPageHeaderPlacement`,
+  `searchResultsPlacement`).
+- `appStoreCreativeImageRules`, and `StoreImageRules.checksDepth` (default
+  `true`, so every existing rule set behaves as before).
+
 ## 1.11.0-dev.3
 
 **Release notes per locale, by filename.** `CHANGELOG.<locale>.md` beside the
