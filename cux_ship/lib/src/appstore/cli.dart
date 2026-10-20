@@ -3484,10 +3484,11 @@ Future<void> runAsc(
 /// A version that is not editable, a locale the version lacks, or bytes App
 /// Review already rejected are found before anything is uploaded, so those
 /// runs leave nothing behind — the asset library has no edit transaction to
-/// discard. The one refusal that cannot come first is an image no placement
-/// group takes, because the groups follow from the `specId` Apple assigns
-/// while processing it; that run leaves the processed images in the library,
-/// where the next run finds them by checksum, and places nothing.
+/// discard. The refusals that cannot come first are an image no placement
+/// group takes and one Apple names no `specId` for, because the groups follow
+/// from the `specId` Apple assigns while processing it; such a run leaves the
+/// processed images in the library, where the next run finds them by
+/// checksum, and places nothing.
 Future<void> _publishCreativeAssets(
   AppStore store,
   App app,

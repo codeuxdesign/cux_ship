@@ -858,9 +858,22 @@ void main() {
         isEmpty,
         reason: 'nothing the tree owns was there to replace',
       );
+      // One sentence true of both: VISION_G is listed as a Vision Pro group,
+      // and NOWHERE_G is not listed at all, which is not the same as being
+      // known to be something else.
       expect(
         said.out,
-        contains('is in VISION_G, which is not an iPhone or iPad group'),
+        contains(
+          'is in VISION_G, which the reference data does not list as an '
+          'iPhone or iPad group',
+        ),
+      );
+      expect(
+        said.out,
+        contains(
+          'is in NOWHERE_G, which the reference data does not list as an '
+          'iPhone or iPad group',
+        ),
       );
     });
 

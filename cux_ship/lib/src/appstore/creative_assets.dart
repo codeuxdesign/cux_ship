@@ -704,8 +704,9 @@ class CreativeAssetPublisher {
       }
       if (!owned.contains(group)) {
         say(
-          '    $locale $placementType: placement $id is in $group, which is '
-          'not an iPhone or iPad group, so it is left as it is',
+          '    $locale $placementType: placement $id is in $group, which the '
+          'reference data does not list as an iPhone or iPad group, so it is '
+          'left as it is',
         );
         continue;
       }
