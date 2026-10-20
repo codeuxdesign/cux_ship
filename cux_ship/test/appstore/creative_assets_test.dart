@@ -145,6 +145,7 @@ class _FakeClient implements AscClient {
     String name = 'u.png',
     String? referenceName,
     String category = 'CREATIVE_ASSETS',
+    bool withSpec = true,
   }) {
     images.add({
       'type': 'appAssetLibraryImages',
@@ -155,7 +156,9 @@ class _FakeClient implements AscClient {
         'referenceName':
             referenceName ?? creativeReferenceName(name, _md5(bytes)),
         'state': state,
-        'specId': 'spec-universal',
+        // Optional in every state Apple's specification declares, so a copy
+        // can read back without one.
+        if (withSpec) 'specId': 'spec-universal',
       },
     });
   }
@@ -1136,6 +1139,26 @@ void main() {
           isEmpty,
         );
       }();
+    });
+
+    test('an image Apple names no specification for is refused', () async {
+      // `specId` is optional in every state the specification declares. A
+      // processed copy without one has no group to go in, and a real run
+      // said "would place", placed nothing and exited 0 — the dry run's
+      // sentence. The copy stays in the library; only the placement is
+      // refused.
+      _write('listings/en-US/creative_assets/UNIVERSAL/header.png', _universal);
+      final client = _FakeClient()
+        ..seedImage(_universal, name: 'header.png', withSpec: false);
+
+      final said = await _run(client, ['--version-name', '1.2.0']);
+
+      expect(exitCode, 1);
+      expect(said.err, contains('with no specification'));
+      expect(said.err, contains('Nothing has been placed on 1.2.0'));
+      expect(said.out, isNot(contains('would place')));
+      expect(client.writes, isEmpty);
+      expect(client.images, hasLength(1));
     });
 
     test('a locale the version lacks is refused before any upload', () async {

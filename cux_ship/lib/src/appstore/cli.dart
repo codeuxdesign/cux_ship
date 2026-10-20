@@ -3573,17 +3573,35 @@ Future<void> _publishCreativeAssets(
     final plans =
         <({CreativeAssetOutcome outcome, String type, List<String> groups})>[];
     for (final o in outcomes) {
-      final specId = images[o.imageId]?.specId;
+      final image = images[o.imageId];
+      final specId = image?.specId;
       for (final type in creativeAssetSpecs[o.slot]!.placements) {
-        if (o.imageId == null || specId == null) {
-          // A dry run's would-be upload, which Apple has not matched to a
-          // specification yet — and the specification is what picks groups.
+        if (o.imageId == null ||
+            processingLibraryStates.contains(image?.state)) {
+          // A dry run's would-be upload, or a copy a dry run did not wait
+          // for: Apple has not matched either to a specification yet — and
+          // the specification is what picks groups. A real run never gets
+          // here, because `ensureInLibrary` waited.
           o.placements[type] = 'would place';
           say(
             '    would place ${o.locale} ${o.fileName} as $type, in the groups '
             'that take the specification Apple matches it to',
           );
           continue;
+        }
+        if (specId == null) {
+          // Processed, and Apple names no specification — `specId` is
+          // optional in every state the specification declares. Without one
+          // there is no group to pick, and saying "would place" on a real
+          // run, then placing nothing and exiting 0, is the sentence for a
+          // dry run. The image stays in the library.
+          throw CreativeAssetsRefused(
+            '${o.locale} ${o.fileName}: App Store Connect reports asset '
+            '${o.imageId} as ${image?.state ?? 'in no state'} with no '
+            'specification, and the specification is what picks the placement '
+            'groups — so there is nowhere to place it. Nothing has been placed '
+            'on $versionName.',
+          );
         }
         final groups = placementGroupsFor(
           referenceData,

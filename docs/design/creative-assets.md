@@ -78,7 +78,10 @@ output says where to look:
   the bytes and would upload them again.
 - **The groups the reference data gives for these two types.** Every
   placement line names its group. A run that finds no iPhone or iPad group for
-  the matched spec refuses before placing anything, and names the spec.
+  the matched spec refuses before placing anything, and names the spec. So does
+  a run over a processed image Apple reports no `specId` for — the attribute is
+  optional in every state [S] declares — because without one there is no group
+  to pick.
 
 **A placement is deleted before its replacement is made**, because a version
 takes one header per group. A run that dies between the two leaves that group
