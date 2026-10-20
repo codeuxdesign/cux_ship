@@ -588,11 +588,21 @@ class CreativeAssetPublisher {
   /// Read whole rather than through `filter[placementTypes]`, because how that
   /// filter narrows the *other* arrays — the placement groups the mapping
   /// names — is not documented, and the groups are what is needed.
+  ///
+  /// **Through [AscClient.get], not [AscClient.getAll].** The response is a
+  /// collection — Apple's article says it "holds a single resource", so `data`
+  /// is a list and the resource is its first — but this is the one collection
+  /// endpoint in the 4.5.1 specification that declares no `limit` parameter,
+  /// and [AscClient.getAll] sends `limit=200` to every page it reads. Whether
+  /// App Store Connect refuses the parameter it does not declare is unmeasured;
+  /// sending only what the specification names is right either way.
   Future<Map<String, dynamic>> referenceData() async {
-    final collection = await client.getAll('/v1/appAssetLibraryRefData');
-    final attributes = collection.isEmpty
-        ? null
-        : collection.first['attributes'];
+    final response = await client.get('/v1/appAssetLibraryRefData');
+    final data = response['data'];
+    final first = data is List
+        ? data.whereType<Map<String, dynamic>>().firstOrNull
+        : null;
+    final attributes = first?['attributes'];
     if (attributes is! Map<String, dynamic>) {
       throw AscApiException(404, [
         'App Store Connect returned no asset library reference data, which '
@@ -600,6 +610,65 @@ class CreativeAssetPublisher {
       ], request: 'GET /v1/appAssetLibraryRefData');
     }
     return attributes;
+  }
+
+  /// Removes every [placementType] placement on [localizationId] whose group
+  /// is not among [groups] — the groups the wanted image's specification is
+  /// mapped to — and returns `<type> <group>` -> `removed` / `would remove`
+  /// for each one.
+  ///
+  /// **The slot the tree owns is the type, not the group.** [place] looks at
+  /// one group at a time and never at a group it is not asked about, so on
+  /// its own a changed image whose specification reaches fewer groups than
+  /// the old one's did would leave the old image placed in the group it no
+  /// longer reaches, with nothing said — the version would show two headers,
+  /// one per device, and only one of them the tree's. A placement in a group
+  /// outside the mapping is therefore stale whichever image it joins, because
+  /// the mapping is what decides where this image can be at all.
+  ///
+  /// A placement whose response carries no `placementGroup` is left alone and
+  /// named, because deleting on a group nobody can read would be a guess.
+  Future<Map<String, String>> removeUnmappedPlacements({
+    required String locale,
+    required String localizationId,
+    required String placementType,
+    required List<String> groups,
+  }) async {
+    final all = await client.getAll(
+      '/v1/appStoreVersionLocalizations/$localizationId/placements',
+      query: {'filter[placementType]': placementType},
+    );
+    final removed = <String, String>{};
+    for (final placement in all) {
+      final id = placement['id'];
+      final attributes = placement['attributes'];
+      final group = attributes is Map<String, dynamic>
+          ? attributes['placementGroup']
+          : null;
+      if (id is! String) {
+        continue;
+      }
+      if (group is! String) {
+        say(
+          '    $locale $placementType: placement $id names no placement '
+          'group, so it is left as it is',
+        );
+        continue;
+      }
+      if (groups.contains(group)) {
+        continue;
+      }
+      await writer.delete(
+        '/v1/appAssetLibraryPlacements/$id',
+        describe:
+            'removed the earlier $locale $placementType placement in $group, '
+            'a group the image\'s specification is not mapped to',
+      );
+      removed['$placementType $group'] = writer.dryRun
+          ? 'would remove'
+          : 'removed';
+    }
+    return removed;
   }
 
   /// Joins [imageId] to [localizationId] as [placementType] in

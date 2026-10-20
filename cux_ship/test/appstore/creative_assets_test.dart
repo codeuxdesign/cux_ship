@@ -79,9 +79,11 @@ class _FakeClient implements AscClient {
 
   /// The reference data's two relevant arrays, shaped as Apple documents
   /// them. The header takes the universal spec in an iPhone and an iPad
-  /// group; search results in the iPhone group alone, so the two types
-  /// resolve differently. A Vision Pro group and a group with no platform
-  /// are there so that a filter dropping either would show.
+  /// group and the dedicated header spec in the iPhone group alone, so a
+  /// change of image can change the groups; search results take the
+  /// universal spec in the iPhone group alone, so the two types resolve
+  /// differently. A Vision Pro group and a group with no platform are there
+  /// so that a filter dropping either would show.
   static const referenceData = {
     'placementTypes': [
       {
@@ -93,7 +95,7 @@ class _FakeClient implements AscClient {
           },
           {
             'placementGroupId': 'IPAD_G',
-            'specs': ['spec-universal', 'spec-header'],
+            'specs': ['spec-universal'],
           },
           {
             'placementGroupId': 'VISION_G',
@@ -165,7 +167,9 @@ class _FakeClient implements AscClient {
     (p) => {
       'type': 'appAssetLibraryPlacements',
       'id': p.id,
-      'attributes': {'placementType': p.type},
+      // Both attributes, as Apple's placement article shows a placement
+      // reading back: the group is what the sweep of stale groups reads.
+      'attributes': {'placementType': p.type, 'placementGroup': p.group},
     },
   );
 
@@ -238,13 +242,14 @@ class _FakeClient implements AscClient {
       ).toList();
     }
     if (path == '/v1/appAssetLibraryRefData') {
-      return [
-        {
-          'type': 'appAssetLibraryRefData',
-          'id': 'ref-1',
-          'attributes': referenceData,
-        },
-      ];
+      // The one collection in Apple's 4.5.1 specification with no `limit`
+      // parameter, and `getAll` sends one to every page. Whether App Store
+      // Connect refuses it is unmeasured; the fake refuses so that the code
+      // sends only what the specification declares, which is right either
+      // way. The read is served by [get] below.
+      throw AscApiException(400, [
+        "'limit' is not a parameter GET /v1/appAssetLibraryRefData declares",
+      ], request: 'GET /v1/appAssetLibraryRefData');
     }
     if (path == '/v1/reviewSubmissions') {
       // All three filters, because the branch depends on all three: the state
@@ -286,6 +291,19 @@ class _FakeClient implements AscClient {
     if (path == '/v1/apps/app-1/assetLibrary') {
       return {
         'data': {'type': 'appAssetLibraries', 'id': 'library-1'},
+      };
+    }
+    if (path == '/v1/appAssetLibraryRefData') {
+      // A collection holding one resource, which is how Apple's article
+      // describes it — so `data` is a list even through a plain GET.
+      return {
+        'data': [
+          {
+            'type': 'appAssetLibraryRefData',
+            'id': 'ref-1',
+            'attributes': referenceData,
+          },
+        ],
       };
     }
     final image = RegExp(
@@ -645,6 +663,15 @@ void main() {
         ),
         ['IPHONE_G'],
       );
+      expect(
+        placementGroupsFor(
+          data,
+          placementType: 'PRODUCT_PAGE_HEADER_ASSET',
+          specId: 'spec-header',
+        ),
+        ['IPHONE_G'],
+        reason: 'the dedicated header reaches fewer groups than the universal',
+      );
     });
 
     test('a spec mapped only to another platform has no group', () {
@@ -795,6 +822,71 @@ void main() {
         isEmpty,
       );
       expect(client.placements.map((p) => p.image).toSet(), {'image-5'});
+    });
+
+    test('a group the new image does not reach loses the old one', () async {
+      // The slot the tree owns is the type. A universal header sat in the
+      // iPhone and the iPad group; the dedicated header that replaces it is
+      // mapped to the iPhone group alone. Looking only at the groups the new
+      // image reaches would leave the old header on every iPad, with nothing
+      // said. The search placement is a slot the tree no longer carries, and
+      // present-means-owned leaves it alone.
+      _write(
+        'listings/en-US/creative_assets/PRODUCT_PAGE_HEADER_ASSET/header.png',
+        _png(3840, 1646),
+      );
+      final client = _FakeClient(processedSpecId: 'spec-header')
+        ..seedImage(_universal, name: 'old.png');
+      const loc = 'loc-en-US';
+      client.placements.addAll([
+        (
+          id: 'old-iphone',
+          type: 'PRODUCT_PAGE_HEADER_ASSET',
+          group: 'IPHONE_G',
+          loc: loc,
+          image: 'image-1',
+        ),
+        (
+          id: 'old-ipad',
+          type: 'PRODUCT_PAGE_HEADER_ASSET',
+          group: 'IPAD_G',
+          loc: loc,
+          image: 'image-1',
+        ),
+        (
+          id: 'old-search',
+          type: 'APP_STORE_SEARCH_RESULTS_ASSET',
+          group: 'IPHONE_G',
+          loc: loc,
+          image: 'image-1',
+        ),
+      ]);
+
+      final said = await _run(client, ['--version-name', '1.2.0']);
+
+      expect(exitCode, 0, reason: said.err);
+      expect(
+        client.placements.map((p) => (p.type, p.group, p.image)),
+        unorderedEquals([
+          ('PRODUCT_PAGE_HEADER_ASSET', 'IPHONE_G', 'image-2'),
+          ('APP_STORE_SEARCH_RESULTS_ASSET', 'IPHONE_G', 'image-1'),
+        ]),
+        reason:
+            'the iPad group is emptied rather than left showing the old '
+            'header; the search slot is absent from the tree and left alone',
+      );
+      expect(
+        said.out,
+        contains(
+          'removed the earlier en-US PRODUCT_PAGE_HEADER_ASSET placement in '
+          'IPAD_G',
+        ),
+      );
+      expect(said.out, contains('PRODUCT_PAGE_HEADER_ASSET IPAD_G removed'));
+
+      client.calls.clear();
+      await _run(client, ['--version-name', '1.2.0']);
+      expect(client.writes, isEmpty, reason: 'and the next run is a no-op');
     });
 
     test('the same bytes in two locales are uploaded once', () async {

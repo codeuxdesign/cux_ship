@@ -55,8 +55,9 @@ What the implementation rests on, claim by claim:
 | `COMPLETE` counts as usable | **Inferred.** The spec maps it; no article describes it |
 | Skip identical bytes by an MD5 in `referenceName` | **This package's convention.** Apple exposes no checksum; [MIG] says to *"record the returned asset ID against your own identifier"* and does not say where |
 | Placement: `placementType`, `placementGroup`, `image` and `appStoreVersionLocalization` | **Confirmed**: [PL] — *"A placement request combines four things"*: the type, the group, the asset and the target. [S] has the group as nullable and outside every `anyOf`, and the first draft of this package omitted it on that reading; the articles show it in every example and document `409 ENTITY_ERROR.ATTRIBUTE.INVALID`, *"The requested 'placementType' and 'placementGroup' combination is not supported for this parent"* |
-| Placement groups come from `GET /v1/appAssetLibraryRefData`, never a constant | **Confirmed**: [PL] — *"Read the valid identifiers from the reference data; they aren't an enumeration"*; [SPEC] and [MIG] say not to hard-code them |
-| An image goes in every group whose `placementTypes[].specMappings` lists its `specId`, on an iPhone, iPad or `ANY` platform | **The mapping is confirmed**, the selection inferred. [SPEC] walks the same arrays (*"Map the group to specifications"*), and [U] says Apple reports the matched spec as `specId`. *Every* group rather than one follows from *"1 product page header asset per group"* ([PL], [SPEC]): an iPhone group and an iPad group are two placements. The platform filter is this package's — creative assets are iOS and iPadOS only ([H-MANAGE]) |
+| Placement groups come from `GET /v1/appAssetLibraryRefData`, never a constant | **Confirmed**: [PL] — *"Read the valid identifiers from the reference data; they aren't an enumeration"*; [SPEC] and [MIG] say not to hard-code them. Read with a plain `GET` and no `limit`: it is the one collection endpoint in [S] that declares no `limit` parameter, and the client's paginating read sends one to everything |
+| An image goes in every group whose `placementTypes[].specMappings` lists its `specId`, on an iPhone, iPad or `ANY` platform | **The mapping is confirmed**, the selection inferred. [SPEC] walks the same arrays (*"Map the group to specifications"*), and [U] says Apple reports the matched spec as `specId`. *Every* group rather than one follows from *"1 product page header asset per group"* ([PL], [SPEC]): an iPhone group and an iPad group are two placements. The platform filter is this package's — creative assets are iOS and iPadOS only ([H-MANAGE]). The first step of [SPEC]'s chain, the feature's `placementPolicies`, is not walked; see the open section below |
+| A placement of the type in a group the image's specification is not mapped to is removed | **This package's rule**, from *present means owned*: the tree names one image per slot, and a changed image whose specification reaches fewer groups than the old one's would otherwise leave the old header on the other device with nothing said |
 | `PRODUCT_PAGE_HEADER_ASSET`, `APP_STORE_SEARCH_RESULTS_ASSET` | **Confirmed**: [S] `AppAssetLibraryPlacementType` |
 | Universal = one image, placed as both types | **Inferred** from [SPEC]: a universal spec *"satisfies several placement types at once"* by *"creating a placement per type"*. No article shows the header-and-search pair specifically |
 | Placements cannot be edited; delete and recreate | **Confirmed**: [S] has no PATCH; [PL] *"You can't change a placement after you create it"* |
@@ -81,7 +82,10 @@ output says where to look:
 
 **A placement is deleted before its replacement is made**, because a version
 takes one header per group. A run that dies between the two leaves that group
-empty until the next run, which recreates it. **A `FAILED` copy is deleted
+empty until the next run, which recreates it. A placement of the type in a
+group the new image's specification is not mapped to is deleted first of all,
+and not recreated: the tree names one image per slot, so that group goes empty
+rather than keeping the old image. **A `FAILED` copy is deleted
 before it is uploaded again**, and Apple refuses that delete with `409
 STATE_ERROR.ASSET_HAS_PLACEMENTS` if somebody placed the copy in the console
 while it was processing ([IMG]). The run then stops with Apple's message, and
@@ -179,6 +183,39 @@ live app this command can upload, and submit standalone with
 `--submit-for-review`. Putting the approved asset on the live page is a click
 in App Store Connect, until an endpoint appears.
 
+## Open: which groups an App Store version takes
+
+Status: **open**.
+
+[SPEC]'s lookup chain has four steps and the code walks three. The first —
+*"Start with the feature. Find `APP_STORE_VERSIONS` in `features`. Its
+`placementPolicies` list the placement types that feature supports, and for
+each one, `groupLimits` gives the `maxCount` allowed per set of `groupIds`"*
+— is skipped: the groups come from `placementTypes[].specMappings` alone,
+which is one array for every feature. Three things only the reference data,
+read with credentials, can settle:
+
+- **Whether `specMappings` names a group App Store versions do not take.**
+  [SPEC] says custom product pages and product page optimizations *"carry
+  their own policies, and they don't always match the App Store version
+  policies"*, and [PL]'s 409 is worded *"not supported for this parent"*. If
+  a header group exists for another feature only, the run would place in it
+  and Apple would refuse — after the groups before it had been written.
+  Intersecting with `features[APP_STORE_VERSIONS].placementPolicies[]
+  .groupLimits[].groupIds` would close this, and [SPEC] presents that as the
+  route; it is not done because [SPEC] also says to *"treat a feature that's
+  absent as unavailable for your app"*, and what the array holds for an app
+  with one platform has not been seen.
+- **An iPhone-only app and the iPad groups.** The reference data is not per
+  app, so the mapping names an iPad group for an app that has no iPad
+  product page. Whether Apple accepts that placement, ignores it, or answers
+  409 is unknown. A 409 there would stop every run of this command for such
+  an app at the second group, with the first already placed.
+- **How many groups one header is.** If the mapping lists the header
+  specification under every iPhone display class the way screenshots are
+  grouped, one header is a placement per class, and the `maxCount` of 1 is
+  per class. The output names every group, which is how the first run says.
+
 ## Open: locale fallback
 
 Status: **open**.
@@ -194,8 +231,11 @@ the fallback.
 Status: **open**.
 
 The idempotency of a placement does not depend on it. `place` asks Apple with
-`filter[placementType]` and `filter[image]`, which Apple answers whatever shape
-the response has. It would matter only if reading back *which* image is placed
-were wanted for a report. `appStoreVersions` returns a relationship without
+`filter[placementType]`, `filter[placementGroup]` and `filter[image]`, which
+Apple answers whatever shape the response has. It would matter only if reading
+back *which* image is placed were wanted for a report; [PL] shows
+`include=image` with `fields[appAssetLibraryImages]` for that. The sweep of
+stale groups reads a placement's own `placementGroup` attribute, which [PL]
+shows in every placement response. `appStoreVersions` returns a relationship without
 `data` unless `include` asks for it ([rollout-state.md](rollout-state.md)), and
 nobody has looked at a placement yet.

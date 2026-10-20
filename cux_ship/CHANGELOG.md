@@ -25,10 +25,12 @@ offline (see `cux_ship_verify`'s changelog for the rules).
 - `--version-name` places the image on an editable version's localization,
   replacing what is there, in every iPhone and iPad placement group that the
   asset library's reference data maps the image's specification to. Apple
-  says not to hard-code these groups. A universal image is placed as both the
-  header and the search results image. The version's editability and its
-  localizations are checked before anything is uploaded, and the groups
-  before anything is placed.
+  says not to hard-code these groups. A placement of the same type in a group
+  the new image's specification does not reach is removed too, so a changed
+  image never leaves the old one showing on the other device. A universal
+  image is placed as both the header and the search results image. The
+  version's editability and its localizations are checked before anything is
+  uploaded, and the groups before anything is placed.
 - The reference name is checked as it comes back, and a run warns if Apple
   stored something other than what was sent, because the skip would then be
   lost.

@@ -3453,6 +3453,12 @@ Future<void> runAsc(
     exitCode = 1;
   } on CreativeAssetsRefused catch (e) {
     stderr.writeln('cux_ship appstore ${cmd.name}: $e');
+    // Nothing refused today has opened a version or a submission first, so
+    // this reports nothing today. It is here for the reason the clause below
+    // carries it: what the run left behind is a fact about the run, not about
+    // which exception ended it, and a refusal added later, after a write,
+    // would otherwise be the one exit that says nothing.
+    _reportStateLeftBehind(store);
     exitCode = 1;
   } catch (_) {
     // Anything not named above — a StateError from a response shaped wrongly,
@@ -3593,6 +3599,17 @@ Future<void> _publishCreativeAssets(
     }
     say('==> placing on $versionName');
     for (final plan in plans) {
+      // The groups the image does not reach first, so a header the old image
+      // still shows on one device is gone before the new one goes up on the
+      // others — see [CreativeAssetPublisher.removeUnmappedPlacements].
+      plan.outcome.placements.addAll(
+        await publisher.removeUnmappedPlacements(
+          locale: plan.outcome.locale,
+          localizationId: localizationIds[plan.outcome.locale]!,
+          placementType: plan.type,
+          groups: plan.groups,
+        ),
+      );
       for (final group in plan.groups) {
         plan.outcome.placements['${plan.type} $group'] = await publisher.place(
           locale: plan.outcome.locale,

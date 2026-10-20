@@ -1565,9 +1565,8 @@ rather than only that the size is unacceptable.
 ## Creative assets: the product page header and the search results image
 
 App Store Connect has accepted these since 5 October 2026, shown on iOS 27 /
-iPadOS 27 and later. They are optional — a search result without one falls
-back to previews and screenshots — and they live beside the screenshots, one
-image per slot directory:
+iPadOS 27 and later. They are optional, Apple's word, and they live beside
+the screenshots, one image per slot directory:
 
 ```
 <metadata root>/listings/en-US/
