@@ -668,6 +668,225 @@ void main() {
     });
   });
 
+  group('creative assets', () {
+    const dir = 'listings/en-US/creative_assets';
+
+    test('a universal PNG loads into its slot', () {
+      writeValidTree();
+      writeBytes('$dir/UNIVERSAL/header.png', png(width: 5244, height: 2950));
+      final assets = load().locales.single.creativeAssets;
+      expect(assets.keys, [universalCreativeSlot]);
+      expect(assets[universalCreativeSlot]!.path, endsWith('header.png'));
+      expect(
+        creativeAssetSpecs[universalCreativeSlot]!.placements,
+        [productPageHeaderPlacement, searchResultsPlacement],
+        reason:
+            'one file, both placements — the API form of "use header '
+            'asset in search results"',
+      );
+    });
+
+    test('a universal JPEG is refused: that size is PNG only', () {
+      writeValidTree();
+      writeBytes('$dir/UNIVERSAL/header.jpg', jpeg(width: 5244, height: 2950));
+      expect(load, throwsMetadata(contains('PNG only')));
+    });
+
+    test('a universal image one pixel off is refused with the size', () {
+      writeValidTree();
+      writeBytes('$dir/UNIVERSAL/header.png', png(width: 5244, height: 2949));
+      expect(
+        load,
+        throwsMetadata(allOf(contains('5244x2949'), contains('5244x2950'))),
+      );
+    });
+
+    test('and one pixel off in width, which only the width bounds catch', () {
+      // At an exact size the height is in range, so these are the cases that
+      // reach the two width comparisons and nothing else.
+      for (final width in [5243, 5245]) {
+        writeValidTree();
+        writeBytes(
+          '$dir/UNIVERSAL/header.png',
+          png(width: width, height: 2950),
+        );
+        expect(load, throwsMetadata(contains('${width}x2950')));
+      }
+    });
+
+    test('the transpose is not accepted, unlike a screenshot', () {
+      writeValidTree();
+      writeBytes('$dir/UNIVERSAL/header.png', png(width: 2950, height: 5244));
+      expect(load, throwsMetadata(contains('2950x5244')));
+    });
+
+    test('an alpha channel is refused, quoting Apple', () {
+      writeValidTree();
+      writeBytes(
+        '$dir/UNIVERSAL/header.png',
+        png(width: 5244, height: 2950, colourType: 6),
+      );
+      expect(
+        load,
+        throwsMetadata(
+          allOf(contains('alpha channel'), contains("Images can't include")),
+        ),
+      );
+    });
+
+    test('a tRNS chunk counts as transparency here too', () {
+      writeValidTree();
+      writeBytes(
+        '$dir/UNIVERSAL/header.png',
+        png(width: 5244, height: 2950, trns: true),
+      );
+      expect(load, throwsMetadata(contains('alpha channel')));
+    });
+
+    test('16 bits per channel is accepted: Apple states no depth here', () {
+      // The screenshot depth rule rests on a screenshot set Apple refused, not
+      // on anything Apple published; the asset library is another pipeline,
+      // and refusing here would be a rule with no failure under it.
+      writeValidTree();
+      writeBytes(
+        '$dir/UNIVERSAL/header.png',
+        png(width: 5244, height: 2950, depth: 16),
+      );
+      expect(load, returnsNormally);
+    });
+
+    test('a header is 3840x1646 in either format', () {
+      writeValidTree();
+      writeBytes(
+        '$dir/PRODUCT_PAGE_HEADER_ASSET/h.jpg',
+        jpeg(width: 3840, height: 1646),
+      );
+      writeBytes(
+        '$dir/APP_STORE_SEARCH_RESULTS_ASSET/s.png',
+        png(width: 1920, height: 1280),
+      );
+      expect(
+        load().locales.single.creativeAssets.keys,
+        unorderedEquals([productPageHeaderPlacement, searchResultsPlacement]),
+      );
+    });
+
+    test('a header at the nominal 21:9 but another size is refused', () {
+      // 3840x1646 is not exactly 21:9, so the slot is a size and not a ratio;
+      // a 21:9 image Apple did not name is still refused.
+      writeValidTree();
+      writeBytes(
+        '$dir/PRODUCT_PAGE_HEADER_ASSET/h.png',
+        png(width: 2520, height: 1080),
+      );
+      expect(load, throwsMetadata(contains('3840x1646')));
+    });
+
+    test('a dedicated header may itself be the universal size', () {
+      writeValidTree();
+      writeBytes(
+        '$dir/PRODUCT_PAGE_HEADER_ASSET/h.png',
+        png(width: 5244, height: 2950),
+      );
+      expect(load, returnsNormally);
+    });
+
+    test('a search image is any exact 3:2 between the bounds', () {
+      for (final (w, h) in [(1920, 1280), (2880, 1920), (3840, 2560)]) {
+        writeValidTree();
+        writeBytes(
+          '$dir/APP_STORE_SEARCH_RESULTS_ASSET/s.png',
+          png(width: w, height: h),
+        );
+        expect(load, returnsNormally, reason: '${w}x$h');
+      }
+    });
+
+    test('a search image off the ratio or out of range is refused', () {
+      for (final (w, h) in [(2000, 1333), (1800, 1200), (4800, 3200)]) {
+        writeValidTree();
+        writeBytes(
+          '$dir/APP_STORE_SEARCH_RESULTS_ASSET/s.png',
+          png(width: w, height: h),
+        );
+        expect(
+          load,
+          throwsMetadata(allOf(contains('${w}x$h'), contains('3:2'))),
+          reason: '${w}x$h',
+        );
+      }
+    });
+
+    test('an empty slot directory is an error, as for screenshots', () {
+      writeValidTree();
+      Directory('${_root.path}/$dir/UNIVERSAL').createSync(recursive: true);
+      expect(load, throwsMetadata(contains('holds 0 image(s)')));
+    });
+
+    test('an empty creative_assets directory is an error too', () {
+      writeValidTree();
+      Directory('${_root.path}/$dir').createSync(recursive: true);
+      expect(load, throwsMetadata(contains('holds no slot directories')));
+    });
+
+    test('two images in one slot are refused', () {
+      writeValidTree();
+      writeBytes('$dir/UNIVERSAL/a.png', png(width: 5244, height: 2950));
+      writeBytes('$dir/UNIVERSAL/b.png', png(width: 5244, height: 2950));
+      expect(load, throwsMetadata(contains('exactly one')));
+    });
+
+    test('an unknown slot names the ones that are known', () {
+      writeValidTree();
+      writeBytes('$dir/HEADER/h.png', png(width: 3840, height: 1646));
+      expect(
+        load,
+        throwsMetadata(
+          allOf(contains('HEADER'), contains('PRODUCT_PAGE_HEADER_ASSET')),
+        ),
+      );
+    });
+
+    test(
+      'universal beside a dedicated slot is two answers to one question',
+      () {
+        writeValidTree();
+        writeBytes('$dir/UNIVERSAL/u.png', png(width: 5244, height: 2950));
+        writeBytes(
+          '$dir/APP_STORE_SEARCH_RESULTS_ASSET/s.png',
+          png(width: 1920, height: 1280),
+        );
+        expect(
+          load,
+          throwsMetadata(contains('already placed as both the header')),
+        );
+      },
+    );
+
+    test('a video is refused rather than skipped', () {
+      writeValidTree();
+      writeBytes('$dir/PRODUCT_PAGE_HEADER_ASSET/h.mp4', [0, 0, 0, 0]);
+      expect(load, throwsMetadata(contains('does not check or upload')));
+    });
+
+    test('an extension that disagrees with the bytes is refused', () {
+      writeValidTree();
+      writeBytes(
+        '$dir/PRODUCT_PAGE_HEADER_ASSET/h.png',
+        jpeg(width: 3840, height: 1646),
+      );
+      expect(load, throwsMetadata(contains('named as a PNG and is a JPEG')));
+    });
+
+    test('a tree of creative assets alone is still a locale', () {
+      writeBytes(
+        'listings/de-DE/creative_assets/UNIVERSAL/u.png',
+        png(width: 5244, height: 2950),
+      );
+      expect(load().locales.single.locale, 'de-DE');
+    });
+  });
+
   group('review-notes.md', () {
     test('stops at the marker, so an internal checklist stays internal', () {
       writeValidTree();

@@ -348,6 +348,169 @@ Duration previewFrameOffset(String value, double frameRate) {
       Duration(microseconds: (frames * 1000000 / frameRate).round());
 }
 
+/// Where a locale's creative assets live: `listings/<locale>/creative_assets/`.
+///
+/// Beside `screenshots/` and `previews/` and shaped like them — one directory
+/// per slot, named so a typo fails a lookup rather than uploading somewhere
+/// unintended. See `docs/design/creative-assets.md`.
+const creativeAssetsDirectory = 'creative_assets';
+
+/// The two `AppAssetLibraryPlacementType` values these assets are placed as,
+/// spelled as Apple's API spells them (App Store Connect API 4.5.1).
+const productPageHeaderPlacement = 'PRODUCT_PAGE_HEADER_ASSET';
+const searchResultsPlacement = 'APP_STORE_SEARCH_RESULTS_ASSET';
+
+/// The one slot name that is this package's rather than Apple's.
+///
+/// **Apple has no placement called "universal".** It is a property of a
+/// *specification* — `universalAsset: true` in the asset library's reference
+/// data — meaning one file satisfies several placement types. The console
+/// presents it as a checkbox, *Use header asset in search results*, which has
+/// no API attribute at all; through the API the same result is one image with
+/// a placement per type. So the directory names the outcome, and the uploader
+/// turns it into those two placements.
+const universalCreativeSlot = 'UNIVERSAL';
+
+/// One size range an image slot accepts, with the containers it may be in.
+///
+/// An exact size is a range whose bounds are equal. [ratio] is checked only
+/// across a real range: Apple's exact sizes are not exact ratios — 5244x2950
+/// is not quite 16:9 and 3840x1646 is not quite 21:9 — so applying the nominal
+/// ratio to them would refuse the very sizes Apple publishes.
+class CreativeImageSize {
+  const CreativeImageSize({
+    required this.minWidth,
+    required this.minHeight,
+    required this.maxWidth,
+    required this.maxHeight,
+    required this.formats,
+    required this.description,
+    this.ratio,
+  });
+
+  const CreativeImageSize.exact(
+    int width,
+    int height, {
+    required Set<ImageFormat> formats,
+    required String description,
+  }) : this(
+         minWidth: width,
+         minHeight: height,
+         maxWidth: width,
+         maxHeight: height,
+         formats: formats,
+         description: description,
+       );
+
+  final int minWidth;
+  final int minHeight;
+  final int maxWidth;
+  final int maxHeight;
+
+  /// `(width, height)` in lowest terms, compared exactly — `(3, 2)`.
+  final (int, int)? ratio;
+
+  final Set<ImageFormat> formats;
+
+  /// How the error names this size, e.g. `5244x2950 PNG (universal, 16:9)`.
+  final String description;
+
+  bool fits(int width, int height) {
+    if (width < minWidth ||
+        width > maxWidth ||
+        height < minHeight ||
+        height > maxHeight) {
+      return false;
+    }
+    final ratio = this.ratio;
+    return ratio == null || width * ratio.$2 == height * ratio.$1;
+  }
+}
+
+/// The universal asset: one 16:9 PNG that serves as the header and the search
+/// results image at once. PNG only — the one size here JPEG is not offered for.
+const universalCreativeSize = CreativeImageSize.exact(
+  5244,
+  2950,
+  formats: {ImageFormat.png},
+  description: '5244x2950 PNG (universal, 16:9)',
+);
+
+/// What one `creative_assets/<slot>/` directory accepts and where it goes.
+///
+/// **Apple is the authority, not this table**, exactly as for
+/// [ScreenshotSpec]. Read off *Creative assets specifications* in App Store
+/// Connect Help in October 2026:
+/// https://developer.apple.com/help/app-store-connect/reference/app-information/creative-assets-specifications
+/// The asset library also serves the same facts machine-readably from
+/// `GET /v1/appAssetLibraryRefData`, which needs credentials — so they are
+/// written down here, where `verify` can use them with none.
+class CreativeAssetSpec {
+  const CreativeAssetSpec(this.label, this.placements, this.sizes);
+
+  /// How Apple names this slot in the console, for error messages.
+  final String label;
+
+  /// The `AppAssetLibraryPlacementType` values one file here is placed as.
+  final List<String> placements;
+
+  /// Any one of these is accepted.
+  final List<CreativeImageSize> sizes;
+
+  String get sizesDescription => sizes.map((s) => s.description).join(', or ');
+}
+
+/// Keyed by slot directory name — Apple's placement type, or
+/// [universalCreativeSlot].
+///
+/// **Images only.** Apple also takes a video in both placements — 21:9 for the
+/// header, 3:2 for search results, 5 to 30 seconds at 30 or 60 fps, `.mov`,
+/// `.m4v` or `.mp4` — and this package does not check or upload one yet. A
+/// video in a slot directory is refused rather than skipped, so the tree never
+/// carries a file that silently goes nowhere.
+const creativeAssetSpecs = <String, CreativeAssetSpec>{
+  universalCreativeSlot: CreativeAssetSpec(
+    'Universal creative asset (product page header and search results)',
+    [productPageHeaderPlacement, searchResultsPlacement],
+    [universalCreativeSize],
+  ),
+  productPageHeaderPlacement: CreativeAssetSpec(
+    'Product page header image',
+    [productPageHeaderPlacement],
+    [
+      CreativeImageSize.exact(
+        3840,
+        1646,
+        formats: {ImageFormat.png, ImageFormat.jpeg},
+        description: '3840x1646 PNG or JPEG (21:9)',
+      ),
+      universalCreativeSize,
+    ],
+  ),
+  searchResultsPlacement: CreativeAssetSpec(
+    'Search results image',
+    [searchResultsPlacement],
+    [
+      CreativeImageSize(
+        minWidth: 1920,
+        minHeight: 1280,
+        maxWidth: 3840,
+        maxHeight: 2560,
+        ratio: (3, 2),
+        formats: {ImageFormat.png, ImageFormat.jpeg},
+        description:
+            'exactly 3:2 from 1920x1280 to 3840x2560, PNG or JPEG — e.g. '
+            '1920x1280, 2880x1920 or 3840x2560',
+      ),
+      universalCreativeSize,
+    ],
+  ),
+};
+
+/// The extensions a creative-asset video would carry — refused for now, with
+/// a message saying so, rather than ignored.
+const creativeVideoExtensions = {'.mp4', '.mov', '.m4v'};
+
 /// One preview video and the poster frame it was told to use.
 ///
 /// `frameTimeCode` is null when the tree named none, and the null is carried
@@ -395,11 +558,23 @@ class LocaleMetadata {
   /// this whole model exists to remove.
   final Map<String, List<LocalPreview>> previews = {};
 
+  /// Creative-asset slot -> the one image for it: [universalCreativeSlot],
+  /// [productPageHeaderPlacement] or [searchResultsPlacement]. Only slots with
+  /// a directory present appear at all.
+  ///
+  /// Separate from [screenshots] for the reason [previews] is, and one more:
+  /// the bytes do not belong to the version. They go into the app's asset
+  /// library and are *placed* on the version's localization, so the uploader
+  /// needs to know which kind of thing it is holding before it knows where it
+  /// goes.
+  final Map<String, File> creativeAssets = {};
+
   bool get isEmpty =>
       appInfo.isEmpty &&
       version.isEmpty &&
       screenshots.isEmpty &&
-      previews.isEmpty;
+      previews.isEmpty &&
+      creativeAssets.isEmpty;
 }
 
 /// The two answers Apple accepts for "does this app contain, show or access
@@ -732,7 +907,147 @@ LocaleMetadata _loadLocale(Directory dir) {
     }
   }
 
+  final creative = Directory(
+    '${dir.path}${Platform.pathSeparator}$creativeAssetsDirectory',
+  );
+  if (creative.existsSync()) {
+    metadata.creativeAssets.addAll(_loadCreativeAssets(locale, creative));
+  }
+
   return metadata;
+}
+
+/// Loads and checks one locale's `creative_assets/` directory.
+///
+/// **Every check here is one Apple makes after the upload**, and for these
+/// assets the after is longer than for a screenshot: the file goes into the
+/// app's asset library, is matched against a specification during processing,
+/// and only then can be placed — so a wrong size is a reservation, a transfer
+/// and a processing wait that end in `FAILED`.
+Map<String, File> _loadCreativeAssets(String locale, Directory dir) {
+  final where = '$locale/$creativeAssetsDirectory';
+  final slotDirs = dir.listSync().whereType<Directory>().toList()
+    ..sort((a, b) => a.path.compareTo(b.path));
+  // **Empty is an error, as it is for a screenshot type.** A directory that
+  // exists says somebody meant to publish something here; publishing nothing
+  // from it would read as success.
+  if (slotDirs.isEmpty) {
+    throw MetadataException(
+      '$where holds no slot directories — put the image in '
+      '$where/$universalCreativeSlot/, $where/$productPageHeaderPlacement/ or '
+      '$where/$searchResultsPlacement/, or delete the directory',
+    );
+  }
+
+  final assets = <String, File>{};
+  for (final slotDir in slotDirs) {
+    final slot = _basename(slotDir.path);
+    final spec = creativeAssetSpecs[slot];
+    if (spec == null) {
+      throw MetadataException(
+        '$where/$slot is not a creative-asset slot this tool knows.\n'
+        '  Known names: ${creativeAssetSpecs.keys.join(", ")}\n'
+        '  $universalCreativeSlot is one 5244x2950 PNG used as both the header '
+        'and the search results image; the other two are Apple\'s placement '
+        'types.',
+      );
+    }
+    assets[slot] = _loadCreativeAsset('$where/$slot', slotDir, spec);
+  }
+
+  // **One file may not be told to go to the same placement twice.** Universal
+  // already fills both, so a dedicated header or search image beside it is two
+  // answers to one question, and which one won would depend on upload order.
+  if (assets.containsKey(universalCreativeSlot)) {
+    final also = assets.keys.where((s) => s != universalCreativeSlot).toList();
+    if (also.isNotEmpty) {
+      throw MetadataException(
+        '$where has $universalCreativeSlot/ and ${also.join(' and ')}/; the '
+        'universal image is already placed as both the header and the search '
+        'results image.\n'
+        '  Keep one: a universal image alone, or a dedicated '
+        '$productPageHeaderPlacement/ and $searchResultsPlacement/ — either of '
+        'which may itself be a 5244x2950 PNG.',
+      );
+    }
+  }
+  return assets;
+}
+
+File _loadCreativeAsset(String where, Directory dir, CreativeAssetSpec spec) {
+  final entries = dir.listSync().whereType<File>().toList()
+    ..sort((a, b) => a.path.compareTo(b.path));
+
+  final videos = entries.where(
+    (f) => creativeVideoExtensions.any(f.path.toLowerCase().endsWith),
+  );
+  if (videos.isNotEmpty) {
+    throw MetadataException(
+      '$where/${_basename(videos.first.path)} is a video; Apple takes one '
+      'here, and this tool does not check or upload creative-asset videos '
+      'yet.\n'
+      '  Move it out of the tree, or it would be skipped without a word.',
+    );
+  }
+
+  final images = entries.where((f) {
+    final name = f.path.toLowerCase();
+    return name.endsWith('.png') ||
+        name.endsWith('.jpg') ||
+        name.endsWith('.jpeg');
+  }).toList();
+  if (images.length != 1) {
+    throw MetadataException(
+      '$where holds ${images.length} image(s); a creative-asset slot takes '
+      'exactly one',
+    );
+  }
+
+  final file = images.single;
+  final name = '$where/${_basename(file.path)}';
+  final image = readImageInfo(file.readAsBytesSync());
+  if (image == null) {
+    throw MetadataException('$name is not a readable PNG or JPEG');
+  }
+
+  // **The extension has to agree with the bytes.** Apple's specifications
+  // list file extensions and MIME types side by side, and the universal size
+  // is PNG only — so a JPEG renamed `.png` would pass a check that read only
+  // one of the two, and be matched against the wrong specification by Apple.
+  final lower = file.path.toLowerCase();
+  final extensionSays = lower.endsWith('.png')
+      ? ImageFormat.png
+      : ImageFormat.jpeg;
+  if (extensionSays != image.format) {
+    throw MetadataException(
+      '$name is named as a ${extensionSays.name.toUpperCase()} and is a '
+      '${image.format.name.toUpperCase()}; rename it or re-export it, so the '
+      'extension and the contents agree',
+    );
+  }
+
+  final encoding = imageEncodingProblem(image, appStoreCreativeImageRules);
+  if (encoding != null) {
+    throw MetadataException('$name $encoding');
+  }
+
+  final fitting = spec.sizes.where((s) => s.fits(image.width, image.height));
+  if (fitting.isEmpty) {
+    throw MetadataException(
+      '$name is ${image.width}x${image.height}; ${spec.label} takes '
+      '${spec.sizesDescription}.\n'
+      '  Apple publishes no safe area for these, and a landscape slot does not '
+      'take the transpose.',
+    );
+  }
+  if (!fitting.any((s) => s.formats.contains(image.format))) {
+    throw MetadataException(
+      '$name is a ${image.width}x${image.height} '
+      '${image.format.name.toUpperCase()}; at that size Apple takes '
+      '${fitting.first.description} — the universal size is PNG only',
+    );
+  }
+  return file;
 }
 
 List<File> _loadScreenshots(

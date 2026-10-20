@@ -195,6 +195,7 @@ class StoreImageRules {
     required this.alphaRule,
     required this.depthRule,
     this.allowsAlpha = false,
+    this.checksDepth = true,
   });
 
   /// Who does the refusing, named in every message. "Refused" on its own sends
@@ -213,6 +214,17 @@ class StoreImageRules {
   /// True only for Play's app icon, the one slot in either store that *asks*
   /// for an alpha channel.
   final bool allowsAlpha;
+
+  /// Whether a PNG deeper than 8 bits per channel is refused at all.
+  ///
+  /// False only for Apple's creative assets, where nothing stands under the
+  /// rule: Apple publishes no depth for them, and the 16-bit refusal
+  /// [appStoreImageRules] rests on was observed on a *screenshot* set, through
+  /// an ingestion pipeline the App Asset Library does not share. Carrying it
+  /// over would be the rule-with-no-failure-under-it that
+  /// `docs/design/store-image-rules.md` declines to enforce. [depthRule] still
+  /// says why, so the decision is readable where the rules are.
+  final bool checksDepth;
 }
 
 /// Apple, for every screenshot.
@@ -234,6 +246,22 @@ const appStoreImageRules = StoreImageRules(
   depthRule:
       'Apple publishes no bit depth for screenshots, and refuses a 16-bit PNG '
       'at ingestion — so this one is this tool\'s, from a set Apple refused',
+);
+
+/// Apple, for the creative assets — the product page header and the search
+/// results image, uploaded through the App Asset Library.
+///
+/// **The alpha rule is Apple's own, and the same sentence** the screenshot
+/// specifications use, read on *Creative assets specifications* in App Store
+/// Connect Help in October 2026. The depth rule is deliberately absent — see
+/// [StoreImageRules.checksDepth] and `docs/design/creative-assets.md`.
+const appStoreCreativeImageRules = StoreImageRules(
+  store: 'Apple',
+  alphaRule: '"Images can\'t include alpha channels or transparencies"',
+  depthRule:
+      'Apple publishes no bit depth for creative assets, and none has been '
+      'seen refused, so depth is not checked here',
+  checksDepth: false,
 );
 
 /// Play, for screenshots, the feature graphic and the TV banner — every slot
@@ -297,7 +325,9 @@ String? imageEncodingProblem(ImageInfo image, StoreImageRules rules) {
   // everything else on libjpeg's 8-bit API do not call. So it is a rule with
   // no observed failure and no working remedy. Measured and argued in
   // docs/design/store-image-rules.md.
-  if (image.format == ImageFormat.png && image.bitDepth > 8) {
+  if (rules.checksDepth &&
+      image.format == ImageFormat.png &&
+      image.bitDepth > 8) {
     return 'is ${image.bitDepth} bits per channel; ${rules.store} takes 8 — '
         '${rules.depthRule}.\n'
         '  Reduce it, and change nothing else about the image:\n'

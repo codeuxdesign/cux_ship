@@ -618,6 +618,94 @@ void main() {
     });
   });
 
+  group('appstore creative-assets refuses offline', () {
+    // In a subprocess because both refusals go through `fail`, which exits —
+    // and both have to come before a credential, so the environment here has
+    // none and a refusal for the wrong reason would say so.
+    void writeTree(Directory repo, {required bool creative}) {
+      File('${repo.path}/store/appstore/listings/en-US/description.txt')
+        ..parent.createSync(recursive: true)
+        ..writeAsStringSync('A description.');
+      if (creative) {
+        List<int> be32(int v) => [
+          v >> 24 & 255,
+          v >> 16 & 255,
+          v >> 8 & 255,
+          v & 255,
+        ];
+        File(
+            '${repo.path}/store/appstore/listings/en-US/creative_assets/'
+            'UNIVERSAL/u.png',
+          )
+          ..parent.createSync(recursive: true)
+          ..writeAsBytesSync([
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, //
+            ...be32(13), ...'IHDR'.codeUnits, ...be32(5244), ...be32(2950),
+            8, 2, 0, 0, 0, ...be32(0),
+            ...be32(0), ...'IEND'.codeUnits, ...be32(0),
+          ]);
+      }
+    }
+
+    ProcessResult creativeAssets(Directory repo, List<String> extra) =>
+        Process.runSync(
+          Platform.resolvedExecutable,
+          [
+            '--enable-asserts',
+            cliSnapshot,
+            'appstore',
+            'creative-assets',
+            '--bundle-id',
+            'design.codeux.consumer',
+            '--metadata',
+            'store/appstore',
+            ...extra,
+          ],
+          workingDirectory: repo.path,
+          environment: {
+            'APPLE_API_KEY_ID': '',
+            'APPLE_API_PRIVATE_KEY_PATH': '',
+          },
+        );
+
+    test('a Mac app, which Apple shows no creative assets for', () {
+      writeTree(repo, creative: true);
+      final result = creativeAssets(repo, ['--platform', 'macos']);
+      expect('${result.stderr}', contains('iOS and iPadOS apps only'));
+      expect('${result.stderr}', isNot(contains('credentials')));
+      expect(result.exitCode, 1);
+    });
+
+    test('not a listing the repository requires more of', () {
+      // The tree has a description and no screenshots, which the listing
+      // requirements refuse for `upload`. This command publishes none of the
+      // listing, so it gets as far as the credentials it was not given.
+      writeTree(repo, creative: true);
+      // A locale the tree does not carry: what `upload` refuses, and what
+      // this command — publishing nothing in de-DE — must not.
+      final config = File('${repo.path}/.cux-ship.yaml');
+      config.writeAsStringSync(
+        config.readAsStringSync().replaceFirst(
+          'locales: [en-US]',
+          'locales: [en-US, de-DE]',
+        ),
+      );
+      // --dry-run so the confirmation prompt, which refuses an unattended
+      // run, does not answer first.
+      final result = creativeAssets(repo, const ['--dry-run']);
+      expect('${result.stderr}', isNot(contains('does not satisfy')));
+      expect('${result.stderr}', contains('no App Store Connect credentials'));
+    });
+
+    test('a tree with no creative_assets/, which would publish nothing', () {
+      writeTree(repo, creative: false);
+      final result = creativeAssets(repo, const []);
+      expect('${result.stderr}', contains('carries no listings/<locale>'));
+      expect('${result.stderr}', isNot(contains('credentials')));
+      expect(result.exitCode, 1);
+    });
+  });
+
   test('a repository with no config still starts every command', () {
     // The other half of the 3.2.0 shape: the crash fired only when a block was
     // declared, so a fixture without one proved nothing. Both are asserted.

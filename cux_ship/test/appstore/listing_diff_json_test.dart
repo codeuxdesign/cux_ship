@@ -247,6 +247,38 @@ void main() {
     });
   });
 
+  test('creative assets in the tree are named as not published here', () async {
+    // The listing publish never touches them — they go to the asset library
+    // through `appstore creative-assets` — and passing over them in silence
+    // would read as having published them. On stderr, so the document survives.
+    List<int> be32(int v) => [
+      v >> 24 & 255,
+      v >> 16 & 255,
+      v >> 8 & 255,
+      v & 255,
+    ];
+    final png = File(
+      '${_root.path}/store/appstore/listings/en-US/creative_assets/UNIVERSAL/u.png',
+    )..parent.createSync(recursive: true);
+    png.writeAsBytesSync([
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, //
+      ...be32(13), ...'IHDR'.codeUnits, ...be32(5244), ...be32(2950),
+      8, 2, 0, 0, 0, ...be32(0),
+      ...be32(0), ...'IEND'.codeUnits, ...be32(0),
+    ]);
+    final client = _FakeClient(
+      localizations: [
+        _localization('en-US', {'description': 'A simulation, not a game.'}),
+      ],
+    );
+
+    final said = await _upload(client);
+
+    expect(said.err, contains('creative assets for en-US are in the tree'));
+    expect(said.err, contains('appstore creative-assets'));
+    expect(_document(said)['matches'], isTrue);
+  });
+
   test('a tree that already matches says so, and writes nothing', () async {
     final client = _FakeClient(
       localizations: [

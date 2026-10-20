@@ -4,7 +4,7 @@ description: >-
   publish the store listing, and promote a build a store already holds.
 repository: https://github.com/codeuxdesign/cux_ship
 issue_tracker: https://github.com/codeuxdesign/cux_ship/issues
-version: 4.5.0-dev.7
+version: 4.5.0-dev.8
 
 topics:
   - app-store
@@ -82,7 +82,7 @@ dependencies:
   # release commit. It is written here because red-on-purpose and red-by-
   # accident look identical to whoever sees the board next, and this is the
   # line they will be sent to.
-  cux_ship_verify: ^1.11.0-dev.3
+  cux_ship_verify: ^1.11.0-dev.4
   # ES256 over the .p8 private key. App Store Connect accepts nothing else, and
   # package:crypto has no ECDSA, so this or pointycastle-by-hand were the
   # options.
