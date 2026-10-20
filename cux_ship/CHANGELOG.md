@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 4.5.0-dev.8
 
 **Needs `cux_ship_verify` 1.11.0-dev.4**, for `LocaleMetadata.creativeAssets`,
 `creativeAssetSpecs` and the placement names.
