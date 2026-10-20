@@ -57,7 +57,7 @@ What the implementation rests on, claim by claim:
 | Placement: `placementType`, `placementGroup`, `image` and `appStoreVersionLocalization` | **Confirmed**: [PL] — *"A placement request combines four things"*: the type, the group, the asset and the target. [S] has the group as nullable and outside every `anyOf`, and the first draft of this package omitted it on that reading; the articles show it in every example and document `409 ENTITY_ERROR.ATTRIBUTE.INVALID`, *"The requested 'placementType' and 'placementGroup' combination is not supported for this parent"* |
 | Placement groups come from `GET /v1/appAssetLibraryRefData`, never a constant | **Confirmed**: [PL] — *"Read the valid identifiers from the reference data; they aren't an enumeration"*; [SPEC] and [MIG] say not to hard-code them. Read with a plain `GET` and no `limit`: it is the one collection endpoint in [S] that declares no `limit` parameter, and the client's paginating read sends one to everything |
 | An image goes in every group whose `placementTypes[].specMappings` lists its `specId`, on an iPhone, iPad or `ANY` platform | **The mapping is confirmed**, the selection inferred. [SPEC] walks the same arrays (*"Map the group to specifications"*), and [U] says Apple reports the matched spec as `specId`. *Every* group rather than one follows from *"1 product page header asset per group"* ([PL], [SPEC]): an iPhone group and an iPad group are two placements. The platform filter is this package's — creative assets are iOS and iPadOS only ([H-MANAGE]). The first step of [SPEC]'s chain, the feature's `placementPolicies`, is not walked; see the open section below |
-| A placement of the type in a group the image's specification is not mapped to is removed | **This package's rule**, from *present means owned*: the tree names one image per slot, and a changed image whose specification reaches fewer groups than the old one's would otherwise leave the old header on the other device with nothing said |
+| A placement of the type in an iPhone or iPad group the image's specification is not mapped to is removed; one in any other group is left and named | **This package's rule**, from *present means owned*: the tree names one image per slot, and a changed image whose specification reaches fewer groups than the old one's would otherwise leave the old header on the other device with nothing said. Limited to the groups this package places in, because deleting where the platform filter forbids placing would remove what no run could put back |
 | `PRODUCT_PAGE_HEADER_ASSET`, `APP_STORE_SEARCH_RESULTS_ASSET` | **Confirmed**: [S] `AppAssetLibraryPlacementType` |
 | Universal = one image, placed as both types | **Inferred** from [SPEC]: a universal spec *"satisfies several placement types at once"* by *"creating a placement per type"*. No article shows the header-and-search pair specifically |
 | Placements cannot be edited; delete and recreate | **Confirmed**: [S] has no PATCH; [PL] *"You can't change a placement after you create it"* |
@@ -85,10 +85,12 @@ output says where to look:
 
 **A placement is deleted before its replacement is made**, because a version
 takes one header per group. A run that dies between the two leaves that group
-empty until the next run, which recreates it. A placement of the type in a
-group the new image's specification is not mapped to is deleted first of all,
-and not recreated: the tree names one image per slot, so that group goes empty
-rather than keeping the old image. **A `FAILED` copy is deleted
+empty until the next run, which recreates it. A placement of the type in an
+iPhone or iPad group the new image's specification is not mapped to is
+deleted first of all, and not recreated: the tree names one image per slot, so
+that group goes empty rather than keeping the old image. A placement in any
+other group — a platform this package does not place on, or one the reference
+data gives no platform for — is left as it is, and the run says so. **A `FAILED` copy is deleted
 before it is uploaded again**, and Apple refuses that delete with `409
 STATE_ERROR.ASSET_HAS_PLACEMENTS` if somebody placed the copy in the console
 while it was processing ([IMG]). The run then stops with Apple's message, and

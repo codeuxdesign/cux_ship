@@ -250,7 +250,28 @@ List<String> placementGroupsFor(
   required String placementType,
   required String specId,
   Set<String> platforms = iosPlacementPlatforms,
-}) {
+}) => _groups(
+  referenceData,
+  placementType,
+  platforms,
+  (specs) => specs.contains(specId),
+);
+
+/// Every group [placementType] has on [platforms], whatever specification it
+/// takes — the groups this package could ever place in, and so the only ones
+/// [CreativeAssetPublisher.removeUnmappedPlacements] may empty.
+List<String> ownedPlacementGroups(
+  Map<String, dynamic> referenceData, {
+  required String placementType,
+  Set<String> platforms = iosPlacementPlatforms,
+}) => _groups(referenceData, placementType, platforms, (_) => true);
+
+List<String> _groups(
+  Map<String, dynamic> referenceData,
+  String placementType,
+  Set<String> platforms,
+  bool Function(List<Object?> specs) takes,
+) {
   final platformOf = <String, String>{
     for (final group in _maps(referenceData['placementProfileGroups']))
       if (group case {
@@ -267,8 +288,7 @@ List<String> placementGroupsFor(
             'placementGroupId': final String group,
             'specs': final List<Object?> specs,
           })
-            if (specs.contains(specId) && platforms.contains(platformOf[group]))
-              group,
+            if (takes(specs) && platforms.contains(platformOf[group])) group,
   ];
 }
 
@@ -644,13 +664,19 @@ class CreativeAssetPublisher {
   /// outside the mapping is therefore stale whichever image it joins, because
   /// the mapping is what decides where this image can be at all.
   ///
-  /// A placement whose response carries no `placementGroup` is left alone and
-  /// named, because deleting on a group nobody can read would be a guess.
+  /// **Only in [owned] — the type's iPhone and iPad groups.** A placement in
+  /// any other group is left alone and named, like one with no
+  /// `placementGroup` at all: this package refuses to place on a surface
+  /// [placementGroupsFor] excludes, so deleting there would remove what it
+  /// could never put back, on the same guess it declines to place on. The
+  /// tree owns the type on the surfaces this tool publishes to, not every
+  /// surface Apple has.
   Future<Map<String, String>> removeUnmappedPlacements({
     required String locale,
     required String localizationId,
     required String placementType,
     required List<String> groups,
+    required List<String> owned,
   }) async {
     final all = await client.getAll(
       '/v1/appStoreVersionLocalizations/$localizationId/placements',
@@ -676,11 +702,19 @@ class CreativeAssetPublisher {
       if (groups.contains(group)) {
         continue;
       }
+      if (!owned.contains(group)) {
+        say(
+          '    $locale $placementType: placement $id is in $group, which is '
+          'not an iPhone or iPad group, so it is left as it is',
+        );
+        continue;
+      }
       await writer.delete(
         '/v1/appAssetLibraryPlacements/$id',
         describe:
             'removed the earlier $locale $placementType placement in $group, '
-            'a group the image\'s specification is not mapped to',
+            'an iPhone or iPad group the image\'s specification is not mapped '
+            'to',
       );
       removed['$placementType $group'] = writer.dryRun
           ? 'would remove'

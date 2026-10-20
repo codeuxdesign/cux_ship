@@ -827,6 +827,43 @@ void main() {
       expect(client.placements.map((p) => p.image).toSet(), {'image-5'});
     });
 
+    test('a group this tool will not place in is never emptied', () async {
+      // The reference data maps the universal spec to a Vision Pro group and
+      // to a group with no platform, and the platform filter keeps the tool
+      // from placing in either. Deleting a console-made placement there would
+      // remove what no run could put back, on the guess placing declines.
+      _write('listings/en-US/creative_assets/UNIVERSAL/header.png', _universal);
+      final client = _FakeClient()..seedImage(_universal, name: 'header.png');
+      const loc = 'loc-en-US';
+      client.placements.addAll([
+        for (final group in ['VISION_G', 'NOWHERE_G'])
+          (
+            id: 'console-$group',
+            type: 'PRODUCT_PAGE_HEADER_ASSET',
+            group: group,
+            loc: loc,
+            image: 'image-1',
+          ),
+      ]);
+
+      final said = await _run(client, ['--version-name', '1.2.0']);
+
+      expect(exitCode, 0, reason: said.err);
+      expect(
+        client.placements.map((p) => p.id),
+        containsAll(['console-VISION_G', 'console-NOWHERE_G']),
+      );
+      expect(
+        client.writes.where((c) => c.method == 'DELETE'),
+        isEmpty,
+        reason: 'nothing the tree owns was there to replace',
+      );
+      expect(
+        said.out,
+        contains('is in VISION_G, which is not an iPhone or iPad group'),
+      );
+    });
+
     test('a group the new image does not reach loses the old one', () async {
       // The slot the tree owns is the type. A universal header sat in the
       // iPhone and the iPad group; the dedicated header that replaces it is

@@ -3630,6 +3630,7 @@ Future<void> _publishCreativeAssets(
           localizationId: localizationIds[plan.outcome.locale]!,
           placementType: plan.type,
           groups: plan.groups,
+          owned: ownedPlacementGroups(referenceData, placementType: plan.type),
         ),
       );
       for (final group in plan.groups) {
