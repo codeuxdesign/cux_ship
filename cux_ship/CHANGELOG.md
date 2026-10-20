@@ -2,9 +2,8 @@
 
 ## Unreleased
 
-**Needs the next `cux_ship_verify`**, for `LocaleMetadata.creativeAssets`,
-`creativeAssetSpecs` and the placement names. The constraint moves on the
-release branch, per docs/RELEASING.md.
+**Needs `cux_ship_verify` 1.11.0-dev.4**, for `LocaleMetadata.creativeAssets`,
+`creativeAssetSpecs` and the placement names.
 
 ### Added
 

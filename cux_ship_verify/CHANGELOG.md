@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.11.0-dev.4
 
 **App Store creative assets in the metadata tree.** The product page header
 and the search results image App Store Connect started accepting on 5 October
