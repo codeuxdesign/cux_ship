@@ -187,12 +187,12 @@ LibraryMatch matchInLibrary(List<LibraryImage> library, String checksum) {
   ]);
 }
 
-/// What one placement type on one localization needs.
+/// What one placement type in one placement group on one localization needs.
 ///
 /// [keep] is the placement already joining the wanted image, if any; [delete]
-/// is every other placement of the type, which has to go first because a
-/// version takes one header per group. [create] is true when nothing joins
-/// the wanted image yet.
+/// is every other placement of the type in the group, which has to go first
+/// because a version takes one header per group. [create] is true when nothing
+/// joins the wanted image yet.
 typedef PlacementPlan = ({String? keep, List<String> delete, bool create});
 
 /// Plans one placement type, from two server-side filtered listings: every
@@ -218,6 +218,62 @@ PlacementPlan planPlacement({
     create: keep == null,
   );
 }
+
+/// The `AppAssetLibraryPlacementPlatform` values an iOS app's version is shown
+/// on. Creative assets are iOS and iPadOS only (App Store Connect Help,
+/// *Manage your App Store assets*).
+const iosPlacementPlatforms = {'IPHONE_APP_STORE', 'IPAD_APP_STORE', 'ANY'};
+
+/// The placement groups [placementType] takes a file of [specId] in, among
+/// those on [platforms], read from the asset library's reference data.
+///
+/// **Apple's documented route, followed rather than shortcut.** A placement
+/// names a placement group, the group identifiers come from the reference data
+/// and "aren't an enumeration", and Apple asks callers not to hard-code them
+/// (*Placing assets on your App Store surfaces*, *Discovering asset
+/// specifications*). Apple matches an uploaded file to a specification during
+/// processing and reports it as `specId`; `placementTypes[].specMappings` maps
+/// each group to the specifications it accepts. So the groups an image belongs
+/// in are the ones whose mapping lists its `specId`.
+///
+/// **Every such group, not the first.** "1 product page header asset per
+/// group" means a header is placed once per group — an iPhone group and an
+/// iPad group are two placements of one image, and placing only one would
+/// leave the other device without a header with nothing said.
+///
+/// A group whose platform the reference data does not give is left out, on
+/// the same reasoning as [platforms]: placing on a surface nobody can name is
+/// a guess, and Apple's guidance for an unrecognized identifier is to refresh,
+/// not to use it.
+List<String> placementGroupsFor(
+  Map<String, dynamic> referenceData, {
+  required String placementType,
+  required String specId,
+  Set<String> platforms = iosPlacementPlatforms,
+}) {
+  final platformOf = <String, String>{
+    for (final group in _maps(referenceData['placementProfileGroups']))
+      if (group case {
+        'placementProfileGroupId': final String id,
+        'platform': final String platform,
+      })
+        id: platform,
+  };
+  return [
+    for (final type in _maps(referenceData['placementTypes']))
+      if (type['placementTypeId'] == placementType)
+        for (final mapping in _maps(type['specMappings']))
+          if (mapping case {
+            'placementGroupId': final String group,
+            'specs': final List<Object?> specs,
+          })
+            if (specs.contains(specId) && platforms.contains(platformOf[group]))
+              group,
+  ];
+}
+
+Iterable<Map<String, dynamic>> _maps(Object? list) =>
+    list is List ? list.whereType<Map<String, dynamic>>() : const [];
 
 /// Raised when the run refuses to go on, for a reason that is this package's
 /// rather than Apple's.
@@ -251,7 +307,9 @@ class CreativeAssetOutcome {
   /// `uploaded`, `unchanged`, or `would upload`.
   String library = '';
 
-  /// Placement type -> `placed`, `unchanged`, `would place`, or `not placed`.
+  /// `<placement type> <group>` -> `placed`, `unchanged` or `would place`; or
+  /// a bare placement type -> `not placed` / `would place` when no group was
+  /// resolved, because nothing was placed or the image is not processed yet.
   final Map<String, String> placements = {};
 
   /// The image's state as last read, after any submission.
@@ -277,6 +335,11 @@ class CreativeAssetPublisher {
   final void Function(String line) say;
   final Duration timeout;
   final Duration poll;
+
+  /// The `reviewSubmissions` container [submitForReview] created, if it
+  /// created one — so a run that fails after making it can still say so, the
+  /// way [AppStore.createdReviewSubmission] does for a version.
+  String? createdReviewSubmission;
 
   /// The app's one asset library.
   Future<String> assetLibraryId(App app) async {
@@ -519,44 +582,62 @@ class CreativeAssetPublisher {
     return data is Map<String, dynamic> ? readLibraryImage(data) : null;
   }
 
-  /// Joins [imageId] to [localizationId] as [placementType], replacing any
-  /// other image placed there.
+  /// The attributes of the asset library's reference data: the catalog of
+  /// specifications, placement types and placement groups.
   ///
-  /// [imageId] is null on a dry run that would have uploaded the image, so
-  /// nothing can already join it and the plan is the full replacement.
+  /// Read whole rather than through `filter[placementTypes]`, because how that
+  /// filter narrows the *other* arrays — the placement groups the mapping
+  /// names — is not documented, and the groups are what is needed.
+  Future<Map<String, dynamic>> referenceData() async {
+    final collection = await client.getAll('/v1/appAssetLibraryRefData');
+    final attributes = collection.isEmpty
+        ? null
+        : collection.first['attributes'];
+    if (attributes is! Map<String, dynamic>) {
+      throw AscApiException(404, [
+        'App Store Connect returned no asset library reference data, which '
+            'is where placement groups come from.',
+      ], request: 'GET /v1/appAssetLibraryRefData');
+    }
+    return attributes;
+  }
+
+  /// Joins [imageId] to [localizationId] as [placementType] in
+  /// [placementGroup], replacing any other image placed there.
   Future<String> place({
     required String locale,
     required String localizationId,
     required String placementType,
-    required String? imageId,
+    required String placementGroup,
+    required String imageId,
   }) async {
     final path = '/v1/appStoreVersionLocalizations/$localizationId/placements';
-    final existing = await client.getAll(
+    final slot = {
+      'filter[placementType]': placementType,
+      'filter[placementGroup]': placementGroup,
+    };
+    final existing = await client.getAll(path, query: slot);
+    final joining = await client.getAll(
       path,
-      query: {'filter[placementType]': placementType},
+      query: {...slot, 'filter[image]': imageId},
     );
-    final joining = imageId == null
-        ? const <Map<String, dynamic>>[]
-        : await client.getAll(
-            path,
-            query: {
-              'filter[placementType]': placementType,
-              'filter[image]': imageId,
-            },
-          );
     final plan = planPlacement(
       existing: [for (final p in existing) ?p['id'] as String?],
       joining: [for (final p in joining) ?p['id'] as String?],
     );
 
+    final where = '$locale $placementType $placementGroup';
     if (plan.keep != null && plan.delete.isEmpty) {
-      say('    $locale $placementType: already placed, unchanged');
+      say('    $where: already placed, unchanged');
       return 'unchanged';
     }
+    // **Deleted before the new one is made**, because a version takes one
+    // header per group and a second would be refused. A run that dies between
+    // the two leaves the slot empty until the next run, which recreates it.
     for (final id in plan.delete) {
       await writer.delete(
         '/v1/appAssetLibraryPlacements/$id',
-        describe: 'removed the earlier $locale $placementType placement',
+        describe: 'removed the earlier $where placement',
       );
     }
     if (!plan.create) {
@@ -565,19 +646,19 @@ class CreativeAssetPublisher {
     final created = await writer.post('/v1/appAssetLibraryPlacements', {
       'data': {
         'type': 'appAssetLibraryPlacements',
-        'attributes': {'placementType': placementType},
+        'attributes': {
+          'placementType': placementType,
+          'placementGroup': placementGroup,
+        },
         'relationships': {
-          'image': relation(
-            'appAssetLibraryImages',
-            imageId ?? '(not yet uploaded)',
-          ),
+          'image': relation('appAssetLibraryImages', imageId),
           'appStoreVersionLocalization': relation(
             'appStoreVersionLocalizations',
             localizationId,
           ),
         },
       },
-    }, describe: 'placed as the $locale $placementType');
+    }, describe: 'placed as the $where');
     return created == null ? 'would place' : 'placed';
   }
 
@@ -665,6 +746,7 @@ class CreativeAssetPublisher {
       submissionId = data is Map<String, dynamic>
           ? data['id'] as String?
           : null;
+      createdReviewSubmission = submissionId;
     }
 
     if (submissionId == null) {

@@ -1809,6 +1809,19 @@ Future<void> runAsc(
     }
   }
 
+  // **iOS and iPadOS only**, per App Store Connect Help ("available for iOS
+  // and iPadOS apps and games running iOS 27 or iPadOS 27 or later"). Asked
+  // before the tree is read, because it is a fact about the arguments: the
+  // upload is app-wide and would succeed, and the placement on a Mac version
+  // is what would fail, after the bytes had gone up.
+  if (cmd == AscCommand.creativeAssets && platform != AscPlatform.ios) {
+    fail(
+      'creative assets are for iOS and iPadOS apps only — Apple shows them on '
+      'iOS 27 and iPadOS 27 — so there is nothing to publish for '
+      '--platform ${platform.name}',
+    );
+  }
+
   final betaGroup = opt('beta-group');
   // A promotion to a group publishes no listing — which is `--beta-group`'s
   // own help text, and until here it was false: promote resolved the inferred
@@ -2117,7 +2130,12 @@ Future<void> runAsc(
       fail(listingProblem);
     }
 
-    final requirements = defaults.listingRequirements;
+    // Not for `creative-assets`, which publishes none of the listing these
+    // requirements describe: a repository missing a declared screenshot type
+    // has a listing to fix, not a header that cannot go up.
+    final requirements = cmd == AscCommand.creativeAssets
+        ? null
+        : defaults.listingRequirements;
     if (requirements != null) {
       final problems = checkAppStoreTree(
         metadataPath,
@@ -3483,8 +3501,11 @@ Future<void> _publishCreativeAssets(
     final state = attributes is Map<String, dynamic>
         ? attributes['appStoreState'] as String?
         : null;
-    // Apple answers a placement on a submitted or approved parent with
-    // `409 STATE_ERROR.INVALID_STATE`, after the uploads; asked here instead.
+    // Apple answers a placement on an approved parent with `409
+    // STATE_ERROR.INVALID_STATE`, after the uploads; asked here instead. Its
+    // articles say placements are made "while the parent surface is
+    // editable", so the other non-editable states are refused on that
+    // sentence rather than on an observed 409.
     if (state != null && !editableVersionStates.contains(state)) {
       throw CreativeAssetsRefused(
         'version $versionName is $state, and Apple accepts a placement only '
@@ -3517,6 +3538,13 @@ Future<void> _publishCreativeAssets(
   say('==> asset library $libraryId: ${outcomes.length} creative asset(s)');
   await publisher.ensureInLibrary(libraryId, outcomes);
 
+  Future<Map<String, LibraryImage>> readStates() async => {
+    for (final id in {...outcomes.map((o) => o.imageId).nonNulls})
+      if (await publisher.readImage(id) case final LibraryImage image)
+        id: image,
+  };
+  var images = await readStates();
+
   if (localizationIds == null) {
     for (final o in outcomes) {
       for (final type in creativeAssetSpecs[o.slot]!.placements) {
@@ -3528,36 +3556,70 @@ Future<void> _publishCreativeAssets(
       'editable one',
     );
   } else {
-    say('==> placing on $versionName');
+    // **Every group is resolved before the first placement is written**, so
+    // an image whose specification no group takes refuses the run without
+    // having half-replaced the version's header.
+    final referenceData = await publisher.referenceData();
+    final plans =
+        <({CreativeAssetOutcome outcome, String type, List<String> groups})>[];
     for (final o in outcomes) {
+      final specId = images[o.imageId]?.specId;
       for (final type in creativeAssetSpecs[o.slot]!.placements) {
-        o.placements[type] = await publisher.place(
-          locale: o.locale,
-          localizationId: localizationIds[o.locale]!,
+        if (o.imageId == null || specId == null) {
+          // A dry run's would-be upload, which Apple has not matched to a
+          // specification yet — and the specification is what picks groups.
+          o.placements[type] = 'would place';
+          say(
+            '    would place ${o.locale} ${o.fileName} as $type, in the groups '
+            'that take the specification Apple matches it to',
+          );
+          continue;
+        }
+        final groups = placementGroupsFor(
+          referenceData,
           placementType: type,
-          imageId: o.imageId,
+          specId: specId,
+        );
+        if (groups.isEmpty) {
+          throw CreativeAssetsRefused(
+            '${o.locale} ${o.fileName}: Apple matched it to specification '
+            '$specId, and the asset library reference data maps no iPhone or '
+            'iPad placement group to it for $type — so there is nowhere to '
+            'place it. Nothing has been placed on $versionName.',
+          );
+        }
+        plans.add((outcome: o, type: type, groups: groups));
+      }
+    }
+    say('==> placing on $versionName');
+    for (final plan in plans) {
+      for (final group in plan.groups) {
+        plan.outcome.placements['${plan.type} $group'] = await publisher.place(
+          locale: plan.outcome.locale,
+          localizationId: localizationIds[plan.outcome.locale]!,
+          placementType: plan.type,
+          placementGroup: group,
+          imageId: plan.outcome.imageId!,
         );
       }
     }
   }
 
-  Future<Map<String, LibraryImage>> readStates() async => {
-    for (final id in {...outcomes.map((o) => o.imageId).nonNulls})
-      if (await publisher.readImage(id) case final LibraryImage image)
-        id: image,
-  };
-
-  var images = await readStates();
   if (submitForReview) {
-    await publisher.submitForReview(
-      app,
-      images.values.toList(),
-      // Distinct bytes, since one upload serves every locale carrying them.
-      awaitingUpload: {
-        for (final o in outcomes)
-          if (o.imageId == null) o.checksum,
-      }.length,
-    );
+    try {
+      await publisher.submitForReview(
+        app,
+        images.values.toList(),
+        // Distinct bytes, since one upload serves every locale carrying them.
+        awaitingUpload: {
+          for (final o in outcomes)
+            if (o.imageId == null) o.checksum,
+        }.length,
+      );
+    } finally {
+      // So a run that fails after making a container still names it.
+      store.createdReviewSubmission ??= publisher.createdReviewSubmission;
+    }
     if (!store.writer.dryRun) {
       images = await readStates();
     }

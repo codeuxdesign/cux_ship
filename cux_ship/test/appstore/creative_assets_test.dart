@@ -53,6 +53,8 @@ class _FakeClient implements AscClient {
     this.processedState = 'PREPARE_FOR_SUBMISSION',
     this.stateDetails = const [],
     this.storedReferenceNameLength,
+    this.processedSpecId = 'spec-universal',
+    this.refuseSubmissionItems = false,
   });
 
   final String versionState;
@@ -67,9 +69,66 @@ class _FakeClient implements AscClient {
   /// publish, which would cut the checksum off the end.
   final int? storedReferenceNameLength;
 
+  /// The specification Apple matches a committed image to — what picks the
+  /// placement groups it goes in.
+  final String processedSpecId;
+
+  /// Fails adding an item to a submission — the shape of a refusal that
+  /// arrives after the container has been made, and only then.
+  final bool refuseSubmissionItems;
+
+  /// The reference data's two relevant arrays, shaped as Apple documents
+  /// them. The header takes the universal spec in an iPhone and an iPad
+  /// group; search results in the iPhone group alone, so the two types
+  /// resolve differently. A Vision Pro group and a group with no platform
+  /// are there so that a filter dropping either would show.
+  static const referenceData = {
+    'placementTypes': [
+      {
+        'placementTypeId': 'PRODUCT_PAGE_HEADER_ASSET',
+        'specMappings': [
+          {
+            'placementGroupId': 'IPHONE_G',
+            'specs': ['spec-universal', 'spec-header'],
+          },
+          {
+            'placementGroupId': 'IPAD_G',
+            'specs': ['spec-universal', 'spec-header'],
+          },
+          {
+            'placementGroupId': 'VISION_G',
+            'specs': ['spec-universal', 'spec-vision'],
+          },
+          {
+            'placementGroupId': 'NOWHERE_G',
+            'specs': ['spec-universal'],
+          },
+        ],
+      },
+      {
+        'placementTypeId': 'APP_STORE_SEARCH_RESULTS_ASSET',
+        'specMappings': [
+          {
+            'placementGroupId': 'IPHONE_G',
+            'specs': ['spec-universal', 'spec-search'],
+          },
+        ],
+      },
+    ],
+    'placementProfileGroups': [
+      {'placementProfileGroupId': 'IPHONE_G', 'platform': 'IPHONE_APP_STORE'},
+      {'placementProfileGroupId': 'IPAD_G', 'platform': 'IPAD_APP_STORE'},
+      {
+        'placementProfileGroupId': 'VISION_G',
+        'platform': 'VISION_PRO_APP_STORE',
+      },
+    ],
+  };
+
   final calls = <_Call>[];
   final images = <Map<String, dynamic>>[];
-  final placements = <({String id, String type, String loc, String image})>[];
+  final placements =
+      <({String id, String type, String group, String loc, String image})>[];
   final submissions =
       <({String id, String state, String platform, List<String> items})>[];
   final uploadedBytes = <int>[];
@@ -94,12 +153,14 @@ class _FakeClient implements AscClient {
         'referenceName':
             referenceName ?? creativeReferenceName(name, _md5(bytes)),
         'state': state,
+        'specId': 'spec-universal',
       },
     });
   }
 
   Iterable<Map<String, dynamic>> _placementResources(
-    Iterable<({String id, String type, String loc, String image})> rows,
+    Iterable<({String id, String type, String group, String loc, String image})>
+    rows,
   ) => rows.map(
     (p) => {
       'type': 'appAssetLibraryPlacements',
@@ -164,15 +225,26 @@ class _FakeClient implements AscClient {
     ).firstMatch(path);
     if (placementsOf != null) {
       final type = query?['filter[placementType]'];
+      final group = query?['filter[placementGroup]'];
       final image = query?['filter[image]'];
       return _placementResources(
         placements.where(
           (p) =>
               p.loc == placementsOf.group(1) &&
               (type == null || p.type == type) &&
+              (group == null || p.group == group) &&
               (image == null || p.image == image),
         ),
       ).toList();
+    }
+    if (path == '/v1/appAssetLibraryRefData') {
+      return [
+        {
+          'type': 'appAssetLibraryRefData',
+          'id': 'ref-1',
+          'attributes': referenceData,
+        },
+      ];
     }
     if (path == '/v1/reviewSubmissions') {
       // All three filters, because the branch depends on all three: the state
@@ -279,10 +351,21 @@ class _FakeClient implements AscClient {
           },
         };
       case '/v1/appAssetLibraryPlacements':
+        // Apple's articles name the group as one of the four parts of a
+        // placement, and a fake that took one without it would let the code
+        // drop it unnoticed.
+        final group = (data['attributes'] as Map)['placementGroup'];
+        if (group is! String) {
+          throw AscApiException(409, [
+            "The requested 'placementType' and 'placementGroup' combination "
+                'is not supported for this parent.',
+          ], request: 'POST /v1/appAssetLibraryPlacements');
+        }
         final id = _id('placement');
         placements.add((
           id: id,
           type: (data['attributes'] as Map)['placementType'] as String,
+          group: group,
           loc: rel('appStoreVersionLocalization'),
           image: rel('image'),
         ));
@@ -301,6 +384,12 @@ class _FakeClient implements AscClient {
           'data': {'type': 'reviewSubmissions', 'id': id},
         };
       case '/v1/reviewSubmissionItems':
+        if (refuseSubmissionItems) {
+          throw AscApiException(409, [
+            'An asset cannot be submitted on its own before the app has an '
+                'approved version.',
+          ], request: 'POST /v1/reviewSubmissionItems');
+        }
         final s = submissions.firstWhere(
           (s) => s.id == rel('reviewSubmission'),
         );
@@ -325,6 +414,7 @@ class _FakeClient implements AscClient {
       final resource = images.firstWhere((i) => i['id'] == image.group(1));
       final attributes = resource['attributes'] as Map<String, dynamic>;
       attributes['state'] = processedState;
+      attributes['specId'] = processedSpecId;
       if (stateDetails.isNotEmpty) {
         attributes['stateDetails'] = stateDetails;
       }
@@ -535,6 +625,51 @@ void main() {
     });
   });
 
+  group('which placement groups an image goes in', () {
+    const data = _FakeClient.referenceData;
+
+    test('every iOS group whose mapping lists the spec, per type', () {
+      expect(
+        placementGroupsFor(
+          data,
+          placementType: 'PRODUCT_PAGE_HEADER_ASSET',
+          specId: 'spec-universal',
+        ),
+        ['IPHONE_G', 'IPAD_G'],
+      );
+      expect(
+        placementGroupsFor(
+          data,
+          placementType: 'APP_STORE_SEARCH_RESULTS_ASSET',
+          specId: 'spec-universal',
+        ),
+        ['IPHONE_G'],
+      );
+    });
+
+    test('a spec mapped only to another platform has no group', () {
+      expect(
+        placementGroupsFor(
+          data,
+          placementType: 'PRODUCT_PAGE_HEADER_ASSET',
+          specId: 'spec-vision',
+        ),
+        isEmpty,
+      );
+    });
+
+    test('a spec of the other type is not placed as this one', () {
+      expect(
+        placementGroupsFor(
+          data,
+          placementType: 'APP_STORE_SEARCH_RESULTS_ASSET',
+          specId: 'spec-header',
+        ),
+        isEmpty,
+      );
+    });
+  });
+
   group('planning one placement', () {
     // Field by field: a record holding a list compares the list by identity.
     void expectPlan(PlacementPlan plan, String? keep, List<String> delete) {
@@ -604,11 +739,20 @@ void main() {
         }, reason: 'the asset library takes no sourceFileChecksum');
 
         expect(
-          client.placements.map((p) => (p.type, p.loc, p.image)),
+          client.placements.map((p) => (p.type, p.group, p.loc, p.image)),
           unorderedEquals([
-            ('PRODUCT_PAGE_HEADER_ASSET', 'loc-en-US', 'image-1'),
-            ('APP_STORE_SEARCH_RESULTS_ASSET', 'loc-en-US', 'image-1'),
+            ('PRODUCT_PAGE_HEADER_ASSET', 'IPHONE_G', 'loc-en-US', 'image-1'),
+            ('PRODUCT_PAGE_HEADER_ASSET', 'IPAD_G', 'loc-en-US', 'image-1'),
+            (
+              'APP_STORE_SEARCH_RESULTS_ASSET',
+              'IPHONE_G',
+              'loc-en-US',
+              'image-1',
+            ),
           ]),
+          reason:
+              'one placement per group the spec maps to, on iOS platforms '
+              'only — never VISION_G, nor a group with no platform',
         );
         expect(said.out, contains('state PREPARE_FOR_SUBMISSION'));
         expect(
@@ -645,12 +789,12 @@ void main() {
 
       expect(exitCode, 0);
       expect(client.images, hasLength(2));
-      expect(client.placements, hasLength(2));
+      expect(client.placements, hasLength(3));
       expect(
         client.placements.map((p) => p.id).toSet().intersection(before),
         isEmpty,
       );
-      expect(client.placements.map((p) => p.image).toSet(), {'image-4'});
+      expect(client.placements.map((p) => p.image).toSet(), {'image-5'});
     });
 
     test('the same bytes in two locales are uploaded once', () async {
@@ -685,11 +829,60 @@ void main() {
       expect(exitCode, 0, reason: said.err);
       expect(client.writes, isEmpty);
       expect(said.out, contains('would create: en-US UNIVERSAL: header.png'));
+      // No spec yet, so no group: the line says how the groups will be found
+      // rather than naming one it cannot know.
       expect(
         said.out,
-        contains('would create: placed as the en-US PRODUCT_PAGE_HEADER_ASSET'),
+        contains(
+          'would place en-US header.png as PRODUCT_PAGE_HEADER_ASSET, in the '
+          'groups that take the specification',
+        ),
       );
       expect(said.out, contains('would upload'));
+    });
+
+    test(
+      'a dry run over bytes already in the library names each group',
+      () async {
+        _write(
+          'listings/en-US/creative_assets/UNIVERSAL/header.png',
+          _universal,
+        );
+        final client = _FakeClient()..seedImage(_universal, name: 'header.png');
+
+        final said = await _run(client, [
+          '--version-name',
+          '1.2.0',
+          '--dry-run',
+        ]);
+
+        expect(exitCode, 0, reason: said.err);
+        expect(client.writes, isEmpty);
+        for (final where in [
+          'PRODUCT_PAGE_HEADER_ASSET IPHONE_G',
+          'PRODUCT_PAGE_HEADER_ASSET IPAD_G',
+          'APP_STORE_SEARCH_RESULTS_ASSET IPHONE_G',
+        ]) {
+          expect(
+            said.out,
+            contains('would create: placed as the en-US $where'),
+          );
+        }
+      },
+    );
+
+    test('a dry run with --submit-for-review over new bytes', () async {
+      _write('listings/en-US/creative_assets/UNIVERSAL/header.png', _universal);
+      final client = _FakeClient();
+
+      final said = await _run(client, [
+        '--version-name',
+        '1.2.0',
+        '--dry-run',
+        '--submit-for-review',
+      ]);
+
+      expect(exitCode, 0, reason: said.err);
       // The image it would upload has no state to read, and that must not be
       // reported as "nothing is waiting" — the real run would submit it.
       expect(said.out, contains('would submit the 1 creative asset(s)'));
@@ -829,6 +1022,30 @@ void main() {
       },
     );
 
+    test('an image no iOS group takes is refused before any placement', () {
+      // The upload is legitimate and stays; what is refused is writing a
+      // placement Apple could only answer with a 409 — and the refusal comes
+      // before the first one, so no version is left half-replaced.
+      return () async {
+        _write(
+          'listings/en-US/creative_assets/UNIVERSAL/header.png',
+          _universal,
+        );
+        final client = _FakeClient(processedSpecId: 'spec-vision');
+
+        final said = await _run(client, ['--version-name', '1.2.0']);
+
+        expect(exitCode, 1);
+        expect(said.err, contains('spec-vision'));
+        expect(said.err, contains('Nothing has been placed on 1.2.0'));
+        expect(client.placements, isEmpty);
+        expect(
+          client.writes.where((c) => c.path.contains('Placements')),
+          isEmpty,
+        );
+      }();
+    });
+
     test('a locale the version lacks is refused before any upload', () async {
       _write('listings/de-DE/creative_assets/UNIVERSAL/header.png', _universal);
       final client = _FakeClient();
@@ -955,6 +1172,20 @@ void main() {
         said.out,
         contains('no creative asset is waiting to be submitted'),
       );
+    });
+
+    test('a submission that fails after its container names it', () async {
+      // The container is left in READY_FOR_REVIEW with nothing in it, and a
+      // rerun adopts it — but only a run that says it exists lets a person
+      // understand what they find in App Store Connect.
+      _write('listings/en-US/creative_assets/UNIVERSAL/header.png', _universal);
+      final client = _FakeClient(refuseSubmissionItems: true);
+
+      final said = await _run(client, ['--submit-for-review']);
+
+      expect(exitCode, 1);
+      final container = client.submissions.single.id;
+      expect(said.err, contains('opened review submission $container'));
     });
 
     test('an open submission holding other items is not flipped', () async {

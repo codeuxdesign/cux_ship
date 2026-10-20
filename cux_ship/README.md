@@ -1598,16 +1598,26 @@ cux_ship appstore creative-assets --submit-for-review            # …and submit
   assets, so the upload writes the file's MD5 into the asset's reference name,
   `header.png [md5 …]`, and the next run matches on it. The same image in two
   locales is uploaded once and placed twice.
-- **`--version-name` places on an editable version only**, one placement per
-  locale and type, and replaces whatever image is placed there. A universal
-  image becomes two placements, `PRODUCT_PAGE_HEADER_ASSET` and
-  `APP_STORE_SEARCH_RESULTS_ASSET`. That is the API form of the console's *Use
-  header asset in search results*, which has no attribute of its own. Placed
-  assets are reviewed with the version when it is submitted.
+- **`--version-name` places on an editable version only**, and replaces
+  whatever image is placed there. A placement is per locale, per type and per
+  **placement group**. Groups are read from the asset library's reference
+  data, one for each iPhone or iPad group that takes the specification Apple
+  matched the file to, so one header usually becomes several placements. A
+  universal image is placed as both `PRODUCT_PAGE_HEADER_ASSET` and
+  `APP_STORE_SEARCH_RESULTS_ASSET`. That is the API form of the console's
+  *Use header asset in search results*, which has no attribute of its own.
+  Placed assets are reviewed with the version when it is submitted. The old
+  placement is deleted before the new one is made, because a group holds one
+  header, so a run that dies in between leaves that group empty until it is
+  run again.
 - **Nothing is submitted for review without `--submit-for-review`.** With it,
   the assets that have not been submitted yet go to App Review on their own,
   in a submission that holds nothing else. An open submission that already
-  holds a version is refused rather than submitted along with them.
+  holds a version is refused rather than submitted along with them. Apple adds
+  two conditions this does not check: an app with no approved version yet
+  sends its assets *with* its first version, and an asset placed on a version
+  already in review cannot also be submitted on its own.
+- **iOS and iPadOS only**, as Apple ships them. `--platform macos` is refused.
 - **Every run ends with each asset's state**, which is its review state too:
   `PREPARE_FOR_SUBMISSION`, `WAITING_FOR_REVIEW`, `APPROVED`, `REJECTED`.
 

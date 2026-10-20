@@ -54,18 +54,38 @@ What the implementation rests on, claim by claim:
 | Delete a `FAILED` copy and reserve again | **Confirmed**: [IMG] |
 | `COMPLETE` counts as usable | **Inferred.** The spec maps it; no article describes it |
 | Skip identical bytes by an MD5 in `referenceName` | **This package's convention.** Apple exposes no checksum; [MIG] says to *"record the returned asset ID against your own identifier"* and does not say where |
-| Placement: `placementType` plus `image` and `appStoreVersionLocalization` | **Confirmed**: [S] `AppAssetLibraryPlacementCreateRequest` |
+| Placement: `placementType`, `placementGroup`, `image` and `appStoreVersionLocalization` | **Confirmed**: [PL] — *"A placement request combines four things"*: the type, the group, the asset and the target. [S] has the group as nullable and outside every `anyOf`, and the first draft of this package omitted it on that reading; the articles show it in every example and document `409 ENTITY_ERROR.ATTRIBUTE.INVALID`, *"The requested 'placementType' and 'placementGroup' combination is not supported for this parent"* |
+| Placement groups come from `GET /v1/appAssetLibraryRefData`, never a constant | **Confirmed**: [PL] — *"Read the valid identifiers from the reference data; they aren't an enumeration"*; [SPEC] and [MIG] say not to hard-code them |
+| An image goes in every group whose `placementTypes[].specMappings` lists its `specId`, on an iPhone, iPad or `ANY` platform | **The mapping is confirmed**, the selection inferred. [SPEC] walks the same arrays (*"Map the group to specifications"*), and [U] says Apple reports the matched spec as `specId`. *Every* group rather than one follows from *"1 product page header asset per group"* ([PL], [SPEC]): an iPhone group and an iPad group are two placements. The platform filter is this package's — creative assets are iOS and iPadOS only ([H-MANAGE]) |
 | `PRODUCT_PAGE_HEADER_ASSET`, `APP_STORE_SEARCH_RESULTS_ASSET` | **Confirmed**: [S] `AppAssetLibraryPlacementType` |
-| Universal = one image, two placements | **Inferred** from [SPEC]: a universal spec *"satisfies several placement types at once"* by *"creating a placement per type"*. No article shows the header-and-search pair specifically |
+| Universal = one image, placed as both types | **Inferred** from [SPEC]: a universal spec *"satisfies several placement types at once"* by *"creating a placement per type"*. No article shows the header-and-search pair specifically |
 | Placements cannot be edited; delete and recreate | **Confirmed**: [S] has no PATCH; [PL] *"You can't change a placement after you create it"* |
-| Placing only on an editable version | **Confirmed**: [PL], `409 STATE_ERROR.INVALID_STATE` on an approved parent |
-| Omitting `placementGroup` on create | **Inferred.** It is nullable and not required by any `anyOf` branch; its values come from the reference data, which needs credentials and was not read |
+| Placing only on an editable version | **Confirmed** for approved: [PL], `409 STATE_ERROR.INVALID_STATE`. The other non-editable states are refused on [MIG]'s *"You can only create placements while the parent surface is editable"*, not on an observed 409 |
+| `--platform macos` refused | **Confirmed**: [H-MANAGE] — *"available for iOS and iPadOS apps and games running iOS 27 or iPadOS 27 or later"* |
 | Standalone submission: `reviewSubmissions` → `reviewSubmissionItems` with `appAssetLibraryImage` → `submitted: true` | **Inferred sequence.** Each piece is in [S], and the three steps are the ones a version submission takes. No Apple article walks through it for an asset, and the API articles describe only review through the parent surface ([PL]: *"Placements go through App Review as part of their parent surface"*) |
+| When a standalone submission is allowed at all | **Confirmed**, three conditions from [H-SUBMIT], none checked here (Apple's own refusal names them): an app with no approved version yet must send its assets *with* the first version; an asset *"can't be submitted on its own … if the item it is assigned to is already part of an active submission"*; and a standalone submission is reviewed with the latest version of the platform, which is why the container carries `platform` |
 
 **Nothing here has run against App Store Connect yet.** The tests run against a
 fake that implements the spec's filters. The first real run should be
 `--dry-run`, then a library-only upload with no `--version-name`, before
-anything is placed or submitted.
+anything is placed or submitted. Two things only that run can answer, and the
+output says where to look:
+
+- **The reference name reads back as written.** Apple publishes no length or
+  character rule for `referenceName`. If the reservation echoes something
+  else, the run prints a warning, because the next run would not recognise
+  the bytes and would upload them again.
+- **The groups the reference data gives for these two types.** Every
+  placement line names its group. A run that finds no iPhone or iPad group for
+  the matched spec refuses before placing anything, and names the spec.
+
+**A placement is deleted before its replacement is made**, because a version
+takes one header per group. A run that dies between the two leaves that group
+empty until the next run, which recreates it. **A `FAILED` copy is deleted
+before it is uploaded again**, and Apple refuses that delete with `409
+STATE_ERROR.ASSET_HAS_PLACEMENTS` if somebody placed the copy in the console
+while it was processing ([IMG]). The run then stops with Apple's message, and
+those placements have to be removed first.
 
 ## The tree
 
@@ -94,7 +114,10 @@ one is what the console offers.
 **`UNIVERSAL` beside a dedicated slot is refused.** It would ask for two images
 in one placement. A universal-size header with a dedicated search image is
 expressed by putting the 5244×2950 PNG in `PRODUCT_PAGE_HEADER_ASSET/`, which
-accepts it, because [H-SPECS] lists a universal row under each placement.
+accepts it. [H-SPECS] lists a 16:9 5244×2950 `.png` row under each placement
+without calling it universal. That those two rows are the one
+`universalAsset: true` specification is an inference, supported by
+[H-MANAGE]'s *"only available for universal creative assets"*.
 
 ## The checks
 

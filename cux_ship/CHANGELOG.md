@@ -23,9 +23,16 @@ offline (see `cux_ship_verify`'s changelog for the rules).
   again. A copy App Review `REJECTED` stops the run, because the same bytes
   would be rejected again.
 - `--version-name` places the image on an editable version's localization,
-  replacing what is there. A universal image is placed as both the header and
-  the search results image. The version's editability and its localizations
-  are checked before anything is uploaded.
+  replacing what is there, in every iPhone and iPad placement group that the
+  asset library's reference data maps the image's specification to. Apple
+  says not to hard-code these groups. A universal image is placed as both the
+  header and the search results image. The version's editability and its
+  localizations are checked before anything is uploaded, and the groups
+  before anything is placed.
+- The reference name is checked as it comes back, and a run warns if Apple
+  stored something other than what was sent, because the skip would then be
+  lost.
+- iOS and iPadOS only, as Apple ships them: `--platform macos` is refused.
 - `--submit-for-review` submits the assets to App Review on their own. Without
   it nothing is ever submitted. An open review submission that already holds
   other items is refused rather than submitted along with the assets.
