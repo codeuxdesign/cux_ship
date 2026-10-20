@@ -12,9 +12,11 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
+import 'package:cux_ship/src/appstore/app_store.dart';
 import 'package:cux_ship/src/appstore/asc_client.dart';
 import 'package:cux_ship/src/appstore/cli.dart';
 import 'package:cux_ship/src/appstore/creative_assets.dart';
+import 'package:cux_ship_verify/metadata.dart';
 import 'package:test/test.dart';
 
 /// A PNG header [readImageInfo] accepts: signature, IHDR, IEND. [seed] varies
@@ -50,6 +52,7 @@ class _FakeClient implements AscClient {
     this.locales = const ['en-US'],
     this.processedState = 'PREPARE_FOR_SUBMISSION',
     this.stateDetails = const [],
+    this.storedReferenceNameLength,
   });
 
   final String versionState;
@@ -59,10 +62,16 @@ class _FakeClient implements AscClient {
   final String processedState;
   final List<Map<String, String>> stateDetails;
 
+  /// When set, a reservation stores only this many characters of the
+  /// `referenceName` it was sent — the shape of a limit Apple does not
+  /// publish, which would cut the checksum off the end.
+  final int? storedReferenceNameLength;
+
   final calls = <_Call>[];
   final images = <Map<String, dynamic>>[];
   final placements = <({String id, String type, String loc, String image})>[];
-  final submissions = <({String id, String state, List<String> items})>[];
+  final submissions =
+      <({String id, String state, String platform, List<String> items})>[];
   final uploadedBytes = <int>[];
   var _next = 0;
 
@@ -166,9 +175,20 @@ class _FakeClient implements AscClient {
       ).toList();
     }
     if (path == '/v1/reviewSubmissions') {
+      // All three filters, because the branch depends on all three: the state
+      // is what makes a container "open", and the app and platform are what
+      // keep a macOS draft from being reused for an iOS submission. A dropped
+      // filter answers nothing here rather than everything — and `filter[app]`
+      // is required by the specification, so its absence is a 400.
+      final app = query?['filter[app]'];
+      if (app == null) {
+        throw StateError('GET /v1/reviewSubmissions without filter[app]');
+      }
       return [
         for (final s in submissions)
-          if (s.state == query?['filter[state]'])
+          if (app == 'app-1' &&
+              s.platform == query?['filter[platform]'] &&
+              s.state == query?['filter[state]'])
             {'type': 'reviewSubmissions', 'id': s.id},
       ];
     }
@@ -223,6 +243,11 @@ class _FakeClient implements AscClient {
         );
         final size = attributes['fileSize'] as int;
         final id = _id('image');
+        final cut = storedReferenceNameLength;
+        if (cut != null) {
+          attributes['referenceName'] = (attributes['referenceName'] as String)
+              .substring(0, cut);
+        }
         images.add({
           'type': 'appAssetLibraryImages',
           'id': id,
@@ -266,7 +291,12 @@ class _FakeClient implements AscClient {
         };
       case '/v1/reviewSubmissions':
         final id = _id('submission');
-        submissions.add((id: id, state: 'READY_FOR_REVIEW', items: []));
+        submissions.add((
+          id: id,
+          state: 'READY_FOR_REVIEW',
+          platform: (data['attributes'] as Map)['platform'] as String,
+          items: [],
+        ));
         return {
           'data': {'type': 'reviewSubmissions', 'id': id},
         };
@@ -392,8 +422,9 @@ final _universal = _png(5244, 2950);
 
 Future<({String out, String err})> _run(
   _FakeClient client,
-  List<String> extra,
-) async {
+  List<String> extra, {
+  AscDefaults defaults = AscDefaults.none,
+}) async {
   final args = buildAscParser(AscCommand.creativeAssets).parse([
     '--bundle-id',
     'design.codeux.example',
@@ -404,7 +435,12 @@ Future<({String out, String err})> _run(
   final out = _MemoryStdout();
   final err = _MemoryStdout();
   await IOOverrides.runZoned(
-    () => runAsc(AscCommand.creativeAssets, args, ascClient: client),
+    () => runAsc(
+      AscCommand.creativeAssets,
+      args,
+      ascClient: client,
+      defaults: defaults,
+    ),
     stdout: () => out,
     stderr: () => err,
   );
@@ -654,7 +690,116 @@ void main() {
         contains('would create: placed as the en-US PRODUCT_PAGE_HEADER_ASSET'),
       );
       expect(said.out, contains('would upload'));
+      // The image it would upload has no state to read, and that must not be
+      // reported as "nothing is waiting" — the real run would submit it.
+      expect(said.out, contains('would submit the 1 creative asset(s)'));
+      expect(said.out, isNot(contains('no creative asset is waiting')));
     });
+
+    test(
+      'a tree carrying a listing needs no version and reads no notes',
+      () async {
+        // `listingPublish` is told there is no listing, so the version-scoped
+        // half of the tree — a description here — neither demands
+        // `--version-name` nor resolves release notes for the inferred version.
+        // With that exclusion dropped, the inferred 9.9.9 reads CHANGELOG.md and
+        // refuses its over-limit section; and the inferred version must not be
+        // the one placed on, which only `--version-name` names.
+        _write(
+          'listings/en-US/description.txt',
+          'A simulation, not a game.'.codeUnits,
+        );
+        _write(
+          'listings/en-US/creative_assets/UNIVERSAL/header.png',
+          _universal,
+        );
+        _write(
+          'CHANGELOG.md',
+          '# Changelog\n\n## 9.9.9\n\n- ${'x' * 4100}\n'.codeUnits,
+        );
+        final client = _FakeClient();
+
+        final said = await _run(
+          client,
+          [],
+          defaults: AscDefaults(
+            versionName: '9.9.9',
+            changelog: '${_root.path}/CHANGELOG.md',
+          ),
+        );
+
+        expect(exitCode, 0, reason: said.err);
+        expect(
+          client.calls.where((c) => c.path.contains('appStoreVersions')),
+          isEmpty,
+          reason: 'the inferred version is neither read nor placed on',
+        );
+        expect(
+          client.writes.where((c) => c.path == '/v1/appAssetLibraryImages'),
+          hasLength(1),
+        );
+      },
+    );
+
+    test('a reservation that does not echo the marker is said', () async {
+      // Apple publishes no length for `referenceName`. If it stored a cut
+      // one, every run would find no checksum, upload again and report
+      // "uploaded" — a re-upload forever that nothing else would name.
+      _write('listings/en-US/creative_assets/UNIVERSAL/header.png', _universal);
+      final client = _FakeClient(storedReferenceNameLength: 20);
+
+      final said = await _run(client, []);
+
+      expect(exitCode, 0, reason: said.err);
+      expect(said.out, contains('warning: App Store Connect stored'));
+      expect(said.out, contains('will upload them again'));
+    });
+
+    test(
+      'a deadline reached says the upload is kept for the next run',
+      () async {
+        // The one path `awaitProcessing` has that no happy-path run reaches, so
+        // it gets its own injection: an image Apple never finishes with.
+        _write(
+          'listings/en-US/creative_assets/UNIVERSAL/header.png',
+          _universal,
+        );
+        final client = _FakeClient(processedState: 'UPLOAD_COMPLETE');
+        final out = _MemoryStdout();
+        addTearDown(out.close);
+        final publisher = CreativeAssetPublisher(
+          client,
+          Writer(client, dryRun: false, out: out),
+          platform: AscPlatform.ios,
+          say: out.writeln,
+          timeout: Duration.zero,
+          poll: Duration.zero,
+        );
+
+        await expectLater(
+          publisher.ensureInLibrary(
+            'library-1',
+            creativeAssetsIn(loadMetadata(_root.path)),
+          ),
+          throwsA(
+            isA<AscApiException>().having(
+              (e) => e.toString(),
+              'message',
+              allOf(
+                contains('504'),
+                contains('has not finished processing 1'),
+                contains('Re-running finds them by checksum'),
+              ),
+            ),
+          ),
+        );
+        expect(
+          (client.images.single['attributes'] as Map)['state'],
+          'UPLOAD_COMPLETE',
+          reason: 'committed, and left for the next run to wait on',
+        );
+      },
+    );
 
     test('without --version-name nothing is placed, and it says so', () async {
       _write('listings/en-US/creative_assets/UNIVERSAL/header.png', _universal);
@@ -818,6 +963,7 @@ void main() {
         ..submissions.add((
           id: 'open-1',
           state: 'READY_FOR_REVIEW',
+          platform: 'IOS',
           items: ['version-1'],
         ));
 

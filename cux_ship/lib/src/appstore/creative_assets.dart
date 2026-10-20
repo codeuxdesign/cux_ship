@@ -383,6 +383,10 @@ class CreativeAssetPublisher {
     CreativeAssetOutcome outcome,
   ) async {
     final bytes = outcome.file.readAsBytesSync();
+    final sentReferenceName = creativeReferenceName(
+      outcome.fileName,
+      outcome.checksum,
+    );
     final reserved = await writer.post('/v1/appAssetLibraryImages', {
       'data': {
         'type': 'appAssetLibraryImages',
@@ -390,10 +394,7 @@ class CreativeAssetPublisher {
           'category': creativeAssetCategory,
           'fileName': outcome.fileName,
           'fileSize': bytes.length,
-          'referenceName': creativeReferenceName(
-            outcome.fileName,
-            outcome.checksum,
-          ),
+          'referenceName': sentReferenceName,
         },
         'relationships': {
           'assetLibrary': relation('appAssetLibraries', libraryId),
@@ -414,6 +415,23 @@ class CreativeAssetPublisher {
     if (id is! String || operations is! List) {
       throw StateError(
         'reserving ${outcome.fileName} returned no id or uploadOperations',
+      );
+    }
+    // **The marker has to read back as written, or the skip is gone.** Apple
+    // publishes no length or character rule for `referenceName`; a truncated
+    // or normalised echo means the next run finds no checksum, uploads again,
+    // and reports "uploaded" every time — a re-upload forever that nothing
+    // else would name. The reservation is kept either way: the bytes are
+    // right, and only the next run's shortcut is lost.
+    final stored = attributes is Map<String, dynamic>
+        ? attributes['referenceName']
+        : null;
+    if (stored != sentReferenceName) {
+      say(
+        '    warning: App Store Connect stored the reference name of '
+        '${outcome.fileName} as ${stored is String ? '"$stored"' : 'nothing'} '
+        'rather than "$sentReferenceName", so the next run will not '
+        'recognise these bytes and will upload them again',
       );
     }
     for (final operation in operations.whereType<Map<String, dynamic>>()) {
@@ -576,7 +594,17 @@ class CreativeAssetPublisher {
   /// holds a version, an event or anything else would be submitted with the
   /// assets when `submitted` flips, and a flag asking to submit *assets* is not
   /// a request to submit those.
-  Future<void> submitForReview(App app, List<LibraryImage> images) async {
+  ///
+  /// [awaitingUpload] is how many distinct files a dry run would have uploaded
+  /// and so could not read a state for. Without it a dry run of
+  /// `--submit-for-review` over new bytes said "no creative asset is waiting
+  /// to be submitted" — the sentence for the opposite outcome, on the run
+  /// whose whole purpose is to say what the real one would do.
+  Future<void> submitForReview(
+    App app,
+    List<LibraryImage> images, {
+    int awaitingUpload = 0,
+  }) async {
     final wanted = [
       for (final image in images)
         if (submittableLibraryStates.contains(image.state)) image,
@@ -589,8 +617,15 @@ class CreativeAssetPublisher {
         );
       }
     }
-    if (wanted.isEmpty) {
+    if (wanted.isEmpty && awaitingUpload == 0) {
       say('==> no creative asset is waiting to be submitted');
+      return;
+    }
+    if (wanted.isEmpty) {
+      say(
+        '==> would submit the $awaitingUpload creative asset(s) this run would '
+        'upload, once Apple has processed them',
+      );
       return;
     }
 
@@ -634,8 +669,8 @@ class CreativeAssetPublisher {
 
     if (submissionId == null) {
       say(
-        '    would then add ${wanted.length} creative asset(s) and submit '
-        'them for review',
+        '    would then add ${wanted.length + awaitingUpload} creative '
+        'asset(s) and submit them for review',
       );
       return;
     }

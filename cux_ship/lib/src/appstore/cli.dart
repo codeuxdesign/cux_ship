@@ -3549,7 +3549,15 @@ Future<void> _publishCreativeAssets(
 
   var images = await readStates();
   if (submitForReview) {
-    await publisher.submitForReview(app, images.values.toList());
+    await publisher.submitForReview(
+      app,
+      images.values.toList(),
+      // Distinct bytes, since one upload serves every locale carrying them.
+      awaitingUpload: {
+        for (final o in outcomes)
+          if (o.imageId == null) o.checksum,
+      }.length,
+    );
     if (!store.writer.dryRun) {
       images = await readStates();
     }
