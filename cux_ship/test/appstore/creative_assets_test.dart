@@ -1187,6 +1187,52 @@ void main() {
       expect(client.writes, isEmpty);
     });
 
+    test(
+      'a rejected copy refuses before the files ahead of it go up',
+      () async {
+        // de-DE sorts first and carries new bytes; en-US carries bytes App
+        // Review rejected. Judged one at a time, de-DE was uploaded before the
+        // refusal.
+        _write(
+          'listings/de-DE/creative_assets/UNIVERSAL/header.png',
+          _png(5244, 2950, seed: 3),
+        );
+        _write(
+          'listings/en-US/creative_assets/UNIVERSAL/header.png',
+          _universal,
+        );
+        final client = _FakeClient(locales: ['de-DE', 'en-US'])
+          ..seedImage(_universal, state: 'REJECTED', name: 'header.png');
+
+        final said = await _run(client, []);
+
+        expect(exitCode, 1);
+        expect(said.err, contains('en-US UNIVERSAL'));
+        expect(client.writes, isEmpty);
+      },
+    );
+
+    test(
+      'a dry run counts an image still processing as one to submit',
+      () async {
+        // The real run waits for it and then submits it; "nothing is waiting"
+        // would be the sentence the real run contradicts.
+        _write(
+          'listings/en-US/creative_assets/UNIVERSAL/header.png',
+          _universal,
+        );
+        final client = _FakeClient()
+          ..seedImage(_universal, state: 'UPLOAD_COMPLETE', name: 'header.png');
+
+        final said = await _run(client, ['--dry-run', '--submit-for-review']);
+
+        expect(exitCode, 0, reason: said.err);
+        expect(said.out, contains('would submit the 1 creative asset(s)'));
+        expect(said.out, isNot(contains('no creative asset is waiting')));
+        expect(said.out, isNot(contains('not added to a submission')));
+      },
+    );
+
     test('a failed copy of the same bytes is deleted, then uploaded', () async {
       // Apple's guidance for FAILED is delete and reserve again. Left in
       // place, every run would add another dead copy to the library.

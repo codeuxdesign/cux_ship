@@ -379,6 +379,19 @@ class CreativeAssetPublisher {
     final byChecksum = <String, ({String? id, String library})>{};
     final waitFor = <String>{};
 
+    // **Every file is judged before any is uploaded.** A rejected copy found
+    // in the loop below would refuse the run after the files ahead of it had
+    // been reserved and sent — harmless, since the next run reuses them, but
+    // not the "a refused run leaves nothing behind" `_publishCreativeAssets`
+    // promises.
+    for (final outcome in outcomes) {
+      if (matchInLibrary(library, outcome.checksum) case RejectedImage(
+        :final image,
+      )) {
+        _refuseRejected(outcome, image);
+      }
+    }
+
     for (final outcome in outcomes) {
       final done = byChecksum[outcome.checksum];
       if (done != null) {
@@ -406,12 +419,9 @@ class CreativeAssetPublisher {
           verdict = 'unchanged';
           waitFor.add(image.id);
         case RejectedImage(:final image):
-          throw CreativeAssetsRefused(
-            '${outcome.locale} ${outcome.slot}: App Review rejected these exact '
-            'bytes (${outcome.fileName}, asset ${image.id}). Uploading them '
-            'again would be rejected again — change the image, or appeal in '
-            'App Store Connect.',
-          );
+          // Unreachable after the sweep above; kept so the switch stays total
+          // over the sealed type rather than defaulting past a new case.
+          _refuseRejected(outcome, image);
         case UploadImage(:final stale):
           for (final image in stale) {
             await writer.delete(
@@ -435,6 +445,14 @@ class CreativeAssetPublisher {
 
     await awaitProcessing(waitFor.toList());
   }
+
+  Never _refuseRejected(CreativeAssetOutcome outcome, LibraryImage image) =>
+      throw CreativeAssetsRefused(
+        '${outcome.locale} ${outcome.slot}: App Review rejected these exact '
+        'bytes (${outcome.fileName}, asset ${image.id}). Uploading them again '
+        'would be rejected again — change the image, or appeal in App Store '
+        'Connect.',
+      );
 
   /// Apple's asset upload: reserve, PUT the parts, commit with `uploaded`.
   ///
@@ -759,22 +777,31 @@ class CreativeAssetPublisher {
       for (final image in images)
         if (submittableLibraryStates.contains(image.state)) image,
     ];
+    // **A dry run never waits, so an image Apple is still processing is one
+    // the real run would have waited for and then submitted.** Counted with
+    // the would-be uploads rather than reported "not added", which is what
+    // the real run would contradict.
+    final stillProcessing = writer.dryRun
+        ? images.where((i) => processingLibraryStates.contains(i.state)).length
+        : 0;
+    final awaiting = awaitingUpload + stillProcessing;
     for (final image in images) {
-      if (!submittableLibraryStates.contains(image.state)) {
+      if (!submittableLibraryStates.contains(image.state) &&
+          !(writer.dryRun && processingLibraryStates.contains(image.state))) {
         say(
           '    ${image.fileName ?? image.id} is ${image.state ?? 'in no '
                   'reported state'}; not added to a submission',
         );
       }
     }
-    if (wanted.isEmpty && awaitingUpload == 0) {
+    if (wanted.isEmpty && awaiting == 0) {
       say('==> no creative asset is waiting to be submitted');
       return;
     }
     if (wanted.isEmpty) {
       say(
-        '==> would submit the $awaitingUpload creative asset(s) this run would '
-        'upload, once Apple has processed them',
+        '==> would submit the $awaiting creative asset(s) this run would '
+        'upload or wait for, once Apple has processed them',
       );
       return;
     }
@@ -820,7 +847,7 @@ class CreativeAssetPublisher {
 
     if (submissionId == null) {
       say(
-        '    would then add ${wanted.length + awaitingUpload} creative '
+        '    would then add ${wanted.length + awaiting} creative '
         'asset(s) and submit them for review',
       );
       return;
