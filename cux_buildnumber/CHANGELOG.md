@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+**The tool is launchable as `package:cux_buildnumber/cli.dart`**, so a project
+that pins this package no longer has to find `bin/git_buildnumber.dart` in the
+pub cache to invoke the entry directly:
+
+```bash
+dart --packages=tool/cux_ship/.dart_tool/package_config.json \
+     package:cux_buildnumber/cli.dart generate
+```
+
+Invoking the entry rather than `dart run` is how a consumer keeps the
+`resolution: workspace` advice out of its logs, and it needed a path. For a
+hosted pin that path is a version-stamped pub cache directory, so launchers were
+reading `rootUri` out of `package_config.json` with a regex; the VM resolves a
+`package:` script URI through `--packages` instead. Same change as `cux_ship`
+made for the same consumer.
+
+`bin/git_buildnumber.dart` is now a one-line re-export, so `dart run` and
+`dart pub global activate` are unchanged.
+
 ## 0.1.0
 
 **Same code as `0.1.0-dev.1`, promoted after use.** The port has allocated build

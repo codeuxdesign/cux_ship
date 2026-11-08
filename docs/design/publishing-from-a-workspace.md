@@ -108,6 +108,15 @@ of the contract are outside this repository: it spawns the `package:` form,
 compares it byte-for-byte against `bin/cux_ship.dart`, and asserts stderr is
 empty — the last of which is the property this whole document is about.
 
+**`cux_buildnumber` got the same treatment in the same change**, with
+`lib/cli.dart` and a copy of that test, because the consumer that hit the regex
+launches both and `_common.sh` was reading `rootUri` for that one too. The
+remaining member, `cux_ship_verify`, has no `bin/` and so has no entry to
+declare. Worth saying plainly: **a published member with an executable wants a
+`lib/cli.dart`**, and the reason is this document's whole subject — the key
+stays, so `dart run` warns, so consumers invoke the entry, so the entry has to
+be nameable without a path.
+
 ## The four facts, each checked
 
 **1. Dropping the key is a hard error, not a trade-off.** `resolution: workspace`
