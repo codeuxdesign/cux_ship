@@ -525,8 +525,38 @@ wrong reason.
 
 That is the form a developer reaches for when working on both repositories at
 once, so it is the one that will be hit, and by whoever is mid-change rather than
-mid-release. Widening the `sed` to accept a relative `rootUri` is a one-line fix
-and belongs in the move.
+mid-release.
+
+**The fix is to parse the file rather than widen the pattern**, and there is no
+`dart` command that would avoid the question. Verified: `dart pub deps --json`
+carries `name`, `version`, `kind`, `source`, the dependency lists, the
+constraints and an `executables` list of *names* — `["train",
+"cux_buildnumber:git_buildnumber", "cux_ship", "test"]` — and no path for any of
+them. The documented artefact is `package_config.json` itself (`configVersion:
+2`), whose documented parser is `package:package_config`
+(`findPackageConfig`/`loadPackageConfig`), and whose in-process equivalent is
+`Isolate.resolvePackageUri` — the route `test/fakes.dart` already takes. All of
+those are Dart-side, and `tool/ship` is the bash wrapper every other tool
+spawns, so it cannot pay a VM start to find a path before starting the VM that
+does the work. It already caches a kernel snapshot precisely because that
+startup is on the hot path.
+
+So from the shell the choice is only *which parser*, and the answer that costs
+nothing new is `python3`: ten files under How It Went's `tool/` are already
+python3 or invoke it, so it is an existing dependency rather than a new one.
+Measured on the real config, `python3 -I` resolving the entry is **28 ms against
+9 ms** for the current `grep | sed` — noise beside the VM it precedes. `jq` would
+also work and is on GitHub's runners, but it would be a new unpinned binary on
+the hot path of a repository whose `deps.lock` exists to pin external binaries.
+
+**A parser fixes three things, not one.** The relative `rootUri` above; a
+percent-encoded `file://` URI, which a pub cache under a path containing a space
+produces and the `sed` passes through verbatim; and the hazard `ship`'s own
+comment records — `"name": "cux_ship"` matches `cux_ship_verify` too, so the
+pattern is anchored on a trailing comma and depends on pub continuing to
+pretty-print the file with `rootUri` on the next line. Matching a parsed `name`
+field removes all three at once, and removes the dependency on pub's formatting
+that the comma anchor is.
 
 ### 6.5 The cost that is real
 
