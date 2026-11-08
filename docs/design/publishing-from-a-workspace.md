@@ -48,6 +48,66 @@ rather than printing beside one — so it is written here rather than treated as
 noise. It does not reopen the decision below: nothing about the key is wrong,
 and the fix is a path, not a pubspec.
 
+**And the entry is no longer a path at all, which closes the question the two
+paragraphs above were working around.** Since 8 November 2026 the CLI is
+declared in `lib/cli.dart`, so the VM resolves it through `--packages` and the
+advice becomes a line a consumer can write without knowing where the package
+landed:
+
+```bash
+dart --packages=<checkout>/.dart_tool/package_config.json \
+     package:cux_ship/cli.dart …
+```
+
+**The path version was worse than "a path, not a pubspec" made it sound, and
+that is why this changed.** For a git pin the path is writable by hand, which is
+the case above. For a *hosted* pin it is a version-stamped directory under
+`~/.pub-cache`, so the launcher has to read `rootUri` out of
+`package_config.json` to find it — and nothing here told anybody that, so they
+reached for a regex. The one that did met all three of its failure modes, in one
+release tool:
+
+- `"name": "cux_ship"` is a prefix of `"name": "cux_ship_verify"`, which is the
+  next entry in the file. The match was anchored on a trailing comma and on pub
+  pretty-printing with `rootUri` on the following line — both shapes pub happens
+  to emit rather than anything the format promises. **The same trap is in this
+  package's own README**, where the lockfile `grep` is anchored on a `$` for
+  exactly this reason, and two readers wrote that one unanchored before it was
+  noticed. Three readers, two files, one prefix.
+- A `rootUri` is **relative** for a `path:` dependency, resolved against the
+  directory holding `package_config.json`. The `file://` pattern matched
+  nothing, so the launcher refused a healthy checkout — and a `path:` pin is how
+  that project develops against an unreleased fix here, so the failure landed on
+  the people most likely to be helping.
+- A `file:` URI is percent-encoded, so a pub cache under a path containing a
+  space arrives as `%20` and goes through verbatim, failing as a missing file in
+  the pub cache rather than as an encoding.
+
+A parser fixes all three and the consumer wrote one. But the three defects were
+only reachable because this package made the entry a path, and the fix for
+*that* is one file here rather than a parser in every consumer.
+
+**`main` rather than a named function**, because the VM looks up `main` in the
+library it is given as the script — the name is what makes the invocation above
+work with no file in between. `bin/cux_ship.dart` becomes `export
+'package:cux_ship/cli.dart' show main;`, which keeps `dart run cux_ship` and
+`dart pub global activate` working, and the exception-to-exit-code mapping moves
+into the library with the body, so a consumer writing its own entry cannot end
+up with a stale copy of it.
+
+**It does not cover `dart compile kernel`, which refuses a `package:` URI** —
+`"package:cux_ship/cli.dart" file not found`, where the plain `dart` above
+resolves it. A consumer caching a snapshot (the one here went from ~4 s a run to
+~420 ms, and a release makes ten invocations) still needs a real file, but it can
+be a one-line `export` committed in its own tree rather than a path recovered
+from the pub cache. Measured both ways before choosing the form:
+`dart compile kernel` accepts an export-only entry and the snapshot runs.
+
+`cux_ship/test/cli_library_entry_test.dart` holds this, because the only users
+of the contract are outside this repository: it spawns the `package:` form,
+compares it byte-for-byte against `bin/cux_ship.dart`, and asserts stderr is
+empty — the last of which is the property this whole document is about.
+
 ## The four facts, each checked
 
 **1. Dropping the key is a hard error, not a trade-off.** `resolution: workspace`

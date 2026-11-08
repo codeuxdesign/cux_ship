@@ -658,6 +658,46 @@ belongs in what you ship — and because `dart run` resolves against the package
 it is invoked from. Everything the command needs is inferred from the repository
 around it, so the directory it lives in does not matter.
 
+**`dart run` prints four lines of advice you cannot act on, and this is how to
+avoid them.** This package declares `resolution: workspace`, which `pub publish`
+copies verbatim into what pub.dev serves, so every `dart run cux_ship` says it
+found a pubspec with that key and no workspace root above it. It is addressed to
+whoever published the package rather than to you. `dart <entry>` — no `run` —
+does not inspect the entry's enclosing package and prints nothing, and the entry
+can be named as a `package:` URI:
+
+```bash
+dart --packages=tool/cux_ship/.dart_tool/package_config.json \
+     package:cux_ship/cli.dart --help
+```
+
+That also keeps your working directory, which `cd tool/cux_ship && dart run`
+does not — so a relative path in an argument still resolves against the
+directory you typed it in.
+
+**Name the library, not a path into the pub cache.** The entry used to be
+reachable only as `bin/cux_ship.dart`, which for a hosted pin is a
+version-stamped directory under `~/.pub-cache`, so a launcher had to read
+`rootUri` out of `package_config.json` to find it. A consumer did that with a
+regex and met all three of its failure modes: `"name": "cux_ship"` is a prefix
+of `"name": "cux_ship_verify"` and matched the wrong entry; a `rootUri` is
+*relative* for a `path:` dependency, so the `file://` pattern matched nothing
+and the launcher refused a healthy checkout; and a `file:` URI is
+percent-encoded, so a pub cache under a path containing a space arrived as
+`%20`. `package:cux_ship/cli.dart` is resolved by the VM through `--packages`,
+so none of that reading is needed. (Note the same prefix trap in the lockfile
+grep above — it has now cost two different readers in two different files.)
+
+If you cache a kernel snapshot of the command — worth it, since starting from
+source costs seconds on every invocation — note that `dart compile kernel`
+*does* require a real file and refuses a `package:` URI. Commit a one-line entry
+in your own tree and compile that:
+
+```dart
+// tool/cux_ship/bin/ship.dart
+export 'package:cux_ship/cli.dart' show main;
+```
+
 **Most projects end up with both, and the two drift apart silently.** Scripts
 run the pinned one through `dart run`; anything typed at a prompt runs the
 global one, because that is what is on `PATH`. Bumping the lockfile does nothing
