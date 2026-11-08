@@ -26,11 +26,11 @@ load-bearing sentences:
   in-process. §2.1 is that, and it is `open`.
 - It staged the move into 4,359 lines needing "no contract design" and 3,150
   that are a release model. The boundary is one symbol short of real, and that
-  symbol is the one §5.2 says a second consumer forces open. §6 withdraws the
+  symbol is the one §5.2 says a second consumer forces open. §7 withdraws the
   claim.
 
 The conclusion — move it, as a sibling, in stages — survives all three. What
-does not survive is the order of the stages, which §6 and §7 now reverse.
+does not survive is the order of the stages, which §7 and §8 now reverse.
 
 ## 1. The question
 
@@ -186,7 +186,7 @@ no longer exists", and neither is free. The `cux_ship_verify` dev dependency the
 train declares exists for two of those six files, so after the move the member
 declares a dev dependency with no remaining user.
 
-**The sharpest single failure is in the set §6 used to call Stage 1.**
+**The sharpest single failure is in the set §7 used to call Stage 1.**
 `status_test.dart`'s *"every flag these reads pass is one the real CLI accepts"*
 spawns `tool/ship play tracks --help` against the real shim. The comment it
 answers (`status.dart:1363`) says why it exists: a `--package-name`/`--package`
@@ -307,7 +307,7 @@ not parameterized:
 
 **Credential selectors.** `apple.api_keys.upload` and
 `android.play_service_account` as `secrets exec --only` arguments — **and both of
-those are in `status.dart`** (`:1358`, `:1474`), not in the files §6 called the
+those are in `status.dart`** (`:1358`, `:1474`), not in the files §7 called the
 release model. The keychain selector is **not** the `${platform.name}_appstore`
 template the first pass described: AuthPass names four profiles in one call —
 `ios_appstore`, `ios_appstore_autofill`, `macos_appstore`, `macos_developerid`
@@ -342,7 +342,7 @@ mechanism §2 rests on. The printed-command-line property survives them, but
 through `StepFailure`'s argv rather than through the runner.
 
 **So the surface is spread over five files — `train.dart`, `options.dart`,
-`status.dart`, `repo.dart`, `hooks.dart` — two of which §6 assigned to the stage
+`status.dart`, `repo.dart`, `hooks.dart` — two of which §7 assigned to the stage
 that was supposed to need no contract design.** The first pass's "concentrated in
 `train.dart` and `options.dart`" is the sentence that was wrong, and it is wrong
 in the direction that mattered: it made the staging look cleaner than it is.
@@ -414,9 +414,13 @@ destination whose credential is out of band and whose step is operator-only** �
 AuthPass's notarized macOS download needs a *team* App Store Connect key that
 cannot be scoped to one app and is deliberately kept off CI.
 
-## 6. What the donor loses
+## 6. What the donor keeps
 
-Status: **open**, and it is the gap the first pass missed entirely.
+Status: **proposed**, worked out 8 November 2026. This section was `open` an
+hour earlier, as *"where does the donor's `cux_ship` pin live after the move?"*,
+and it was the question said to gate everything else. The answer is that the pin
+does not move at all, and the reason it looked like it must is worth more than
+the conclusion.
 
 `tool/train` **is** How It Went's release pin, and that is not incidental.
 `SHIPPING.md` §12.3 is the decision: three structures were compared and B — fold
@@ -430,17 +434,123 @@ two uploads, until a log line 4.0.1 no longer prints gave it away. Two of
 thirty-one worktrees on that desk were already in the stale state when it was
 written.
 
-**Consume the train from here instead and How It Went has two pins of `cux_ship`
-again** — the one inside the pinned `cux_train` and the one `tool/ship` resolves
-locally — and `tool/ship` compares one lockfile against one resolution, so the
-second is invisible to it. That is the bad state B was chosen to make
-unrepresentable.
+### 6.1 "Two pins again" is wrong, and the reason is the useful part
 
-This is also why the train declares `cux_buildnumber: ^0.1.0` while importing it
-nowhere: the package is doing double duty as the repository's tooling pin, and
-that role has no home after the move. **Where the donor's pin lives afterwards
-has to be answered before the move, not after it.** It is the one cost on this
-list that falls entirely on the repository giving the code away.
+The objection was that consuming the train from here gives How It Went two pins
+of `cux_ship` — the one inside the pinned `cux_train` and the one `tool/ship`
+resolves locally — re-creating the state B was chosen to forbid.
+
+**A dependency's lockfile is not shipped to its consumers; pub ignores it.**
+`cux_train` would declare a *constraint*, and the donor's single `pub get`
+resolves one `cux_ship` into one lockfile. **Two pins requires two lockfiles,
+and the move does not add one.**
+
+So B's property was never "the library and the pin sit in one directory". It was
+**one lockfile that both the in-process import and the spawned CLI resolve
+from** — and emptying `lib/` does not add a lockfile. Stated that way the
+property is obviously preserved, which is why the first pass's framing of this
+as the gating cost was wrong: it read B as being about *co-location* when §12.3
+argues it as being about *arity*.
+
+### 6.2 The donor's wrapper needs no change, verified three ways
+
+- **`ship` finds a transitive `cux_ship`.** It reads the `rootUri` beside
+  `"name": "cux_ship",` out of `package_config.json`, and that file lists every
+  package in the resolution, direct or transitive. Measured on a three-level
+  path-dependency probe: the leaf appears with a `rootUri` although nothing
+  depends on it directly.
+- **A hosted entry carries the URI form `ship`'s `sed` expects.** The donor's
+  own config today reads
+  `file:///Users/…/.pub-cache/hosted/pub.dev/cux_ship-4.5.0-dev.8`, absolute and
+  `file://`-prefixed, and `cux_ship_verify` — already transitive-adjacent — has
+  the same shape.
+- **A transitive executable runs both ways.** `dart --packages=<config>
+  <path/to/bin.dart>` → exit 0, and `dart run <transitive-package>` → exit 0
+  with no warning. The second was the risk worth checking, because AuthPass's
+  `ship.sh` ends in `exec "$dart" run cux_ship "$@"`; it survives `cux_ship`
+  becoming transitive.
+
+And `require_current_resolution` in `_resolution.sh` already compares **every**
+package in the lockfile against the config — hosted by `version`, git by
+`resolved-ref` — so `cux_train` is covered the day it appears, with no edit. The
+guard was generalized away from `cux_ship` specifically when `tool/train.sh`
+needed the same question asked about a different failure, and that generalization
+is what pays here.
+
+### 6.3 What the donor's package becomes
+
+```yaml
+# tool/train/pubspec.yaml — How It Went
+name: cycling_storyteller_train
+publish_to: 'none'
+dependencies:
+  cux_train: ^1.0.0
+  cux_ship: 4.5.0-dev.8      # kept direct: see below
+  cux_buildnumber: ^0.1.0
+```
+
+`lib/` empties; `bin/train.dart` stays, because §3 and §5 establish it cannot
+move — it holds the bundle identifier, the TestFlight group, the sibling checks
+and the `--only tokens.…` regex over `build.sh`. `RELEASE_PACKAGE=train` in
+`_release_pkg.sh` does not change, so none of the five callers it exists to keep
+in step move either.
+
+**Keep `cux_ship` a direct dependency even though it would resolve
+transitively.** Not for `dart run` — §6.2 shows that works regardless — but
+because the pin is a thing this repository states on purpose. `_release_pkg.sh`
+says five things find it through one name; a constraint that exists only inside
+someone else's pubspec is not a pin the donor can read or bump. Declaring it
+direct also turns a disagreement between the donor's intent and `cux_train`'s cap
+into a **resolution failure** rather than a silent widening, which is the choice
+`SILENT-FAILURES.md` asks for everywhere else.
+
+**And `cux_buildnumber: ^0.1.0`, declared and imported nowhere, stops being
+odd.** The first pass read it as a leftover of the package doing double duty.
+After the move the double duty *is* the duty: the donor's package exists to be
+the pin plus `bin/train.dart`, and an unimported pin is what that looks like.
+
+### 6.4 One form of the dependency breaks the wrapper
+
+| form | one lockfile | `ship` finds the CLI |
+|---|---|---|
+| hosted `cux_train: ^1.0.0` | yes | yes |
+| git ref on this repository | yes | yes — `resolved-ref` already covered |
+| `path:` to a local checkout | yes | **no** |
+
+**Measured: a path dependency's `rootUri` is relative** — `../../leaf` on the
+probe — and `ship`'s extraction is
+`sed -n 's|.*"rootUri": "file://\(.*\)".*|\1|p'`, which matches nothing. It then
+dies on *"could not read cux_ship's location"*, naming the right file for the
+wrong reason.
+
+That is the form a developer reaches for when working on both repositories at
+once, so it is the one that will be hit, and by whoever is mid-change rather than
+mid-release. Widening the `sed` to accept a relative `rootUri` is a one-line fix
+and belongs in the move.
+
+### 6.5 The cost that is real
+
+The donor loses **unilateral** control of the pin. Today a `cux_ship` bump is one
+line in one pubspec. Afterwards, a bump past `cux_train`'s cap needs a
+`cux_train` release first — and §4's diamond makes that up to three serialized
+publishes with a resolver-liveness wait between each. During a release that is
+the difference between a one-line edit and an afternoon.
+
+**The escape hatch is already named in the donor.** `_release_pkg.sh` says: *"If
+a second Dart tool ever needs `cux_ship` as a library rather than as a command,
+the answer is a pub workspace and this moves again; docs/SHIPPING.md §12.3 has
+the comparison and what it would cost."* A donor-side workspace over
+`tool/train` and a local `cux_train` checkout restores same-day iteration, at
+exactly the price §12.3 put on A′ — a root pubspec, deleted member lockfiles, a
+`resolution:` key per member, a pre-commit hook change, and the pin declared
+twice. Worth paying during development of the extraction and not after it.
+
+So the honest summary is that the move costs the donor **release-time latency on
+a `cux_ship` bump**, not the integrity property §12.3 was written to protect.
+That is a smaller cost than the first pass claimed and a different one, and it is
+the kind that only shows up under time pressure — which is the argument for
+settling the workspace question before the first release that needs it rather
+than during.
 
 ## 7. The staging, and the first pass had it backwards
 
@@ -558,8 +668,11 @@ preflight has something to verify the day AuthPass declares requirements.
 
 Status: **open**.
 
-- **Where does the donor's `cux_ship` pin live after the move?** §6. This one
-  gates the move rather than following it.
+- **When does the donor's pub workspace get built — before the extraction or
+  after the first bump that needs it?** §6.5. The pin itself no longer moves
+  (§6), so what is left is release-time latency on a `cux_ship` bump and the
+  `rootUri` widening §6.4 asks for. Both are the donor's to schedule, and the
+  second is a one-line fix that should not wait.
 - **Where does the coverage of the five shell scripts and the Python script go?**
   §3. "Deleted" and "left in a package that no longer exists" are the two honest
   answers.
