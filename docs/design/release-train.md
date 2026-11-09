@@ -642,22 +642,30 @@ itself (`configVersion: 2`), whose documented parser is `package:package_config`
 `Isolate.resolvePackageUri` — the route `test/fakes.dart` already takes. Both are
 Dart-side, and the bash wrapper every other tool spawns cannot pay a VM start to
 find a path before starting the VM that does the work. Measured on the donor's
-own config (68 packages, 12.9 kB), 20 runs each: `grep | sed` **7 ms**, the
-python parser **39 ms**, a Dart reader **150–180 ms**.
+own config (68 packages, 12.9 kB): `grep | sed` around **7 ms**, the python
+parser **39–47 ms**, a Dart reader **150–180 ms**.
 
-**That middle figure is the least trustworthy number in this section, and it is
-interpreter start rather than work.** Bare `python3 -I -c pass` is 13 ms of the
-39; adding `json` and `urllib.parse` reaches 19 ms; adding `urllib.request` —
-imported for a single `url2pathname` call, which on POSIX is `unquote` — reaches
-36 ms. So parsing 12.9 kB of JSON costs about 3 ms and the rest is start-up,
-which makes the figure depend on which `python3` is first on `PATH`: under a
-different interpreter on this same machine, against a *larger* config, it
-measures 19 ms. None of that moves the decision — 150 ms against 7–39 ms is the
-same argument, and it is the reason the parser is not Dart — but **this sentence
-has now said 28 ms, then 56 ms, then 39 ms**, and the first two did not
-reproduce. Recorded rather than quietly corrected, per this document's own rule,
-because a figure nobody can reproduce is worse than no figure. It also hands the
-donor a cheap win: dropping `urllib.request` nearly halves the parser.
+**The middle figure is a range because it would not hold still, and this
+sentence has now carried four different numbers.** It said 28 ms in the first
+pass, 56 ms on 9 November, then 39 ms, then 39–47 — and the spread is not
+sloppiness in the last two: the same machine measured an hour apart under
+different load gave 39 and 47, with bare `python3 -I -c pass` moving 13 → 17 ms
+over the same interval. Only the first two were wrong; the rest is load. So the
+honest form is an order of magnitude, which is all the decision needs: the Dart
+reader is 3–20× the others and is the one that cannot be avoided by starting
+fewer processes. Recorded rather than quietly corrected, per this document's own
+rule, because a figure nobody can reproduce is worse than no figure.
+
+**And a correction to this section's own advice, which is the better lesson.**
+It said the donor could nearly halve the parser by dropping its
+`urllib.request` import, on the strength of `python3 -I -c 'import json,
+urllib.parse'` costing 17 ms less than the same plus `urllib.request`. The
+donor tried it. Timed as two copies of the real script differing only in that
+import, 30 runs each over three alternating rounds: **46.7/47.3, 47.3/47.0,
+47.3/46.3 ms — no difference at all.** Once `json` and `pathlib` are loaded the
+marginal cost is noise, so the import is back and the parser is unchanged. An
+import benchmarked in isolation is not a measurement of the program that
+contains it, and about 3 ms of the whole thing is the JSON parse either way.
 
 `jq` would also work and is on GitHub's runners, but it would be a new unpinned
 binary on the hot path of a repository whose `deps.lock` exists to pin external
