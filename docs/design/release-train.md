@@ -14,6 +14,17 @@ recommendation is recorded in place rather than removed. The same review turned
 up a knock-on in §4 and §9 that §6.4 had silently invalidated, and a figure in
 §6.4 that had been revised without being recorded; both are fixed and marked.
 
+**And a third review took out a premise this document inherited.** The
+`resolution: workspace` warning — the reason a consumer invokes an entry
+instead of `dart run`, and so the reason any of §6.4 exists — **does not print
+on Dart 3.13.7**. Measured 9 November 2026 on hosted `cux_ship 3.4.1`, the
+version [publishing-from-a-workspace.md](publishing-from-a-workspace.md) says it
+verified: zero bytes of stderr from `pub get` and from `dart run`. That document
+now carries the correction. Nothing here is withdrawn — naming the entry still
+earns its keep for a cached kernel snapshot, and this repository's CI pins
+3.13.0, so older pins may still be noisy — but §9's `publish_to: none` bullet
+rested on the message and is marked for re-pricing rather than quietly adjusted.
+
 How It Went's release train — `tool/train.sh` plus `tool/train/`, a
 `publish_to: none` Dart package of 7,509 lines of `lib/` and 10,718 lines of
 tests across 18 `*_test.dart` files and a 520-line `fakes.dart` — orders the six
@@ -815,10 +826,22 @@ Status: **open**.
   `<checkout>/<member>/bin/….dart` becomes `package:<member>/cli.dart` — so the
   surprising half is untouched: pointing `--packages` at the member is still the
   wrong guess, and it still reads as a broken checkout rather than a wrong flag.
-  AuthPass's `ship.sh` ends in `exec "$dart" run cux_ship "$@"`, the exact
-  invocation that warns. So a `publish_to: none` `cux_train` is still worse for
-  the second consumer — one path to get right now rather than two, but not
-  merely "not the better one".
+  AuthPass's `ship.sh` ends in `exec "$dart" run cux_ship "$@"`.
+
+  **This bullet needs re-pricing before it is relied on, because the warning it
+  rests on no longer prints.** Measured 9 November 2026 on Dart 3.13.7: a
+  consumer on hosted `cux_ship 3.4.1` gets zero bytes of stderr from both `pub
+  get` and `dart run`, and `publishing-from-a-workspace.md` now carries that
+  with what was run. The `--packages` awkwardness above is only *reached* by a
+  consumer avoiding `dart run`; one that can simply call `dart run cux_train`
+  never meets it. So the cost of `publish_to: none` is smaller than this bullet
+  says, and what survives of it is narrower: a consumer that caches a kernel
+  snapshot still needs a real entry path, and for a git checkout that path is
+  hand-writable, which is the cheap case. Still probably "not the better one",
+  but the "materially worse" framing was carried by a message that is gone, and
+  this question is `open` — so it should be re-answered on the snapshot and on
+  resolver behaviour, not on log noise. CI pins can lag (this repository's own
+  workflow pins 3.13.0), so a consumer on an older SDK may still see it.
 - **The name is a filename, not a label — and §6.4 took the force out of this.**
   §4 — pub ties the entry library to the package name on pain of exit 65, so
   choosing `cux_train` would rename `lib/train.dart` to `lib/cux_train.dart` and
