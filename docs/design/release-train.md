@@ -5,6 +5,11 @@ folded in, 8 November 2026. Not built. Everything marked *verified* was run on
 this machine with Dart 3.13.7 and git 2.54.0; everything else is argument or is
 marked as read rather than measured.
 
+**§6.4 was amended 9 November 2026**, while this was open for review, because
+the fix it recommended turned out to belong here rather than at the consumer and
+has since landed. The old recommendation is recorded in place rather than
+removed.
+
 How It Went's release train — `tool/train.sh` plus `tool/train/`, a
 `publish_to: none` Dart package of 7,509 lines of `lib/` and 10,718 lines of
 tests across 18 `*_test.dart` files and a 520-line `fakes.dart` — orders the six
@@ -509,7 +514,7 @@ odd.** The first pass read it as a leftover of the package doing double duty.
 After the move the double duty *is* the duty: the donor's package exists to be
 the pin plus `bin/train.dart`, and an unimported pin is what that looks like.
 
-### 6.4 One form of the dependency breaks the wrapper
+### 6.4 One form of the dependency broke the wrapper, and the fix belonged here
 
 | form | one lockfile | `ship` finds the CLI |
 |---|---|---|
@@ -517,46 +522,72 @@ the pin plus `bin/train.dart`, and an unimported pin is what that looks like.
 | git ref on this repository | yes | yes — `resolved-ref` already covered |
 | `path:` to a local checkout | yes | **no** |
 
+*As measured, before the fix below. There is now no path to find, so the third
+row is a fact about a question nobody asks any more.*
+
 **Measured: a path dependency's `rootUri` is relative** — `../../leaf` on the
-probe — and `ship`'s extraction is
+probe — and `ship`'s extraction was
 `sed -n 's|.*"rootUri": "file://\(.*\)".*|\1|p'`, which matches nothing. It then
-dies on *"could not read cux_ship's location"*, naming the right file for the
+died on *"could not read cux_ship's location"*, naming the right file for the
 wrong reason.
 
 That is the form a developer reaches for when working on both repositories at
 once, so it is the one that will be hit, and by whoever is mid-change rather than
 mid-release.
 
-**The fix is to parse the file rather than widen the pattern**, and there is no
-`dart` command that would avoid the question. Verified: `dart pub deps --json`
-carries `name`, `version`, `kind`, `source`, the dependency lists, the
-constraints and an `executables` list of *names* — `["train",
-"cux_buildnumber:git_buildnumber", "cux_ship", "test"]` — and no path for any of
-them. The documented artefact is `package_config.json` itself (`configVersion:
-2`), whose documented parser is `package:package_config`
-(`findPackageConfig`/`loadPackageConfig`), and whose in-process equivalent is
-`Isolate.resolvePackageUri` — the route `test/fakes.dart` already takes. All of
-those are Dart-side, and `tool/ship` is the bash wrapper every other tool
-spawns, so it cannot pay a VM start to find a path before starting the VM that
-does the work. It already caches a kernel snapshot precisely because that
-startup is on the hot path.
+**This section first answered "parse the file rather than widen the pattern",
+and that was the right shape at the wrong level.** A launcher reads `rootUri` at
+all only because this repository made its entry a filesystem path — and for a
+hosted pin that path is a version-stamped directory under `~/.pub-cache` that
+nothing but the config knows. One file here against a parser in every consumer.
 
-So from the shell the choice is only *which parser*, and the answer that costs
-nothing new is `python3`: ten files under How It Went's `tool/` are already
-python3 or invoke it, so it is an existing dependency rather than a new one.
-Measured on the real config, `python3 -I` resolving the entry is **28 ms against
-9 ms** for the current `grep | sed` — noise beside the VM it precedes. `jq` would
-also work and is on GitHub's runners, but it would be a new unpinned binary on
-the hot path of a repository whose `deps.lock` exists to pin external binaries.
+So since 8 November 2026 `cux_ship` and `cux_buildnumber` declare their CLIs in
+`lib/cli.dart`, the VM resolves the entry through `--packages`, and the failing
+row has nothing left to find:
 
-**A parser fixes three things, not one.** The relative `rootUri` above; a
-percent-encoded `file://` URI, which a pub cache under a path containing a space
-produces and the `sed` passes through verbatim; and the hazard `ship`'s own
-comment records — `"name": "cux_ship"` matches `cux_ship_verify` too, so the
-pattern is anchored on a trailing comma and depends on pub continuing to
-pretty-print the file with `rootUri` on the next line. Matching a parsed `name`
-field removes all three at once, and removes the dependency on pub's formatting
-that the comma anchor is.
+```bash
+dart --packages=<root>/.dart_tool/package_config.json \
+     package:cux_ship/cli.dart "$@"
+```
+
+A relative `rootUri` stops mattering because nobody reads `rootUri`.
+[publishing-from-a-workspace.md](publishing-from-a-workspace.md) carries the
+change, the two further defects the regex also had — a percent-encoded `file:`
+URI passed through verbatim, and `"name": "cux_ship"` matching `cux_ship_verify`
+— and why `main` rather than a named function is what makes the line above work.
+
+**Which turns this section's requirement on `cux_train` from a parser into one
+line: a published member with an executable declares it in `lib/cli.dart`.** It
+costs one file at creation and spares every consumer the question.
+`cux_ship_verify` bounds the rule rather than breaking it — no `bin/`, so no
+entry to declare.
+
+**Two things keep the donor's parser alive for now, so it was still worth
+writing.** Until the donor's pin reaches a release carrying `lib/cli.dart` all
+three defects are live, and the relative-`rootUri` one breaks exactly the `path:`
+pin somebody uses to develop against an unreleased fix here — so the failure
+lands on whoever is helping. And `dart compile kernel` refuses a `package:` URI
+(*`"package:cux_ship/cli.dart" file not found`*, where the plain `dart` above
+resolves it), so a consumer caching a snapshot still needs a real file — though
+it can be a one-line `export` committed in its own tree rather than a path
+recovered from the cache.
+
+**For the record, because the research was the expensive part: no `dart` command
+prints that path.** `dart pub deps --json` carries `name`, `version`, `kind`,
+`source`, the dependency lists, the constraints and an `executables` list of
+*names* — `["train", "cux_buildnumber:git_buildnumber", "cux_ship", "test"]` —
+and no path for any of them. The documented artefact is `package_config.json`
+itself (`configVersion: 2`), whose documented parser is `package:package_config`
+(`findPackageConfig`/`loadPackageConfig`) and whose in-process equivalent is
+`Isolate.resolvePackageUri` — the route `test/fakes.dart` already takes. Both are
+Dart-side, and the bash wrapper every other tool spawns cannot pay a VM start to
+find a path before starting the VM that does the work: measured on the real
+config, `python3 -I` resolves the entry in **56 ms** against **8 ms** for the
+`grep | sed` and **180 ms** for a Dart reader. `jq` would also work and is on
+GitHub's runners, but it would be a new unpinned binary on the hot path of a
+repository whose `deps.lock` exists to pin external binaries. And a Dart reader
+could not be snapshotted away the way `cux_ship` itself is, because it computes
+the path the snapshot is compiled from.
 
 ### 6.5 The cost that is real
 
@@ -700,9 +731,10 @@ Status: **open**.
 
 - **When does the donor's pub workspace get built — before the extraction or
   after the first bump that needs it?** §6.5. The pin itself no longer moves
-  (§6), so what is left is release-time latency on a `cux_ship` bump and the
-  `rootUri` widening §6.4 asks for. Both are the donor's to schedule, and the
-  second is a one-line fix that should not wait.
+  (§6), and the `rootUri` question is now closed from both ends — the donor
+  parses the config today, and stops needing to the day its pin reaches a
+  release carrying `lib/cli.dart` (§6.4). So what is left here is release-time
+  latency on a `cux_ship` bump, and that is the donor's to schedule.
 - **Where does the coverage of the five shell scripts and the Python script go?**
   §3. "Deleted" and "left in a package that no longer exists" are the two honest
   answers.
@@ -712,12 +744,15 @@ Status: **open**.
   [publishing-from-a-workspace.md](publishing-from-a-workspace.md) records that a
   git dependency on a member needs
   `dart --packages=<checkout>/.dart_tool/package_config.json
-  <checkout>/<member>/bin/…`, because `pub get` writes no config beside the
+  package:<member>/cli.dart`, because `pub get` writes no config beside the
   member — found "9 September 2026 by a consumer pinning a branch of this
-  repository as a git dependency". AuthPass's `ship.sh` ends in `exec "$dart" run
-  cux_ship "$@"`, the exact invocation that warns. So a `publish_to: none`
-  `cux_train` is materially worse for the second consumer, not merely "not the
-  better one".
+  repository as a git dependency". The `lib/cli.dart` change (§6.4) took the
+  second path out of that line but not the first: the config still lives at the
+  workspace root, and pointing `--packages` at the member is still the wrong
+  guess that reads as a broken checkout. AuthPass's `ship.sh` ends in `exec
+  "$dart" run cux_ship "$@"`, the exact invocation that warns. So a
+  `publish_to: none` `cux_train` is still worse for the second consumer — one
+  path to get right now rather than two, but not merely "not the better one".
 - **The name is a filename, not a label.** §4 — pub ties the entry library to
   the package name on pain of exit 65, so choosing `cux_train` renames
   `lib/train.dart` to `lib/cux_train.dart` and every consumer's import with it.
