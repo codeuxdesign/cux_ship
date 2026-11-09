@@ -13,14 +13,20 @@ dart --packages=tool/cux_ship/.dart_tool/package_config.json \
      package:cux_ship/cli.dart --help
 ```
 
-`dart <entry>` — rather than `dart run` — is how a consumer keeps the
-`resolution: workspace` advice out of its logs, and it needed a path to the
-entry. For a hosted pin that path is a version-stamped pub cache directory, so
+Consumers invoke the entry directly for two reasons — a cached kernel snapshot
+needs a real file, and on an older SDK pin `dart run` prints `resolution:
+workspace` advice into the log — and either way it needed a *path* to the entry.
+For a hosted pin that path is a version-stamped pub cache directory, so
 launchers were reading `rootUri` out of `package_config.json` with a regex. One
 met all three of that regex's failure modes: `"name": "cux_ship"` matching
-`cux_ship_verify`, a relative `rootUri` for a `path:` dependency matching
-nothing at all, and a percent-encoded `file:` URI. The VM resolves a `package:`
-script URI through `--packages`, so the reading is no longer needed.
+`cux_ship_verify`, a relative `rootUri` matching nothing at all, and a
+percent-encoded `file:` URI. The VM resolves a `package:` script URI through
+`--packages`, so the reading is no longer needed.
+
+On the warning specifically: it does **not** print on Dart 3.13.7 — measured 9
+November 2026 against hosted `cux_ship 3.4.1`, zero bytes of stderr — so if that
+is your only reason for avoiding `dart run`, check your own SDK first.
+`docs/design/publishing-from-a-workspace.md` has what was run.
 
 `dart run cux_ship` and `dart pub global activate cux_ship` are unchanged:
 `bin/cux_ship.dart` is now a one-line re-export of the new library, which is

@@ -52,6 +52,23 @@ import 'package:cux_ship/src/release.dart' show ReleaseException;
 /// half of why this is a library. A consumer that wrote its own entry would
 /// copy these three `catch` clauses, pinned to the exceptions that existed the
 /// day it copied them — and the first one is the loudest error this tool has.
+///
+/// **Call this from a process you are willing to lose, not in-process.** The
+/// clauses below call `exit()`, which used to be unreachable because it lived
+/// in `bin/`; publishing it as a library puts it one `import` away, and an
+/// in-process caller — a wrapper running several commands, or a test that
+/// imports this — has its process killed on a `ReleaseException` rather than
+/// getting an exception or a code back. Inside a `dart test` isolate that takes
+/// down the runner.
+///
+/// Note the asymmetry with `cux_buildnumber`'s `lib/cli.dart`, which sets
+/// `exitCode` and is import-safe. The import-safe shape here would be a
+/// `Future<int> run(List<String>)` holding the mapping, with `exit` only in
+/// `main`; it is not that today because changing how the collision path exits
+/// is a change to the loudest error on a release path, and it wants its own
+/// commit and its own mutation run rather than riding along with the move.
+/// `lib/runner.dart` and `lib/exit_codes.dart` already publish what a consumer
+/// needs to write that entry itself in the meantime.
 Future<void> main(List<String> argv) async {
   try {
     await buildRunner().run(argv);

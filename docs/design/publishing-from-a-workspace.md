@@ -1,11 +1,46 @@
 # `resolution: workspace` reaches consumers, and it stays
 
 Status: **decided**, 21 August 2026, after the second time somebody proposed
-dropping the key. Everything below was verified by running it against
-`cux_ship 3.4.1` and Dart 3.13.0, not read off an issue tracker.
+dropping the key. The four facts were verified by running them against
+`cux_ship 3.4.1` and Dart 3.13.0, not read off an issue tracker; the sections
+added since carry their own dates and SDKs, because — as the note below
+shows — a pub behaviour measured once is not a pub behaviour forever.
 
-Every consumer of a package published from this repository sees this on `pub
-get` and on **`dart run`** — so on nearly every build script and CI step:
+> **The warning is gone, and this document asked to be told.** Its closing
+> section says a new fact makes it wrong and should be written here with what
+> was run, so: on **9 November 2026**, Dart **3.13.7**, a throwaway consumer
+> depending on hosted `cux_ship: 3.4.1` — the same version verified above —
+> printed **nothing**. Zero bytes of stderr from `dart pub get`, zero from `dart
+> run cux_ship --help`, and no match for `resolution`, `workspace` or `pubspec.yaml
+> at` in either stream. The key is certainly still there:
+> `~/.pub-cache/hosted/pub.dev/cux_ship-3.4.1/pubspec.yaml:40: resolution: workspace`.
+> Five further shapes — 3.2.1, a consumer that is itself a workspace root, a
+> `path:` dep on a keyed package with no root above it, and a git pin of this
+> repository — were all silent too. It looks fixed in a pub patch somewhere
+> between 3.13.0 and 3.13.7.
+>
+> **What that does and does not overturn.** It kills two claims: *"every
+> consumer … sees this"*, and *"it is permanent"*. It leaves the four facts
+> below untouched, because they are about publishing and resolution rather than
+> about the message — the key still cannot be dropped, `pub publish` still
+> copies it, `pubspec_overrides.yaml` is still the wrong place for it. The
+> title still holds: it stays.
+>
+> **And one combination nobody has re-run: hosted on Dart 3.13.0**, which is
+> exactly what this document measured. CI pins 3.13.0 and PR
+> [#85](https://github.com/codeuxdesign/cux_ship/pull/85)'s run makes ten
+> `dart run cux_ship` calls with no occurrence of the warning in 443 kB of log
+> — but `cux_ship` is a *git* dependency there, so pub clones the whole
+> repository and the workspace root **is** in a parent directory, which is the
+> one case that correctly stays quiet. The hosted `cux_ship_verify` resolved
+> beside it does carry the key (line 44 of every cached copy) and was also
+> silent, which is suggestive and not the clean experiment. So treat 3.13.0 as
+> *probably* still noisy and every later SDK as quiet, and do not write
+> "permanent" again without a version beside it.
+
+On Dart 3.13.0, every consumer of a package published from this repository saw
+this on `pub get` and on **`dart run`** — so on nearly every build script and CI
+step:
 
 ```
 Found a pubspec.yaml at ~/.pub-cache/hosted/pub.dev/cux_ship-3.4.1.
@@ -15,18 +50,24 @@ But found no workspace root including it in parent directories.
 See https://dart.dev/go/pub-workspaces for more information.
 ```
 
-It is noise, it is permanent, and **it is not a bug to fix here.**
+It was noise, it is no longer printed on a current SDK, and **it was never a bug
+to fix here.**
 
-**It is, however, avoidable at the call site, which this document used to deny.**
-`dart <entry>` — no `run` — does not inspect the entry's enclosing package and
-prints nothing. Measured on `--help` by the consumer that found it, 4 September
-2026: stdout byte-identical at 25 lines, same exit code, stderr four lines
-against none, startup unchanged at 2.7–3.0 s either way. So a project pinning
-this package can have a clean log today by invoking the entry directly instead
-of through `dart run`. That does not change anything below — `pub get` still
-warns, the key still stays — but the claim that every invocation carries it was
-wrong, and a reader who takes "permanent" to mean "unavoidable" spends an
-afternoon confirming it.
+**It was, however, avoidable at the call site, which this document used to
+deny.** `dart <entry>` — no `run` — does not inspect the entry's enclosing
+package and prints nothing. Measured on `--help` by the consumer that found it,
+4 September 2026: stdout byte-identical at 25 lines, same exit code, stderr four
+lines against none, startup unchanged at 2.7–3.0 s either way. So on the SDK of
+the day a project pinning this package could get a clean log by invoking the
+entry directly instead of through `dart run`, and the claim that every
+invocation carried the warning was wrong.
+
+**Read in November, that paragraph is a trap of a different kind: it is the
+reason two consumers and this repository went to work on an entry path, and the
+warning it was dodging no longer prints.** Nothing below is wasted — naming the
+entry has two reasons that outlive the message, and the next section is about
+both — but a reader arriving at `dart <entry>` *in order to silence a warning*
+should check their own SDK first. On 3.13.7 there is nothing to silence.
 
 **And the advice above has a trap in it, found 9 September 2026 by a consumer
 pinning a branch of this repository as a git dependency.** `dart <entry>` needs
@@ -52,7 +93,17 @@ and the fix is a path, not a pubspec.
 paragraphs above were working around.** Since 8 November 2026 the CLI is
 declared in `lib/cli.dart`, so the VM resolves it through `--packages` and the
 advice becomes a line a consumer can write without knowing where the package
-landed:
+landed.
+
+**Two reasons to name the entry survive the warning going quiet, and they are
+why this section is not withdrawn along with it.** First, a consumer caching a
+**kernel snapshot** needs a real file either way — the one here went from ~4 s a
+run to ~420 ms and a release makes ten invocations — and `dart compile kernel`
+refuses a `package:` URI (below). Second, **CI pins can lag**: this repository's
+own workflow pins Dart 3.13.0, the version the warning was measured on, so a
+consumer on a pinned older SDK may still be seeing it long after a current one
+does not. Both are reasons to name the entry; neither is a reason to name a
+*path*, which is the only thing that changed here:
 
 ```bash
 dart --packages=<checkout>/.dart_tool/package_config.json \
@@ -191,7 +242,16 @@ else, with no `path:` rewriting around a publish and no melos.
 
 ## If you are here because you saw the warning
 
-Nothing is wrong. Do not drop the key, do not move it to an override file, and
-do not add a `# ignore` for it. If it becomes more than noise — if it ever
-fails a resolution rather than printing beside one — that is a new fact and
-this document is wrong; say so here with what you ran.
+**First, say which SDK**, because on 3.13.7 it does not print and the top of
+this document explains that. If you are on an older pin, nothing is wrong: do
+not drop the key, do not move it to an override file, and do not add a
+`# ignore` for it.
+
+If it becomes more than noise — if it ever fails a resolution rather than
+printing beside one — that is a new fact and this document is wrong; say so
+here with what you ran. **That clause has now been used once, in the direction
+nobody expected: the message stopped appearing.** It was worth having, so it
+stays, and it is worth widening — a claim here that something is permanent, or
+that every consumer sees it, is a claim about a version of pub, and the next
+person to find one of those false should write the version and the date in
+rather than deleting the sentence.

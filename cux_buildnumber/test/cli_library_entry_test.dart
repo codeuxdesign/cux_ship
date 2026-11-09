@@ -80,13 +80,17 @@ void main() {
       expect(viaLibrary.stdout, viaBin.stdout);
     });
 
-    test('prints no workspace warning, which is why consumers use it', () {
-      // The whole reason a consumer passes an entry instead of `dart run`:
-      // `resolution: workspace` in the published pubspec makes `dart run` emit
-      // four lines of advice addressed to whoever published the package.
+    test('writes nothing to stderr on a successful run', () {
+      // Renamed for the same reason as `cux_ship`'s copy, whose comment has
+      // the detail: the old name claimed a comparison against `dart run` that
+      // this case never makes, the `isNot(contains(…))` it carried was
+      // strictly subsumed by `isEmpty`, and the warning it named stopped
+      // printing between Dart 3.13.0 and 3.13.7 anyway. What is left is a real
+      // property — a launcher that works but chatters on stderr fails here and
+      // nowhere else.
       final result = _run('package:cux_buildnumber/cli.dart');
 
-      expect(result.stderr, isNot(contains('resolution `workspace`')));
+      expect(result.exitCode, 0, reason: result.stderr.toString());
       expect(result.stderr, isEmpty);
     });
   });

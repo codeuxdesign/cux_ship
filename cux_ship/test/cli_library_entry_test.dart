@@ -91,14 +91,34 @@ void main() {
       expect(viaLibrary.stdout, viaBin.stdout);
     });
 
-    test('prints no workspace warning, which is why consumers use it', () {
-      // The whole reason a consumer passes an entry instead of `dart run`:
-      // `resolution: workspace` in the published pubspec makes `dart run` emit
-      // four lines of advice addressed to whoever published the package. A
-      // launcher that reintroduced them would still pass the two cases above.
+    test('writes nothing to stderr on a successful run', () {
+      // **Named for what it checks, which is not what it was named for.** It
+      // used to say "prints no workspace warning, which is why consumers use
+      // it", and it asserted `isNot(contains('resolution `workspace`'))` above
+      // an `isEmpty` that strictly subsumes it. Two things were wrong with
+      // that: the first assertion was dead, and the case never spawns `dart
+      // run`, so it never compared the two and could not have shown the
+      // difference it claimed.
+      //
+      // **The comparison is not available to be written, either**, which is
+      // the more interesting half. That warning stopped printing between Dart
+      // 3.13.0 and 3.13.7 (measured 9 November 2026; see
+      // `docs/design/publishing-from-a-workspace.md`), so a test asserting
+      // `dart run` is noisy would assert a pub version rather than anything
+      // about this package, and would go red on a current SDK for the right
+      // reason. The warning's exact wording — "But it has resolution
+      // `workspace`." — is kept here in prose, since that assertion was the
+      // only record of it.
+      //
+      // **It is still a discriminating case, which the rename does not
+      // weaken.** Mutation: one `stderr.writeln` added at the top of
+      // `lib/cli.dart`'s `main` → `+2 -1`, this case red and the other two
+      // green. It is the only case that sees a launcher that works but is
+      // noisy, which is exactly the regression a consumer piping stderr into a
+      // release log would care about.
       final result = _run('package:cux_ship/cli.dart');
 
-      expect(result.stderr, isNot(contains('resolution `workspace`')));
+      expect(result.exitCode, 0, reason: result.stderr.toString());
       expect(result.stderr, isEmpty);
     });
   });

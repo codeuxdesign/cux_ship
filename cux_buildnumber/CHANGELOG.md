@@ -13,12 +13,15 @@ dart --packages=tool/cux_ship/.dart_tool/package_config.json \
      package:cux_buildnumber/cli.dart generate
 ```
 
-Invoking the entry rather than `dart run` is how a consumer keeps the
-`resolution: workspace` advice out of its logs, and it needed a path. For a
-hosted pin that path is a version-stamped pub cache directory, so launchers were
-reading `rootUri` out of `package_config.json` with a regex; the VM resolves a
-`package:` script URI through `--packages` instead. Same change as `cux_ship`
-made for the same consumer.
+Consumers invoke the entry rather than `dart run` — for a cached snapshot, or on
+an older SDK pin to keep `resolution: workspace` advice out of the log — and
+either way it needed a path. For a hosted pin that path is a version-stamped pub
+cache directory, so launchers were reading `rootUri` out of
+`package_config.json` with a regex; the VM resolves a `package:` script URI
+through `--packages` instead. Same change as `cux_ship`, for the same consumer.
+
+The warning itself does not print on Dart 3.13.7 (measured 9 November 2026);
+`cux_ship`'s `docs/design/publishing-from-a-workspace.md` records what was run.
 
 `bin/git_buildnumber.dart` is now a one-line re-export, so `dart run` and
 `dart pub global activate` are unchanged.

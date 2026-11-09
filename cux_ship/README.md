@@ -658,13 +658,20 @@ belongs in what you ship — and because `dart run` resolves against the package
 it is invoked from. Everything the command needs is inferred from the repository
 around it, so the directory it lives in does not matter.
 
-**`dart run` prints four lines of advice you cannot act on, and this is how to
-avoid them.** This package declares `resolution: workspace`, which `pub publish`
-copies verbatim into what pub.dev serves, so every `dart run cux_ship` says it
-found a pubspec with that key and no workspace root above it. It is addressed to
-whoever published the package rather than to you. `dart <entry>` — no `run` —
-does not inspect the entry's enclosing package and prints nothing, and the entry
-can be named as a `package:` URI:
+**On an older SDK, `dart run` prints four lines of advice you cannot act on, and
+this is how to avoid them.** This package declares `resolution: workspace`,
+which `pub publish` copies verbatim into what pub.dev serves, so `dart run
+cux_ship` said it found a pubspec with that key and no workspace root above it —
+advice addressed to whoever published the package rather than to you. **That
+stopped printing somewhere between Dart 3.13.0 and 3.13.7**: measured 9 November
+2026 against hosted `cux_ship 3.4.1`, both `pub get` and `dart run` give zero
+bytes of stderr. So if a quiet log is all you are after, try `dart run` on your
+own SDK before changing anything.
+
+Naming the entry still earns its keep for two other reasons — a cached kernel
+snapshot needs a real file (below), and a pinned older SDK may still be noisy —
+and `dart <entry>`, no `run`, does not inspect the entry's enclosing package.
+The entry can be named as a `package:` URI:
 
 ```bash
 dart --packages=tool/cux_ship/.dart_tool/package_config.json \
