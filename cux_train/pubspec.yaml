@@ -1,0 +1,59 @@
+name: cux_train
+description: >-
+  Orders the steps of a release and waits on the ones a person performs — the
+  orchestration above cux_ship, which each step spawns for the store writes.
+repository: https://github.com/codeuxdesign/cux_ship
+issue_tracker: https://github.com/codeuxdesign/cux_ship/issues
+# **The package's first number, and `docs/RELEASING.md`'s rule about not
+# claiming one does not reach it.** That rule exists because several open
+# branches each bumping a released package claim the same next version and
+# collide; a package that has never been published has nothing to collide with,
+# and `cux_buildnumber` started at `0.1.0-dev.1` the same way. The heading in
+# CHANGELOG.md has to match this line or `pub publish --dry-run` warns, which
+# `tool/check.sh` turns into a red run, so the two move together. Publishing it
+# is still a `release/` branch's job.
+version: 0.1.0-dev.1
+
+topics:
+  - release
+  - ci
+
+# **The floor is 3.12.2, and the donor's `^3.13.0` was incidental.**
+# `docs/design/release-train.md` §7 priced the move as needing a Flutter bump at
+# the consumer, because How It Went's `tool/train/pubspec.yaml` declares
+# `sdk: ^3.13.0` with no reason recorded beside it — unlike every dependency
+# constraint in that file, which each name the floor they ask for and why.
+# Tested rather than assumed, on 10 November 2026: the analyzer gates language
+# features on the *declared* constraint, so a copy of that package with this
+# constraint says whether it uses anything newer without needing an older SDK
+# installed. `dart pub get` resolved and `dart analyze` found no issues, so it
+# does not. The design document carries what was run.
+#
+# Which keeps this member where its three siblings already are, and that
+# matters more than the one line: `cux_ship` 4.5.0-dev.8, `cux_ship_verify` and
+# `cux_buildnumber` all declare `^3.12.2`, as does the workspace root, and
+# 3.12.2 is exactly the Dart that Flutter 3.44.7 bundles. A member asking for
+# more would raise the floor for all of them.
+environment:
+  sdk: ^3.12.2
+
+# **Consumers of the published package see a warning about this key, and it
+# stays.** Removing it is not a trade-off — pub refuses to resolve this
+# repository at all, because the root pubspec lists this directory as a
+# workspace member and this line is what makes it one. Moving it into a
+# committed pubspec_overrides.yaml does work and is rejected for a worse
+# failure mode. Verified, with what was run:
+# docs/design/publishing-from-a-workspace.md
+resolution: workspace
+
+# **No dependencies yet, and `cux_ship` is the one this will grow.** The train
+# spawns the command rather than importing its clients — that is the whole
+# argument of `docs/design/release-train.md` §2, and the reason this is a
+# sibling member and not a library inside `cux_ship`. What it will import is the
+# read side: `package:cux_ship/documents.dart` and
+# `package:cux_ship/exit_codes.dart` are the only two the donor's `lib/` reaches
+# for today, across four import sites.
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.25.0
