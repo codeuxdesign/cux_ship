@@ -1,9 +1,49 @@
 # The release train is a sibling member, not a library in `cux_ship`
 
-Status: **proposed**, second pass, with one adversarial and one consumer review
-folded in, 8 November 2026. Not built. Everything marked *verified* was run on
-this machine with Dart 3.13.7 and git 2.54.0; everything else is argument or is
+Status: **decided**, second pass, with one adversarial and one consumer review
+folded in, 8 November 2026. Everything marked *verified* was run on this
+machine with Dart 3.13.7 and git 2.54.0; everything else is argument or is
 marked as read rather than measured.
+
+**Taken, and begun, 10 November 2026.** `cux_train` exists as the fourth
+workspace member — an entry point, a usage text and the tests that hold both,
+with no train in it. The move itself is still ahead, and §7's staging is the
+order it goes in: the **ordering** stage first, because §8 is right that it is
+the one with a consumer today. The status is `decided` rather than `built`
+because the subject of this document is the move, and the move has not
+happened; §7, §8 and §9 stay `open` where they say so.
+
+**And §7's Dart floor is wrong in the consumer's favour — measured 10 November
+2026.** §7 asserts that the donor declaring `sdk: ^3.13.0` makes the move "a
+Flutter bump as well" for AuthPass, whose pinned Flutter 3.44.7 bundles Dart
+**3.12.2** (confirmed from Flutter's release index; the `ci.yaml` comment §7
+cites is right that 3.13.0 is what Flutter 3.47.0 bundles, and 3.47.7 bundles
+3.13.5). The constraint turned out to be incidental rather than required. Its
+line in `tool/train/pubspec.yaml` carries no reason — unlike every dependency
+constraint around it, each of which records "the floor it names and why" — only
+`TO BUMP: widen the constraint and run dart pub get here`. The analyzer gates
+language features on the *declared* constraint, so a copy of that package with
+the constraint lowered reports anything needing a newer language version
+without an older SDK being installed. On a copy, leaving the repository's
+lockfile untouched:
+
+```
+constraint now: 89:  sdk: ^3.12.2
+dart pub get  → Changed 68 dependencies!   exit 0
+dart analyze  → No issues found!           exit 0
+```
+
+So the train uses nothing from Dart 3.13, `cux_train` declares `^3.12.2` with
+its three siblings and the workspace root, and the SDK move drops out of the
+ordering stage's price. The dependency side agrees, which is what makes it safe
+rather than merely convenient: `cux_ship` 4.5.0-dev.8 itself declares
+`^3.12.2`, and of the six resolved packages whose floors exceed 3.12 every one
+is test tooling or a leaf parser with older compatible versions
+(`analyzer`, `_fe_analyzer_shared`, `frontend_server_client`, `petitparser`,
+`web`, `xml`). **The other half of §7's objection is untouched** and is the
+half that was load-bearing: the *reads* stage still needs a 4.5.0-dev pin two
+majors above AuthPass's `^3.6.0`, and `status` still does not answer the
+question AuthPass's guards ask.
 
 **§6.4 was amended 9 November 2026**, while this was open for review, because
 the fix it recommended turned out to belong in this repository rather than at
@@ -867,9 +907,16 @@ Status: **open**.
   371, `panel` 442, `status_block` 143, `upload_progress` 222 — which degrade to
   null off a terminal. What AuthPass would use in CI is none of it. A package of
   their own, with no googleapis attached, is the alternative.
-- **What is the Dart floor, against Flutter 3.44.7?** §7 asserts AuthPass's
-  bundled Dart is below `^3.13.0` from `ci.yaml`'s comment about Flutter 3.47.
-  Not verified against the SDK itself, and it should be before §7 is relied on.
+- **ANSWERED 10 November 2026 — what is the Dart floor, against Flutter
+  3.44.7?** Flutter 3.44.7 bundles **Dart 3.12.2**, so §7's reading of
+  `ci.yaml`'s comment was right and AuthPass is indeed below `^3.13.0`. **But
+  the floor is not required**: the donor's constraint is incidental, the train
+  analyzes clean declared at `^3.12.2`, and `cux_train` therefore declares
+  `^3.12.2` like its siblings. This question asked whether §7 could be relied
+  on; the answer is that its premise holds and its conclusion does not. The
+  header has what was run, and the ordering stage asks the consumer for no SDK
+  move. Nothing here closes §7's *other* objection, which is the reads stage's
+  4.5.0-dev pin.
 - **Does the train replace AuthPass's build matrix, run inside one cell, or watch
   it?** Its Android release is a six-way matrix with `fail-fast: true`, each cell
   allocating its own build number by pushing a ref, while `Train` takes a
