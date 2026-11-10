@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+**The command is launchable as `package:cux_ship/cli.dart`**, so a project that
+pins this package no longer has to find `bin/cux_ship.dart` in the pub cache to
+invoke the entry directly:
+
+```bash
+dart --packages=tool/cux_ship/.dart_tool/package_config.json \
+     package:cux_ship/cli.dart --help
+```
+
+Consumers invoke the entry directly for two reasons — a cached kernel snapshot
+needs a real file, and on an older SDK pin `dart run` prints `resolution:
+workspace` advice into the log — and either way it needed a *path* to the entry.
+For a hosted pin that path is a version-stamped pub cache directory, so
+launchers were reading `rootUri` out of `package_config.json` with a regex. One
+met all three of that regex's failure modes: `"name": "cux_ship"` matching
+`cux_ship_verify`, a relative `rootUri` matching nothing at all, and a
+percent-encoded `file:` URI. The VM resolves a `package:` script URI through
+`--packages`, so the reading is no longer needed.
+
+On the warning specifically: it does **not** print on Dart 3.13.7 — measured 9
+November 2026 against hosted `cux_ship 3.4.1`, zero bytes of stderr — so if that
+is your only reason for avoiding `dart run`, check your own SDK first.
+`docs/design/publishing-from-a-workspace.md` has what was run.
+
+`dart run cux_ship` and `dart pub global activate cux_ship` are unchanged:
+`bin/cux_ship.dart` is now a one-line re-export of the new library, which is
+also the shape to commit in a consumer's own tree if it caches a kernel
+snapshot — `dart compile kernel` requires a real file and refuses a `package:`
+URI.
+
 ## 4.5.0-dev.8
 
 **Needs `cux_ship_verify` 1.11.0-dev.4**, for `LocaleMetadata.creativeAssets`,
