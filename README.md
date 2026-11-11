@@ -4,15 +4,18 @@ Release tooling for shipping a Flutter or Dart app to the App Store and Google
 Play: upload an artifact, publish the store listing, promote a build that is
 already up, and turn a `CHANGELOG.md` into the notes each store shows.
 
-Two published packages, and which one you want depends on what you are doing.
+Four packages, and which one you want depends on what you are doing. Three are
+published; `cux_train` is not yet.
 
 | Package | | |
 |---|---|---|
 | [**`cux_ship`**](cux_ship) | **You are shipping.** The command, and the App Store Connect and Google Play clients behind it. | [pub.dev](https://pub.dev/packages/cux_ship) · [README](cux_ship/README.md) |
 | [**`cux_ship_verify`**](cux_ship_verify) | **You are checking.** The changelog parser, the App Store metadata model, and the offline checks over both. No dependencies at all, so it belongs in your `dev_dependencies`. | [pub.dev](https://pub.dev/packages/cux_ship_verify) · [README](cux_ship_verify/README.md) |
+| [**`cux_buildnumber`**](cux_buildnumber) | **You are numbering a build.** Monotonic build numbers shared through git refs, which a build allocates before it has an artifact. Its one runtime dependency is `git` on PATH. | [pub.dev](https://pub.dev/packages/cux_buildnumber) · [README](cux_buildnumber/README.md) |
+| [**`cux_train`**](cux_train) | **You are ordering a release.** The steps, their credentials, and the ones a person performs by hand. Nothing implemented yet — see [the design](docs/design/release-train.md). | [README](cux_train/README.md) |
 
-`cux_ship` depends on `cux_ship_verify`, never the reverse. That direction is the
-reason there are two packages: both stores enforce their limits *after* an
+`cux_ship` depends on `cux_ship_verify`, never the reverse. That direction is why
+those two are separate packages: both stores enforce their limits *after* an
 upload, so the checks want to run in your own test suite on every push — and
 reaching them through the CLI would put googleapis in the lockfile of everyone
 who only wanted to know whether a release note is too long.
@@ -36,9 +39,10 @@ steps, pointing at the READMEs for everything else. See
 
 ## Development
 
-A pub workspace. `dart pub get` at the root resolves both packages against one
+A pub workspace. `dart pub get` at the root resolves every member against one
 lockfile; `dart format`, `dart analyze --fatal-infos` and `dart test` run per
-package.
+package. `tool/check.sh` runs what CI runs, over every member or a named one,
+and takes its list from the root pubspec's `workspace:` key.
 
 ## Licence
 
