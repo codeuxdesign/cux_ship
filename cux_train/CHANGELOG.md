@@ -35,9 +35,12 @@ An unknown key is an error, as in `cux_ship`'s `.cux-ship.yaml` and for the
 same reason: a misspelt `prodution:` that is quietly skipped is
 indistinguishable from a destination that deliberately has no production step.
 A missing stage is the one exception and is read as `none`, because fifty-seven
-cells of which most are nobody-acts is a table whose rows get copied instead of
-read — and a stage omitted by mistake surfaces as a refusal naming the
-destination, not as a silent skip.
+cells, twenty-four of them nobody-acts, is a table whose rows get copied
+instead of read. A stage *written and left empty* is still refused — absent and
+explicit-null are different acts — but a stage whose key is simply gone is only
+caught at the stage it was needed for, as a refusal when the run names that
+destination and as a skip when it does not. That is weaker than a refusal and
+it is what the default costs.
 
 **Two guards in the first draft were dead, and the mutation run is what said
 so.** A second condition in `coversEveryDestination` that could never be false,

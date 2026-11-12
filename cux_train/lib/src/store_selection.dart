@@ -60,8 +60,15 @@ class StoreSelection {
 
 /// Resolves [names] against [table] for [stage].
 ///
-/// An empty [names] is "every destination", which is the default and the only
-/// way to reach the finish rule.
+/// An empty [names] is "every destination", and it is the default.
+///
+/// **It is not a precondition of the finish rule**, and the draft of this
+/// comment said it was. §4 of `authpass-on-the-train.md` settles the rule as
+/// "every declared destination that has a production step is *recorded* at
+/// production" — a question about the record, not about whether this
+/// invocation was narrowed. §3's `production` is resumable across days, so the
+/// last console finished with `--store ppa production` has to be able to spend
+/// the version tag; a rule keyed on this argument could never let it.
 StoreSelection resolveStores({
   required DestinationTable table,
   required List<String> names,
@@ -160,9 +167,6 @@ String _nothingToDo(
   List<Destination> skipped,
   Stage stage,
 ) {
-  final asked = names.isEmpty
-      ? 'no destination'
-      : names.map((n) => '`$n`').join(', ');
   if (skipped.length == 1) {
     final destination = skipped.single;
     final has = Stage.values
@@ -174,7 +178,18 @@ String _nothingToDo(
         : 'the stages it has are ${has.join(' and ')}';
     return '`${destination.name}` has no `${stage.name}` stage; $alternative.';
   }
-  return '$asked ${names.length == 1 ? 'has' : 'have'} no `${stage.name}` stage: '
-      '${skipped.map((d) => '`${d.name}`').join(', ')} '
-      'declare nothing at that stage.';
+  // **The unnarrowed run gets its own sentence**, because the narrowed one's
+  // subject is the names that were typed and there are none to put there. The
+  // draft interpolated `no destination` into the same frame and read "no
+  // destination have no `beta` stage", which is both ungrammatical and the
+  // opposite of what it means. Reachable without a typo: `beta` over a table
+  // where nobody declares one.
+  final skippedNames = skipped.map((d) => '`${d.name}`').join(', ');
+  if (names.isEmpty) {
+    return 'no destination has a `${stage.name}` stage: '
+        '$skippedNames declare nothing at that stage.';
+  }
+  return '${names.map((n) => '`$n`').join(', ')} '
+      '${names.length == 1 ? 'has' : 'have'} no `${stage.name}` stage: '
+      '$skippedNames declare nothing at that stage.';
 }

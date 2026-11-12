@@ -4,11 +4,12 @@
 /// **This is the piece that lets one train serve two repositories**, and it is
 /// the first thing `docs/design/authpass-on-the-train.md` §8 asks for. The
 /// donor validates `--store` against a hardcoded four-row map of the stores it
-/// happens to publish to; a consumer with nineteen destinations — six Android
-/// listings, four direct downloads, F-Droid, a PPA — cannot be expressed in
-/// that map, and the donor's own comment says as much ("a second Android store
-/// … a row in the table below can express that"). So the map becomes data the
-/// consumer declares, and the donor becomes the degenerate case with three
+/// happens to publish to; a consumer with nineteen destinations, six of them
+/// Android and four of them direct downloads, cannot be expressed in that map
+/// — and the donor's own comment reaches for the same answer, anticipating a
+/// second Android store and saying of F-Droid that "A row in the table below
+/// can express that" (the comment as §2 records it). So the map becomes data
+/// the consumer declares, and the donor becomes the degenerate case with three
 /// rows.
 ///
 /// **What is deliberately not here.** No step is executed and no store is
@@ -25,8 +26,9 @@ import 'package:yaml/yaml.dart';
 /// **Its message names the file and the key**, because the reader is an
 /// operator who has just typed a release command and needs to know which line
 /// of which file to open — not a stack trace. The same reasoning as
-/// `cux_ship`'s `ProjectException`, which this will become once this package
-/// depends on `cux_ship` for `exit_codes.dart`.
+/// `cux_ship`'s `ProjectException` (`lib/src/project.dart`, which no public
+/// library of that package exports today), and this becomes it if and when
+/// that type is exported alongside `exit_codes.dart`.
 class DestinationTableException implements Exception {
   DestinationTableException(this.message);
 
@@ -108,12 +110,16 @@ class DestinationStep {
   /// **Absent means `none`, and that is a deliberate asymmetry with the
   /// unknown-key policy below.** A missing key is refused everywhere else in
   /// this file; a missing *stage* is not, because nineteen destinations times
-  /// three stages is fifty-seven cells of which most are "nobody acts", and a
-  /// table that makes the author write them all out is a table whose rows get
-  /// copied rather than read. The risk this trades against — a stage omitted
-  /// by mistake reading as deliberate — is caught elsewhere: `--store x beta`
-  /// refuses when the cell is `none`, so a forgotten stage surfaces as a
-  /// refusal naming the destination rather than as a silent skip.
+  /// three stages is fifty-seven cells, twenty-four of them "nobody acts", and
+  /// a table that makes the author write them all out is a table whose rows
+  /// get copied rather than read.
+  ///
+  /// **What that trades away, exactly.** A stage *written and left empty* is
+  /// refused at parse time — `_parseDestination` tells absent from
+  /// explicit-null. A stage whose key is gone is not, so the omission shows up
+  /// at the stage: `--store x beta` refuses when the cell is `none`, and an
+  /// unnarrowed run reports the destination as skipped. The second is weaker
+  /// than a refusal and is the real cost of the default.
   static const absent = DestinationStep(kind: StepKind.none);
 
   final StepKind kind;
@@ -150,8 +156,8 @@ class Destination {
   /// How to read what this destination currently holds, if it can be read.
   ///
   /// Null means unreadable, which is not a defect — it is what makes a
-  /// destination *attested* rather than *observed*, and five of AuthPass's
-  /// are.
+  /// destination *attested* rather than *observed*, and four of AuthPass's
+  /// are: the store consoles, with two more the plan takes no position on.
   final String? read;
 
   /// Per-destination identity: `package`, `bundle-id`, whatever the step needs.
@@ -204,7 +210,7 @@ class DestinationTable {
         '$source must be a map with a `destinations` key',
       );
     }
-    _checkKeys(document, const {'destinations'}, source, source);
+    _checkKeys(document, const {'destinations'}, source);
 
     // **Missing and malformed are separate messages**, because they are
     // separate mistakes: the first is a file that has not been written yet,
@@ -231,8 +237,22 @@ class DestinationTable {
 
     final destinations = <Destination>[];
     for (final entry in declared.entries) {
-      final name = '${entry.key}';
-      destinations.add(_parseDestination(name, entry.value, source));
+      // **A name YAML did not read as text is refused, not stringified.**
+      // `'${entry.key}'` accepts anything and what it produces is a *plausible
+      // name*: an unquoted `~:` becomes the four letters `null`, `true:`
+      // becomes `true`, and `--store null` then selects a destination nobody
+      // declared. The name pattern cannot catch it, because the stringified
+      // form is a legal name — which is why this has to be a check on the
+      // type rather than on the spelling. Quoting it is the fix.
+      final key = entry.key;
+      if (key is! String) {
+        throw DestinationTableException(
+          '$source: a destination name must be text, and YAML read '
+          '`${entry.key}` as ${key == null ? 'null' : key.runtimeType} — '
+          'quote it if that is the name you meant',
+        );
+      }
+      destinations.add(_parseDestination(key, entry.value, source));
     }
     final table = DestinationTable(destinations);
     table._checkNamesAreUsable(source);
@@ -305,24 +325,45 @@ class DestinationTable {
     if (value is! YamlMap) {
       throw DestinationTableException('$where must be a map');
     }
-    _checkKeys(
-      value,
-      const {'internal', 'beta', 'production', 'read', 'identity'},
-      source,
-      'destination `$name`',
-    );
+    _checkKeys(value, const {
+      'internal',
+      'beta',
+      'production',
+      'read',
+      'identity',
+    }, where);
 
     final steps = <Stage, DestinationStep>{};
     for (final stage in Stage.values) {
-      final declared = value[stage.name];
-      if (declared != null) {
-        steps[stage] = _parseStep(declared, '$where, `${stage.name}`');
+      // **Absent is `none`; written-and-left-empty is a mistake.** The two
+      // are different acts and only the first is a decision: `beta: none` is
+      // how an author says nobody acts, so a bare `beta:` — a body deleted, a
+      // step commented out mid-edit — is the unknown-key argument applied to a
+      // key that happens to be spelt right. This file already refuses the same
+      // shape one level up (`play:` with no body is "destination `play` must
+      // be a map"), and reading it as `none` here would have the two levels
+      // disagree about what an empty body means.
+      if (!value.containsKey(stage.name)) {
+        continue;
       }
+      final declared = value[stage.name];
+      if (declared == null) {
+        throw DestinationTableException(
+          '$where declares `${stage.name}` with nothing in it — write '
+          '`${stage.name}: none` for a stage nobody acts at, or leave the key '
+          'out',
+        );
+      }
+      steps[stage] = _parseStep(declared, '$where, `${stage.name}`');
     }
 
     return Destination(
       name: name,
-      steps: steps,
+      // **Unmodifiable, as `DestinationTable.destinations` is.** A parsed
+      // destination is what `--store` resolves over, and a caller that could
+      // put a step into this map could make the train act on a destination at
+      // a stage the consumer never declared.
+      steps: Map.unmodifiable(steps),
       read: _optionalString(value, 'read', where),
       identity: _parseIdentity(value['identity'], where),
     );
@@ -331,8 +372,9 @@ class DestinationTable {
   /// A step is either a bare kind or a map carrying what the kind needs.
   ///
   /// The bare form exists for the kind that dominates a real table: `beta:
-  /// none` is most of fifty-seven cells, and writing `beta: {kind: none}`
-  /// fifty times is how a table stops being read.
+  /// none` is sixteen of AuthPass's nineteen beta cells, `none` is twenty-four
+  /// of its fifty-seven cells in all, and writing `beta: {kind: none}` sixteen
+  /// times is how a table stops being read.
   static DestinationStep _parseStep(Object? declared, String where) {
     if (declared is String) {
       final kind = StepKind.byName(declared);
@@ -349,18 +391,18 @@ class DestinationTable {
         '$where must be a step kind (${_kindNames()}) or a map',
       );
     }
-    _checkKeys(
-      declared,
-      const {'kind', 'command', 'console', 'note'},
-      where,
-      where,
-    );
+    _checkKeys(declared, const {'kind', 'command', 'console', 'note'}, where);
 
+    // **Absent and present-but-not-a-kind are different mistakes**, and only
+    // the first one is a missing `kind`. `kind: 7` told the operator it needed
+    // a `kind` it had plainly written, which sends them looking for the wrong
+    // thing; a non-string is a value this parser cannot read, so it gets the
+    // same message as `kind: shp`.
     final kindName = declared['kind'];
-    if (kindName is! String) {
+    if (kindName == null) {
       throw DestinationTableException('$where needs a `kind`');
     }
-    final kind = StepKind.byName(kindName);
+    final kind = kindName is String ? StepKind.byName(kindName) : null;
     if (kind == null) {
       throw DestinationTableException(
         '$where has kind `$kindName`, which is not one of ${_kindNames()}',
@@ -386,7 +428,11 @@ class DestinationTable {
   /// expecting it to run. Neither is recoverable later from the record,
   /// because the record only ever says what the train believes it did.
   static DestinationStep _checkedStep(DestinationStep step, String where) {
-    if (step.kind.spawns && (step.command?.isEmpty ?? true)) {
+    // `command == null`, not also `command.isEmpty`: `_optionalString` has
+    // already refused an empty one by the time this runs, so a second check
+    // for it would read as a guard and never fire — the shape the mutation run
+    // found twice in the first draft.
+    if (step.kind.spawns && step.command == null) {
       throw DestinationTableException(
         '$where is `${step.kind.name}` and needs a `command` — a step that '
         'spawns nothing would be reported as done',
@@ -416,7 +462,17 @@ class DestinationTable {
     }
     final identity = <String, String>{};
     for (final entry in declared.entries) {
-      final key = '${entry.key}';
+      // Same stringification as the destination names above, same refusal: a
+      // step reads these by key, so `identity['null']` is a value no step will
+      // ever ask for.
+      final rawKey = entry.key;
+      if (rawKey is! String) {
+        throw DestinationTableException(
+          '$where: an `identity` key must be text, and YAML read '
+          '`${entry.key}` as ${rawKey == null ? 'null' : rawKey.runtimeType}',
+        );
+      }
+      final key = rawKey;
       final value = entry.value;
       if (value is! String || value.isEmpty) {
         throw DestinationTableException(
@@ -425,7 +481,7 @@ class DestinationTable {
       }
       identity[key] = value;
     }
-    return identity;
+    return Map.unmodifiable(identity);
   }
 
   /// A name has to be typeable after `--store` and unambiguous in a message.
@@ -469,12 +525,7 @@ class DestinationTable {
   /// where a release goes. A misspelt `prodution:` that is quietly skipped is
   /// a destination the train will report as having no production step, which
   /// reads exactly like a destination that deliberately has none.
-  static void _checkKeys(
-    YamlMap map,
-    Set<String> known,
-    String source,
-    String where,
-  ) {
+  static void _checkKeys(YamlMap map, Set<String> known, String where) {
     final unknown =
         map.keys
             .map((key) => '$key')

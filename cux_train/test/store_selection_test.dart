@@ -111,7 +111,7 @@ void main() {
       );
     });
 
-    test('is refused for a whole family with no member staged', () {
+    test('is not refused when one member of the family is staged', () {
       expect(
         () => _resolve(['appstore'], Stage.beta),
         // `appstore:macos` has no beta; `appstore:ios` does, so the family is
@@ -119,6 +119,56 @@ void main() {
         returnsNormally,
       );
     });
+
+    test('is refused for a whole family with no member staged', () {
+      // One name, several skipped destinations: the sentence's subject is the
+      // family that was typed and its verb has to be singular, while the list
+      // it names is the members.
+      final allUnstaged = DestinationTable.parse('''
+destinations:
+  appstore:ios:
+    production: {kind: ship, command: "appstore promote"}
+  appstore:macos:
+    production: {kind: ship, command: "appstore promote"}
+''', source: '.cux-train.yaml');
+
+      expect(
+        () => resolveStores(
+          table: allUnstaged,
+          names: ['appstore'],
+          stage: Stage.beta,
+        ),
+        _refused(
+          '`appstore` has no `beta` stage: `appstore:ios`, `appstore:macos` '
+          'declare nothing at that stage.',
+        ),
+      );
+    });
+
+    test(
+      'an unnarrowed run over a stage nobody declares reads as a sentence',
+      () {
+        // The path with no names to put in the subject. The draft said "no
+        // destination have no `beta` stage", which is ungrammatical and says the
+        // opposite of what it means — and nothing reached it, because every
+        // other case here narrows with a name.
+        final noBeta = DestinationTable.parse('''
+destinations:
+  play:
+    production: {kind: ship, command: "play promote"}
+  amazon:
+    production: {kind: manual, console: "https://developer.amazon.com"}
+''', source: '.cux-train.yaml');
+
+        expect(
+          () => resolveStores(table: noBeta, names: [], stage: Stage.beta),
+          _refused(
+            'no destination has a `beta` stage: `play`, `amazon` declare '
+            'nothing at that stage.',
+          ),
+        );
+      },
+    );
 
     test(
       'a partial family acts on the staged members and reports the rest',
