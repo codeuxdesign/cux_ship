@@ -47,12 +47,16 @@ question AuthPass's guards ask.
 
 **§6.4 was amended 9 November 2026**, while this was open for review, because
 the fix it recommended turned out to belong in this repository rather than at
-the consumer. That fix is committed on `claude/cli-library` and open as
-[#85](https://github.com/codeuxdesign/cux_ship/pull/85) — **not merged, and not
-in any release** — so §6.4 is true of #85's tree and not yet of `main`. The old
-recommendation is recorded in place rather than removed. The same review turned
-up a knock-on in §4 and §9 that §6.4 had silently invalidated, and a figure in
-§6.4 that had been revised without being recorded; both are fixed and marked.
+the consumer. That fix was
+[#85](https://github.com/codeuxdesign/cux_ship/pull/85), **merged 10 November
+2026** — before this document itself landed — so §6.4 is true of `main`. It is
+still in **no release**: it sits under `## Unreleased`, and the donor's pin is
+`4.5.0-dev.8`, which predates it. This sentence read *"not merged, and not in
+any release"* until 12 November 2026, which was half true from the day the
+document landed. The old recommendation is recorded in place rather than
+removed. The same review turned up a knock-on in §4 and §9 that §6.4 had
+silently invalidated, and a figure in §6.4 that had been revised without being
+recorded; both are fixed and marked.
 
 **And a third review took out a premise this document inherited.** The
 `resolution: workspace` warning — the reason a consumer invokes an entry
@@ -616,7 +620,7 @@ all only because this repository made its entry a filesystem path — and for a
 hosted pin that path is a version-stamped directory under `~/.pub-cache` that
 nothing but the config knows. One file here against a parser in every consumer.
 
-So on `claude/cli-library`, committed 8 November 2026, `cux_ship` and
+So since 8 November 2026, and on `main` since the 10th, `cux_ship` and
 `cux_buildnumber` declare their CLIs in `lib/cli.dart`, the VM resolves the
 entry through `--packages`, and the failing row has nothing left to find:
 
@@ -634,16 +638,22 @@ change removes: a percent-encoded `file:` URI passed through verbatim, and
 `"name": "cux_ship"` matching `cux_ship_verify`, which is the next entry in the
 file.
 
-**That branch is not this one, and this section is only true once it lands.**
-It is [#85](https://github.com/codeuxdesign/cux_ship/pull/85), open against
-`main` at the same time as this document. On *this* branch
-[publishing-from-a-workspace.md](publishing-from-a-workspace.md) does not
-mention `lib/cli.dart` at all — it still prescribes
-`<checkout>/cux_ship/bin/cux_ship.dart` and still closes with *"the fix is a
-path, not a pubspec"*, the sentence this section overturns — and `main` has
-neither file. So the facts above are stated here rather than delegated to it,
-and no *released* `cux_ship` carries any of this; the donor's pin is
-`4.5.0-dev.8`, which does not.
+**That branch landed, and this section is now true of `main`.** It was
+[#85](https://github.com/codeuxdesign/cux_ship/pull/85), merged 10 November
+2026 — before this document itself landed, which is why the paragraph was
+wrong on arrival rather than overtaken. It read *"that branch is not this one,
+and this section is only true once it lands"*, and said that
+[publishing-from-a-workspace.md](publishing-from-a-workspace.md) did not
+mention `lib/cli.dart` at all. That document now carries its own amendment —
+the entry is no longer a path — while keeping *"the fix is a path, not a
+pubspec"* in place as the sentence this section overturns. All three members
+declare `lib/cli.dart`, `cux_train` included, so this section's requirement
+below was met at creation rather than left to ask for.
+
+**The released half has not moved, and it is the half the donor feels.** No
+*released* `cux_ship` carries any of this; the donor's pin is `4.5.0-dev.8`,
+which does not. So the facts above are still stated here rather than delegated
+to a release.
 
 **Which turns this section's requirement on `cux_train` from a parser into one
 line: a published member with an executable declares it in `lib/cli.dart`.** It
