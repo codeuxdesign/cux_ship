@@ -108,15 +108,7 @@ StoreSelection resolveStores({
 /// Turns names into destinations, refusing anything it would have to guess at.
 List<Destination> _expand(DestinationTable table, List<String> names) {
   final chosen = <Destination>[];
-  // Deduplicated, because a repeated `--store play play` is a typo rather than
-  // a quantity — the reading `cux_ship`'s own config list parser already takes
-  // of a repeated entry. Order is the table's, not the flag's, so a report
-  // reads the same however the invocation was typed.
-  final seen = <String>{};
   for (final name in names) {
-    if (!seen.add(name)) {
-      continue;
-    }
     final destination = table.byName(name);
     if (destination != null) {
       chosen.add(destination);
@@ -129,9 +121,19 @@ List<Destination> _expand(DestinationTable table, List<String> names) {
     }
     throw StoreSelectionException(_unknown(table, name));
   }
-  // Back into declaration order, and without a destination twice: `--store
-  // appstore appstore:ios` names the family and one of its members, which is
-  // not an error and must not act on that member twice.
+  // **Back into declaration order, and this is also what deduplicates.** Two
+  // cases need it and neither is an error: `--store play play` is a typo
+  // rather than a quantity, and `--store appstore appstore:ios` names a family
+  // and one of its members. Rebuilding from the table filtered by a set of
+  // wanted names answers both at once, and makes a report read the same
+  // however the invocation was typed.
+  //
+  // The draft also kept a `seen` set in the loop above to skip a repeated
+  // name. Mutation testing killed it: removing it left every case green,
+  // because this rebuild had already done the work. It was a second guard for
+  // something one line guarantees — the same shape as the dead second
+  // condition in `coversEveryDestination` above, found the same way, and both
+  // would have read to the next person as load-bearing.
   final wanted = chosen.map((d) => d.name).toSet();
   return [
     for (final destination in table.destinations)
