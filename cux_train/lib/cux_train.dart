@@ -4,4 +4,6 @@
 /// `cli.dart`.
 library;
 
+export 'src/destinations.dart';
+export 'src/store_selection.dart';
 export 'src/usage.dart';
