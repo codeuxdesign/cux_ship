@@ -935,5 +935,16 @@ Status: **open**.
   through a file, so the build step never holds a decryption key — the split that
   made `cux_ship` 3.0.0 adoptable there. Whether a `RELEASE_PHASE`-style split
   survives the train is unanswered, and AuthPass will not give it up.
+
+  **ANSWERED 12 November 2026 — none of the three: the train brackets the
+  matrix.** The maintainer's answer is that everything the train supports should
+  be replaced and that F-Droid and its kind cannot be, and
+  [authpass-on-the-train.md](authpass-on-the-train.md) is what that costs. The
+  short of it: the matrix stays six cells, the train runs before it to allocate
+  **one** build number instead of six, and the `RELEASE_PHASE` split becomes a
+  hard constraint on the step model rather than an open question — a train step
+  must be able to build while holding no store credential. That document also
+  finds the replaceable set is five steps out of about twenty, which is the
+  argument for the ordering stage rather than against it.
 - **Should `secrets exec` strip `SOPS_AGE_KEY`?** §2.1. Not this document's
   question, but this document is the reason it stops being latent.
