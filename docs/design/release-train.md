@@ -781,7 +781,12 @@ consumer today and Stage 2 does not"*. Both halves are wrong:
   `appStoreListingDiff` (`appstore upload --dry-run --metadata --json`,
   4.5.0-dev.4) and `storefrontReleased` (4.5.0-dev.6). AuthPass pins `cux_ship:
   ^3.6.0`. No stable release serves that set, so adopting it means pinning a
-  prerelease two majors up — and the train declares `sdk: ^3.13.0` while AuthPass
+  prerelease **one** major up — this said "two majors" until 12 November 2026,
+  which is wrong: 3.6.0 to 4.5.0 is a single major step, and
+  `cux_ship/pubspec.yaml` is `version: 4.5.0-dev.8`. The error was copied
+  forward into a second document before being caught, which is the reason for
+  correcting a figure that changes no conclusion — and the train declares
+  `sdk: ^3.13.0` while AuthPass
   pins Flutter 3.44.7, whose bundled Dart is below that floor (`ci.yaml`'s own
   comment: 3.13.0 is what Flutter 3.47 bundles). That is a Flutter bump as well.
 - **`status` does not answer the question AuthPass's guards ask.** Those guards
@@ -935,5 +940,32 @@ Status: **open**.
   through a file, so the build step never holds a decryption key — the split that
   made `cux_ship` 3.0.0 adoptable there. Whether a `RELEASE_PHASE`-style split
   survives the train is unanswered, and AuthPass will not give it up.
+
+  **ANSWERED 12 November 2026 — none of the three: the train conducts from
+  outside, and enters no cell.** The plan is
+  [authpass-on-the-train.md](authpass-on-the-train.md), written to the
+  maintainer's own goal — `train.sh` typed the same way in both repositories,
+  with AuthPass still distributing to every channel. `tool/train.sh` runs on the
+  maintainer's machine; CI cells keep running `release.sh` as *steps*, and the
+  train orders across jobs, which only something outside the jobs can see. So
+  the `RELEASE_PHASE` split is not "preserved" but untouched, and the matrix and
+  its `fail-fast` are never seen by the train at all.
+
+  **The premise above is wrong and the plan corrects it.** "Each cell allocating
+  its own build number by pushing a ref" is not what happens: `_generateOrGet`
+  returns the commit's existing number before allocating, and concurrent cells
+  converge on the first push's note. AuthPass's `refs/buildnumbers/commits`
+  carries 66 allocations across 66 distinct commits with none repeated. One
+  commit has one number, so there is nothing for the train to centralize.
+
+  Parity is reached by declaring every AuthPass release step a destination and
+  letting most start as `manual` — which is what its README checklist already
+  is — so the five verbs mean the same in both repositories before anything is
+  automated; destinations then flip from `manual` to automated one at a time
+  behind an unchanged command. `beta` is honest for exactly three of nineteen
+  destinations and refuses by name for the rest. The real new work is
+  resumability and distinguishing *observed* from *attested*, because an
+  AuthPass `production` spans days and half its destinations can only be
+  attested by a person.
 - **Should `secrets exec` strip `SOPS_AGE_KEY`?** §2.1. Not this document's
   question, but this document is the reason it stops being latent.
