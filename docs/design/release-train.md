@@ -964,14 +964,17 @@ Status: **open**.
   own build number by pushing a ref" is not what happens: `_generateOrGet`
   returns the commit's existing number before allocating, and concurrent cells
   converge on the first push's note. AuthPass's `refs/buildnumbers/commits`
-  carries 66 allocations across 66 distinct commits with none repeated, so one
-  commit has one number and there is nothing for the train to centralize.
+  carries one allocation per commit with none repeated, so one commit has one
+  number and there is nothing for the train to centralize.
 
   But the reassuring reading of that is also wrong, and it took a second review
-  pass to see: a *release* is not one commit. AuthPass's 1.9.13 has **24**
-  `uploaded/` tags across 24 commits, because `main.yml` builds and uploads
-  `playstoredev` on every pull request to `main` as well, and snap `edge`
-  holds a different build of 1.9.13 from the newest record. So the invariant
+  pass to see: a *release* is not one commit. AuthPass's 1.9.13 has **dozens**
+  of `uploaded/` tags, each on its own commit (25 of them on 12 November 2026,
+  and climbing), because `main.yml` builds and uploads `playstoredev` on every
+  pull request to `main` as well. Its real build is **2196**, the number
+  allocated for `origin/stable`'s tip — which `refs/buildnumbers`, the only
+  tag at that commit, the artifact server's manifest and snap `edge` all
+  agree on, while the highest `uploaded/` tag says 2219. So the invariant
   this document's five verbs rest on — *the same build* moving through
   audiences — does not hold at a consumer like AuthPass unless the release
   candidate is **named** rather than inferred from the newest record. That is a

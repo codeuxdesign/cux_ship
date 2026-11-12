@@ -63,12 +63,14 @@ place.
 2. **Automation then replaces `manual` one destination at a time, behind an
    unchanged command.** Play and the App Store flip to `cux_ship` promotes;
    snap, the artifact server, GitHub and FossHub flip to scripts AuthPass
-   already has; F-Droid and the consoles whose APIs nobody has written a client
-   for never flip. (Not "the consoles with no API" — §7 records that all four
-   publish one; what is missing is a client, and writing four is a separate
-   project.) This is the owner's own rule ("everything supported by train is
-   replaced; f-droid etc. can't be") expressed as a property of a table rather
-   than of a migration. [A]
+   mostly already has — mostly, because the appcast's script is not in the
+   repository (§6.4); F-Droid and the four consoles never flip. Those four are
+   not "consoles with no API": §7 believes all four publish one, though it
+   marks that `[?]` and did not check, and what is certainly missing is a
+   client for any of them. Writing four is a separate project. This is the
+   owner's own rule ("everything supported by train is replaced; f-droid etc.
+   can't be") expressed as a property of a table rather than of a migration.
+   [A]
 3. **`tool/train.sh` runs on the maintainer's machine and nowhere else.** CI
    cells keep running *steps* (`release.sh` via `ci-release.sh`); the train is
    what orders steps across jobs, and only something outside the jobs can see
@@ -103,10 +105,9 @@ Only the facts the design rests on.
   hooks, and that script's header says it is also run "by hand for promotions
   done in a store console".
 - **[V] AuthPass already writes `uploaded/` tags** (`.cux-ship.yaml`:
-  `tag.upload.enabled: true`; highest build number as of 12 November 2026 is
-  `uploaded/v1.9.13+2218`, and the count moves with every pull request — see
-  the bullet below). It writes **no** `promoted/` tags at all: zero, against 46
-  `uploaded/`.
+  `tag.upload.enabled: true`). It writes **no** `promoted/` tags at all: not
+  one, against dozens of `uploaded/` — see the bullet below for why that
+  number is not worth pinning down.
 - **[V] One build number per commit, across every CI cell.** So although a
   dozen jobs each call `ship.sh buildnumber generate`, one *commit* has one
   number, and every artifact built from that commit agrees. **It is also what
@@ -118,9 +119,11 @@ Only the facts the design rests on.
      refetches and takes the winner's note for that commit, which is what its
      "Another allocation won the race" retry resolves to. Concurrent cells
      therefore converge rather than each claiming a number.
-  2. **The allocation log agrees, over sixty-six allocations.** In AuthPass's
-     `refs/buildnumbers/commits`, 66 entries carry a built commit as a second
-     parent, across 66 **distinct** commits, and no commit appears twice:
+  2. **The allocation log agrees, over every allocation ever made.** In
+     AuthPass's `refs/buildnumbers/commits`, each entry carries a built commit
+     as a second parent, and **no commit appears twice**. The invariant is the
+     claim; the total is whatever the log has reached (67 on 12 November 2026,
+     and it grows with every build):
 
      ```
      git log --first-parent --format='%P' refs/buildnumbers/commits \
@@ -146,30 +149,49 @@ Only the facts the design rests on.
   that inference does not hold. One commit has one number. A release is not one
   commit.
 
-  There are **46 `uploaded/` tags covering exactly two versions** — 22 for
-  1.9.12 and 24 for 1.9.13, on 46 distinct commits. The reason is that
-  `main.yml` triggers on `pull_request: branches: [main]`, `playstoredev` is in
-  the matrix and is *not* in the `shouldRelease: false` exclude list, and
-  `release.sh:205`–`:230` uploads it to Play on every such run — so an
-  ordinary pull request writes an `uploaded/` tag. The newest,
-  `uploaded/v1.9.13+2218`, sits on a PR-check merge commit; `+2217` has a
-  *later* tagger date than `+2218`, so the namespace is not even monotonic in
-  creation order.
+  **Dozens of `uploaded/` tags cover just two versions** — on 12 November 2026
+  there were 47, split 22 for 1.9.12 and 25 for 1.9.13, each on its own
+  commit. The reason is that `main.yml` triggers on
+  `pull_request: branches: [main]`, `playstoredev` is in the matrix and is
+  *not* in the `shouldRelease: false` exclude list, and `release.sh:205`–`:230`
+  uploads it to Play on every such run — so an ordinary pull request writes an
+  `uploaded/` tag.
+
+  Two consequences, and the second is why no count above is given without a
+  date. Tag creation order does not track build number: `+2218` was tagged at
+  12:42:47 and `+2217` twenty seconds *later*, so the namespace is not
+  monotonic in either axis. And the figures move constantly — during the
+  review of this document the totals went from 46 to 47 and 1.9.13's from 24
+  to 25, because one more pull request merged. **A count of `uploaded/` tags is
+  not a fact about a release; it is a fact about the hour it was taken.**
 
   And the destinations disagree in exactly the way that predicts. Read from
   `api.snapcraft.io` (no credential) on 12 November 2026, snap `edge` holds
-  **1.9.13+2196** — twenty-two numbers behind the newest record for the same
-  version.
+  **1.9.13+2196** — twenty-three numbers below the highest record for the same
+  version, and, as it turns out, the *correct* build. Which the next paragraph
+  is about.
 
   So the donor's central invariant — *the same build* moves through the
   audiences — does not hold in AuthPass as it stands, and two things follow
   that the rest of this document is written to:
 
-  1. **The release candidate has to be named, never inferred from the newest
+  1. **The release candidate has to be named, never inferred from the highest
      tag.** `--build N` explicitly, or the number allocated for the commit at
      the tip of `stable`, read from `refs/buildnumbers`. `uploaded/` is
      corroboration only — §5 says the same thing for a different reason, and
      §3 and §8 must not quietly use it as the anchor.
+
+     **That rule was checked against 1.9.13, and four independent sources
+     agree on 2196.** [V, 12 November 2026] `origin/stable`'s tip is
+     `50f5d63f`; `refs/buildnumbers/commits` carries
+     `buildnumber: 2196 (increment) at commit 50f5d63f…`; the only tag at that
+     commit is `uploaded/v1.9.13+2196`; the artifact server's manifest for
+     that build records `gitSha: 50f5d63f…`; and snap `edge` holds 2196.
+     Asking instead for the highest `uploaded/` tag gives 2219, whose artifact
+     set is **incoherent**: `authpass-sideload-1.9.13_2219.apk` answers 200 and
+     `authpass-linux-1.9.13_2219.tar.gz` answers 404, because `sideload` builds
+     on pull requests and `linux.yml` does not. A run anchored there would ask
+     fifteen destinations for an artifact that was never built.
   2. **`status` has to be able to say that one version is scattered across
      builds**, because today it is. That is not an error state to refuse; it is
      the state of the world, and rendering it is most of the value.
@@ -219,9 +241,24 @@ Only the facts the design rests on.
   And from the destinations themselves, read without a credential on 12
   November 2026: **F-Droid is on 1.9.10** and **snap `stable` is on 1.9.7+1940,
   published 30 June 2022** — six releases and four years behind its own `edge`.
+
+  **Every direct download is still on 1.9.11+2007**, and three separate
+  server-side documents say so independently: `stable.txt` reads
+  `release=1.9.11_2007`, `appcast.xml` offers `Version 1.9.11+2007`
+  (`sparkle:version="2007"`, so Windows auto-update is pointed there), and the
+  `.fosshub` index — the document `github-release.sh` and `fosshub-release.sh`
+  both read, and from which the former takes its version — reads
+  `1.9.11+2007`. Two releases have been built and uploaded and have reached no
+  direct-download user.
+
+  That last one carries an ordering constraint §3 should respect: because
+  `github` and `fosshub` read the server's index, their steps must run *after*
+  the `direct:*` production step that updates it. Run today, in the order §3
+  step 3 lists them, `github-release.sh` would cut a release for **1.9.11**.
+
   So the question the draft could not answer from git ("did 1.9.12 reach every
-  console and merely go untagged?") is answered *no* for at least two of them,
-  and remains open only for the consoles that cannot be read. **[?]** Which is
+  console and merely go untagged?") is answered *no* wherever anything can be
+  read, and remains open only for the consoles that cannot be. **[?]** Which is
   still the argument for a record, now with examples: for Amazon, Samsung,
   Huawei, Microsoft and the PPA there is no way to find out at all.
 - **[V] `cux_ship` 3.6.0 already has** `play promote`, `appstore promote`,
@@ -231,7 +268,16 @@ Only the facts the design rests on.
   one loud CLI break is `--data-safety`, which AuthPass does not pass (grepped
   `_tools/`).
 - **[V] `cux_train` on `origin/main` is an entry point and a usage text**,
-  `sdk: ^3.12.2`, no dependency on `cux_ship` yet.
+  `sdk: ^3.12.2`, no dependencies at all yet. **And that floor is reachable,
+  which settles a disagreement between the two documents.** `release-train.md`
+  §7 still says "the train declares `sdk: ^3.13.0` while AuthPass pins Flutter
+  3.44.7, whose bundled Dart is below that floor … That is a Flutter bump as
+  well" — that is about the *donor's* `tool/train/`, and `cux_train`'s own
+  pubspec records why it does not inherit it: the donor's `^3.13.0` was
+  incidental, the package analyzes clean declared at `^3.12.2`, and 3.12.2 is
+  exactly the Dart that Flutter 3.44.7 bundles. `release-train.md` §9 already
+  carries that as answered. So step 1 needs **no Flutter bump**, which is what
+  lets §8 claim it moves no pin.
 
 Three findings inherited from the superseded #88, kept because they are right
 and because two of them bear on the evidence model in §6:
@@ -312,18 +358,20 @@ are now settled** [V, 12 November 2026]: snap answers on `api.snapcraft.io`
 and F-Droid on `f-droid.org/api/v1/packages/<id>`, both without a credential,
 and §6.3 records what they said.
 
-Of the four remaining, three are not load-bearing — an unreadable destination
-simply becomes *attested* (§6). **`flathub` is the exception**, and §6.3 makes
-it one: nobody acts there, so there is nothing to attest, and the row's entire
-content is its read. If Flathub cannot be read the row is permanently
-`pending` and means nothing, rather than degrading gracefully. `web` and
-`packagecloud` have the same shape.
+Of the four remaining, **two** are not load-bearing — `fosshub` and `ppa`,
+where a person or a script acts, so an unreadable destination simply becomes
+*attested* (§6). The other two are, for the reason §6.3 gives about Flathub:
+nobody acts there, so there is nothing to attest, and the row's entire content
+is its read. If Flathub cannot be read the row is permanently `pending` and
+means nothing, rather than degrading gracefully. **`packagecloud` has exactly
+that shape** — its production cell is "nothing left to do" — and so does
+`web`, which is readable because it is a URL.
 
 ### `status`
 
 Reads, writes nothing. One row per destination, one column per audience, each
-cell a build number **with its evidence class** (§6): observed from the
-destination, recorded in git, or unknown. Clean mapping. The only difference
+cell a build number **with its evidence class** (§6.2's six marks: observed,
+attested, disagreed, failed, pending, n/a). Clean mapping. The only difference
 from the donor is that the grid is taller and that most cells are records, and
 the grid has to say which is which rather than render both the same way.
 
@@ -331,7 +379,8 @@ the grid has to say which is which rather than render both the same way.
 is forced by §2: AuthPass's 1.9.13 exists as two dozen builds and its
 destinations hold different ones, so a grid keyed by build would render one
 release as two dozen near-empty grids. A cell whose build differs from the
-candidate (below) is named as such — `2196 ≠ 2218` — and never normalised
+candidate (below) is named as such — snap `stable` holds 1940 where the
+candidate is 2196 — and never normalised
 away, because that difference is the thing worth seeing.
 
 **Which build the run is about — the candidate — is named, not guessed.**
@@ -378,9 +427,15 @@ the laptop:
    The timeout is not optional, because the failure signal is. §5 keeps the
    train working without `gh`, and without `gh` there is no way to observe
    "its CI job has failed" — so for a destination whose build failed, the only
-   exit is the clock. A default on the order of an hour, `--wait-timeout` to
-   change it, and a timed-out row marked `pending` rather than `failed`,
-   because not hearing back is not the same as being told no. [A]
+   exit is the clock. A default on the order of an hour and `--wait-timeout` to
+   change it.
+
+   A timed-out row is **`pending`**, not `failed`: not hearing back is not the
+   same as being told no. That is why §6.2 defines `pending` as *no evidence
+   either way* rather than as "nobody has acted" — a dispatched build whose
+   wait expired has been acted on and read repeatedly, and still produced no
+   evidence. The run says so in its summary ("3 destinations still pending
+   after 1h") so that a timeout is never mistaken for a quiet success. [A]
 
 **Where this is not honest, and the train must say so:** for `web`,
 `packagecloud` and (arguably) `snap`, `internal` reaches the public. That is a
@@ -433,8 +488,10 @@ AuthPass meaning: the README's "Submit release to" list plus everything after
 1. gates: `pre-release` hook, and `release finish --dry-run` first (the donor's
    placement: refuse "wrong branch" while it is still free);
 2. API destinations: `play promote`, `appstore promote` ×2;
-3. script destinations: `stable.txt`/`update_stable.sh`/appcast, GitHub
-   release, FossHub, snap → stable;
+3. script destinations, and **this group is ordered, not a set**: the
+   artifact-server index first (`stable.txt`/`update_stable.sh`/appcast), then
+   GitHub release and FossHub, which read that index and would otherwise
+   publish the previous release (§2), then snap → stable;
 4. manual destinations, one at a time: Amazon, Samsung, Huawei, Microsoft, PPA
    (§6 says what the operator sees);
 5. finish, **once every destination that has a production step is recorded**:
@@ -458,14 +515,18 @@ Two things differ from the donor and both are real:
 - **"Production" for a manual destination means *handed over*, not *live*.**
   The record says the operator submitted it. `status` can only upgrade that to
   *live* where the destination can be read. The grid must not render
-  "submitted to Huawei" and "Play production holds 2217" identically.
+  "submitted to Huawei" and "Play production holds 2196" identically.
 
 ### Flags
 
-`--build`, `--dry-run`, `--yes`, `--verbose` carry over unchanged. `--rollout`
+`--build`, `--dry-run`, `--yes`, `--verbose` carry over unchanged.
+`--wait-timeout` is new and belongs to `internal` alone (above); it is the one
+addition to the donor's surface this plan asks for, and it exists because the
+evidence it bounds is a wait on other machines. `--rollout`
 stays Play-only, `--phased`, `--hold`, `--prepare` stay App-Store-only, and are
 refused by name for any other destination, as the donor already refuses
-`--prepare` for Play. **No new flag is needed for the normal path.** I
+`--prepare` for Play. **No new flag is needed for the normal path** —
+`--wait-timeout` has a default, so the normal path never types it. I
 considered `--resume` and rejected it: resuming is what a re-run *is* when
 state is recorded, and the donor's rule is that the ordinary path takes no
 flag. [A]
@@ -517,7 +578,7 @@ to be applied and is not. Since the file is read before *every* `cux_ship`
 command, a `train:` block would fail every upload in AuthPass's CI, which is
 flatly incompatible with §8 step 1's "does not touch working CI".
 
-So there are three options, in the order I would take them:
+So there are two options, in the order I would take them, and no third:
 
 1. **Add `'train'` to `_knownKeys`.** One line, in *this* repository —
    `cux_train` is a workspace member of `_cux_ship_workspace` beside
@@ -525,12 +586,18 @@ So there are three options, in the order I would take them:
    config file at the root, which is the arrangement worth keeping.
 2. **A sibling `.cux-train.yaml`** — works immediately, at the cost of a
    second file that has to agree with the first about the tag namespace.
-3. Nothing else.
 
 **Option 1 is not available to step 1**, because step 1 holds the
 `cux_ship: ^3.6.0` pin and the key would only be known to the version that
-learns it. So step 1 uses the sibling file, and the table moves into
-`.cux-ship.yaml` when step 2 moves the pin. [A]
+learns it. So step 1 uses the sibling file.
+
+**And option 1 has no release to land in yet**, which is a consequence of
+step 2 settling on 4.4.0 (§8). 4.4.0 is already published and cannot learn the
+key, so the move into `.cux-ship.yaml` waits for the first `cux_ship` release
+*after* it — not for step 2. Until then the sibling file is where the table
+lives, and if no such release is cut, it is where the table stays. That is a
+tolerable end state rather than a broken one; it is recorded so nobody plans a
+migration that has no date. [A]
 
 A destination row declares, per stage, one of four **step kinds**:
 
@@ -611,14 +678,34 @@ evidence is the artifact's presence and name, which embeds `{version}_{build}`
 — adequate, and weaker. Writing a manifest for the macOS zip is a few lines in
 `notarize-macos.sh` and worth doing before step 1 leans on it.
 
-**Separately, whether the server accepts manifests is unclear from inside the
-repository, and two of its own comments disagree.** `upload-artifact.sh` makes
-the sidecar upload a *tolerated failure* because "no `*.manifest.json`
-companion pattern is in [the allow-list] yet"; `make_deb.yaml`, committed
-thirteen hours later the same day, says "the server only recently learned to
-accept manifests". [V, both] One `curl` of a known sidecar settles it, and the
-newer comment says it is already fixed. If it is not, the fallback above
-applies and the fix is small and server-side in `authpass-cloud`.
+**The server does accept manifests. Settled by reading it.** [V, 12 November
+2026] Two of AuthPass's own comments disagree —`upload-artifact.sh` makes the
+sidecar upload a *tolerated failure* because "no `*.manifest.json` companion
+pattern is in [the allow-list] yet", while `make_deb.yaml`, committed thirteen
+hours later the same day, says "the server only recently learned to accept
+manifests". The newer one is right. For build 2196, every CI-built artifact
+checked answers 200 **with its sidecar**: the linux tar.gz, the sideload apk,
+the windows setup exe, and the huawei and amazon apks. The sidecar is schema 2
+and carries exactly what §6 wants from *observed* evidence:
+
+```
+{ "artifact": "authpass-linux-1.9.13_2196.tar.gz", "sha256": "6559bd0b…",
+  "versionName": "1.9.13", "buildNumber": 2196, "buildNumberAssigned": true,
+  "gitSha": "50f5d63f8a11d3800b09c33b9af6a7e89ee60793", "dirty": false,
+  "platform": "linux", "producer": { "name": "cux_ship", "version": "3.6.0" } }
+```
+
+So §5's best evidence class exists today, and `upload-artifact.sh`'s comment is
+the stale one. Its own instruction now applies — "Drop the `||` once the
+allow-list knows manifests; a silent-refusal state is not worth keeping" —
+which is a small change in AuthPass and not this plan's to make, but it should
+be made before a `run` step relies on that upload failing loudly.
+
+The three manifest-less destinations above are a separate gap, and `direct:macos`
+is the one that bites: `AuthPass.app-1.9.13_2196.zip` answers **404** on the
+server, so 1.9.13's macOS direct download was never uploaded at all. "The step
+people forget" has in fact been forgotten for the current release — which is
+§3's `ready` check, firing on live data, before the tool exists.
 
 **The dispatch needs `gh` only for progress**, not for correctness, so the
 train works without it and says "no CI progress — waiting on the artifacts
@@ -636,14 +723,14 @@ When `production` reaches a `manual` destination the operator sees, for
 example:
 
 ```
-── huawei · production · build 2217 ────────────────────────────────────
-  upload   authpass-huawei-1.9.13_2217.apk
-           https://data.authpass.app/data/artifacts/authpass-huawei-1.9.13_2217.apk
+── huawei · production · build 2196 ────────────────────────────────────
+  upload   authpass-huawei-1.9.13_2196.apk
+           https://data.authpass.app/data/artifacts/authpass-huawei-1.9.13_2196.apk
            sha256 3f9c…  (from its manifest)
   where    https://developer.huawei.com/consumer/en/service/josp/agc/index.html
   notes    CHANGELOG.md § 1.9.13, rendered for this store — copied to the clipboard
 
-  [d]one   [s]kip for now   [q]uit — nothing after this is lost
+  [d]one   [s]kip for now   [f]ailed   [q]uit — nothing after this is lost
 ```
 
 - **Instruction**: the exact artifact (name, URL, digest from the manifest),
@@ -655,9 +742,13 @@ example:
   because `s` alone makes "the console rejected the binary" look exactly like
   "nobody has looked yet", and §2's whole argument for a record is that *not
   being able to tell* is the failure.
-- **Record**: `promoted/huawei/production/v1.9.13+2217`, the donor's existing
+- **Record**: `promoted/huawei/production/v1.9.13+2196`, the donor's existing
   tag shape, pushed. That one tag is what makes the run resumable, what
   `status` shows next week, and what the finish rule counts.
+
+The example uses 2196 because that is 1.9.13's actual candidate (§2), and the
+artifact and sidecar it names both answer 200 on the server today — so the
+block above is what the operator would really see, not a sketch.
 
 `--yes` must **not** auto-confirm a manual step. `--yes` means "do not ask me
 before doing what you were going to do"; a manual step is not something the
@@ -675,9 +766,9 @@ Every cell in `status` carries one of:
 |---|---|---|
 | observed | the destination was read and holds this build | Play production, snap stable, F-Droid index |
 | attested | a `promoted/` tag says a person or script did it | Huawei, Amazon, PPA |
-| disagreed | observation and attestation name different builds | snap stable: tag says 2217, API says 2196 |
+| disagreed | observation and attestation name different builds | snap stable: a record would say 2196, the API says 1.9.7+1940 |
 | failed | a step ran or was attempted and did not land | a CI cell that failed; a console that refused the binary |
-| pending | none of the above — nobody has acted and nothing was read | |
+| pending | no evidence either way — nothing was read, nothing is recorded, and nothing is known to have failed | an untouched cell; a destination whose wait timed out |
 | n/a | this destination has no such stage | every non-store `beta` cell |
 
 Six marks, not four, and the two added ones are the point rather than
@@ -697,7 +788,7 @@ internal`**, for the three destinations §3 identifies as reaching users the
 moment `stable` is pushed. It is a property of the destination's stages, not of
 this cell's evidence, which is why it does not belong in the table above.
 
-### 6.3 F-Droid, Flathub: nobody here acts
+### 6.3 F-Droid, Flathub: the publishing decision is not the train's
 
 - **F-Droid** has a `production` step that is not an upload: the gate checks
   the changelog file is committed, and the step pushes `fdroid-vX.Y.Z` and
@@ -783,7 +874,7 @@ Test applied to each: **would the donor, or a third consumer, want it?**
 | Step kinds `ship` / `run` / `manual` / `none` | `manual` is useful to the donor too: its `record-promotion.sh` header already documents "by hand for promotions done in a store console". |
 | **The promotion record** — writing and reading `promoted/<dest>/<stage>/v…+N` | Today it is donor-local shell called from hooks. Once resumability and the finish rule depend on it, it is core state, not an app's side effect. Whether the *writer* belongs in `cux_train` or as a `cux_ship release record` command beside `release finish` is a fair question; I lean `cux_ship`, since it already owns `uploaded/` and the tag namespace config. [A] |
 | Resumable `production`; the finish rule "every declared destination recorded" | The donor gets it for free and it closes its own "narrowed with `--store`, so not finishing — run finish.sh by hand" note. |
-| Evidence classes in the grid (observed / attested / pending / n/a) | Any consumer with one unreadable destination needs it. |
+| Evidence classes in the grid (observed / attested / disagreed / failed / pending / n/a) | Any consumer with one unreadable destination needs it. |
 | Per-destination identity (bundle id, package) | AuthPass forces it; the donor is the degenerate case. |
 | The hook contract (already generic) with `HOOK_STORES` carrying destination names | Unchanged shape. |
 | A `wait`-on-evidence step: poll a destination's `read` until it holds build N or times out | This is the generic half of "CI builds it". The donor's `appstore wait` is the same idea for one store. |
@@ -806,10 +897,9 @@ Test applied to each: **would the donor, or a third consumer, want it?**
 
 Amazon, Huawei, Samsung and Microsoft all publish submission APIs. [?, from
 general knowledge; not checked against their documentation] Writing clients
-for them in `cux_ship`
-would turn four `manual` rows into `ship` rows. That is a separate project with
-its own review burden; this plan makes it *possible* (flip the row's kind) and
-does not ask for it.
+for them in `cux_ship` would turn four `manual` rows into `ship` rows. That is
+a separate project with its own review burden; this plan makes it *possible*
+(flip the row's kind) and does not ask for it.
 
 ---
 
@@ -834,7 +924,7 @@ What exists after it:
   `app/` [V].
 
   Two things to be straight about. `tool/` would be AuthPass's **first**
-  root-level tool directory — all 29 existing release scripts are in
+  root-level tool directory — every existing release script lives under
   `authpass/_tools/`, and CLAUDE.md tells readers to run Flutter commands from
   `authpass/`. And the root `CHANGELOG.md` being a symlink is not free: it is
   why the wrapper's pubspec records taking `cux_ship` 3.5.1 for "the
@@ -914,7 +1004,7 @@ consumer.
 
 So "the smallest thing that is real" is smallest **as seen from AuthPass**,
 where it changes no workflow, moves no pin and holds no credential. Measured in
-work it is the largest step in this plan, and §9 item 10 is right that nobody
+work it is the largest step in this plan, and §9 item 9 is right that nobody
 has sized it. A reader choosing step 1 because it sounds cheap should read that
 sentence first.
 
@@ -933,9 +1023,11 @@ is not scheduled — `cux_ship`'s newest published stable is **4.4.0**, and the
 4.5.0 line exists only as `-dev.1` through `-dev.8`. Since the floor this step
 actually needs is 4.1, 4.4.0 carries it, and pinning a prerelease in a
 repository whose CI ships to stores is avoided. What 4.4.0 does *not* carry is
-exact parity with the donor's `status` — `appStoreListingDiff` landed in
-4.5.0-dev.4 and `storefrontReleased` in 4.5.0-dev.6 (`release-train.md` §7) —
-so step 2's grid has two fewer columns than the donor's until 4.5.0 ships.
+exact parity with the donor's `status`: `release-train.md` §7 names three
+`StoreReads` members above 4.4.0 — `appStorePreviews` (needs
+`noSuchVersionExit`, 4.5.0-dev.3), `appStoreListingDiff` (4.5.0-dev.4) and
+`storefrontReleased` (4.5.0-dev.6) — so step 2's grid has **three** fewer
+columns than the donor's until 4.5.0 ships.
 That is a smaller price than either waiting or pinning a `-dev`. [A]
 
 ### Step 3 — flip the API destinations
@@ -999,18 +1091,18 @@ it is not; the draft asserted the conclusion without either. [?]
 1. **The `beta` branch versus the `beta` verb** (§3). Owner's decision.
 2. **Whether `web`, `packagecloud` and snap `edge` should stay public at
    `internal`.** The plan reports it and does not change it.
-3. **Whether the artifact server accepts manifests yet** (§5). Two of the
-   repository's own comments disagree, thirteen hours apart, and the newer one
-   says yes. One `curl` of a known sidecar settles it. Related and separate:
-   the macOS zip and the `.snap` have no manifest written for them at all,
-   which is a change in AuthPass, not on the server.
+3. **Writing a manifest for the macOS zip and the `.snap`** (§5). The server
+   question is settled — it accepts them — so what is left is that nothing
+   writes one for those two, which is a few lines in `notarize-macos.sh` and a
+   snap branch in `release.sh`. AuthPass's change, not `cux_train`'s.
 4. **Where the record writer lives** — `cux_train` or a `cux_ship release
    record` command (§7). This one now has a consequence attached: on the
    `cux_ship` reading, step 1 needs a command 3.6.0 does not have (§8).
 5. **Which read endpoints exist** for FossHub, packagecloud, Launchpad and
-   Flathub. Snap and F-Droid are settled (§3, §6.3); of the four left,
-   **Flathub's is the one that matters**, because nobody acts there and the
-   read is the row's entire content.
+   Flathub. Snap and F-Droid are settled (§3, §6.3). Of the four left,
+   **Flathub's and packagecloud's are the ones that matter**, because nobody
+   acts at either and the read is the whole content of the row; FossHub's and
+   Launchpad's rows degrade to *attested* and lose little.
 6. **"Submitted" versus "live" for manual stores.** One record state
    (*handed over*) is what I propose, now with *attempted and refused* beside
    it (§6.1). A third ("I saw it live") is easy to add and I am not sure it
@@ -1030,8 +1122,12 @@ open: F-Droid's versionCode is the pubspec's `+N` (164 for 1.9.10, from the
 F-Droid index — §6.3); `.cux-ship.yaml` **rejects** an unknown `train:` key and
 would fail every `cux_ship` command if given one (§4); snap and F-Droid both
 answer public reads (§3); `cux_ship` 4.4.0 is a released stable that carries
-step 2 (§8); and "is 1.9.12 finished?" is answered *no* for F-Droid and snap,
-and remains unanswerable only for the five destinations nobody can read (§2).
+step 2 (§8); the artifact server **does** accept manifests, so §5's best
+evidence class exists today (§5); `cux_train`'s `^3.12.2` floor needs no
+Flutter bump (§2); and "is 1.9.12 finished?" is answered *no* — for F-Droid,
+for snap, and for every direct download, since `stable.txt`, the appcast and
+the FossHub index all still read 1.9.11+2007 (§2). It is unanswerable only for
+the five consoles nobody can read.
 
 ---
 
@@ -1053,10 +1149,17 @@ the comparison is the record of why.
   from `release-train.md` §8, so the agreement is weaker evidence than it
   looks.
 - The matrix stays a matrix; the Apple split and the local notarization are
-  hard constraints; F-Droid and Flathub are checked, never performed.
+  hard constraints; the publishing decision at F-Droid and Flathub is never
+  the train's. (#88 and the draft both wrote this as "checked, never
+  performed", which §8's "Never" correction and §6.3 show is too strong: the
+  train does push `fdroid-vX.Y.Z` and update `fdroid-version.txt`. What
+  neither tool ever does is decide to publish or claim F-Droid published.)
 - `upload-artifact.sh`, `github-release.sh`, `fosshub-release.sh` and the
   appcast stay AuthPass's, named as steps.
-- Reads wait on `cux_ship` 4.5.0.
+- Reads wait on a `cux_ship` the consumer does not yet pin. *Corrected in
+  review — see §8 step 2:* both documents said "4.5.0", which is unreleased.
+  The reads land in 4.1.0 and **4.4.0 is published**, so the agreement holds
+  only in the weak sense that the pin has to move at all.
 
 ### The difference that matters most: #88's central factual claim is wrong
 
@@ -1073,17 +1176,17 @@ build number instead of six") all follow from that sentence.
    note, then again after a fetch — before it allocates anything. The package
    README states the property outright: "Two hosts building the same SHA get
    the same answer."
-2. AuthPass's own allocation chain (`refs/buildnumbers/commits` in the main
-   checkout): one `buildnumber: N (increment) at commit <sha>` entry per
-   commit, not six.
+2. AuthPass's own allocation chain (`refs/buildnumbers/commits`): one
+   `buildnumber: N (increment) at commit <sha>` entry per commit, not six.
 3. AuthPass's README names one release's artifacts from three different
    workflows on two operating systems with one number:
    `AuthPass-setup-1.7.7_1519.exe`, `authpass-sideload-1519.apk`,
-   `authpass-linux-1.7.7_1519.tar.gz`. And all **46** `uploaded/` tags sit on
-   46 distinct commits — no commit carries two build numbers, which is the
-   property this check actually establishes. (The draft said 21; the count was
-   wrong and, as §2 explains, it climbs with every pull request, which is why
-   it does not belong in a design document as a figure.)
+   `authpass-linux-1.7.7_1519.tar.gz`. And every `uploaded/` tag sits on its
+   own commit — no commit carries two build numbers, which is the property
+   this check actually establishes. (The draft gave a total of 21, which was
+   both wrong and the wrong kind of claim: §2 explains that the total climbs
+   with every pull request, so the invariant is stated here and the snapshot
+   is dated there.)
 
 So the six cells already agree, the allocator already is the "allocate once"
 mechanism, and #88's stage 2 (`FORCE_BUILDNUMBER` into every cell) would
@@ -1150,7 +1253,8 @@ which gives up one of the five words.
 I think that is the larger gap of the two documents: #88 answers "what can
 `cux_train` do for AuthPass's pipeline", not "how do I type the same command".
 My §3 and §4 are the missing half. (It was written to answer §9's bullet, not
-this brief, so this is a scope difference more than an error.)
+the maintainer's parity goal, so this is a scope difference more than an
+error.)
 
 ### The fourth: `playstoredev`
 
