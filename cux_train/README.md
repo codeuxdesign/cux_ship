@@ -2,15 +2,22 @@
 
 Orders the steps of a release, and waits on the ones a person performs.
 
-**Nothing is implemented yet.** This package is the workspace member that How
-It Went's release train moves into, created ahead of the move so that each step
-arrives as a commit against a package CI already builds, formats, tests and
-runs a publish dry run over — rather than as one commit that creates a package
-and fills it at the same time. Today it has an entry point, a usage text and
-the tests that hold both.
+**No command runs a release yet.** This package is the workspace member that
+How It Went's release train moves into, created ahead of the move so that each
+step arrives as a commit against a package CI already builds, formats, tests
+and runs a publish dry run over — rather than as one commit that creates a
+package and fills it at the same time.
+
+What exists today is the **destination table**: a consumer declares where a
+release has to go and who acts at each stage, and `--store` resolves against
+that declaration rather than against a list compiled into the tool. It parses
+and answers questions; it spawns nothing and contacts no store. The entry
+point still says there are no release commands, because there are none.
 
 The plan, the measurements behind it and the questions still open are in
-[docs/design/release-train.md](../docs/design/release-train.md).
+[docs/design/release-train.md](../docs/design/release-train.md); what a second
+consumer needs, and the staging this is step 1 of, are in
+[docs/design/authpass-on-the-train.md](../docs/design/authpass-on-the-train.md).
 
 ## What it is for
 
