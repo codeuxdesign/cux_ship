@@ -142,6 +142,7 @@ class Destination {
     this.read,
     this.identity = const {},
     this.afterFinish = false,
+    this.publicAtInternal = false,
   });
 
   /// The name typed after `--store`.
@@ -180,6 +181,16 @@ class Destination {
   /// It says nothing about *order within* the run; it says only that the
   /// finish rule does not count this destination.
   final bool afterFinish;
+
+  /// Whether reaching this destination at `internal` already reaches users.
+  ///
+  /// **§6.2's one annotation, and it sits beside the mark rather than among
+  /// them** because it is a property of the destination's stages and not of
+  /// any cell's evidence. AuthPass has three: `web` and `packagecloud` are
+  /// public the moment CI finishes, and the snap is on `edge`, which anyone
+  /// can install. The donor has none, and whether AuthPass's three *should*
+  /// stay that way is §9 item 2 — the train reports it and changes nothing.
+  final bool publicAtInternal;
 
   /// The part before the colon, or null for a bare name.
   String? get family {
@@ -346,6 +357,7 @@ class DestinationTable {
       'read',
       'identity',
       'after-finish',
+      'public-at-internal',
     }, where);
 
     final steps = <Stage, DestinationStep>{};
@@ -381,38 +393,59 @@ class DestinationTable {
       steps: Map.unmodifiable(steps),
       read: _optionalString(value, 'read', where),
       identity: _parseIdentity(value['identity'], where),
-      afterFinish: _parseAfterFinish(value, steps, where),
+      afterFinish: _parseStageFlag(
+        value,
+        steps,
+        where,
+        key: 'after-finish',
+        stage: Stage.production,
+        // It excludes a destination from the finish rule, and one with no
+        // production step is already excluded — vacuously, because nothing
+        // writes a record for it.
+        pointless: 'the finish rule already does not wait on it',
+      ),
+      publicAtInternal: _parseStageFlag(
+        value,
+        steps,
+        where,
+        key: 'public-at-internal',
+        stage: Stage.internal,
+        // Nobody acts at internal, so nothing this release does can make it
+        // public there.
+        pointless: 'nothing this release does reaches it at that stage',
+      ),
     );
   }
 
-  /// **`after-finish` is only meaningful where somebody acts at production.**
+  /// **A flag about a stage is only meaningful where somebody acts at it.**
   ///
-  /// It excludes a destination from the finish rule, and a destination with no
-  /// production step is already excluded — vacuously, because nothing writes a
-  /// record for it. So the key on such a row does nothing, and a key that does
-  /// nothing is read by the next person as doing something. The likeliest way
-  /// to write it is to mark the right destination and then delete its step,
-  /// which is worth being told about.
-  static bool _parseAfterFinish(
+  /// Both of these annotate what happens at one stage, and on a row where
+  /// nobody acts there, each says nothing — a key that does nothing is read by
+  /// the next person as doing something. The likeliest way to write one is to
+  /// mark the right destination and then delete its step, which is exactly the
+  /// case worth being told about rather than left to read correctly.
+  static bool _parseStageFlag(
     YamlMap value,
     Map<Stage, DestinationStep> steps,
-    String where,
-  ) {
-    if (!value.containsKey('after-finish')) {
+    String where, {
+    required String key,
+    required Stage stage,
+    required String pointless,
+  }) {
+    if (!value.containsKey(key)) {
       return false;
     }
-    final declared = value['after-finish'];
+    final declared = value[key];
     if (declared is! bool) {
       throw DestinationTableException(
-        '$where: `after-finish` must be true or false, and YAML read '
+        '$where: `$key` must be true or false, and YAML read '
         '`$declared` as ${declared == null ? 'null' : declared.runtimeType}',
       );
     }
-    final production = steps[Stage.production] ?? DestinationStep.absent;
-    if (declared && production.kind == StepKind.none) {
+    final step = steps[stage] ?? DestinationStep.absent;
+    if (declared && step.kind == StepKind.none) {
       throw DestinationTableException(
-        '$where is `after-finish` but nobody acts at `production` — nothing '
-        'would record it, so the finish rule already does not wait on it',
+        '$where is `$key` but nobody acts at `${stage.name}` — $pointless',
       );
     }
     return declared;
