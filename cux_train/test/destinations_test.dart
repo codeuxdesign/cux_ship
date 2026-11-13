@@ -145,7 +145,10 @@ destinations:
   play:
     prodution: {kind: ship, command: "play promote"}
 '''),
-        _refused('known keys: beta, identity, internal, production, read'),
+        _refused(
+          'known keys: after-finish, beta, identity, internal, production, '
+          'read',
+        ),
       );
       // And it names the file, as every other refusal here does — this one is
       // the level where the filename was being dropped.

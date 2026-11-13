@@ -5,5 +5,7 @@
 library;
 
 export 'src/destinations.dart';
+export 'src/promotion_ledger.dart';
+export 'src/promotion_record.dart';
 export 'src/store_selection.dart';
 export 'src/usage.dart';
