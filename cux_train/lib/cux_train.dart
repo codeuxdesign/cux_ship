@@ -9,5 +9,6 @@ export 'src/evidence.dart';
 export 'src/promotion_ledger.dart';
 export 'src/promotion_record.dart';
 export 'src/record_writer.dart';
+export 'src/status_grid.dart';
 export 'src/store_selection.dart';
 export 'src/usage.dart';

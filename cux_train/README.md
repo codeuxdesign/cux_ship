@@ -16,8 +16,11 @@ git refs a caller hands over; from it come the two questions a resumable run
 asks — what is still outstanding, and whether the version tag may be spent.
 Over both sits the **evidence model**, which decides what `status` is allowed
 to claim about a cell: read, recorded, contradicted, failed, unknown, or
-nobody's job. Beside them is the **record writer**, which is the only part that
-leaves a mark on anything.
+nobody's job. Over that sits the **status grid**, which is the shape all of it
+is read in: one row per destination, one column per audience, and in every cell
+a build number with the evidence behind it, never a build number alone. Beside
+them is the **record writer**, which is the only part that leaves a mark on
+anything.
 
 Nearly all of it parses and answers questions — no spawning, no store, no
 credential — which is what lets every case be tested without either. The writer

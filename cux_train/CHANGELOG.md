@@ -4,6 +4,38 @@
 
 ### Added
 
+**The grid `status` prints, which is where §6.2's rule is kept or lost.** One
+row per destination, one column per audience, and in every cell a build number
+with the evidence class behind it. The evidence model decides every mark;
+`status_grid.dart` decides only layout — and layout is the whole of "the grid
+says so in the cell and never promotes it to *holds*", because a renderer that
+prints a read and a record as the same bare number passes every test the
+evidence model has. So every mark is spelled out: `2196 observed` beside
+`2196 attested`, and never `2196` beside `2196 attested`, where the shorter cell
+would read as the stronger claim for being shorter.
+
+**Keyed by version, with the build in the cell.** §3's reason is that AuthPass's
+1.9.13 exists as two dozen builds and its destinations hold different ones, so a
+grid keyed by build renders one release as two dozen near-empty grids. A cell
+holding something else names it — `1940 disagreed` against a candidate of
+2196 — and a note under the grid says what disagrees with what. The candidate is
+handed in, never guessed: `--build N`, or what `refs/buildnumbers` allocated for
+the tip of `stable`, and expressly not the newest `uploaded/` tag, which §2
+shows is routinely a pull request's.
+
+**Nothing is collapsed away.** A stage no destination declares still gets its
+column, because dropping it would report the absence of a column as the absence
+of an audience. A destination nobody acts at still gets its row, because §4's
+finish rule is satisfied vacuously by `none` and never asked about a destination
+that is not there. Rows stay in declaration order, since a consumer groups its
+own destinations by writing them together.
+
+**§6.2's one annotation rides the `internal` cell**, which is the stage it makes
+a claim about — on the row's name it would read as a claim about all three. It
+needs no case for a cell nobody acts at: the table already refuses
+`public-at-internal` on a destination with no internal step, and a test holds
+that refusal, so the branch missing here surfaces if it is ever relaxed.
+
 **The record writer, and §9 item 4 answered as neither of the two things it
 asked.** The question was whether writing a promotion belongs in `cux_train` or
 in a `cux_ship release record` command beside `release finish`. `cux_ship`
