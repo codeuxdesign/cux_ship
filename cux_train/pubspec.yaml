@@ -46,13 +46,22 @@ environment:
 # docs/design/publishing-from-a-workspace.md
 resolution: workspace
 
-# **No dependencies yet, and `cux_ship` is the one this will grow.** The train
+# **One dependency, and `cux_ship` is still the one this will grow.** The train
 # spawns the command rather than importing its clients — that is the whole
 # argument of `docs/design/release-train.md` §2, and the reason this is a
 # sibling member and not a library inside `cux_ship`. What it will import is the
 # read side: `package:cux_ship/documents.dart` and
 # `package:cux_ship/exit_codes.dart` are the only two the donor's `lib/` reaches
 # for today, across four import sites.
+dependencies:
+  # The destination table is a YAML document the consumer writes, so this is
+  # the same dependency at the same constraint `cux_ship` takes for
+  # `.cux-ship.yaml` — deliberately, because the two files sit beside each
+  # other and `authpass-on-the-train.md` §4 leaves open that the table ends up
+  # *inside* `.cux-ship.yaml` once that file's key list learns the word. The
+  # two are parsed by different code either way; there is no reason for them to
+  # disagree about what YAML is.
+  yaml: ^3.1.0
 
 dev_dependencies:
   lints: ^6.0.0
