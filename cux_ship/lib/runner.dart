@@ -312,6 +312,14 @@ void _recordUploadIfAsked(
         '==> would record this upload',
       UploadRecordResult.created => '==> recorded this upload',
       UploadRecordResult.alreadyRecorded => '==> upload already recorded',
+      // Unreachable from here, and spelled out rather than folded into a
+      // default so that it stays unreachable. An upload record is written
+      // before the store is contacted, so this path never passes
+      // `failedPushIsFatal: false` — a push that fails has to stop the upload,
+      // not report on it. If this line ever prints, the guard above it is
+      // gone.
+      UploadRecordResult.writtenNotPushed =>
+        '==> recorded this upload locally; the push to origin failed',
     });
   }
 }

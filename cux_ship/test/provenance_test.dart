@@ -434,4 +434,117 @@ void main() {
       ),
     );
   });
+
+  // The group below is the record written *after* its event rather than before
+  // it. Everything above assumes the upload has not happened yet, which is what
+  // makes a failed push fatal there: an unpushed tag protects nothing and the
+  // upload must not proceed. A promotion record is written once a person has
+  // already pressed the button in a console, and failing the run then does not
+  // un-promote anything — it costs the operator the step they just did and
+  // sends the next run back to the same console.
+  group('failedPushIsFatal: false', () {
+    test('reports a tag it could not push instead of failing', () {
+      final built = _commit('built here');
+      final origin = Directory.systemTemp.createTempSync('cux_ship_origin');
+      addTearDown(() => origin.deleteSync(recursive: true));
+      Process.runSync('git', ['init', '-q', '--bare', origin.path]);
+      _git.run(['remote', 'add', 'origin', '${origin.path}-does-not-exist']);
+
+      final result = recordUpload(
+        _git,
+        _record(built, name: 'promoted/huawei/production/v1.0.0+49'),
+        failedPushIsFatal: false,
+      );
+
+      expect(result, UploadRecordResult.writtenNotPushed);
+      expect(
+        _git.run([
+          'rev-parse',
+          'refs/tags/promoted/huawei/production/'
+              'v1.0.0+49^{commit}',
+        ]),
+        built,
+        reason: 'the local tag is what the next run on this machine resumes on',
+      );
+    });
+
+    test('still retries, so a transient failure is not reported as unpushed', () {
+      // The retry is the reason that branch exists at all, and making the
+      // failure non-fatal must not quietly remove it: a push that fails once
+      // and succeeds on the second attempt is the ordinary case, and reporting
+      // it as `writtenNotPushed` would have an operator chase a record that is
+      // on origin and correct.
+      final origin = Directory.systemTemp.createTempSync('cux_ship_origin');
+      addTearDown(() => origin.deleteSync(recursive: true));
+      Process.runSync('git', ['init', '-q', '--bare', origin.path]);
+      final hook = File('${origin.path}/hooks/pre-receive')
+        ..writeAsStringSync(
+          '#!/bin/sh\n'
+          'marker="${origin.path}/refused-once"\n'
+          'if [ ! -f "\$marker" ]; then\n'
+          '  touch "\$marker"\n'
+          '  echo "transient" >&2\n'
+          '  exit 1\n'
+          'fi\n'
+          'exit 0\n',
+        );
+      Process.runSync('chmod', ['+x', hook.path]);
+      _git.run(['remote', 'add', 'origin', origin.path]);
+
+      final built = _commit('built');
+
+      expect(
+        recordUpload(_git, _record(built), failedPushIsFatal: false),
+        UploadRecordResult.created,
+      );
+      expect(
+        Git(
+          origin.path,
+        ).run(['rev-parse', 'refs/tags/uploaded/v1.0.0+49^{commit}']),
+        built,
+        reason: 'the second push landed, so the record is published',
+      );
+    });
+
+    test('does not soften a collision on origin', () {
+      // A transport failure and a disagreement about what happened are
+      // different things, and only the first is tolerable. A remote tag naming
+      // another commit means this name has been used twice; continuing would
+      // leave a record pointing at the wrong code whichever side of its event
+      // it was written on.
+      final origin = Directory.systemTemp.createTempSync('cux_ship_origin');
+      addTearDown(() => origin.deleteSync(recursive: true));
+      Process.runSync('git', ['init', '-q', '--bare', origin.path]);
+      _git.run(['remote', 'add', 'origin', origin.path]);
+
+      final theirs = _commit('what origin recorded');
+      recordUpload(_git, _record(theirs));
+      _git.run(['tag', '-d', 'uploaded/v1.0.0+49']);
+      final ours = _commit('what this machine has');
+
+      expect(
+        () => recordUpload(_git, _record(ours), failedPushIsFatal: false),
+        throwsA(isA<UploadCollisionException>()),
+      );
+    });
+
+    test('a local collision is refused before the push is reached', () {
+      // The local check runs first and is untouched by this flag. Without this
+      // the non-fatal path could be read as "nothing about this record can
+      // fail", which is the reading that would make it dangerous.
+      final first = _commit('first artifact');
+      recordUpload(_git, _record(first), push: false);
+      final second = _commit('second artifact');
+
+      expect(
+        () => recordUpload(
+          _git,
+          _record(second),
+          push: false,
+          failedPushIsFatal: false,
+        ),
+        throwsA(isA<UploadCollisionException>()),
+      );
+    });
+  });
 }

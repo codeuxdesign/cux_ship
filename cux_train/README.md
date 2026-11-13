@@ -16,12 +16,15 @@ git refs a caller hands over; from it come the two questions a resumable run
 asks — what is still outstanding, and whether the version tag may be spent.
 Over both sits the **evidence model**, which decides what `status` is allowed
 to claim about a cell: read, recorded, contradicted, failed, unknown, or
-nobody's job.
+nobody's job. Beside them is the **record writer**, which is the only part that
+leaves a mark on anything.
 
-All of it parses and answers questions. It spawns nothing, runs no git and
-contacts no store, which is what lets every case be tested with no credential
-and no network. The entry point still says there are no release commands,
-because there are none.
+Nearly all of it parses and answers questions — no spawning, no store, no
+credential — which is what lets every case be tested without either. The writer
+is the exception and a narrow one: it names a tag and hands it to `cux_ship`'s
+`recordUpload`, over a checkout root a caller supplies, so its tests point at a
+temporary repository and get the real behaviour. The entry point still says
+there are no release commands, because there are none.
 
 The plan, the measurements behind it and the questions still open are in
 [docs/design/release-train.md](../docs/design/release-train.md); what a second

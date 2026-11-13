@@ -4,6 +4,53 @@
 
 ### Added
 
+**The record writer, and §9 item 4 answered as neither of the two things it
+asked.** The question was whether writing a promotion belongs in `cux_train` or
+in a `cux_ship release record` command beside `release finish`. `cux_ship`
+already had the writer — `recordUpload`, whose `UploadRecord` has said since it
+was written that *"the caller owns the convention, because what a released tag
+is called differs per repository and this must never assume a shape"*. So no
+verb was added anywhere. `promotion_record.dart` names the tag, a new
+`package:cux_ship/provenance.dart` export writes it, and `record_writer.dart`
+is the forty lines between them.
+
+What that seam avoids reimplementing: the refusal when a name already points at
+a different commit, the refusal when something else left a lightweight tag under
+it, the retry that tells a rejected push apart from a collision, and the check
+against `origin` rather than against this clone. How It Went already
+reimplemented that once, in 125 lines of bash whose header says it "refuses,
+like cux_ship" — and `recordUploadIfConfigured`'s doc calls exactly that shape
+"one guarantee implemented twice, in two languages".
+
+**One behavioural change was needed, and it is the useful finding.**
+`recordUpload` fails the caller when the push fails, because an upload record is
+written *before* the store is contacted and an unpushed tag protects nothing. A
+promotion record is written *after* a person pressed the button in a console, so
+failing there does not un-promote anything — it costs the operator the step they
+just finished and sends the next run back to the same console. `cux_ship` gained
+`failedPushIsFatal` for that, and this package passes `false`.
+
+**The commit comes from the `uploaded/` tag, never from a search.** That tag is
+the one thing in the repository that already knows which commit the artifact was
+built from, because `cux_ship` wrote it from the build manifest's `gitSha`. The
+tag's *name* is the caller's, since `tag.upload.format` is configurable —
+composing it here would send a consumer that changed it looking for a tag nobody
+writes. With no such tag there is no commit and the write is refused rather than
+guessed at.
+
+**A refusal with no reason is refused.** §6.1 gives the operator `s` as well as
+`f`: skipping leaves the cell unrecorded so the next run stops at it again,
+while `f` records that it was attempted and refused *with a line of why*. An
+unexplained refusal is a permanent, pushed tag saying no more than skipping
+already said, about a step only a person can repeat.
+
+**This is the first thing in the package that touches git**, and the property it
+cost is worth naming: everything else here parses and answers questions, which
+is what lets it be tested with no credential and no network. That is preserved
+rather than abandoned — the git this runs is `cux_ship`'s `Git` handle over a
+checkout root, so the tests point it at a temporary repository and exercise the
+real behaviour, including a push to a bare origin that is not there.
+
 **The evidence model: §6.2's six marks, and what each one rests on.** `status`
 has to say *which kind of evidence it has* and never render two kinds the same
 way — "submitted to Huawei" and "Play production holds 2196" are different

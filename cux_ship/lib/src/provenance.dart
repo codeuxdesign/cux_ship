@@ -114,6 +114,17 @@ enum UploadRecordResult {
   /// The tag already pointed at this commit. Re-running an upload is ordinary —
   /// a second store, a retried job — and must not be an error.
   alreadyRecorded,
+
+  /// The tag exists locally and `origin` does not have it, reached only with
+  /// `failedPushIsFatal: false`.
+  ///
+  /// **It replaces the other two rather than joining them**, although "created"
+  /// and "already recorded" both remain true of the local tag, because the only
+  /// question a caller has left is whether the record is anywhere another
+  /// machine can read it. Reporting `created` with a quiet second field saying
+  /// `pushed: false` is how an unpushed tag gets treated as a record — the path
+  /// every caller already handles is the one that runs.
+  writtenNotPushed,
 }
 
 /// Records that [record] reached a store, and pushes it.
@@ -135,11 +146,29 @@ enum UploadRecordResult {
 /// this process learns of it is the remote rejecting the push. Passing false to
 /// save a network round trip keeps every local check and silently forfeits the
 /// cross-machine one, with nothing to indicate the guarantee is gone.
+///
+/// **[failedPushIsFatal] is the one thing that differs between a record written
+/// before its event and one written after it**, and the comment on the push
+/// below already named the distinction before anything needed it: *elsewhere a
+/// failed tag push is a warning because the release has already gone out and
+/// the tag is bookkeeping; here nothing has gone out yet.* An upload record is
+/// written before the store is contacted, so a push that fails means the upload
+/// must not proceed, and the default stays true. A **promotion** record is
+/// written after a person has already pressed the button in a console — failing
+/// the run there does not un-promote anything, it only costs the operator the
+/// step they just did, and the next run stops at the same console asking them
+/// to do it again. Such a caller passes false and gets
+/// [UploadRecordResult.writtenNotPushed] to report.
+///
+/// It does **not** soften a collision. A remote tag naming a different commit
+/// is a disagreement about what happened rather than a failure to transmit, and
+/// that throws whichever side of its event the record sits on.
 UploadRecordResult recordUpload(
   Git git,
   UploadRecord record, {
   bool push = true,
   bool dryRun = false,
+  bool failedPushIsFatal = true,
 }) {
   // "The whole tag name" means the name, not the ref path — and the difference
   // is invisible without this, because every use here is consistent. `git tag`
@@ -221,8 +250,25 @@ UploadRecordResult recordUpload(
       final remote = remoteTaggedCommit(git, record.name);
       if (remote == null) {
         // Rejected, and origin does not hold this tag — so the push failed for
-        // some other reason (credentials, network, a hook). Re-run it without
-        // `ok` to surface git's own message rather than inventing one.
+        // some other reason (credentials, network, a hook).
+        //
+        // **The retry happens on both paths, because it is the reason this
+        // branch exists** rather than a side effect of wanting git's message:
+        // a transient failure that succeeds on the second attempt is the
+        // ordinary case here. What differs is only what a second failure
+        // means. Fatal: re-run without `ok`, so the exception carries git's own
+        // words rather than ones invented here. Not fatal: the tag is local and
+        // the caller is told so, which is the whole of what it can act on —
+        // git's message is lost on this path, and that is the cost of the run
+        // continuing.
+        if (!failedPushIsFatal) {
+          final retried = git.ok([
+            'push',
+            'origin',
+            'refs/tags/${record.name}',
+          ]);
+          return retried ? result : UploadRecordResult.writtenNotPushed;
+        }
         git.run(['push', 'origin', 'refs/tags/${record.name}']);
         // **And return, because the retry may have worked.** Falling through
         // with `remote` still null compared null against the commit and threw

@@ -4,6 +4,47 @@
 
 ### Added
 
+**`package:cux_ship/provenance.dart` — the record writer, exported.** An
+annotated tag naming the commit something reached, with the collision refusal,
+the lightweight-tag guard and the rejected-push-is-not-a-collision check that
+took three incidents to get right. `UploadRecord` has always said the caller
+owns the tag name, so this needed no new behaviour and no new command: the
+train names `promoted/<destination>/<stage>/v{version}+{build}` and this writes
+it, exactly as `uploaded/` is written today.
+
+**`read-api.md` says the exported surface is reads only, and this is the
+exception rather than a drift.** That rule's two arguments are about *store*
+writes — a printed command line is what makes a failed step re-runnable, and
+per-step `secrets exec --only …` is what keeps a credential out of a step with
+no use for it. Neither reaches a git tag: the equivalent invocation is `git tag
+-a` and `git push`, and the credential is whatever the checkout already has.
+Nothing exported uploads, promotes, publishes a listing or moves a build
+between tracks.
+
+What it fixes is a guarantee implemented twice, which this package already
+named as the failure mode in `recordUploadIfConfigured`'s own doc — "one
+guarantee implemented twice, in two languages". That is the live state of
+`promoted/` tags: How It Went's `tool/record-promotion.sh` is 125 lines of bash
+whose header says a tag naming a different commit "refuses, like cux_ship".
+
+**`recordUpload` gained `failedPushIsFatal`, and the distinction was already
+written in the comment beside the push** — *elsewhere a failed tag push is a
+warning because the release has already gone out and the tag is bookkeeping;
+here nothing has gone out yet*. An upload record is written **before** the store
+is contacted, so a push that fails has to stop the upload, and the default
+stays `true`. A promotion record is written **after** a person pressed the
+button in a console: failing then does not un-promote anything, it costs the
+operator the step they just did and sends the next run back to the same
+console. Such a caller passes `false` and gets the new
+`UploadRecordResult.writtenNotPushed` to report.
+
+It does **not** soften a collision. A remote tag naming a different commit is a
+disagreement about what happened rather than a failure to transmit, and it
+throws on either side of its event. The retry is kept on both paths too, since
+a push that fails once and works on the second attempt is the ordinary reason
+to reach that branch — what the flag changes is only what a *second* failure
+means.
+
 **The command is launchable as `package:cux_ship/cli.dart`**, so a project that
 pins this package no longer has to find `bin/cux_ship.dart` in the pub cache to
 invoke the entry directly:
