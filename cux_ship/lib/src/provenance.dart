@@ -89,6 +89,10 @@ class UploadRecord {
 /// as the tolerable kind and the release finishes green, which turns the
 /// loudest error here into the quietest. A distinct type gives the CLI a
 /// distinct exit code, and the wrapper something to match on.
+class UploadCollisionException extends ReleaseException {
+  UploadCollisionException(super.message);
+}
+
 /// What `cux_ship` exits with when [UploadCollisionException] is raised.
 ///
 /// **A number, because a shell wrapper cannot match on a Dart type.** The class
@@ -102,10 +106,6 @@ class UploadRecord {
 /// needs to be unmistakably one thing.
 const uploadCollisionExit = 3;
 
-class UploadCollisionException extends ReleaseException {
-  UploadCollisionException(super.message);
-}
-
 /// Outcome of [recordUpload], so a caller can report without re-deriving it.
 enum UploadRecordResult {
   /// The tag did not exist, and now does — or under `dryRun`, would.
@@ -115,8 +115,14 @@ enum UploadRecordResult {
   /// a second store, a retried job — and must not be an error.
   alreadyRecorded,
 
-  /// The tag exists locally and `origin` does not have it, reached only with
-  /// `failedPushIsFatal: false`.
+  /// The tag exists locally and two attempts to push it failed, reached only
+  /// with `failedPushIsFatal: false`.
+  ///
+  /// **"Not pushed" is all this knows.** `origin` was asked whether it holds
+  /// the name and gave no answer saying so — which is what an `origin` without
+  /// the tag says, and also what an unreachable one says. So this is not a
+  /// statement that the name is free there: the next run pushes again, and
+  /// that push is where a collision would still surface.
   ///
   /// **It replaces the other two rather than joining them**, although "created"
   /// and "already recorded" both remain true of the local tag, because the only
@@ -138,6 +144,7 @@ enum UploadRecordResult {
 /// success will publish one artifact while the record names another. Where a
 /// build number can be allocated twice — concurrent CI on different commits, or
 /// a forced number — that is precisely how it happens.
+///
 /// **[push] is for tests, and an upload path must never pass false.** The push
 /// is not bookkeeping here — it is the only guard that sees a collision raised
 /// on another machine. Locally this function can compare against a tag this
@@ -215,7 +222,24 @@ UploadRecordResult recordUpload(
   }
 
   if (existing == null) {
-    git.run(['tag', '-a', record.name, commit, '-m', record.annotation]);
+    // **`--cleanup=whitespace`, because the default deletes lines.** `git tag`
+    // cleans a message given with `-m` exactly as it cleans one typed in an
+    // editor, and its default mode drops every line starting with `#` as a
+    // comment. The annotation is the record, and a caller's line may well
+    // start that way: a promotion refused with the reason "#418 is why the
+    // console said no" came out as a refusal with no reason at all, the tag
+    // written and pushed and nothing red (found in review of the promotion
+    // writer, before it shipped). This mode still trims blank lines and leaves
+    // the rest alone.
+    git.run([
+      'tag',
+      '-a',
+      '--cleanup=whitespace',
+      record.name,
+      commit,
+      '-m',
+      record.annotation,
+    ]);
   }
 
   if (push) {

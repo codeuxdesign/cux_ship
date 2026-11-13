@@ -197,6 +197,28 @@ void main() {
     );
   });
 
+  test('a reason starting with # is still a reason', () {
+    // An issue number is the likeliest first word of a refusal's reason, and
+    // git's default message cleanup deletes any line starting with `#`. The
+    // check above would pass and the tag would say nothing — the unexplained
+    // refusal this file refuses to write, written anyway.
+    final built = _commit('built');
+    _uploaded(built);
+
+    writePromotion(
+      git: _git,
+      record: _record(outcome: PromotionOutcome.attemptedAndRefused),
+      uploadedTag: 'uploaded/v1.9.13+2196',
+      note: '#418: console rejects the 32-bit libs',
+      push: false,
+    );
+
+    expect(
+      _body('refused/huawei/production/v1.9.13+2196'),
+      contains('#418: console rejects the 32-bit libs'),
+    );
+  });
+
   test('a hand-over needs no reason, and may still carry one', () {
     final built = _commit('built');
     _uploaded(built);

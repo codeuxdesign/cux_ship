@@ -68,6 +68,28 @@ void main() {
     );
   });
 
+  test('an annotation line starting with # is kept', () {
+    // `git tag -m` cleans its message in `strip` mode unless told otherwise,
+    // and that mode deletes every line starting with `#` as an editor comment.
+    // The annotation is the record, so a line lost from it is a record that
+    // says less than its caller wrote — silently, with the tag created.
+    final built = _commit('built here');
+    recordUpload(
+      _git,
+      UploadRecord(
+        name: 'refused/huawei/production/v1.0.0+49',
+        commit: built,
+        annotation: 'build 49 of 1.0.0\n#418 is why the console said no',
+      ),
+      push: false,
+    );
+
+    expect(
+      _git.run(['tag', '-l', '-n99', 'refused/huawei/production/v1.0.0+49']),
+      contains('#418 is why the console said no'),
+    );
+  });
+
   test('re-recording the same artifact is not an error', () {
     final built = _commit('built here');
     recordUpload(_git, _record(built), push: false);
@@ -444,11 +466,11 @@ void main() {
   // sends the next run back to the same console.
   group('failedPushIsFatal: false', () {
     test('reports a tag it could not push instead of failing', () {
+      // An origin that is not there at all, which is what a dropped network or
+      // a revoked credential looks like from here: both pushes fail, and so
+      // does asking it what the tag names.
       final built = _commit('built here');
-      final origin = Directory.systemTemp.createTempSync('cux_ship_origin');
-      addTearDown(() => origin.deleteSync(recursive: true));
-      Process.runSync('git', ['init', '-q', '--bare', origin.path]);
-      _git.run(['remote', 'add', 'origin', '${origin.path}-does-not-exist']);
+      _git.run(['remote', 'add', 'origin', '${_root.path}/no-such-remote']);
 
       final result = recordUpload(
         _git,
@@ -528,6 +550,24 @@ void main() {
       );
     });
 
+    test(
+      'a tag already here and still unpushable is not "already recorded"',
+      () {
+        // The resumed run: the first attempt left the tag locally and could not
+        // push it, and the second finds it. `alreadyRecorded` would be true of
+        // this clone and would tell the caller the record is done, when the only
+        // question it has left is whether another machine can read it.
+        final built = _commit('built here');
+        recordUpload(_git, _record(built), push: false);
+        _git.run(['remote', 'add', 'origin', '${_root.path}/no-such-remote']);
+
+        expect(
+          recordUpload(_git, _record(built), failedPushIsFatal: false),
+          UploadRecordResult.writtenNotPushed,
+        );
+      },
+    );
+
     test('a local collision is refused before the push is reached', () {
       // The local check runs first and is untouched by this flag. Without this
       // the non-fatal path could be read as "nothing about this record can
@@ -546,5 +586,52 @@ void main() {
         throwsA(isA<UploadCollisionException>()),
       );
     });
+  });
+
+  test('package:cux_ship/provenance.dart exports these names and no others', () {
+    // That library's header argues itself an exception to `read-api.md`'s
+    // "reads only", and the argument covers exactly this: one function that
+    // writes a tag, the types in its signature and its failures, and the
+    // lookup for the commit to hand it. `read-api.md` also says a surface is
+    // grown by "an edit somebody has to make on purpose" — this is the edit. A
+    // name added to a `show` list, or an export with no `show` at all, widens
+    // what the exception has to defend and fails here until someone says so.
+    final library = [
+      'lib/provenance.dart',
+      'cux_ship/lib/provenance.dart',
+    ].map(File.new).firstWhere((file) => file.existsSync());
+    // Comments dropped first, because the header quotes an `import` line and
+    // prose with semicolons in it.
+    final code = library
+        .readAsLinesSync()
+        .where((line) => !line.trimLeft().startsWith('//'))
+        .join('\n');
+
+    final exports = RegExp(r'export [^;]*;').allMatches(code).toList();
+    final shown = RegExp(
+      r'export [^;]*?\sshow\s([^;]*);',
+    ).allMatches(code).toList();
+    expect(exports, isNotEmpty);
+    expect(
+      shown.length,
+      exports.length,
+      reason: 'an export without `show` hands out the whole library',
+    );
+    expect(
+      {
+        for (final clause in shown)
+          ...clause.group(1)!.split(',').map((name) => name.trim()),
+      },
+      {
+        'Git',
+        'ReleaseException',
+        'UploadCollisionException',
+        'UploadRecord',
+        'UploadRecordResult',
+        'recordUpload',
+        'taggedCommit',
+        'uploadCollisionExit',
+      },
+    );
   });
 }

@@ -57,8 +57,13 @@ class PromotionWriteException implements Exception {
 /// [note] is the operator's line of why, required for a refusal and optional
 /// otherwise.
 ///
+/// **[push] is for tests, exactly as it is on [recordUpload].** A promotion
+/// that is not pushed is a record only on this machine, and the push is also
+/// the only thing that sees the same name recorded at another commit from
+/// somewhere else.
+///
 /// Returns what `cux_ship` reports, including
-/// [UploadRecordResult.writtenNotPushed] — see [failedPushIsFatal] on
+/// [UploadRecordResult.writtenNotPushed] — see `failedPushIsFatal` on
 /// [recordUpload] for why a promotion tolerates a failed push and an upload
 /// record must not.
 UploadRecordResult writePromotion({
