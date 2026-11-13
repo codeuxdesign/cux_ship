@@ -14,6 +14,9 @@ consumer declares where a release has to go and who acts at each stage, and
 into the tool. The record says what the release has already reached, read from
 git refs a caller hands over; from it come the two questions a resumable run
 asks — what is still outstanding, and whether the version tag may be spent.
+Over both sits the **evidence model**, which decides what `status` is allowed
+to claim about a cell: read, recorded, contradicted, failed, unknown, or
+nobody's job.
 
 All of it parses and answers questions. It spawns nothing, runs no git and
 contacts no store, which is what lets every case be tested with no credential
