@@ -107,6 +107,46 @@ void main() {
         );
       }
     });
+
+    test('each of the six marks has a word of its own', () {
+      // The case above looks at lines, so it cannot see one mark borrowing
+      // another's word: `failed` spelled `observed` still puts a class beside
+      // every 2196. Here all six are on the page at once, each in a cell
+      // whose mark the evidence model has already decided.
+      final render = _grid(
+        refs: [
+          'promoted/huawei/production/v1.9.13+2196',
+          'promoted/snap/production/v1.9.13+2196',
+        ],
+        observations: {
+          ('play', Stage.internal): const StepFailed('job 812 failed'),
+          ('play', Stage.production): const Holds(_candidate),
+          ('snap', Stage.production): const Holds(1940),
+        },
+      ).render();
+
+      expect(_row(render, 'play'), 'play | 2196 failed | n/a | 2196 observed');
+      expect(_row(render, 'huawei'), 'huawei | n/a | n/a | 2196 attested');
+      expect(
+        _row(render, 'snap'),
+        'snap | pending (public) | n/a | 1940 disagreed',
+      );
+    });
+
+    test('a refusal on record is `failed`, never a build the cell holds', () {
+      // The cell names the candidate because that is what was refused, which
+      // makes it the one mark whose number is not a claim that anything is
+      // there. Spelled as `observed` or `attested` it would be exactly that.
+      final render = _grid(
+        refs: ['refused/snap/production/v1.9.13+2196'],
+      ).render();
+
+      expect(
+        _row(render, 'snap'),
+        'snap | pending (public) | n/a | 2196 failed',
+      );
+      expect(render, contains('snap production — attempted and refused'));
+    });
   });
 
   group('the header', () {
@@ -199,6 +239,17 @@ destinations:
       expect(row, 'snap | pending (public) | n/a | pending');
     });
 
+    test('sits beside a build and its mark without replacing either', () {
+      final render = _grid(
+        observations: {('snap', Stage.internal): const Holds(_candidate)},
+      ).render();
+
+      expect(
+        _row(render, 'snap'),
+        'snap | 2196 observed (public) | n/a | pending',
+      );
+    });
+
     test('never has to be printed on a cell nobody acts at', () {
       // **This is why the renderer has no case for that.** A destination that
       // claims to be public at a stage it also says nobody touches is refused
@@ -212,7 +263,16 @@ destinations:
     public-at-internal: true
     production: {kind: manual, console: "https://authpass.app"}
 ''', source: '.cux-train.yaml'),
-        throwsA(isA<DestinationTableException>()),
+        throwsA(
+          isA<DestinationTableException>().having(
+            (e) => e.message,
+            'message',
+            allOf(
+              contains('`public-at-internal`'),
+              contains('nobody acts at `internal`'),
+            ),
+          ),
+        ),
       );
     });
 
@@ -263,6 +323,23 @@ destinations:
         );
       },
     );
+
+    test('lose the whitespace around them, and a blank one is no note', () {
+      // A reason that is only whitespace has nothing to say, and a line that
+      // ends in an em dash reads as a note somebody forgot to finish.
+      final lines = _grid(
+        observations: {
+          ('play', Stage.internal): const Unreadable('\n  timed out\n'),
+          ('play', Stage.production): const Unreadable(' \n'),
+        },
+      ).render().split('\n');
+
+      expect(lines, contains('play internal — timed out'));
+      expect(
+        lines.where((line) => line.startsWith('play production')),
+        isEmpty,
+      );
+    });
 
     test('are absent when every cell speaks for itself', () {
       // Nothing public, nothing disagreed, nothing refused: the header is the
