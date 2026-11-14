@@ -202,6 +202,14 @@ void main() {
       // destination nobody declared, and §4's finish rule counts on the
       // difference: `none` at production is satisfied vacuously, while an
       // absent destination is one the rule never asked about.
+      //
+      // **The `read` in this fixture is deliberate, and currently inert.** No
+      // observation is handed in here, so `n/a` is right either way — but a
+      // destination that is `none` at every stage renders `n/a` even when a
+      // read *did* answer, because `evidenceFor` settles `n/a` before it looks
+      // at the observation. §6.3 wants the opposite for flathub in particular:
+      // that row exists so a daily bot which did not run becomes a red cell.
+      // When that is fixed, this case gains a sibling that hands one in.
       final render = _grid(
         table: DestinationTable.parse('''
 destinations:
@@ -431,6 +439,47 @@ snap production — recorded at 2196, holds 1940
 
     test('a destination nobody declared has no cell', () {
       expect(_grid().cellFor('amazon', Stage.production), isNull);
+    });
+
+    test('refuses an observation it cannot place in any row', () {
+      // The failure this prevents is not a missing row, it is a wrong cell:
+      // a read keyed `appstore` against a table declaring `appstore:ios`
+      // misses the lookup, and the cell then says `pending`. A failure the
+      // run actually found, reported as nothing known.
+      expect(
+        () => _grid(
+          observations: {('appstore', Stage.production): const Holds(2196)},
+        ),
+        throwsA(
+          isA<StatusGridException>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains('appstore'), contains('does not declare')),
+          ),
+        ),
+      );
+    });
+
+    test('refuses a row with a hole in it', () {
+      // `cellAt` and every renderer index the map directly, so a missing
+      // stage would surface as a bare null-check error thrown from inside
+      // `render()`, nowhere near the caller that built the row.
+      expect(
+        () => StatusRow(
+          destination: _table.destinations.first,
+          cells: const {
+            Stage.internal: Evidence(mark: EvidenceMark.pending),
+            Stage.production: Evidence(mark: EvidenceMark.pending),
+          },
+        ),
+        throwsA(
+          isA<StatusGridException>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains('no cell at'), contains('beta')),
+          ),
+        ),
+      );
     });
   });
 }

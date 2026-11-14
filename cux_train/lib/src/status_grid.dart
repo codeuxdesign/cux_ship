@@ -56,7 +56,26 @@ typedef ObservationsByCell = Map<(String, Stage), Observation>;
 /// One destination's row.
 class StatusRow {
   StatusRow({required this.destination, required Map<Stage, Evidence> cells})
-    : cells = Map.unmodifiable(cells);
+    : cells = Map.unmodifiable(cells) {
+    // **A row with a hole in it is refused here rather than at render time.**
+    // [cellAt] and every renderer below it index `cells` directly, so a
+    // missing stage surfaces as a bare null-check error thrown from inside
+    // `render()` — about as far from the caller that built the row as it is
+    // possible to land. [StatusGrid.of] always fills every stage, but this
+    // constructor is public, so it has to hold the rule itself instead of
+    // resting on its only in-tree caller.
+    final missing = Stage.values
+        .where((stage) => !cells.containsKey(stage))
+        .toList();
+    if (missing.isNotEmpty) {
+      throw StatusGridException(
+        'The row for ${destination.name} has no cell at '
+        '${missing.map((stage) => stage.name).join(', ')}. Every stage gets a '
+        'cell, because a grid that omits one reports an absent column as an '
+        'absent audience.',
+      );
+    }
+  }
 
   final Destination destination;
 
@@ -65,8 +84,8 @@ class StatusRow {
 
   /// The cell at [stage].
   ///
-  /// Not nullable: [StatusGrid.of] fills every stage of every row, so a null
-  /// here would be a bug in this file rather than a state a caller can reach.
+  /// Not nullable: every row carries a cell at every stage, because the
+  /// constructor refuses one that does not.
   Evidence cellAt(Stage stage) => cells[stage]!;
 }
 
@@ -104,6 +123,30 @@ class StatusGrid {
       throw StatusGridException(
         'A status grid needs a candidate build, and $candidate is not one. '
         'Build numbers are allocated from 1 upwards; see `--build N`.',
+      );
+    }
+    // **An observation nobody can place is refused, not dropped.**
+    // [observations] is keyed by destination *name*, and a caller that spells
+    // one differently from the table — `appstore` for a row the table declares
+    // as `appstore:ios` — gets no error and no cell. The lookup below simply
+    // misses, and the cell then renders `pending`: a read that found a failure
+    // reported as "nothing known", which is the exact loss §6.2 added `failed`
+    // to prevent. Silent on both sides, so it is refused up front.
+    final declared = {for (final it in table.destinations) it.name};
+    final unplaceable =
+        observations.keys
+            .map((key) => key.$1)
+            .where((name) => !declared.contains(name))
+            .toSet()
+            .toList()
+          ..sort();
+    if (unplaceable.isNotEmpty) {
+      throw StatusGridException(
+        'A read was handed in for ${unplaceable.join(', ')}, which the '
+        'destination table does not declare. It declares '
+        '${declared.join(', ')}. An observation that cannot be placed in a '
+        'row would be dropped, and that row would then say `pending` — '
+        '"nothing known" in place of what the read found.',
       );
     }
     return StatusGrid(
@@ -224,11 +267,17 @@ class StatusGrid {
     // pushed. On the row's name instead it would read as a claim about all
     // three stages, which is the one thing it is not.
     //
-    // **There is no case here for a cell nobody acts at**, because the table
-    // refuses `public-at-internal` on a destination with no internal step
-    // before this file ever sees it. `status_grid_test.dart` holds that
-    // refusal as a case of its own: if it is ever relaxed, the branch missing
-    // here is what has to be written.
+    // **There is no case here for a cell nobody acts at**, because
+    // `DestinationTable.parse` refuses `public-at-internal` on a destination
+    // with no internal step. `status_grid_test.dart` holds that refusal as a
+    // case of its own: if it is ever relaxed, the branch missing here is what
+    // has to be written.
+    //
+    // It is the *parser* that refuses it and not the type. A [Destination]
+    // built by hand can still carry the flag with no internal step, and this
+    // renders it `n/a (public)` — an audience claimed for a step nobody takes.
+    // Worth knowing before that rule is loosened, because the output is wrong
+    // rather than absent.
     if (stage == Stage.internal && evidence.publicAtInternal) {
       return '$text (public)';
     }
