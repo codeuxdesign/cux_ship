@@ -75,6 +75,27 @@ also the shape to commit in a consumer's own tree if it caches a kernel
 snapshot — `dart compile kernel` requires a real file and refuses a `package:`
 URI.
 
+### Fixed
+
+**A tag collision on origin was invisible when origin's tag was
+*lightweight*.** `remoteTaggedCommit` asked `ls-remote` for
+`refs/tags/<name>^{}` alone, and `ls-remote` emits a `^{}` line only for an
+annotated tag — so a lightweight one came back empty and read as *origin has no
+such tag*, which is the one answer nothing checks twice. The rejected push was
+then treated as a transport failure: `release finish` and `recordUpload`
+re-ran the push and reported raw git output instead of the collision, and
+`recordUpload` with `failedPushIsFatal: false` returned `writtenNotPushed` on
+every run forever while this clone's record and origin's named different
+commits. Both refs are now asked for in one call and the peeled answer wins
+where there is one — the peel is still load-bearing, because the plain line of
+an annotated tag is a tag object that equals no commit.
+
+This was found in review of the promotion writer below, and it is that writer
+that makes it matter: `promoted/` is a namespace this package is about to share
+with a shell script writing tags by hand, which is exactly where a lightweight
+tag at the wrong commit comes from. For `uploaded/`, where every tag was
+written by this code, it had not been reachable.
+
 ## 4.5.0-dev.8
 
 **Needs `cux_ship_verify` 1.11.0-dev.4**, for `LocaleMetadata.creativeAssets`,

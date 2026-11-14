@@ -225,6 +225,39 @@ void main() {
     );
   });
 
+  test('refuses a collision with a lightweight tag on origin', () {
+    // **The same collision as above, written by something that was not this
+    // tool, and for a while it was invisible.** `ls-remote` emits a `^{}` line
+    // only for an annotated tag, so asking origin for the peeled ref alone got
+    // nothing back from a lightweight one and read as "origin has no such
+    // tag" — after which the rejected push looked like a transport failure and
+    // the operator got raw git output instead of the collision.
+    //
+    // Not hypothetical: a `promoted/` namespace this repository is about to
+    // share with a shell script that writes tags by hand is precisely where a
+    // lightweight tag at the wrong commit comes from.
+    final origin = Directory.systemTemp.createTempSync('cux_ship_origin');
+    addTearDown(() => origin.deleteSync(recursive: true));
+    Process.runSync('git', ['init', '-q', '--bare', origin.path]);
+    _git.run(['remote', 'add', 'origin', origin.path]);
+
+    final ours = _commit('our artifact');
+    final theirs = _commit('their artifact');
+
+    // No `-a`: whatever wrote this did not make a tag object.
+    _git.run(['tag', 'uploaded/v1.0.0+49', theirs]);
+    _git.run(['push', '-q', 'origin', 'refs/tags/uploaded/v1.0.0+49']);
+    _git.run(['tag', '-d', 'uploaded/v1.0.0+49']);
+
+    expect(
+      () => recordUpload(_git, _record(ours)),
+      throwsA(isA<UploadCollisionException>()),
+      reason:
+          'a lightweight tag at another commit is still two commits under '
+          'one build number, and still exit 3 rather than a git error',
+    );
+  });
+
   test('two runners recording the same build is not a collision', () {
     // **The half the test above could not see, and the one that happens.** It
     // uses a *different* commit, which is the rare case; a release matrix
@@ -541,6 +574,29 @@ void main() {
 
       final theirs = _commit('what origin recorded');
       recordUpload(_git, _record(theirs));
+      _git.run(['tag', '-d', 'uploaded/v1.0.0+49']);
+      final ours = _commit('what this machine has');
+
+      expect(
+        () => recordUpload(_git, _record(ours), failedPushIsFatal: false),
+        throwsA(isA<UploadCollisionException>()),
+      );
+    });
+
+    test('does not soften a lightweight collision either', () {
+      // **The quiet half of the same bug, and the worse half.** On the fatal
+      // path an invisible collision at least stopped the run, with the wrong
+      // message. Here it returned `writtenNotPushed` — a result that reads as
+      // "write it again next time" — on every run forever, while this clone's
+      // record and origin's named different commits and nothing said so.
+      final origin = Directory.systemTemp.createTempSync('cux_ship_origin');
+      addTearDown(() => origin.deleteSync(recursive: true));
+      Process.runSync('git', ['init', '-q', '--bare', origin.path]);
+      _git.run(['remote', 'add', 'origin', origin.path]);
+
+      final theirs = _commit('what origin recorded');
+      _git.run(['tag', 'uploaded/v1.0.0+49', theirs]);
+      _git.run(['push', '-q', 'origin', 'refs/tags/uploaded/v1.0.0+49']);
       _git.run(['tag', '-d', 'uploaded/v1.0.0+49']);
       final ours = _commit('what this machine has');
 

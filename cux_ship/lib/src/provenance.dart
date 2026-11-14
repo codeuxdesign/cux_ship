@@ -170,6 +170,12 @@ enum UploadRecordResult {
 /// It does **not** soften a collision. A remote tag naming a different commit
 /// is a disagreement about what happened rather than a failure to transmit, and
 /// that throws whichever side of its event the record sits on.
+///
+/// **That sentence rests entirely on [remoteTaggedCommit] being able to see
+/// origin's tag**, and it was false for a while because that function could not
+/// see a lightweight one. Worth naming here rather than only there: this path
+/// has no other way to tell a collision from a failure to transmit, so anything
+/// that query cannot answer is silently the tolerable case.
 UploadRecordResult recordUpload(
   Git git,
   UploadRecord record, {

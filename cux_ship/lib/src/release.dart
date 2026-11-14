@@ -582,20 +582,50 @@ String? taggedCommit(Git git, String name) {
 /// local answer alone is what let a clone without the tag mint its own and be
 /// refused by a remote that already had one.
 ///
-/// **`^{}` is load-bearing.** Without it `ls-remote` answers with the *tag
-/// object* id, and two clones that tagged the same commit have two different
-/// tag objects — so comparing those would report a collision on every parallel
-/// run and never on a real one. One network call, no fetch.
+/// **`^{}` is load-bearing, and asking for it alone was a bug.** Without the
+/// peel `ls-remote` answers with the *tag object* id, and two clones that
+/// tagged the same commit have two different tag objects — so comparing those
+/// would report a collision on every parallel run and never on a real one.
+///
+/// But `ls-remote` emits a `^{}` line **only for an annotated tag**. A
+/// lightweight tag on origin answers on the plain ref and nothing else, so a
+/// query for the peeled form alone came back empty and read as *origin has no
+/// such tag* — the one answer that is never checked twice. `recordUpload` then
+/// treats the rejected push as a transport failure: fatal, it re-runs the push
+/// and reports raw git output instead of the collision; non-fatal, it returns
+/// `writtenNotPushed` on every run forever while the local record names a
+/// different commit from origin's. Hand-written and
+/// script-written tags are exactly where a lightweight one comes from, and a
+/// `promoted/` namespace a shell script used to write is the live example.
+///
+/// So both refs go in one call and the peeled answer wins wherever there is
+/// one. Still one network call, still no fetch.
 String? remoteTaggedCommit(Git git, String name) {
-  final line = git.run([
+  final output = git.run([
     'ls-remote',
     'origin',
+    'refs/tags/$name',
     'refs/tags/$name^{}',
   ], allowFailure: true);
-  if (line.isEmpty) {
-    return null;
+
+  String? peeled;
+  String? plain;
+  for (final line in output.split('\n')) {
+    final parts = line.trim().split(RegExp(r'\s+'));
+    if (parts.length < 2) {
+      continue;
+    }
+    // Matched by ref name rather than by line order, because preferring the
+    // wrong one is silent: the plain line of an annotated tag is a tag object
+    // that equals no commit, which is the collision-on-every-run failure the
+    // peel exists to avoid.
+    if (parts[1] == 'refs/tags/$name^{}') {
+      peeled = parts[0];
+    } else if (parts[1] == 'refs/tags/$name') {
+      plain = parts[0];
+    }
   }
-  return line.split(RegExp(r'\s+')).first;
+  return peeled ?? plain;
 }
 
 /// [spec] as the full 40-character SHA of a commit that exists here.
