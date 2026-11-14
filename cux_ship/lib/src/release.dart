@@ -405,11 +405,18 @@ List<String> finishRelease(Git git, FinishOptions options) {
           );
         } else {
           // **A lightweight tag on origin is accepted here and refused by
-          // `recordUpload`, and the difference is deliberate.** There the
-          // annotation *is* the record and nothing has shipped yet, so an
-          // empty one must not stand in. Here the release has already gone
-          // out and the tag is bookkeeping, so refusing would fail a run whose
-          // work is done and cannot be undone.
+          // `recordUpload`, and the difference is what the tag is made of
+          // rather than when it is written.** A finish tag's content is its
+          // name and the commit it points at, and a bare ref carries both. A
+          // record's content is its annotation — the build number, the
+          // checksum, which store took it, and for a refused promotion the
+          // operator's reason — none of which survives without a tag object,
+          // so an empty one cannot stand in for it.
+          //
+          // Timing would be the wrong reason to give, tempting as it is from
+          // here: `writePromotion` runs *after* a person promoted in a console
+          // and refuses all the same. What it cannot accept is an empty
+          // record, not a late one.
           log.add('$tagName already on origin at ${_short(commit)}');
         }
       }

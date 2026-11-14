@@ -132,6 +132,12 @@ class StatusGrid {
     // misses, and the cell then renders `pending`: a read that found a failure
     // reported as "nothing known", which is the exact loss §6.2 added `failed`
     // to prevent. Silent on both sides, so it is refused up front.
+    //
+    // **It closes the misspelt name and not the class.** An observation for a
+    // destination the table *does* declare, at a stage whose step is `none`,
+    // is still discarded: [evidenceFor] settles `n/a` before it looks at one.
+    // That is §6.3's open question rather than this check's, and a case in
+    // `status_grid_test.dart` holds it.
     final declared = {for (final it in table.destinations) it.name};
     final unplaceable =
         observations.keys
