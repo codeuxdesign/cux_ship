@@ -78,7 +78,7 @@ URI.
 ### Fixed
 
 **A tag collision on origin was invisible when origin's tag was
-*lightweight*.** `remoteTaggedCommit` asked `ls-remote` for
+*lightweight*.** `remoteTag` (then `remoteTaggedCommit`) asked `ls-remote` for
 `refs/tags/<name>^{}` alone, and `ls-remote` emits a `^{}` line only for an
 annotated tag — so a lightweight one came back empty and read as *origin has no
 such tag*, which is the one answer nothing checks twice. The rejected push was
@@ -95,6 +95,23 @@ that makes it matter: `promoted/` is a namespace this package is about to share
 with a shell script writing tags by hand, which is exactly where a lightweight
 tag at the wrong commit comes from. For `uploaded/`, where every tag was
 written by this code, it had not been reachable.
+
+**And a lightweight tag on origin at the *right* commit is now refused rather
+than reported as an existing record.** Review of the fix above found that it
+turned one quiet case into another: once origin's lightweight tag was visible
+and its commit matched, `recordUpload` read it as "another job recorded this
+build" and returned `alreadyRecorded`, where previously it threw. But a bare
+ref carries no annotation, and `recordUpload` already refuses that same tag
+when it finds it *locally* — the build number, the checksum and the store are
+all in the annotation, and for a `promoted/` refusal the annotation is the
+operator's reason. Accepting it on origin while refusing it locally made one
+tag a record or an empty one depending on which clone saw it first, and the
+annotated tag the run had just written never left the machine. `remoteTag` now
+reports whether origin's tag is annotated along with the commit it names,
+because asking a narrower question than the caller needs is what both halves
+of this bug were made of. `release finish` still accepts one, deliberately:
+there the release has already gone out and the tag is bookkeeping, so refusing
+would fail a run whose work cannot be undone.
 
 ## 4.5.0-dev.8
 

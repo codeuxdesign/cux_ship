@@ -48,7 +48,7 @@
 // can name.
 import 'config.dart' show TagKindConfig;
 import 'release.dart'
-    show Git, ReleaseException, remoteTaggedCommit, resolveCommit, taggedCommit;
+    show Git, ReleaseException, remoteTag, resolveCommit, taggedCommit;
 
 /// The tag recording that [commit] reached a store.
 ///
@@ -171,11 +171,15 @@ enum UploadRecordResult {
 /// is a disagreement about what happened rather than a failure to transmit, and
 /// that throws whichever side of its event the record sits on.
 ///
-/// **That sentence rests entirely on [remoteTaggedCommit] being able to see
-/// origin's tag**, and it was false for a while because that function could not
-/// see a lightweight one. Worth naming here rather than only there: this path
-/// has no other way to tell a collision from a failure to transmit, so anything
-/// that query cannot answer is silently the tolerable case.
+/// **That sentence rests entirely on [remoteTag] being able to see origin's
+/// tag**, and it was false for a while because that function could not see a
+/// lightweight one. Worth naming here rather than only there: this path has no
+/// other way to tell a collision from a failure to transmit, so anything that
+/// query cannot answer is silently the tolerable case.
+///
+/// Which is also why a lightweight tag on origin at the *right* commit is
+/// refused rather than accepted as a record. Seeing it was the fix; believing
+/// it would have been half of one.
 UploadRecordResult recordUpload(
   Git git,
   UploadRecord record, {
@@ -277,7 +281,7 @@ UploadRecordResult recordUpload(
     // nothing.
     final pushed = git.ok(['push', 'origin', 'refs/tags/${record.name}']);
     if (!pushed) {
-      final remote = remoteTaggedCommit(git, record.name);
+      final remote = remoteTag(git, record.name);
       if (remote == null) {
         // Rejected, and origin does not hold this tag — so the push failed for
         // some other reason (credentials, network, a hook).
@@ -308,13 +312,36 @@ UploadRecordResult recordUpload(
         // attempt is the ordinary reason to reach this branch.
         return result;
       }
-      if (remote != commit) {
+      if (remote.commit != commit) {
         throw UploadCollisionException(
           'Tag ${record.name} already names a different commit on origin.\n'
-          '  origin points at:  $remote\n'
+          '  origin points at:  ${remote.commit}\n'
           '  this artifact:     $commit\n'
           'One build number has been used for two commits, so publishing this '
           'would leave the record naming the wrong one. Nothing was uploaded.',
+        );
+      }
+      if (!remote.annotated) {
+        // **The same refusal as the local one above, applied to origin.**
+        // Right commit, no annotation: the build number, the checksum and
+        // which store took it are all absent, and this run's annotated tag was
+        // rejected rather than replacing it — so returning `alreadyRecorded`
+        // would report a record that exists nowhere but as a bare ref on
+        // origin, while the real one stayed on a machine about to be torn
+        // down. For a `promoted/` refusal that annotation is the operator's
+        // reason, which is the only thing a refusal record carries at all.
+        //
+        // Accepting it here while refusing it locally would have made the same
+        // tag a record or an empty one depending only on which clone found it
+        // first.
+        throw ReleaseException(
+          'Tag ${record.name} exists on origin at the right commit but is '
+          'lightweight, so it carries no annotation — and the annotation is '
+          'the record. This run wrote an annotated tag and origin refused to '
+          'take it, so the record would exist only on this machine. This tool '
+          'only writes annotated tags, so something else created that one: '
+          'delete it on origin and re-run, or annotate it by hand. Nothing '
+          'was uploaded.',
         );
       }
       // Same commit, someone else's tag object. Another job recorded this exact

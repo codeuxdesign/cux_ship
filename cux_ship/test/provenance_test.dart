@@ -258,6 +258,44 @@ void main() {
     );
   });
 
+  test('refuses an empty record on origin at the right commit', () {
+    // **The case the fix above opened, found reviewing it.** Asking for both
+    // refs made a lightweight tag on origin visible, and the commit matched,
+    // so this stopped being read as "no tag on origin" and started being read
+    // as "another job recorded it" — `alreadyRecorded`, quietly, where before
+    // it threw. But a bare ref is not a record: `recordUpload` refuses that
+    // very tag three screens up when it finds it *locally*, because the
+    // annotation is where the build number, the checksum and the store live.
+    //
+    // Accepting it here would have made one tag a record or an empty one
+    // depending only on which clone found it first, and the annotated tag this
+    // run wrote would never have left the machine.
+    final origin = Directory.systemTemp.createTempSync('cux_ship_origin');
+    addTearDown(() => origin.deleteSync(recursive: true));
+    Process.runSync('git', ['init', '-q', '--bare', origin.path]);
+    _git.run(['remote', 'add', 'origin', origin.path]);
+
+    final shared = _commit('one artifact');
+
+    // No `-a`: a hand-written or script-written tag, which is where the
+    // `promoted/` namespace's lightweight tags come from.
+    _git.run(['tag', 'uploaded/v1.0.0+49', shared]);
+    _git.run(['push', '-q', 'origin', 'refs/tags/uploaded/v1.0.0+49']);
+    _git.run(['tag', '-d', 'uploaded/v1.0.0+49']);
+
+    expect(
+      () => recordUpload(_git, _record(shared)),
+      throwsA(
+        isA<ReleaseException>().having(
+          (e) => e.toString(),
+          'message',
+          allOf(contains('lightweight'), contains('the annotation is')),
+        ),
+      ),
+      reason: 'the local path refuses this same tag for this same reason',
+    );
+  });
+
   test('two runners recording the same build is not a collision', () {
     // **The half the test above could not see, and the one that happens.** It
     // uses a *different* commit, which is the rare case; a release matrix
@@ -603,6 +641,35 @@ void main() {
       expect(
         () => recordUpload(_git, _record(ours), failedPushIsFatal: false),
         throwsA(isA<UploadCollisionException>()),
+      );
+    });
+
+    test('an empty record on origin is refused here too', () {
+      // Same commit, so not a collision — and not a record either. The flag
+      // softens a push that could not be made, and this push *was* made and
+      // refused, by an origin holding a bare ref where the annotation should
+      // be. Reported as `alreadyRecorded` it would end the run claiming a
+      // record that holds no build number, no checksum and, for a refusal,
+      // none of the operator's reason.
+      final origin = Directory.systemTemp.createTempSync('cux_ship_origin');
+      addTearDown(() => origin.deleteSync(recursive: true));
+      Process.runSync('git', ['init', '-q', '--bare', origin.path]);
+      _git.run(['remote', 'add', 'origin', origin.path]);
+
+      final shared = _commit('one artifact');
+      _git.run(['tag', 'uploaded/v1.0.0+49', shared]);
+      _git.run(['push', '-q', 'origin', 'refs/tags/uploaded/v1.0.0+49']);
+      _git.run(['tag', '-d', 'uploaded/v1.0.0+49']);
+
+      expect(
+        () => recordUpload(_git, _record(shared), failedPushIsFatal: false),
+        throwsA(
+          isA<ReleaseException>().having(
+            (e) => e.toString(),
+            'message',
+            allOf(contains('lightweight'), contains('the annotation is')),
+          ),
+        ),
       );
     });
 
