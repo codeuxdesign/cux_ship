@@ -8,7 +8,7 @@ packages, three of them published:
 | `cux_ship` | the command, and everything publishing needs — googleapis, an image codec, an HTTP client, a JWT signer |
 | `cux_ship_verify` | the offline half, with no dependencies at all: the CHANGELOG parser, the App Store metadata model, and the checks over both |
 | `cux_buildnumber` | allocating a build number, which is a git operation a build does before it has an artifact |
-| `cux_train` | ordering the steps of a release, including the ones a person performs. **Nothing implemented yet** — the member exists ahead of the move that `docs/design/release-train.md` plans, and is unpublished |
+| `cux_train` | ordering the steps of a release, including the ones a person performs: the destination table, the promotion record and the ledger that reads it, the evidence model, and the `status` grid. **No CLI yet** — nothing drives these from a command line, which is the next piece of the move `docs/design/release-train.md` plans. Unpublished, and it spawns `cux_ship` rather than importing its store clients |
 
 **Read [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) before changing anything.**
 It is three rules and a rule about the rules, and it is deliberately short: a
