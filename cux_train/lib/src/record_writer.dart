@@ -74,6 +74,16 @@ UploadRecordResult writePromotion({
   bool push = true,
   bool dryRun = false,
 }) {
+  // **Nothing is written that this package could not read back.**
+  // `PromotionRecord` is a plain value and takes what it is given — a build of
+  // 0, a version with a `/` in it, a destination spelt `direct/apk` — and its
+  // `ref` formats every one of them. The tag would be created and pushed, and
+  // the next ledger read, which insists that every ref in the namespace
+  // parses, would then refuse the namespace for every build, not only this
+  // one. So the name is read back before anything is written, and has to come
+  // out as the record that went in.
+  _refuseUnreadable(record);
+
   // **A refusal with nothing said about it is the state `s` already covers.**
   // §6.1 gives the operator three keys: `d` records, `s` leaves the cell
   // unrecorded so the next run stops at it again, and `f` records "that it was
@@ -125,6 +135,32 @@ UploadRecordResult writePromotion({
     // it costs the operator the console step they just finished.
     failedPushIsFatal: false,
   );
+}
+
+/// Throws unless [record]'s ref parses back to [record].
+void _refuseUnreadable(PromotionRecord record) {
+  final PromotionRecord reread;
+  try {
+    reread = PromotionRecord.parse(record.ref, source: 'writePromotion');
+  } on PromotionRecordException catch (e) {
+    throw PromotionWriteException(
+      'Refusing to record `${record.ref}`, which would not read back as a '
+      'promotion record — ${e.message}',
+    );
+  }
+  if (reread.destination != record.destination ||
+      reread.stage != record.stage ||
+      reread.version != record.version ||
+      reread.build != record.build ||
+      reread.outcome != record.outcome) {
+    throw PromotionWriteException(
+      'Refusing to record `${record.ref}`: it was written for '
+      '`${record.destination}` at ${record.stage.name}, version '
+      '${record.version}, and reads back as `${reread.destination}` at '
+      '${reread.stage.name}, version ${reread.version}. A `/` in a '
+      'destination or a version changes where the name is split.',
+    );
+  }
 }
 
 /// The tag body.

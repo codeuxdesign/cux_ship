@@ -251,5 +251,20 @@ destinations:
       expect(_table.byName('play')!.afterFinish, isFalse);
       expect(_table.byName('fdroid')!.afterFinish, isTrue);
     });
+
+    test('may be written as false where nobody acts at production', () {
+      // The refusal is for a key that claims something and does nothing. An
+      // explicit `false` claims nothing, so it is the default spelt out.
+      final table = DestinationTable.parse('''
+destinations:
+  web:
+    after-finish: false
+    production: none
+  play:
+    production: {kind: ship, command: "play promote"}
+''', source: '.cux-train.yaml');
+
+      expect(table.byName('web')!.afterFinish, isFalse);
+    });
   });
 }

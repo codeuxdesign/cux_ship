@@ -143,6 +143,39 @@ void main() {
       }
     });
 
+    test('a build this grammar would not have written that way', () {
+      // `int.tryParse` reads all three, and none is a ref that comes back as
+      // itself: `0x10` is sixteen, `02196` is rewritten as `+2196`, and the
+      // padded one loses its spaces. Two ref names reading as one record is
+      // how a ledger counts a build nobody recorded. The last is all digits
+      // and too long to be a number at all.
+      for (final build in ['0x10', '02196', ' 5 ', '99999999999999999999']) {
+        expect(
+          () => _parse('promoted/huawei/production/v1.9.13+$build'),
+          _refused('not a positive whole number'),
+          reason: build,
+        );
+      }
+    });
+
+    test('a destination that is not one name or `family/member`', () {
+      // Reading from the right takes whatever is left as the destination, so
+      // without a bound three components come back as `a:b:c` — a name the
+      // table refuses to declare — and an empty one as no name at all.
+      for (final ref in [
+        'promoted/a/b/c/production/v1.9.13+2196',
+        'promoted//production/v1.9.13+2196',
+        'promoted/a//production/v1.9.13+2196',
+        'promoted//ios/production/v1.9.13+2196',
+      ]) {
+        expect(
+          () => _parse(ref),
+          _refused('is not a destination name'),
+          reason: ref,
+        );
+      }
+    });
+
     test('names where the ref came from, not a guess', () {
       expect(
         () => PromotionRecord.parse('promoted/x', source: 'origin'),

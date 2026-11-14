@@ -219,7 +219,13 @@ Evidence _fromRecordAlone({
       return Evidence(
         mark: EvidenceMark.failed,
         build: candidate,
-        note: note ?? 'attempted and refused',
+        // **The refusal is why this cell is `failed`, so it is always said.**
+        // An unreadable endpoint adds its reason and never replaces this one:
+        // on its own, "504 from the API" under `failed` would read as the
+        // step having failed for that reason.
+        note: note == null
+            ? 'attempted and refused'
+            : 'attempted and refused; $note',
         publicAtInternal: publicAtInternal,
       );
     case null:

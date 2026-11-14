@@ -58,6 +58,25 @@ void main() {
       expect(recorded.build, _candidate);
     });
 
+    test(
+      'a record the read confirms is `observed`, with nothing to explain',
+      () {
+        // §6.3: "attested until the F-Droid index shows the version, then
+        // observed". A hand-over the destination bears out is the ordinary
+        // good case, and must not be mistaken for the contradicted refusal
+        // one branch away.
+        final cell = _evidence(
+          'play',
+          refs: ['promoted/play/production/v1.9.13+2196'],
+          observation: const Holds(_candidate),
+        );
+
+        expect(cell.mark, EvidenceMark.observed);
+        expect(cell.build, _candidate);
+        expect(cell.note, isNull);
+      },
+    );
+
     test('nothing known is `pending`; a refusal is `failed`', () {
       // §6.1's reason for `f` over `s`: a console that rejected the binary
       // must not look like one nobody has looked at.
@@ -101,6 +120,26 @@ void main() {
       expect(attested.mark, EvidenceMark.attested);
       expect(attested.note, '504 from the Play API');
     });
+
+    test('an unreadable endpoint does not swallow a recorded refusal', () {
+      // The cell is `failed` because of the refusal, not because of the
+      // read. A note carrying only the read's error would say the opposite,
+      // and would render exactly like a step that failed for that reason.
+      final refused = _evidence(
+        'play',
+        refs: ['refused/play/production/v1.9.13+2196'],
+        observation: const Unreadable('504 from the Play API'),
+      );
+      final jobFailed = _evidence(
+        'play',
+        observation: const StepFailed('504 from the Play API'),
+      );
+
+      expect(refused.mark, EvidenceMark.failed);
+      expect(refused.note, contains('refused'));
+      expect(refused.note, contains('504 from the Play API'));
+      expect(refused.note, isNot(jobFailed.note));
+    });
   });
 
   group('disagreement', () {
@@ -138,6 +177,7 @@ void main() {
 
       expect(cell.mark, EvidenceMark.disagreed);
       expect(cell.note, contains('refused'));
+      expect(cell.build, _candidate);
     });
   });
 
@@ -195,6 +235,45 @@ void main() {
         reason: 'the annotation is about the destination, not the cell',
       );
       expect(_evidence('play').publicAtInternal, isFalse);
+    });
+
+    test('is carried on the marks a record or a read produces', () {
+      // One cell per remaining place a mark is decided. The annotation is
+      // threaded through each by hand, so each can drop it alone.
+      const promoted = ['promoted/snap/production/v1.9.13+2196'];
+      const refused = ['refused/snap/production/v1.9.13+2196'];
+      final cells = {
+        'attested': _evidence('snap', refs: promoted),
+        'failed, from a refusal': _evidence('snap', refs: refused),
+        'failed, from a step': _evidence(
+          'snap',
+          observation: const StepFailed('the snap job failed'),
+        ),
+        'observed, of another build': _evidence(
+          'snap',
+          observation: const Holds(1940),
+        ),
+        'disagreed, on the build': _evidence(
+          'snap',
+          refs: promoted,
+          observation: const Holds(1940),
+        ),
+        'disagreed, with a refusal': _evidence(
+          'snap',
+          refs: refused,
+          observation: const Holds(_candidate),
+        ),
+      };
+
+      expect(cells.values.map((cell) => cell.mark).toSet(), {
+        EvidenceMark.attested,
+        EvidenceMark.failed,
+        EvidenceMark.observed,
+        EvidenceMark.disagreed,
+      }, reason: 'the fixture reaches the marks it says it does');
+      for (final MapEntry(key: name, value: cell) in cells.entries) {
+        expect(cell.publicAtInternal, isTrue, reason: name);
+      }
     });
 
     test('is refused where nobody acts at internal', () {

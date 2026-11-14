@@ -388,22 +388,28 @@ List<String> finishRelease(Git git, FinishOptions options) {
       if (git.ok(['push', 'origin', 'refs/tags/$tagName'])) {
         log.add('pushed $tagName');
       } else {
-        final remote = remoteTaggedCommit(git, tagName);
+        final remote = remoteTag(git, tagName);
         if (remote == null) {
           // Rejected, and origin does not hold this tag — the push failed for
           // some other reason. Re-run it without `ok` so git's own message
           // reaches the operator rather than one invented here.
           git.run(['push', 'origin', 'refs/tags/$tagName']);
           log.add('pushed $tagName');
-        } else if (remote != commit) {
+        } else if (remote.commit != commit) {
           throw ReleaseException(
             'Tag $tagName already names a different commit on origin.\n'
-            '  origin points at:  $remote\n'
+            '  origin points at:  ${remote.commit}\n'
             '  this release:      $commit\n'
             'One version recorded against two commits. Retag deliberately or '
             'pick another version; nothing was changed.',
           );
         } else {
+          // **A lightweight tag on origin is accepted here and refused by
+          // `recordUpload`, and the difference is deliberate.** There the
+          // annotation *is* the record and nothing has shipped yet, so an
+          // empty one must not stand in. Here the release has already gone
+          // out and the tag is bookkeeping, so refusing would fail a run whose
+          // work is done and cannot be undone.
           log.add('$tagName already on origin at ${_short(commit)}');
         }
       }
@@ -576,26 +582,75 @@ String? taggedCommit(Git git, String name) {
   return git.run(['rev-parse', 'refs/tags/$name^{commit}']);
 }
 
-/// The commit origin's copy of [name] points at, or null if it has no such tag.
+/// What origin holds under a tag name: the commit it resolves to, and whether
+/// the tag itself is an annotated object or a bare ref.
+typedef RemoteTag = ({String commit, bool annotated});
+
+/// Origin's copy of [name], or null if origin has no such tag.
 ///
 /// The remote counterpart of [taggedCommit], and deliberately beside it: the
 /// local answer alone is what let a clone without the tag mint its own and be
 /// refused by a remote that already had one.
 ///
-/// **`^{}` is load-bearing.** Without it `ls-remote` answers with the *tag
-/// object* id, and two clones that tagged the same commit have two different
-/// tag objects — so comparing those would report a collision on every parallel
-/// run and never on a real one. One network call, no fetch.
-String? remoteTaggedCommit(Git git, String name) {
-  final line = git.run([
+/// **`^{}` is load-bearing, and asking for it alone was a bug.** Without the
+/// peel `ls-remote` answers with the *tag object* id, and two clones that
+/// tagged the same commit have two different tag objects — so comparing those
+/// would report a collision on every parallel run and never on a real one.
+///
+/// But `ls-remote` emits a `^{}` line **only for an annotated tag**. A
+/// lightweight tag on origin answers on the plain ref and nothing else, so a
+/// query for the peeled form alone came back empty and read as *origin has no
+/// such tag* — the one answer that is never checked twice. `recordUpload` then
+/// treats the rejected push as a transport failure: fatal, it re-runs the push
+/// and reports raw git output instead of the collision; non-fatal, it returns
+/// `writtenNotPushed` on every run forever while the local record names a
+/// different commit from origin's. Hand-written and
+/// script-written tags are exactly where a lightweight one comes from, and a
+/// `promoted/` namespace a shell script used to write is the live example.
+///
+/// So both refs go in one call and the peeled answer wins wherever there is
+/// one. Still one network call, still no fetch.
+///
+/// **Which kind of tag it is comes back with the commit, because asking a
+/// narrower question than the caller needs is the bug above in miniature.**
+/// Told only the commit, a caller cannot tell origin's hand-written
+/// lightweight tag from a record — and `recordUpload` refuses that very tag
+/// when it finds it *locally*, on the ground that an annotation is what a
+/// record is made of. The same query answers both halves, so no caller has to
+/// pick one and no later reader has to guess why it picked that one.
+RemoteTag? remoteTag(Git git, String name) {
+  final output = git.run([
     'ls-remote',
     'origin',
+    'refs/tags/$name',
     'refs/tags/$name^{}',
   ], allowFailure: true);
-  if (line.isEmpty) {
+
+  String? peeled;
+  String? plain;
+  for (final line in output.split('\n')) {
+    final parts = line.trim().split(RegExp(r'\s+'));
+    if (parts.length < 2) {
+      continue;
+    }
+    // Matched by ref name rather than by line order, because preferring the
+    // wrong one is silent: the plain line of an annotated tag is a tag object
+    // that equals no commit, which is the collision-on-every-run failure the
+    // peel exists to avoid.
+    if (parts[1] == 'refs/tags/$name^{}') {
+      peeled = parts[0];
+    } else if (parts[1] == 'refs/tags/$name') {
+      plain = parts[0];
+    }
+  }
+  final commit = peeled ?? plain;
+  if (commit == null) {
     return null;
   }
-  return line.split(RegExp(r'\s+')).first;
+  // Annotated exactly when origin answered the peeled ref, because `ls-remote`
+  // emits that line for nothing else — which is the whole of what made a
+  // lightweight tag invisible here.
+  return (commit: commit, annotated: peeled != null);
 }
 
 /// [spec] as the full 40-character SHA of a commit that exists here.
