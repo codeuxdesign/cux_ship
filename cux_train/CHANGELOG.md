@@ -4,6 +4,43 @@
 
 ### Added
 
+**The evidence model: §6.2's six marks, and what each one rests on.** `status`
+has to say *which kind of evidence it has* and never render two kinds the same
+way — "submitted to Huawei" and "Play production holds 2196" are different
+facts, and a grid that shows them identically is the failure the record exists
+to fix. `evidenceFor` answers one cell from the table, the record and a read
+that somebody else made.
+
+- **`observed`** — the destination was read and holds the build in the cell.
+- **`attested`** — a record says a person or a script did it, and nothing
+  independent confirms it. Never promoted to "holds".
+- **`disagreed`** — a read and a record name different builds. Snap `stable`
+  recorded at 2196 while `api.snapcraft.io` answers 1940.
+- **`failed`** — a step ran or was attempted and did not land.
+- **`pending`** — no evidence either way.
+- **`n/a`** — nobody acts at this stage, which is twenty-four of AuthPass's
+  fifty-seven cells. It is decided before anything else, because a grid where
+  twenty-four cells say "pending" has buried the four that matter.
+
+**A read that cannot answer is not a failed step**, which is the distinction
+the mark set would most easily lose: an endpoint that times out says nothing
+about whether the build is there, so the cell falls back to the record and
+carries the reason rather than claiming failure. `Observation` is sealed for
+this reason — "the store answered 1940", "the CI job failed" and "the endpoint
+timed out" lead to three different marks, and a nullable build number could
+only have expressed the first.
+
+**A cell names the build it found, not the candidate.** §3 is explicit that a
+destination holding something else is named as such and "never normalised away,
+because that difference is the thing worth seeing".
+
+**`public-at-internal`** is a new table key carrying §6.2's one annotation,
+which rides beside the mark rather than among them: `web`, `packagecloud` and
+the snap's `edge` channel reach users the moment the release is pushed. Like
+`after-finish` it is refused where nobody acts at the stage it annotates —
+both now go through one helper, since both are flags about a stage and both
+say nothing on a row with no step there.
+
 **The promotion record, and the two questions a run asks of it.** What a
 release has already reached, as `promoted/<destination>/<stage>/v<version>+N`
 refs — the donor's existing tag shape — plus `refused/…` for a step that was

@@ -147,7 +147,7 @@ destinations:
 '''),
         _refused(
           'known keys: after-finish, beta, identity, internal, production, '
-          'read',
+          'public-at-internal, read',
         ),
       );
       // And it names the file, as every other refusal here does — this one is
