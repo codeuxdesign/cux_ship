@@ -1,12 +1,13 @@
 /// The command's usage text, and the exit code an unusable invocation gets.
 ///
-/// **This is the whole of the package today.** `cux_train` is a workspace
-/// member with an entry point and nothing behind it yet; the orchestration it
-/// is named for still lives in How It Went's `tool/train/`, and
-/// `docs/design/release-train.md` is the plan for moving it. What is here is
-/// the member itself — so that the move lands as commits against a package CI
-/// already builds, publishes a dry run of and runs `dart format` over, rather
-/// than as one commit that creates a package and fills it at the same time.
+/// **This is the whole of the *command* today, and no longer of the package.**
+/// The library beside it parses a destination table and reads a promotion
+/// record, and the entry point reaches none of it yet: the orchestration
+/// `cux_train` is named for still lives in How It Went's `tool/train/`, and
+/// `docs/design/release-train.md` is the plan for moving it. The member came
+/// first so that the move lands as commits against a package CI already
+/// builds, publishes a dry run of and runs `dart format` over, rather than as
+/// one commit that creates a package and fills it at the same time.
 library;
 
 /// The exit code for an invocation this command cannot make sense of.

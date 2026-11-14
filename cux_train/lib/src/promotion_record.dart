@@ -128,6 +128,9 @@ class PromotionRecord {
   static String _pathFor(String destination) =>
       destination.replaceAll(':', '/');
 
+  /// A build number as [ref] writes one: decimal digits, no sign, no padding.
+  static final _buildPattern = RegExp(r'^[1-9][0-9]*$');
+
   /// Reads a ref name written by [ref].
   ///
   /// [source] names where the ref came from, for the refusal.
@@ -189,17 +192,39 @@ class PromotionRecord {
         '$source: `$ref` ends with `$versionPart` and names no version',
       );
     }
-    final build = int.tryParse(versionPart.substring(plus + 1));
-    if (build == null || build <= 0) {
+    // **The digits are checked before they are parsed**, because
+    // `int.tryParse` is more generous than [ref] is: it reads `0x10` as
+    // sixteen, `02196` as 2196 and ` 5 ` as five, and each of those is a ref
+    // this file would then write back under a different name. The pattern
+    // also carries the "positive" half — no sign, no leading zero — so the
+    // only thing left for `tryParse` to refuse is a number too long to hold.
+    final buildText = versionPart.substring(plus + 1);
+    final build = _buildPattern.hasMatch(buildText)
+        ? int.tryParse(buildText)
+        : null;
+    if (build == null) {
       throw PromotionRecordException(
         '$source: `$ref` ends with `$versionPart`, whose build is not a '
         'positive whole number',
       );
     }
 
-    final destination = parts.sublist(1, parts.length - 2).join(':');
+    // **One component or two, and neither empty** — the bound the comment
+    // above states and reading from the right does not by itself enforce.
+    // Whatever is left of the stage is taken as the destination, so without
+    // this `promoted/a/b/c/production/v…` reads back as `a:b:c`, a name the
+    // table refuses to declare and no destination can therefore match.
+    final destinationParts = parts.sublist(1, parts.length - 2);
+    if (destinationParts.length > 2 || destinationParts.any((p) => p.isEmpty)) {
+      throw PromotionRecordException(
+        '$source: `$ref` puts `${destinationParts.join('/')}` where the '
+        'destination goes, which is not a destination name — expected '
+        '`<name>` or `<family>/<member>`',
+      );
+    }
+
     return PromotionRecord(
-      destination: destination,
+      destination: destinationParts.join(':'),
       stage: stage,
       version: version,
       build: build,
