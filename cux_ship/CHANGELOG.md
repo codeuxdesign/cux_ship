@@ -109,9 +109,12 @@ tag a record or an empty one depending on which clone saw it first, and the
 annotated tag the run had just written never left the machine. `remoteTag` now
 reports whether origin's tag is annotated along with the commit it names,
 because asking a narrower question than the caller needs is what both halves
-of this bug were made of. `release finish` still accepts one, deliberately:
-there the release has already gone out and the tag is bookkeeping, so refusing
-would fail a run whose work cannot be undone.
+of this bug were made of. `release finish` still accepts one, deliberately,
+and the reason is what the tag is made of rather than when it is written: a
+finish tag's content is its name and the commit it points at, both of which a
+bare ref carries, while a record's content is its annotation. Timing would be
+the wrong line to draw — `writePromotion` runs after a person has promoted in
+a console and refuses all the same.
 
 ## 4.5.0-dev.8
 
