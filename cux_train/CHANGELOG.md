@@ -4,6 +4,38 @@
 
 ### Added
 
+**The promotion record, and the two questions a run asks of it.** What a
+release has already reached, as `promoted/<destination>/<stage>/v<version>+N`
+refs — the donor's existing tag shape — plus `refused/…` for a step that was
+attempted and turned down. `PromotionRecord` owns the grammar, `PromotionLedger`
+reads a build's worth of them, and `finishRule` says whether the bare version
+tag may be spent. Still no git, no store and no credential: a caller hands over
+ref names.
+
+**A `family:member` destination cannot go in a ref, and nothing had noticed.**
+`git check-ref-format` refuses a colon — verified, not assumed — and six of
+AuthPass's nineteen destinations have one. The design document writes the shape
+as `promoted/<dest>/<stage>/v…+N` throughout; the donor never hit it because it
+only ever recorded `play`. The colon travels as a slash, so `appstore:ios`
+records at `promoted/appstore/ios/production/v1.9.13+2196` and the destination
+is read back by parsing from the right, where the shape is known.
+
+**A refusal is filed under its own namespace rather than as a flag inside the
+ref**, because the existence of a ref is what everything else reads — a refusal
+under `promoted/` would be counted as a promotion by any `git for-each-ref`
+one-liner that globs and does not parse. Where both exist for one cell, the
+refusal wins: ref names carry no time, so guessing which is newer would be a
+worse answer than stopping the run and showing a human both.
+
+**The finish rule is keyed on the record, not on how the run was narrowed.**
+The donor asks whether `--store` named every store, which a `production` that
+spans days can never satisfy — the operator finishing the last console with
+`--store ppa production` would never be allowed to spend the tag. Both of §3's
+exclusions are here: a destination nobody acts at is satisfied vacuously, and
+one declared `after-finish` is skipped because its step annotates the tag it
+would otherwise precede. `after-finish` is a new table key, refused on a
+destination with no production step, where it would silently do nothing.
+
 **The destination table, and `--store` resolved over it.** The first piece of
 step 1 in
 [docs/design/authpass-on-the-train.md](../docs/design/authpass-on-the-train.md),

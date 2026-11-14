@@ -141,6 +141,7 @@ class Destination {
     required this.steps,
     this.read,
     this.identity = const {},
+    this.afterFinish = false,
   });
 
   /// The name typed after `--store`.
@@ -166,6 +167,19 @@ class Destination {
   /// `appleBundleId`/`playPackageName` is exactly what cannot express a
   /// consumer with two App Store records and two Play packages.**
   final Map<String, String> identity;
+
+  /// Whether this destination's production step runs *after* the version tag.
+  ///
+  /// **The one exclusion from the finish rule that is not vacuous**, and the
+  /// reason it is table data rather than a name in the rule: AuthPass's
+  /// `fdroid` step pushes `fdroid-vX.Y.Z`, which cannot sensibly precede the
+  /// `vX.Y.Z` it annotates, so finish must not wait on it (§3 step 5). The
+  /// next consumer will have the same shape under another name, or none at
+  /// all — the donor has none.
+  ///
+  /// It says nothing about *order within* the run; it says only that the
+  /// finish rule does not count this destination.
+  final bool afterFinish;
 
   /// The part before the colon, or null for a bare name.
   String? get family {
@@ -331,6 +345,7 @@ class DestinationTable {
       'production',
       'read',
       'identity',
+      'after-finish',
     }, where);
 
     final steps = <Stage, DestinationStep>{};
@@ -366,7 +381,41 @@ class DestinationTable {
       steps: Map.unmodifiable(steps),
       read: _optionalString(value, 'read', where),
       identity: _parseIdentity(value['identity'], where),
+      afterFinish: _parseAfterFinish(value, steps, where),
     );
+  }
+
+  /// **`after-finish` is only meaningful where somebody acts at production.**
+  ///
+  /// It excludes a destination from the finish rule, and a destination with no
+  /// production step is already excluded — vacuously, because nothing writes a
+  /// record for it. So the key on such a row does nothing, and a key that does
+  /// nothing is read by the next person as doing something. The likeliest way
+  /// to write it is to mark the right destination and then delete its step,
+  /// which is worth being told about.
+  static bool _parseAfterFinish(
+    YamlMap value,
+    Map<Stage, DestinationStep> steps,
+    String where,
+  ) {
+    if (!value.containsKey('after-finish')) {
+      return false;
+    }
+    final declared = value['after-finish'];
+    if (declared is! bool) {
+      throw DestinationTableException(
+        '$where: `after-finish` must be true or false, and YAML read '
+        '`$declared` as ${declared == null ? 'null' : declared.runtimeType}',
+      );
+    }
+    final production = steps[Stage.production] ?? DestinationStep.absent;
+    if (declared && production.kind == StepKind.none) {
+      throw DestinationTableException(
+        '$where is `after-finish` but nobody acts at `production` — nothing '
+        'would record it, so the finish rule already does not wait on it',
+      );
+    }
+    return declared;
   }
 
   /// A step is either a bare kind or a map carrying what the kind needs.

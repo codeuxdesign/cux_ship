@@ -54,7 +54,9 @@ class StoreSelection {
   ///
   /// **Not the finish rule**, which asks whether every destination with a
   /// production step has been *recorded*; this only says the invocation was
-  /// not narrowed. The finish rule consumes it and adds the record.
+  /// not narrowed. `finishRule` does not read it at all — see [resolveStores]
+  /// for why a rule keyed on narrowing could never be met — so this is for a
+  /// report that wants to say "a narrowed run", and nothing decides on it.
   final bool coversEveryDestination;
 }
 

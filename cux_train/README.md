@@ -8,11 +8,17 @@ step arrives as a commit against a package CI already builds, formats, tests
 and runs a publish dry run over — rather than as one commit that creates a
 package and fills it at the same time.
 
-What exists today is the **destination table**: a consumer declares where a
-release has to go and who acts at each stage, and `--store` resolves against
-that declaration rather than against a list compiled into the tool. It parses
-and answers questions; it spawns nothing and contacts no store. The entry
-point still says there are no release commands, because there are none.
+What exists today is the **destination table** and the **promotion record**. A
+consumer declares where a release has to go and who acts at each stage, and
+`--store` resolves against that declaration rather than against a list compiled
+into the tool. The record says what the release has already reached, read from
+git refs a caller hands over; from it come the two questions a resumable run
+asks — what is still outstanding, and whether the version tag may be spent.
+
+All of it parses and answers questions. It spawns nothing, runs no git and
+contacts no store, which is what lets every case be tested with no credential
+and no network. The entry point still says there are no release commands,
+because there are none.
 
 The plan, the measurements behind it and the questions still open are in
 [docs/design/release-train.md](../docs/design/release-train.md); what a second
