@@ -158,6 +158,56 @@ void main() {
     );
   });
 
+  test('refuses a record whose name would not read back', () {
+    // `PromotionRecord` formats whatever it is given, and a ledger read
+    // refuses a namespace holding one ref it cannot parse — so each of these,
+    // once pushed, would break reading every other build's records too. The
+    // last one does parse, as `direct:apk`, which is a different destination
+    // from the one written.
+    final built = _commit('built');
+    _uploaded(built);
+
+    for (final record in const [
+      PromotionRecord(
+        destination: 'huawei',
+        stage: Stage.production,
+        version: '1.9.13',
+        build: 0,
+        outcome: PromotionOutcome.handedOver,
+      ),
+      PromotionRecord(
+        destination: 'huawei',
+        stage: Stage.production,
+        version: '1.9/13',
+        build: 2196,
+        outcome: PromotionOutcome.handedOver,
+      ),
+      PromotionRecord(
+        destination: 'direct/apk',
+        stage: Stage.production,
+        version: '1.9.13',
+        build: 2196,
+        outcome: PromotionOutcome.handedOver,
+      ),
+    ]) {
+      expect(
+        () => writePromotion(
+          git: _git,
+          record: record,
+          uploadedTag: 'uploaded/v1.9.13+2196',
+          push: false,
+        ),
+        throwsA(isA<PromotionWriteException>()),
+        reason: record.ref,
+      );
+    }
+    expect(
+      _git.run(['tag', '-l', 'refused/*', 'promoted/*']),
+      isEmpty,
+      reason: 'the name is checked before anything is written',
+    );
+  });
+
   test('refuses to record a refusal with no reason', () {
     // §6.1 gives the operator `s` as well as `f`. An unexplained refusal is a
     // permanent, pushed tag saying no more than leaving the cell unrecorded
