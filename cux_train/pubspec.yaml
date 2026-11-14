@@ -46,14 +46,32 @@ environment:
 # docs/design/publishing-from-a-workspace.md
 resolution: workspace
 
-# **One dependency, and `cux_ship` is still the one this will grow.** The train
-# spawns the command rather than importing its clients — that is the whole
-# argument of `docs/design/release-train.md` §2, and the reason this is a
-# sibling member and not a library inside `cux_ship`. What it will import is the
-# read side: `package:cux_ship/documents.dart` and
-# `package:cux_ship/exit_codes.dart` are the only two the donor's `lib/` reaches
-# for today, across four import sites.
+# **The train spawns `cux_ship` rather than importing its clients** — that is
+# the whole argument of `docs/design/release-train.md` §2, and the reason this
+# is a sibling member and not a library inside `cux_ship`. The dependency below
+# does not weaken it: every *store* write is still a spawned command line, for
+# the two reasons `read-api.md` gives — a printed invocation is what makes a
+# failed step re-runnable by hand, and per-step `secrets exec --only …` keeps a
+# credential out of a step with no use for it. What is imported is the part
+# where neither applies: value types over printed JSON, exit codes, and the git
+# tag that records what a step reached. A tag write contacts no store and
+# narrows no secret.
 dependencies:
+  # **For `package:cux_ship/provenance.dart`, and the constraint is a floor on
+  # that library existing** rather than on a version anyone picked. Writing a
+  # promotion record is `recordUpload` with a different name passed to it —
+  # which it has always accepted, since `UploadRecord` says the caller owns the
+  # convention — plus `failedPushIsFatal: false`, the one thing a record
+  # written *after* its event needs and an upload record must never have.
+  #
+  # The alternative was reimplementing the collision refusal, the lightweight
+  # tag guard and the rejected-push-is-not-a-collision check here. How It Went
+  # already did that once in 125 lines of bash whose header says it "refuses,
+  # like cux_ship"; `recordUploadIfConfigured`'s doc calls that shape "one
+  # guarantee implemented twice, in two languages" and names it as what made
+  # the refusal worthless. Doing it a third time in Dart, beside the package
+  # that holds the original, would be worse than either.
+  cux_ship: ^4.5.0-dev.8
   # The destination table is a YAML document the consumer writes, so this is
   # the same dependency at the same constraint `cux_ship` takes for
   # `.cux-ship.yaml` — deliberately, because the two files sit beside each

@@ -68,6 +68,28 @@ void main() {
     );
   });
 
+  test('an annotation line starting with # is kept', () {
+    // `git tag -m` cleans its message in `strip` mode unless told otherwise,
+    // and that mode deletes every line starting with `#` as an editor comment.
+    // The annotation is the record, so a line lost from it is a record that
+    // says less than its caller wrote — silently, with the tag created.
+    final built = _commit('built here');
+    recordUpload(
+      _git,
+      UploadRecord(
+        name: 'refused/huawei/production/v1.0.0+49',
+        commit: built,
+        annotation: 'build 49 of 1.0.0\n#418 is why the console said no',
+      ),
+      push: false,
+    );
+
+    expect(
+      _git.run(['tag', '-l', '-n99', 'refused/huawei/production/v1.0.0+49']),
+      contains('#418 is why the console said no'),
+    );
+  });
+
   test('re-recording the same artifact is not an error', () {
     final built = _commit('built here');
     recordUpload(_git, _record(built), push: false);
@@ -200,6 +222,77 @@ void main() {
       ).run(['rev-parse', 'refs/tags/uploaded/v1.0.0+49^{commit}']),
       theirs,
       reason: 'and the record that was already published must not move',
+    );
+  });
+
+  test('refuses a collision with a lightweight tag on origin', () {
+    // **The same collision as above, written by something that was not this
+    // tool, and for a while it was invisible.** `ls-remote` emits a `^{}` line
+    // only for an annotated tag, so asking origin for the peeled ref alone got
+    // nothing back from a lightweight one and read as "origin has no such
+    // tag" — after which the rejected push looked like a transport failure and
+    // the operator got raw git output instead of the collision.
+    //
+    // Not hypothetical: a `promoted/` namespace this repository is about to
+    // share with a shell script that writes tags by hand is precisely where a
+    // lightweight tag at the wrong commit comes from.
+    final origin = Directory.systemTemp.createTempSync('cux_ship_origin');
+    addTearDown(() => origin.deleteSync(recursive: true));
+    Process.runSync('git', ['init', '-q', '--bare', origin.path]);
+    _git.run(['remote', 'add', 'origin', origin.path]);
+
+    final ours = _commit('our artifact');
+    final theirs = _commit('their artifact');
+
+    // No `-a`: whatever wrote this did not make a tag object.
+    _git.run(['tag', 'uploaded/v1.0.0+49', theirs]);
+    _git.run(['push', '-q', 'origin', 'refs/tags/uploaded/v1.0.0+49']);
+    _git.run(['tag', '-d', 'uploaded/v1.0.0+49']);
+
+    expect(
+      () => recordUpload(_git, _record(ours)),
+      throwsA(isA<UploadCollisionException>()),
+      reason:
+          'a lightweight tag at another commit is still two commits under '
+          'one build number, and still exit 3 rather than a git error',
+    );
+  });
+
+  test('refuses an empty record on origin at the right commit', () {
+    // **The case the fix above opened, found reviewing it.** Asking for both
+    // refs made a lightweight tag on origin visible, and the commit matched,
+    // so this stopped being read as "no tag on origin" and started being read
+    // as "another job recorded it" — `alreadyRecorded`, quietly, where before
+    // it threw. But a bare ref is not a record: `recordUpload` refuses that
+    // very tag three screens up when it finds it *locally*, because the
+    // annotation is where the build number, the checksum and the store live.
+    //
+    // Accepting it here would have made one tag a record or an empty one
+    // depending only on which clone found it first, and the annotated tag this
+    // run wrote would never have left the machine.
+    final origin = Directory.systemTemp.createTempSync('cux_ship_origin');
+    addTearDown(() => origin.deleteSync(recursive: true));
+    Process.runSync('git', ['init', '-q', '--bare', origin.path]);
+    _git.run(['remote', 'add', 'origin', origin.path]);
+
+    final shared = _commit('one artifact');
+
+    // No `-a`: a hand-written or script-written tag, which is where the
+    // `promoted/` namespace's lightweight tags come from.
+    _git.run(['tag', 'uploaded/v1.0.0+49', shared]);
+    _git.run(['push', '-q', 'origin', 'refs/tags/uploaded/v1.0.0+49']);
+    _git.run(['tag', '-d', 'uploaded/v1.0.0+49']);
+
+    expect(
+      () => recordUpload(_git, _record(shared)),
+      throwsA(
+        isA<ReleaseException>().having(
+          (e) => e.toString(),
+          'message',
+          allOf(contains('lightweight'), contains('the annotation is')),
+        ),
+      ),
+      reason: 'the local path refuses this same tag for this same reason',
     );
   });
 
@@ -432,6 +525,236 @@ void main() {
           allOf(contains('lightweight'), contains('Nothing was uploaded')),
         ),
       ),
+    );
+  });
+
+  // The group below is the record written *after* its event rather than before
+  // it. Everything above assumes the upload has not happened yet, which is what
+  // makes a failed push fatal there: an unpushed tag protects nothing and the
+  // upload must not proceed. A promotion record is written once a person has
+  // already pressed the button in a console, and failing the run then does not
+  // un-promote anything — it costs the operator the step they just did and
+  // sends the next run back to the same console.
+  group('failedPushIsFatal: false', () {
+    test('reports a tag it could not push instead of failing', () {
+      // An origin that is not there at all, which is what a dropped network or
+      // a revoked credential looks like from here: both pushes fail, and so
+      // does asking it what the tag names.
+      final built = _commit('built here');
+      _git.run(['remote', 'add', 'origin', '${_root.path}/no-such-remote']);
+
+      final result = recordUpload(
+        _git,
+        _record(built, name: 'promoted/huawei/production/v1.0.0+49'),
+        failedPushIsFatal: false,
+      );
+
+      expect(result, UploadRecordResult.writtenNotPushed);
+      expect(
+        _git.run([
+          'rev-parse',
+          'refs/tags/promoted/huawei/production/'
+              'v1.0.0+49^{commit}',
+        ]),
+        built,
+        reason: 'the local tag is what the next run on this machine resumes on',
+      );
+    });
+
+    test('still retries, so a transient failure is not reported as unpushed', () {
+      // The retry is the reason that branch exists at all, and making the
+      // failure non-fatal must not quietly remove it: a push that fails once
+      // and succeeds on the second attempt is the ordinary case, and reporting
+      // it as `writtenNotPushed` would have an operator chase a record that is
+      // on origin and correct.
+      final origin = Directory.systemTemp.createTempSync('cux_ship_origin');
+      addTearDown(() => origin.deleteSync(recursive: true));
+      Process.runSync('git', ['init', '-q', '--bare', origin.path]);
+      final hook = File('${origin.path}/hooks/pre-receive')
+        ..writeAsStringSync(
+          '#!/bin/sh\n'
+          'marker="${origin.path}/refused-once"\n'
+          'if [ ! -f "\$marker" ]; then\n'
+          '  touch "\$marker"\n'
+          '  echo "transient" >&2\n'
+          '  exit 1\n'
+          'fi\n'
+          'exit 0\n',
+        );
+      Process.runSync('chmod', ['+x', hook.path]);
+      _git.run(['remote', 'add', 'origin', origin.path]);
+
+      final built = _commit('built');
+
+      expect(
+        recordUpload(_git, _record(built), failedPushIsFatal: false),
+        UploadRecordResult.created,
+      );
+      expect(
+        Git(
+          origin.path,
+        ).run(['rev-parse', 'refs/tags/uploaded/v1.0.0+49^{commit}']),
+        built,
+        reason: 'the second push landed, so the record is published',
+      );
+    });
+
+    test('does not soften a collision on origin', () {
+      // A transport failure and a disagreement about what happened are
+      // different things, and only the first is tolerable. A remote tag naming
+      // another commit means this name has been used twice; continuing would
+      // leave a record pointing at the wrong code whichever side of its event
+      // it was written on.
+      final origin = Directory.systemTemp.createTempSync('cux_ship_origin');
+      addTearDown(() => origin.deleteSync(recursive: true));
+      Process.runSync('git', ['init', '-q', '--bare', origin.path]);
+      _git.run(['remote', 'add', 'origin', origin.path]);
+
+      final theirs = _commit('what origin recorded');
+      recordUpload(_git, _record(theirs));
+      _git.run(['tag', '-d', 'uploaded/v1.0.0+49']);
+      final ours = _commit('what this machine has');
+
+      expect(
+        () => recordUpload(_git, _record(ours), failedPushIsFatal: false),
+        throwsA(isA<UploadCollisionException>()),
+      );
+    });
+
+    test('does not soften a lightweight collision either', () {
+      // **The quiet half of the same bug, and the worse half.** On the fatal
+      // path an invisible collision at least stopped the run, with the wrong
+      // message. Here it returned `writtenNotPushed` — a result that reads as
+      // "write it again next time" — on every run forever, while this clone's
+      // record and origin's named different commits and nothing said so.
+      final origin = Directory.systemTemp.createTempSync('cux_ship_origin');
+      addTearDown(() => origin.deleteSync(recursive: true));
+      Process.runSync('git', ['init', '-q', '--bare', origin.path]);
+      _git.run(['remote', 'add', 'origin', origin.path]);
+
+      final theirs = _commit('what origin recorded');
+      _git.run(['tag', 'uploaded/v1.0.0+49', theirs]);
+      _git.run(['push', '-q', 'origin', 'refs/tags/uploaded/v1.0.0+49']);
+      _git.run(['tag', '-d', 'uploaded/v1.0.0+49']);
+      final ours = _commit('what this machine has');
+
+      expect(
+        () => recordUpload(_git, _record(ours), failedPushIsFatal: false),
+        throwsA(isA<UploadCollisionException>()),
+      );
+    });
+
+    test('an empty record on origin is refused here too', () {
+      // Same commit, so not a collision — and not a record either. The flag
+      // softens a push that could not be made, and this push *was* made and
+      // refused, by an origin holding a bare ref where the annotation should
+      // be. Reported as `alreadyRecorded` it would end the run claiming a
+      // record that holds no build number, no checksum and, for a refusal,
+      // none of the operator's reason.
+      final origin = Directory.systemTemp.createTempSync('cux_ship_origin');
+      addTearDown(() => origin.deleteSync(recursive: true));
+      Process.runSync('git', ['init', '-q', '--bare', origin.path]);
+      _git.run(['remote', 'add', 'origin', origin.path]);
+
+      final shared = _commit('one artifact');
+      _git.run(['tag', 'uploaded/v1.0.0+49', shared]);
+      _git.run(['push', '-q', 'origin', 'refs/tags/uploaded/v1.0.0+49']);
+      _git.run(['tag', '-d', 'uploaded/v1.0.0+49']);
+
+      expect(
+        () => recordUpload(_git, _record(shared), failedPushIsFatal: false),
+        throwsA(
+          isA<ReleaseException>().having(
+            (e) => e.toString(),
+            'message',
+            allOf(contains('lightweight'), contains('the annotation is')),
+          ),
+        ),
+      );
+    });
+
+    test(
+      'a tag already here and still unpushable is not "already recorded"',
+      () {
+        // The resumed run: the first attempt left the tag locally and could not
+        // push it, and the second finds it. `alreadyRecorded` would be true of
+        // this clone and would tell the caller the record is done, when the only
+        // question it has left is whether another machine can read it.
+        final built = _commit('built here');
+        recordUpload(_git, _record(built), push: false);
+        _git.run(['remote', 'add', 'origin', '${_root.path}/no-such-remote']);
+
+        expect(
+          recordUpload(_git, _record(built), failedPushIsFatal: false),
+          UploadRecordResult.writtenNotPushed,
+        );
+      },
+    );
+
+    test('a local collision is refused before the push is reached', () {
+      // The local check runs first and is untouched by this flag. Without this
+      // the non-fatal path could be read as "nothing about this record can
+      // fail", which is the reading that would make it dangerous.
+      final first = _commit('first artifact');
+      recordUpload(_git, _record(first), push: false);
+      final second = _commit('second artifact');
+
+      expect(
+        () => recordUpload(
+          _git,
+          _record(second),
+          push: false,
+          failedPushIsFatal: false,
+        ),
+        throwsA(isA<UploadCollisionException>()),
+      );
+    });
+  });
+
+  test('package:cux_ship/provenance.dart exports these names and no others', () {
+    // That library's header argues itself an exception to `read-api.md`'s
+    // "reads only", and the argument covers exactly this: one function that
+    // writes a tag, the types in its signature and its failures, and the
+    // lookup for the commit to hand it. `read-api.md` also says a surface is
+    // grown by "an edit somebody has to make on purpose" — this is the edit. A
+    // name added to a `show` list, or an export with no `show` at all, widens
+    // what the exception has to defend and fails here until someone says so.
+    final library = [
+      'lib/provenance.dart',
+      'cux_ship/lib/provenance.dart',
+    ].map(File.new).firstWhere((file) => file.existsSync());
+    // Comments dropped first, because the header quotes an `import` line and
+    // prose with semicolons in it.
+    final code = library
+        .readAsLinesSync()
+        .where((line) => !line.trimLeft().startsWith('//'))
+        .join('\n');
+
+    final exports = RegExp(r'export [^;]*;').allMatches(code).toList();
+    final shown = RegExp(
+      r'export [^;]*?\sshow\s([^;]*);',
+    ).allMatches(code).toList();
+    expect(exports, isNotEmpty);
+    expect(
+      shown.length,
+      exports.length,
+      reason: 'an export without `show` hands out the whole library',
+    );
+    expect(
+      {
+        for (final clause in shown)
+          ...clause.group(1)!.split(',').map((name) => name.trim()),
+      },
+      {
+        'Git',
+        'ReleaseException',
+        'UploadCollisionException',
+        'UploadRecord',
+        'UploadRecordResult',
+        'recordUpload',
+        'taggedCommit',
+        'uploadCollisionExit',
+      },
     );
   });
 }

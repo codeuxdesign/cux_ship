@@ -6,13 +6,19 @@
 /// deciding when the version tag may be spent, and answering "is 1.9.12
 /// finished?" are all one question asked of this state.
 ///
-/// **What is deliberately not here: writing it.** §9 item 4 is open — the
-/// writer may belong in `cux_train` or in a `cux_ship release record` command
-/// beside `release finish`, and the plan leans toward the latter because
-/// `cux_ship` already owns the `uploaded/` namespace and the tag config. So
-/// this file owns the *grammar* and the *reading*, which both sides of that
-/// question need and neither changes. A caller hands it ref names; it does not
-/// run git, and nothing here needs a credential or a network.
+/// **What is deliberately not here: writing it**, and that split survived the
+/// question it was waiting on. §9 item 4 asked whether the writer belongs in
+/// `cux_train` or in a `cux_ship release record` command beside `release
+/// finish`, leaning toward the latter because `cux_ship` already owns the
+/// `uploaded/` namespace and the tag config. The answer is that `cux_ship` owns
+/// the *tag* and this file owns the *name* — `UploadRecord` has said since it
+/// was written that "the caller owns the convention, because what a released
+/// tag is called differs per repository and this must never assume a shape", so
+/// no new command was needed, only an export. `record_writer.dart` is the join.
+///
+/// So this file owns the grammar and the reading, which is what it would have
+/// owned either way. A caller hands it ref names; it does not run git, and
+/// nothing here needs a credential or a network.
 library;
 
 import 'destinations.dart';

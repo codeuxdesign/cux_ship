@@ -4,6 +4,47 @@
 
 ### Added
 
+**`package:cux_ship/provenance.dart` — the record writer, exported.** An
+annotated tag naming the commit something reached, with the collision refusal,
+the lightweight-tag guard and the rejected-push-is-not-a-collision check that
+took three incidents to get right. `UploadRecord` has always said the caller
+owns the tag name, so this needed no new behaviour and no new command: the
+train names `promoted/<destination>/<stage>/v{version}+{build}` and this writes
+it, exactly as `uploaded/` is written today.
+
+**`read-api.md` says the exported surface is reads only, and this is the
+exception rather than a drift.** That rule's two arguments are about *store*
+writes — a printed command line is what makes a failed step re-runnable, and
+per-step `secrets exec --only …` is what keeps a credential out of a step with
+no use for it. Neither reaches a git tag: the equivalent invocation is `git tag
+-a` and `git push`, and the credential is whatever the checkout already has.
+Nothing exported uploads, promotes, publishes a listing or moves a build
+between tracks.
+
+What it fixes is a guarantee implemented twice, which this package already
+named as the failure mode in `recordUploadIfConfigured`'s own doc — "one
+guarantee implemented twice, in two languages". That is the live state of
+`promoted/` tags: How It Went's `tool/record-promotion.sh` is 125 lines of bash
+whose header says a tag naming a different commit "refuses, like cux_ship".
+
+**`recordUpload` gained `failedPushIsFatal`, and the distinction was already
+written in the comment beside the push** — *elsewhere a failed tag push is a
+warning because the release has already gone out and the tag is bookkeeping;
+here nothing has gone out yet*. An upload record is written **before** the store
+is contacted, so a push that fails has to stop the upload, and the default
+stays `true`. A promotion record is written **after** a person pressed the
+button in a console: failing then does not un-promote anything, it costs the
+operator the step they just did and sends the next run back to the same
+console. Such a caller passes `false` and gets the new
+`UploadRecordResult.writtenNotPushed` to report.
+
+It does **not** soften a collision. A remote tag naming a different commit is a
+disagreement about what happened rather than a failure to transmit, and it
+throws on either side of its event. The retry is kept on both paths too, since
+a push that fails once and works on the second attempt is the ordinary reason
+to reach that branch — what the flag changes is only what a *second* failure
+means.
+
 **The command is launchable as `package:cux_ship/cli.dart`**, so a project that
 pins this package no longer has to find `bin/cux_ship.dart` in the pub cache to
 invoke the entry directly:
@@ -33,6 +74,44 @@ is your only reason for avoiding `dart run`, check your own SDK first.
 also the shape to commit in a consumer's own tree if it caches a kernel
 snapshot — `dart compile kernel` requires a real file and refuses a `package:`
 URI.
+
+### Fixed
+
+**A tag collision on origin was invisible when origin's tag was
+*lightweight*.** `remoteTag` (then `remoteTaggedCommit`) asked `ls-remote` for
+`refs/tags/<name>^{}` alone, and `ls-remote` emits a `^{}` line only for an
+annotated tag — so a lightweight one came back empty and read as *origin has no
+such tag*, which is the one answer nothing checks twice. The rejected push was
+then treated as a transport failure: `release finish` and `recordUpload`
+re-ran the push and reported raw git output instead of the collision, and
+`recordUpload` with `failedPushIsFatal: false` returned `writtenNotPushed` on
+every run forever while this clone's record and origin's named different
+commits. Both refs are now asked for in one call and the peeled answer wins
+where there is one — the peel is still load-bearing, because the plain line of
+an annotated tag is a tag object that equals no commit.
+
+This was found in review of the promotion writer below, and it is that writer
+that makes it matter: `promoted/` is a namespace this package is about to share
+with a shell script writing tags by hand, which is exactly where a lightweight
+tag at the wrong commit comes from. For `uploaded/`, where every tag was
+written by this code, it had not been reachable.
+
+**And a lightweight tag on origin at the *right* commit is now refused rather
+than reported as an existing record.** Review of the fix above found that it
+turned one quiet case into another: once origin's lightweight tag was visible
+and its commit matched, `recordUpload` read it as "another job recorded this
+build" and returned `alreadyRecorded`, where previously it threw. But a bare
+ref carries no annotation, and `recordUpload` already refuses that same tag
+when it finds it *locally* — the build number, the checksum and the store are
+all in the annotation, and for a `promoted/` refusal the annotation is the
+operator's reason. Accepting it on origin while refusing it locally made one
+tag a record or an empty one depending on which clone saw it first, and the
+annotated tag the run had just written never left the machine. `remoteTag` now
+reports whether origin's tag is annotated along with the commit it names,
+because asking a narrower question than the caller needs is what both halves
+of this bug were made of. `release finish` still accepts one, deliberately:
+there the release has already gone out and the tag is bookkeeping, so refusing
+would fail a run whose work cannot be undone.
 
 ## 4.5.0-dev.8
 

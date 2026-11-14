@@ -48,7 +48,7 @@
 // can name.
 import 'config.dart' show TagKindConfig;
 import 'release.dart'
-    show Git, ReleaseException, remoteTaggedCommit, resolveCommit, taggedCommit;
+    show Git, ReleaseException, remoteTag, resolveCommit, taggedCommit;
 
 /// The tag recording that [commit] reached a store.
 ///
@@ -89,6 +89,10 @@ class UploadRecord {
 /// as the tolerable kind and the release finishes green, which turns the
 /// loudest error here into the quietest. A distinct type gives the CLI a
 /// distinct exit code, and the wrapper something to match on.
+class UploadCollisionException extends ReleaseException {
+  UploadCollisionException(super.message);
+}
+
 /// What `cux_ship` exits with when [UploadCollisionException] is raised.
 ///
 /// **A number, because a shell wrapper cannot match on a Dart type.** The class
@@ -102,10 +106,6 @@ class UploadRecord {
 /// needs to be unmistakably one thing.
 const uploadCollisionExit = 3;
 
-class UploadCollisionException extends ReleaseException {
-  UploadCollisionException(super.message);
-}
-
 /// Outcome of [recordUpload], so a caller can report without re-deriving it.
 enum UploadRecordResult {
   /// The tag did not exist, and now does — or under `dryRun`, would.
@@ -114,6 +114,23 @@ enum UploadRecordResult {
   /// The tag already pointed at this commit. Re-running an upload is ordinary —
   /// a second store, a retried job — and must not be an error.
   alreadyRecorded,
+
+  /// The tag exists locally and two attempts to push it failed, reached only
+  /// with `failedPushIsFatal: false`.
+  ///
+  /// **"Not pushed" is all this knows.** `origin` was asked whether it holds
+  /// the name and gave no answer saying so — which is what an `origin` without
+  /// the tag says, and also what an unreachable one says. So this is not a
+  /// statement that the name is free there: the next run pushes again, and
+  /// that push is where a collision would still surface.
+  ///
+  /// **It replaces the other two rather than joining them**, although "created"
+  /// and "already recorded" both remain true of the local tag, because the only
+  /// question a caller has left is whether the record is anywhere another
+  /// machine can read it. Reporting `created` with a quiet second field saying
+  /// `pushed: false` is how an unpushed tag gets treated as a record — the path
+  /// every caller already handles is the one that runs.
+  writtenNotPushed,
 }
 
 /// Records that [record] reached a store, and pushes it.
@@ -127,6 +144,7 @@ enum UploadRecordResult {
 /// success will publish one artifact while the record names another. Where a
 /// build number can be allocated twice — concurrent CI on different commits, or
 /// a forced number — that is precisely how it happens.
+///
 /// **[push] is for tests, and an upload path must never pass false.** The push
 /// is not bookkeeping here — it is the only guard that sees a collision raised
 /// on another machine. Locally this function can compare against a tag this
@@ -135,11 +153,39 @@ enum UploadRecordResult {
 /// this process learns of it is the remote rejecting the push. Passing false to
 /// save a network round trip keeps every local check and silently forfeits the
 /// cross-machine one, with nothing to indicate the guarantee is gone.
+///
+/// **[failedPushIsFatal] is the one thing that differs between a record written
+/// before its event and one written after it**, and the comment on the push
+/// below already named the distinction before anything needed it: *elsewhere a
+/// failed tag push is a warning because the release has already gone out and
+/// the tag is bookkeeping; here nothing has gone out yet.* An upload record is
+/// written before the store is contacted, so a push that fails means the upload
+/// must not proceed, and the default stays true. A **promotion** record is
+/// written after a person has already pressed the button in a console — failing
+/// the run there does not un-promote anything, it only costs the operator the
+/// step they just did, and the next run stops at the same console asking them
+/// to do it again. Such a caller passes false and gets
+/// [UploadRecordResult.writtenNotPushed] to report.
+///
+/// It does **not** soften a collision. A remote tag naming a different commit
+/// is a disagreement about what happened rather than a failure to transmit, and
+/// that throws whichever side of its event the record sits on.
+///
+/// **That sentence rests entirely on [remoteTag] being able to see origin's
+/// tag**, and it was false for a while because that function could not see a
+/// lightweight one. Worth naming here rather than only there: this path has no
+/// other way to tell a collision from a failure to transmit, so anything that
+/// query cannot answer is silently the tolerable case.
+///
+/// Which is also why a lightweight tag on origin at the *right* commit is
+/// refused rather than accepted as a record. Seeing it was the fix; believing
+/// it would have been half of one.
 UploadRecordResult recordUpload(
   Git git,
   UploadRecord record, {
   bool push = true,
   bool dryRun = false,
+  bool failedPushIsFatal = true,
 }) {
   // "The whole tag name" means the name, not the ref path — and the difference
   // is invisible without this, because every use here is consistent. `git tag`
@@ -186,7 +232,24 @@ UploadRecordResult recordUpload(
   }
 
   if (existing == null) {
-    git.run(['tag', '-a', record.name, commit, '-m', record.annotation]);
+    // **`--cleanup=whitespace`, because the default deletes lines.** `git tag`
+    // cleans a message given with `-m` exactly as it cleans one typed in an
+    // editor, and its default mode drops every line starting with `#` as a
+    // comment. The annotation is the record, and a caller's line may well
+    // start that way: a promotion refused with the reason "#418 is why the
+    // console said no" came out as a refusal with no reason at all, the tag
+    // written and pushed and nothing red (found in review of the promotion
+    // writer, before it shipped). This mode still trims blank lines and leaves
+    // the rest alone.
+    git.run([
+      'tag',
+      '-a',
+      '--cleanup=whitespace',
+      record.name,
+      commit,
+      '-m',
+      record.annotation,
+    ]);
   }
 
   if (push) {
@@ -218,11 +281,28 @@ UploadRecordResult recordUpload(
     // nothing.
     final pushed = git.ok(['push', 'origin', 'refs/tags/${record.name}']);
     if (!pushed) {
-      final remote = remoteTaggedCommit(git, record.name);
+      final remote = remoteTag(git, record.name);
       if (remote == null) {
         // Rejected, and origin does not hold this tag — so the push failed for
-        // some other reason (credentials, network, a hook). Re-run it without
-        // `ok` to surface git's own message rather than inventing one.
+        // some other reason (credentials, network, a hook).
+        //
+        // **The retry happens on both paths, because it is the reason this
+        // branch exists** rather than a side effect of wanting git's message:
+        // a transient failure that succeeds on the second attempt is the
+        // ordinary case here. What differs is only what a second failure
+        // means. Fatal: re-run without `ok`, so the exception carries git's own
+        // words rather than ones invented here. Not fatal: the tag is local and
+        // the caller is told so, which is the whole of what it can act on —
+        // git's message is lost on this path, and that is the cost of the run
+        // continuing.
+        if (!failedPushIsFatal) {
+          final retried = git.ok([
+            'push',
+            'origin',
+            'refs/tags/${record.name}',
+          ]);
+          return retried ? result : UploadRecordResult.writtenNotPushed;
+        }
         git.run(['push', 'origin', 'refs/tags/${record.name}']);
         // **And return, because the retry may have worked.** Falling through
         // with `remote` still null compared null against the commit and threw
@@ -232,13 +312,36 @@ UploadRecordResult recordUpload(
         // attempt is the ordinary reason to reach this branch.
         return result;
       }
-      if (remote != commit) {
+      if (remote.commit != commit) {
         throw UploadCollisionException(
           'Tag ${record.name} already names a different commit on origin.\n'
-          '  origin points at:  $remote\n'
+          '  origin points at:  ${remote.commit}\n'
           '  this artifact:     $commit\n'
           'One build number has been used for two commits, so publishing this '
           'would leave the record naming the wrong one. Nothing was uploaded.',
+        );
+      }
+      if (!remote.annotated) {
+        // **The same refusal as the local one above, applied to origin.**
+        // Right commit, no annotation: the build number, the checksum and
+        // which store took it are all absent, and this run's annotated tag was
+        // rejected rather than replacing it — so returning `alreadyRecorded`
+        // would report a record that exists nowhere but as a bare ref on
+        // origin, while the real one stayed on a machine about to be torn
+        // down. For a `promoted/` refusal that annotation is the operator's
+        // reason, which is the only thing a refusal record carries at all.
+        //
+        // Accepting it here while refusing it locally would have made the same
+        // tag a record or an empty one depending only on which clone found it
+        // first.
+        throw ReleaseException(
+          'Tag ${record.name} exists on origin at the right commit but is '
+          'lightweight, so it carries no annotation — and the annotation is '
+          'the record. This run wrote an annotated tag and origin refused to '
+          'take it, so the record would exist only on this machine. This tool '
+          'only writes annotated tags, so something else created that one: '
+          'delete it on origin and re-run, or annotate it by hand. Nothing '
+          'was uploaded.',
         );
       }
       // Same commit, someone else's tag object. Another job recorded this exact
