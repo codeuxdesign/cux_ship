@@ -207,13 +207,16 @@ class ProductionCommand extends PromotingCommand {
     if (!dryRun) {
       return rule.waitingOn;
     }
-    final wouldRecord = {
-      for (final step in report.steps)
-        if (step.outcome == StepOutcome.wouldAct) step.destination,
-    };
+    // **Every step of a dry run is `wouldAct`**, so this is the destinations
+    // the pass printed and not a filter on them. There was a
+    // `step.outcome == StepOutcome.wouldAct` here; a mutation that removed it
+    // survived, because in a dry run it can never exclude anything. A
+    // condition that reads as a guard and cannot fire is the shape this
+    // package has twice found and removed elsewhere.
+    final printed = {for (final step in report.steps) step.destination};
     return [
       for (final destination in rule.waitingOn)
-        if (!wouldRecord.contains(destination.name)) destination,
+        if (!printed.contains(destination.name)) destination,
     ];
   }
 
