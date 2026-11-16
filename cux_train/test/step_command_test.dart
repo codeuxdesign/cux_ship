@@ -234,6 +234,13 @@ void main() {
             'message',
             allOf(
               contains('{artifact}'),
+              // **The vocabulary message, not the one about this call.**
+              // There are two: a name the package does not define at all, and
+              // a name it defines that this particular caller has no value
+              // for — `--uploaded-tag` gets only two of the four. Asserting
+              // the four names alone could not tell them apart, and a
+              // mutation that removed this guard survived because of it.
+              contains('does not define'),
               contains('version'),
               contains('build'),
               contains('destination'),
@@ -281,7 +288,33 @@ void main() {
           isA<StepCommandException>().having(
             (e) => e.message,
             'message',
-            contains('--uploaded-tag'),
+            allOf(contains('--uploaded-tag'), contains('does not define')),
+          ),
+        ),
+      );
+    });
+
+    test('a name it knows but this caller has no value for blames the '
+        'caller, not the package', () {
+      // `--uploaded-tag` is interpolated with `version` and `build` only, so
+      // `{destination}` is a reasonable thing for an operator to try. The
+      // message used to say "That is a bug in cux_train rather than in the
+      // table", which stopped being true the moment this function was shared
+      // with a two-key caller.
+      expect(
+        () => interpolate('up/{destination}/{build}', {
+          'version': '1.9.13',
+          'build': '2196',
+        }, '--uploaded-tag'),
+        throwsA(
+          isA<StepCommandException>().having(
+            (e) => e.message,
+            'message',
+            allOf(
+              contains('{destination}'),
+              contains('version, build'),
+              isNot(contains('bug in cux_train')),
+            ),
           ),
         ),
       );
