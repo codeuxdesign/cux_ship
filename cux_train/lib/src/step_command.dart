@@ -62,6 +62,7 @@ List<String> resolveStepCommand(
   required Map<String, String> values,
   required String where,
 }) {
+  _refuseShellSyntax(template, where);
   final argv = _split(template, where);
   if (argv.isEmpty) {
     throw StepCommandException(
@@ -71,6 +72,113 @@ List<String> resolveStepCommand(
   }
   return [for (final argument in argv) interpolate(argument, values, where)];
 }
+
+/// What a shell would act on and this does not.
+///
+/// Each is followed by what it would otherwise become as an argument.
+const Map<String, String> _shellSyntax = {
+  '&&': 'two commands',
+  '||': 'two commands',
+  '|': 'a pipeline',
+  ';': 'two commands',
+  '>': 'a redirection',
+  '<': 'a redirection',
+  r'$': 'a variable',
+  '`': 'a command substitution',
+  // **`*` is here and `?` is not**, which is a judgement about false
+  // positives rather than about globbing. Both are globs to a shell, but `?`
+  // is ordinary inside a URL — `curl https://host/p?v=1` is a plausible `run`
+  // step — and refusing that would make the guard something consumers quote
+  // their way around out of habit. An unquoted `*` in a command template is
+  // nearly always somebody expecting a glob they will not get.
+  '*': 'a glob',
+};
+
+/// Refuses a template that reads as shell and would silently not behave as it.
+///
+/// **This is the half the no-shell decision was missing.** Nothing here
+/// reaches a shell, which is deliberate — see the library comment — but a
+/// consumer writing `make build && ./upload.sh` does not get an error, they
+/// get `make` run with `build`, `&&` and `./upload.sh` as three arguments.
+/// Plenty of programs ignore arguments they do not understand, so the step
+/// then succeeds and is recorded as handed over while the upload never ran.
+/// That is precisely the "meant to do something and silently did not" failure
+/// this file exists to make loud, and the splitter was committing it.
+///
+/// **Quoted is allowed through**, because a quoted `*` or `$` is somebody
+/// saying they mean the character: `--message "cost: $5"` is a literal, and
+/// only an unquoted one reads as syntax.
+void _refuseShellSyntax(String template, String where) {
+  for (final token in _unquotedTokens(template)) {
+    throw StepCommandException(
+      '$where contains `$token`, which to a shell is ${_shellSyntax[token]}. '
+      'Nothing here runs a shell, so it would reach the command as an '
+      'ordinary argument instead — and a program that ignores an argument it '
+      'does not understand would then be recorded as having done the work. '
+      'Put it in a script and name the script, or quote the character if you '
+      'meant it literally.',
+    );
+  }
+  // **A leading `~` is the one that is not punctuation.** It is expanded by
+  // the shell and by nothing else, so `~/bin/ship` names a directory called
+  // `~` — which fails to start, loudly, only because no such program exists.
+  if (template.startsWith('~')) {
+    throw StepCommandException(
+      '$where begins with `~`, which only a shell expands. Write the path out '
+      'or name a program on the PATH.',
+    );
+  }
+}
+
+/// Every unquoted shell token in [template], longest match first.
+Iterable<String> _unquotedTokens(String template) sync* {
+  var index = 0;
+  while (index < template.length) {
+    final char = template[index];
+    if (char == r'\') {
+      index += 2;
+      continue;
+    }
+    if (char == "'" || char == '"') {
+      final close = template.indexOf(char, index + 1);
+      // An unterminated quote is the splitter's error to report, with its own
+      // message; stopping here leaves it to say so.
+      if (close == -1) {
+        return;
+      }
+      index = close + 1;
+      continue;
+    }
+    final pair = index + 1 < template.length
+        ? template.substring(index, index + 2)
+        : '';
+    // The pair first, so `&&` is reported as itself rather than as a stray
+    // `&` — which is not in the map at all, because a trailing `&` is one
+    // command backgrounded and reads nothing like the others.
+    if (_shellSyntax.containsKey(pair)) {
+      yield pair;
+      index += 2;
+      continue;
+    }
+    if (_shellSyntax.containsKey(char)) {
+      yield char;
+    }
+    index++;
+  }
+}
+
+/// What a backslash may escape outside quotes: separators, quotes, itself,
+/// and every character [_shellSyntax] refuses, so that escaping one is how a
+/// template says it meant the character literally.
+final Set<String> _escapable = {
+  ' ',
+  '\t',
+  '\n',
+  "'",
+  '"',
+  r'\',
+  ..._shellSyntax.keys.where((it) => it.length == 1),
+};
 
 /// Splits on unquoted whitespace, honouring the three quoting forms.
 List<String> _split(String template, String where) {
@@ -95,9 +203,23 @@ List<String> _split(String template, String where) {
           '$where ends in a backslash, which escapes nothing.',
         );
       }
-      current.write(template[index + 1]);
+      final next = template[index + 1];
+      // **A backslash escapes only what there is a reason to escape, and is
+      // otherwise a backslash. This is a deliberate difference from a
+      // shell.** A shell drops it either way, so `C:\tools\ship.exe` arrives
+      // as `C:toolsship.exe` — a Windows path destroyed by a rule written for
+      // escaping spaces. Nothing is lost by the narrower reading: the
+      // characters anybody escapes on purpose are still escapable, and a
+      // backslash before a letter now means the one thing somebody typing it
+      // could have wanted.
+      if (_escapable.contains(next)) {
+        current.write(next);
+        index += 2;
+      } else {
+        current.write(char);
+        index++;
+      }
       started = true;
-      index += 2;
       continue;
     }
     if (char == "'" || char == '"') {
@@ -127,17 +249,29 @@ int _quoted(String template, int open, StringBuffer into, String where) {
     if (char == quote) {
       return index + 1;
     }
-    // **Only a double quote honours the backslash**, which is what a shell
-    // does and what anybody writing `"C:\\path"` or `'it'` is relying on. A
-    // single-quoted run is literal, so a backslash in one is a backslash.
+    // **Inside double quotes a backslash escapes only what a shell lets it
+    // escape**, and anything else is a literal backslash. The first version
+    // escaped the next character whatever it was, which turned
+    // `"C:\tools\ship.exe"` into `C:toolsship.exe` — a Windows path quietly
+    // destroyed by the quoting that was supposed to protect it. POSIX says a
+    // backslash in a double-quoted run is special only before `$`, a
+    // backtick, `"`, `\` or a newline; everywhere else it stands for itself.
+    // A single-quoted run is literal throughout, so a backslash in one is a
+    // backslash.
     if (char == r'\' && quote == '"') {
       if (index + 1 >= template.length) {
         throw StepCommandException(
           '$where ends in a backslash, which escapes nothing.',
         );
       }
-      into.write(template[index + 1]);
-      index += 2;
+      final next = template[index + 1];
+      if (next == r'$' || next == '`' || next == '"' || next == r'\') {
+        into.write(next);
+        index += 2;
+        continue;
+      }
+      into.write(char);
+      index++;
       continue;
     }
     into.write(char);
@@ -184,12 +318,15 @@ String interpolate(String argument, Map<String, String> values, String where) {
     }
     final value = values[name];
     if (value == null) {
-      // Not reachable from a caller that passes every placeholder, which is
-      // why it says so rather than suggesting a fix: it is this package
-      // disagreeing with itself, not the table being wrong.
+      // **It said "a bug in cux_train" and stopped being true the moment this
+      // function went public.** `--uploaded-tag` is a template an operator
+      // types and is interpolated with two of the four names, so
+      // `--uploaded-tag 'up/{destination}/{build}'` — a reasonable thing to
+      // try — met a message telling them the tool was broken. The caller says
+      // which names it has, and the message names them.
       throw StepCommandException(
-        '$where interpolates `{$name}`, which this run was not given a value '
-        'for. That is a bug in cux_train rather than in the table.',
+        '$where interpolates `{$name}`, which is not one of the names it can '
+        'use here: ${values.keys.join(', ')}.',
       );
     }
     out.write(value);

@@ -79,6 +79,98 @@ void main() {
     });
   });
 
+  group('what reads as shell and is not', () {
+    // **These all used to pass silently**, which is the failure this file
+    // claims to exist against: `make build && ./upload.sh` ran `make` with
+    // three arguments, and a program that ignores what it does not recognise
+    // would then be recorded as having done the upload.
+    for (final template in [
+      'make build && ./upload.sh',
+      'a || b',
+      './upload.sh | tee log',
+      'a; b',
+      './upload.sh > log.txt',
+      './upload.sh < in.txt',
+      r'ship $HOME/out.apk',
+      'ship `date`',
+      'ship build/*.apk',
+    ]) {
+      test('refuses `$template`', () {
+        expect(
+          () => _resolve(template),
+          throwsA(
+            isA<StepCommandException>().having(
+              (e) => e.message,
+              'message',
+              allOf(contains('shell'), contains('script')),
+            ),
+          ),
+          reason: 'it would reach the command as an ordinary argument',
+        );
+      });
+    }
+
+    test('refuses a leading ~, which only a shell expands', () {
+      expect(
+        () => _resolve('~/bin/ship'),
+        throwsA(isA<StepCommandException>()),
+      );
+    });
+
+    test('a quoted one is allowed, because quoting says it is literal', () {
+      expect(_resolve('ship --message "cost: \$5"'), [
+        'ship',
+        '--message',
+        r'cost: $5',
+      ]);
+      expect(_resolve("ship --glob '*.apk'"), ['ship', '--glob', '*.apk']);
+    });
+
+    test('an escaped one is allowed too', () {
+      expect(_resolve(r'ship --price \$5'), ['ship', '--price', r'$5']);
+    });
+
+    test('a ? is not refused, because a URL is not a glob', () {
+      // Unlike `*`: a query string is an ordinary argument to `curl`, and
+      // refusing it would teach consumers to quote their way past the guard.
+      expect(_resolve('curl https://host/p?v=1'), [
+        'curl',
+        'https://host/p?v=1',
+      ]);
+    });
+  });
+
+  group('backslashes, which a Windows path is made of', () {
+    test('an unquoted path keeps its separators', () {
+      // A shell drops these, leaving `C:toolsship.exe`. That is a path
+      // destroyed by a rule meant for escaping spaces, so this deliberately
+      // differs: a backslash before a letter is a backslash.
+      expect(_resolve(r'C:\tools\ship.exe play'), [
+        r'C:\tools\ship.exe',
+        'play',
+      ]);
+      expect(_resolve(r'cmd tool\upload.bat'), ['cmd', r'tool\upload.bat']);
+    });
+
+    test('a double-quoted path keeps them too', () {
+      expect(_resolve(r'cmd "C:\tools\ship.exe"'), [
+        'cmd',
+        r'C:\tools\ship.exe',
+      ]);
+    });
+
+    test('but it still escapes what there is a reason to escape', () {
+      expect(_resolve(r'cmd one\ two'), ['cmd', 'one two']);
+      expect(_resolve(r'cmd a\"b'), ['cmd', 'a"b']);
+      expect(_resolve(r'cmd a\\b'), [r'cmd', r'a\b']);
+    });
+
+    test('inside double quotes it escapes only what POSIX says', () {
+      expect(_resolve(r'cmd "a\"b"'), ['cmd', 'a"b']);
+      expect(_resolve(r'cmd "a\nb"'), [r'cmd', r'a\nb']);
+    });
+  });
+
   group('interpolation', () {
     test('substitutes every placeholder it defines', () {
       expect(_resolve('ship {destination} {stage} {version} {build}'), [

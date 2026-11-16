@@ -69,6 +69,21 @@ enum StepOutcome {
   /// Performed, and recorded under `promoted/`.
   handedOver('handed over'),
 
+  /// Performed over a refusal that is still on record, and so not finished.
+  ///
+  /// **The destination was handed over and the ledger will still say it was
+  /// refused**, because [PromotionLedger.recordFor] lets a refusal beat a
+  /// later hand-over whichever was written first — ref names carry no time,
+  /// so guessing which is newer would be a worse answer than refusing to
+  /// guess.
+  ///
+  /// This verb is the first code that lets an operator answer `d` over a
+  /// refusal, and reporting that as [handedOver] made the run say the stage
+  /// was complete and exit 0 while the very next run had the destination
+  /// outstanding again. That is the exit code describing this invocation's
+  /// luck rather than the build, which is the one thing it is not for.
+  handedOverOverRefusal('handed over, but the refusal stands'),
+
   /// Attempted and refused, recorded under `refused/`.
   refused('refused'),
 
@@ -205,9 +220,24 @@ class RunReport {
           'without --dry-run.';
     }
     final left = outstanding.length;
+    // **A destination a refusal outranks is not one a re-run finishes**, and
+    // telling the operator to run it again would send them round a loop that
+    // cannot end. Nothing in this package clears a refusal; saying so here is
+    // the only place the run can say it before they try.
+    final stuck = [
+      for (final step in outstanding)
+        if (step.outcome == StepOutcome.refused ||
+            step.outcome == StepOutcome.handedOverOverRefusal)
+          step.destination,
+    ];
+    final advice = stuck.isEmpty
+        ? ''
+        : ' ${stuck.join(', ')} ${stuck.length == 1 ? 'carries' : 'carry'} a '
+              'refusal, which nothing here clears, so re-running will not '
+              'settle ${stuck.length == 1 ? 'it' : 'them'}.';
     return '${left == 1 ? '1 destination is' : '$left destinations are'} '
         'still outstanding. Run ${stage.name} again — what is recorded is '
-        'skipped, so it picks up where this stopped.';
+        'skipped, so it picks up where this stopped.$advice';
   }
 }
 
@@ -459,10 +489,7 @@ class PromotionRun {
       );
     }
     _record(destination, PromotionOutcome.handedOver, null);
-    return StepReport(
-      destination: destination.name,
-      outcome: StepOutcome.handedOver,
-    );
+    return _handedOver(destination);
   }
 
   /// A `manual` step: §6.1's instruction, wait and record.
@@ -473,6 +500,17 @@ class PromotionRun {
     }
     if (step.note != null) {
       output.write('  notes    ${step.note}\n');
+    }
+    // **Said before the question, not after the answer.** The operator is
+    // about to decide whether to resubmit, and the fact that this destination
+    // already turned this build down — and that nothing clears that — is the
+    // thing that should change what they do.
+    if (_standingRefusal(destination) case final refusal?) {
+      output.write(
+        '  careful  `${refusal.ref}` records that this build was already '
+        'offered\n           here and refused. Nothing clears a refusal, so '
+        '`d` will not\n           settle this destination.\n',
+      );
     }
     output.write('\n');
 
@@ -515,10 +553,7 @@ class PromotionRun {
         );
       case ManualAnswer.done:
         _record(destination, PromotionOutcome.handedOver, null);
-        return StepReport(
-          destination: destination.name,
-          outcome: StepOutcome.handedOver,
-        );
+        return _handedOver(destination);
       case ManualAnswer.failed:
         final note = console.askNote();
         if (note == null) {
@@ -545,6 +580,36 @@ class PromotionRun {
     }
   }
 
+  /// The refusal already on record for [destination] at this stage, if any.
+  PromotionRecord? _standingRefusal(Destination destination) {
+    final record = ledger.recordFor(destination.name, stage);
+    return record?.outcome == PromotionOutcome.attemptedAndRefused
+        ? record
+        : null;
+  }
+
+  /// The report for a destination just handed over.
+  ///
+  /// Separate from writing the record because the two answer different
+  /// questions: the record says what happened, and this says whether the
+  /// destination is settled — which it is not while a refusal outranks it.
+  StepReport _handedOver(Destination destination) {
+    final refusal = _standingRefusal(destination);
+    if (refusal == null) {
+      return StepReport(
+        destination: destination.name,
+        outcome: StepOutcome.handedOver,
+      );
+    }
+    return StepReport(
+      destination: destination.name,
+      outcome: StepOutcome.handedOverOverRefusal,
+      detail:
+          '`${refusal.ref}` outranks it, so the record still reads as '
+          'refused',
+    );
+  }
+
   void _record(
     Destination destination,
     PromotionOutcome outcome,
@@ -564,6 +629,20 @@ class PromotionRun {
       note: note,
       push: push,
     );
+    // **`alreadyRecorded` is not the same as having recorded it**, and saying
+    // "recorded" for both loses the one thing the operator needs to know. A
+    // second `f` on the same destination writes nothing: the tag is already
+    // there, with the *first* reason in it, and `recordUpload` reports the
+    // name as taken rather than replacing the annotation. The run was then
+    // printing the new reason in its report while the record kept the old
+    // one, so the two disagreed permanently and nothing said so.
+    if (result == UploadRecordResult.alreadyRecorded) {
+      output.write(
+        '  already recorded: ${record.ref} exists, and its note is the one '
+        'written the first time.\n',
+      );
+      return;
+    }
     output.write('  recorded ${record.ref}');
     if (result == UploadRecordResult.writtenNotPushed) {
       output.write(' (written here, not pushed — push it when you can)');

@@ -43,10 +43,20 @@ class _ScriptedConsole implements OperatorConsole {
   /// The confirmations it was asked, so a case can assert it was not asked.
   final List<String> confirmed = [];
 
+  /// How much had been printed when the keys were asked for.
+  ///
+  /// The scripted console prints nothing itself — only [StdioConsole] draws
+  /// the `[d]one …` line — so a case that cares whether something was said
+  /// *before* the question measures it here instead of looking for the keys.
+  int? askedAfter;
+
   bool agreeToConfirm = true;
 
   @override
-  ManualAnswer? ask() => _answers.isEmpty ? null : _answers.removeAt(0);
+  ManualAnswer? ask() {
+    askedAfter = _out.length;
+    return _answers.isEmpty ? null : _answers.removeAt(0);
+  }
 
   @override
   String? askNote() => _notes.isEmpty ? null : _notes.removeAt(0);
@@ -587,7 +597,101 @@ destinations:
         already: ['refused/huawei/beta/v1.9.13+2196'],
       );
 
-      expect(report.steps.single.outcome, StepOutcome.handedOver);
+      // It is offered again — a refusal is a retry, not a tombstone — and the
+      // hand-over is recorded.
+      expect(_written(), contains('promoted/huawei/beta/v1.9.13+2196'));
+      expect(report.steps.single.outcome, StepOutcome.handedOverOverRefusal);
+    });
+
+    test('d over a refusal does not report the stage as finished', () async {
+      // **The case this verb got wrong.** `recordFor` lets the refusal beat
+      // the hand-over, so the ledger still reads refused and the *next* run
+      // has the destination outstanding again. Reporting `handedOver` here
+      // made the run claim the stage complete and exit 0 while that was so.
+      final console = _ScriptedConsole([ManualAnswer.done]);
+      final report = await _run(
+        console: console,
+        store: ['huawei'],
+        already: ['refused/huawei/beta/v1.9.13+2196'],
+      );
+
+      expect(report.complete, isFalse);
+      expect(report.outstanding, hasLength(1));
+    });
+
+    test('and the next run agrees with what this one reported', () async {
+      // The property underneath: whatever this run says about the stage, a
+      // fresh read of the ledger has to say the same thing.
+      final console = _ScriptedConsole([ManualAnswer.done]);
+      final first = await _run(
+        console: console,
+        store: ['huawei'],
+        already: ['refused/huawei/beta/v1.9.13+2196'],
+      );
+      final second = await _run(
+        console: _ScriptedConsole([ManualAnswer.skip]),
+        store: ['huawei'],
+      );
+
+      expect(first.complete, isFalse);
+      expect(second.steps, hasLength(1), reason: 'still outstanding');
+    });
+
+    test('the operator is warned before being asked, not after', () async {
+      // The one moment the warning can change what they do: they are about to
+      // decide whether to resubmit the same binary.
+      final console = _ScriptedConsole([ManualAnswer.skip]);
+      await _run(
+        console: console,
+        store: ['huawei'],
+        already: ['refused/huawei/beta/v1.9.13+2196'],
+      );
+
+      final printed = _out.toString();
+      expect(printed, contains('refused/huawei/beta/v1.9.13+2196'));
+      expect(
+        printed.indexOf('Nothing clears a refusal'),
+        allOf(isNonNegative, lessThan(console.askedAfter!)),
+        reason: 'the warning is printed before the question is put',
+      );
+    });
+
+    test('says a re-run will not settle a refused destination', () async {
+      final console = _ScriptedConsole(
+        [ManualAnswer.failed],
+        notes: ['bad apk'],
+      );
+      final report = await _run(console: console, store: ['huawei']);
+
+      expect(report.render(), contains('which nothing here clears'));
+    });
+
+    test('a second refusal says the note is the first one', () async {
+      // `recordUpload` reports the name as taken rather than replacing the
+      // annotation, so the new reason exists only in this run's output.
+      // The first refusal has to be written by a run rather than by
+      // `already:`, which makes a lightweight tag — and `writePromotion`
+      // refuses one of those, with a message of its own.
+      await _run(
+        console: _ScriptedConsole([ManualAnswer.failed], notes: ['bad apk']),
+        store: ['huawei'],
+      );
+      _out.clear();
+      await _run(
+        console: _ScriptedConsole(
+          [ManualAnswer.failed],
+          notes: ['a different reason'],
+        ),
+        store: ['huawei'],
+      );
+
+      expect(_out.toString(), contains('already recorded'));
+      expect(_out.toString(), contains('written the first time'));
+      expect(
+        _git.run(['tag', '-l', '-n99', 'refused/huawei/beta/v1.9.13+2196']),
+        contains('bad apk'),
+        reason: 'the annotation is still the first reason',
+      );
     });
   });
 
