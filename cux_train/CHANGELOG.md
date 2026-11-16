@@ -4,6 +4,60 @@
 
 ### Added
 
+**`cux_train beta`, the first verb that spends something.** §3's beta stage,
+walked once: every destination with a beta step is performed and recorded —
+`ship` and `run` by spawning the command the table declares, `manual` through
+§6.1's instruction, wait and record. It is resumable because the record is a
+tag rather than because of a flag, so a re-run names what is already recorded
+and stops at the same destinations; and one destination refusing never stops
+the others. Every command is resolved and the `uploaded/` tag is looked for
+before the first destination is touched, so a mistake in the table's last row
+or an unfetched tag is a refusal rather than a release half performed.
+
+**A declared `command` is split into arguments and never handed to a shell.**
+That field has been a string nothing read since it was written; this gives it
+a meaning. Interpolation of `{version}`, `{build}`, `{destination}` and
+`{stage}` happens *after* the split, so a value containing a space lands in
+exactly one argument instead of becoming two, and a value carrying shell
+punctuation is an argument rather than a second command. A placeholder the
+package does not define is refused rather than reaching the command as itself.
+
+**A template that reads as shell is refused rather than run as not-shell.**
+`make build && ./upload.sh` would otherwise run `make` with three arguments
+and be recorded as having done the upload. Unquoted `&&`, `||`, `|`, `;`,
+`>`, `<`, `$`, a backtick, a `*` glob and a leading `~` are refused, and
+quoting or escaping one says it was meant literally. A backslash keeps its
+character unless there is a reason to escape it, so `C:\tools\ship.exe`
+survives where a shell would leave `C:toolsship.exe`.
+
+**`d` over a destination that already refused this build does not finish it.**
+A refusal outranks a later hand-over and nothing clears one, so the hand-over
+is recorded and the destination stays outstanding — reported as `handed over,
+but the refusal stands` rather than as done. The refusal is named above the
+keys, before the operator decides whether to resubmit, and the closing verdict
+no longer tells them to re-run something a re-run cannot settle.
+
+**A second refusal says the note is the first one.** `recordUpload` reports
+the name as taken rather than replacing the annotation, so the new reason
+existed only in that run's output while the tag kept the old one.
+
+**A step whose command fails is reported and not recorded.** A `refused/` tag
+for a non-zero exit would be permanent — nothing clears a refusal, and a
+refusal beats a later hand-over on purpose — so a network timeout would mark
+that destination refused for the life of the build. A refusal is a judgement
+about the artifact; a failed command is an incident.
+
+**`--dry-run`, `--yes`, `--store` and `--uploaded-tag` arrive with the verb
+that acts**, which is where `runner.dart` said they would. `--yes` does not
+answer a manual step, and off a terminal a manual destination is reported
+pending while everything else is still performed.
+
+**`incompleteExit`, a 2 for a stage a run did not finish.** The number the
+removed `notReadyExit` was reaching for, now that there is a half of the train
+with states that mean no: refused, failed, skipped, pending, or a dry run
+that found work it did not do. A dry run that finds the stage already recorded
+exits 0, because the code answers whether the build is at the stage.
+
 **`cux_train ready`, which reads the record for a purpose.** §3's verb, with
 the half of it that needs nothing but the destination table and the promotion
 refs: what `production` would act on, who acts at each one, what the version

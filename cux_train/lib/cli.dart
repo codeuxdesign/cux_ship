@@ -74,6 +74,26 @@ Future<void> main(List<String> args) async {
   } on ReadinessException catch (e) {
     stderr.writeln('cux_train: $e');
     exitCode = 1;
+  } on StepCommandException catch (e) {
+    // A `command` in the table this package will not spawn. A table problem
+    // rather than a usage one — the operator typed nothing wrong.
+    stderr.writeln('cux_train: $e');
+    exitCode = 1;
+  } on PromotionWriteException catch (e) {
+    stderr.writeln('cux_train: $e');
+    exitCode = 1;
+  } on PromotionRunException catch (e) {
+    stderr.writeln('cux_train: $e');
+    exitCode = 1;
+  } on PromotionIncomplete {
+    // **Nothing is printed here, and that is the point of the clause.** The
+    // run already rendered what is outstanding and why; this exists only to
+    // turn that into a number a caller can branch on, and a second sentence
+    // saying it again would be the one that goes stale. It covers a dry run
+    // that found work to do — what it printed it did not perform, so it must
+    // not be the cheap way to a zero exit — and not one that found the stage
+    // already recorded, which is complete and never throws this.
+    exitCode = incompleteExit;
   } on ReleaseException catch (e) {
     // Git ran and said no — not a repository, most often. It arrives from
     // `cux_ship`, because that is whose `Git` reads the refs. A `git` that is

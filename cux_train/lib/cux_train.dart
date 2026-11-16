@@ -4,12 +4,16 @@
 /// `cli.dart`.
 library;
 
+export 'src/beta_command.dart' show PromotionIncomplete;
 export 'src/destinations.dart';
 export 'src/evidence.dart';
+export 'src/operator_console.dart';
 export 'src/promotion_ledger.dart';
 export 'src/promotion_record.dart';
+export 'src/promotion_run.dart';
 export 'src/readiness.dart';
 export 'src/record_writer.dart';
 export 'src/status_grid.dart';
+export 'src/step_command.dart';
 export 'src/store_selection.dart';
 export 'src/usage.dart';
