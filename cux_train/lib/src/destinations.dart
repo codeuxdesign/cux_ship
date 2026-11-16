@@ -210,7 +210,7 @@ class Destination {
 
 /// Every destination a consumer declares.
 class DestinationTable {
-  DestinationTable(List<Destination> destinations)
+  DestinationTable(List<Destination> destinations, {this.finish})
     : destinations = List.unmodifiable(destinations);
 
   /// Parses a `destinations:` declaration.
@@ -235,7 +235,7 @@ class DestinationTable {
         '$source must be a map with a `destinations` key',
       );
     }
-    _checkKeys(document, const {'destinations'}, source);
+    _checkKeys(document, const {'destinations', 'finish'}, source);
 
     // **Missing and malformed are separate messages**, because they are
     // separate mistakes: the first is a file that has not been written yet,
@@ -279,12 +279,29 @@ class DestinationTable {
       }
       destinations.add(_parseDestination(key, entry.value, source));
     }
-    final table = DestinationTable(destinations);
+    final table = DestinationTable(
+      destinations,
+      finish: _parseFinish(document['finish'], source),
+    );
     table._checkNamesAreUsable(source);
     return table;
   }
 
   final List<Destination> destinations;
+
+  /// The step that spends the version tag, once the finish rule is met.
+  ///
+  /// **Optional, and a table without one cannot finish a release.** §3 step 5
+  /// names it as `cux_ship release finish`, which writes `vX.Y.Z` under the
+  /// consumer's configured namespace — so the train spawns a command it is
+  /// given rather than composing a tag name. Guessing `v$version` here would
+  /// be the same mistake as reading the release out of an `uploaded/` tag:
+  /// inventing somebody else's convention and being wrong silently wherever
+  /// they spell it differently.
+  ///
+  /// `production` says so when it is absent, rather than treating a release
+  /// with every destination recorded as finished.
+  final DestinationStep? finish;
 
   /// The destination called [name], or null.
   Destination? byName(String name) {
@@ -449,6 +466,28 @@ class DestinationTable {
       );
     }
     return declared;
+  }
+
+  /// The optional top-level `finish:` step.
+  ///
+  /// **It has to spawn something.** `manual` would mean instructing a person
+  /// to write the version tag by hand, and the train would then be believing
+  /// them about a tag it can see for itself; `none` would mean a table that
+  /// declares a finish and has none. Both say more than they mean, so each is
+  /// refused by name.
+  static DestinationStep? _parseFinish(Object? declared, String source) {
+    if (declared == null) {
+      return null;
+    }
+    final step = _parseStep(declared, '$source: `finish`');
+    if (!step.kind.spawns) {
+      throw DestinationTableException(
+        '$source: `finish` is `${step.kind.name}`, and finishing a release '
+        'has to run something — it is the step that spends the version tag. '
+        'Give it a `ship` or `run` command, or leave `finish` out.',
+      );
+    }
+    return step;
   }
 
   /// A step is either a bare kind or a map carrying what the kind needs.

@@ -2,12 +2,14 @@
 
 Orders the steps of a release, and waits on the ones a person performs.
 
-**Three commands run, and one of them spends something.** `cux_train status`
+**Four commands run, and two of them spend something.** `cux_train status`
 prints the evidence grid for a release candidate and `cux_train ready` says
 what `production` has left to do against it; both write nothing anywhere.
 `cux_train beta` performs the beta step at every destination that has one and
-records each — the first verb here that acts. `internal` and `production` are
-still a plan, and the usage lists only what exists. This package is the workspace
+records each. `cux_train production` does the same at production and then
+spends the version tag, once every destination that has a production step is
+recorded. `internal` is still a plan, and the usage lists only what exists.
+This package is the workspace
 member that How It Went's release train moves into, created ahead of the move
 so that each step arrives as a commit against a package CI already builds,
 formats, tests and runs a publish dry run over — rather than as one commit that
@@ -126,6 +128,63 @@ while there is anything left to do, because what it printed it did not
 perform — but it exits zero when it finds the stage already recorded, since
 the exit code answers *is this build at beta* rather than *did this process
 do the work*.
+
+## `production`, the verb that finishes
+
+Everything `beta` does, at the production stage, plus the three things that
+are about the version tag.
+
+```console
+$ cux_train production --build 2196 --release 1.9.13 --yes
+…
+1.9.13 — build 2196 — production
+
+  play    handed over
+  huawei  handed over
+
+  no production step: web
+
+Every destination this run covers is recorded at production.
+
+finish  release-finish 1.9.13
+
+── fdroid · production · build 2196 ────────────────────────────────────
+  run  fdroid-tag 1.9.13
+  recorded promoted/fdroid/production/v1.9.13+2196
+
+1.9.13 — build 2196 — production — after the version tag
+
+  fdroid  handed over
+```
+
+**The finish rule asks the record, never the invocation.** `vX.Y.Z` is spent
+once every declared destination with a production step is *recorded* at
+production. A destination whose production kind is `none` is satisfied
+vacuously — nobody acts, so nothing writes a record, and waiting for one would
+hold the tag forever. The rule is deliberately not keyed on `--store`: a
+`production` that spans days ends with somebody typing `--store ppa
+production`, and a rule about narrowing could never let that run finish the
+release.
+
+**A destination declared `after-finish` runs after the tag, not with the
+rest.** AuthPass's `fdroid` pushes `fdroid-vX.Y.Z`, which annotates the
+version tag and so cannot precede it. Those destinations are excluded from the
+rule and walked in a second pass, which the report labels — and they are not
+touched at all while the tag is held, because pushing them early would
+annotate a release that may never be finished.
+
+**The tag is written by a command the consumer declares**, as a top-level
+`finish:` step in the table:
+
+```yaml
+finish: {kind: run, command: "cux_ship release finish --version {version}"}
+```
+
+Composing `v$version` here would be inventing somebody else's convention — the
+same mistake as reading a release out of an `uploaded/` tag — and being
+silently wrong wherever they spell it differently. A table with no `finish`
+says so rather than treating a fully recorded release as finished, and a
+`finish` that is `manual` or `none` is refused when the table is read.
 
 The destination table it reads is `.cux-train.yaml` in the directory it is run
 from — the repository root, where the launcher sits — or wherever `--table`
