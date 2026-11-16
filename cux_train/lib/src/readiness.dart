@@ -57,12 +57,13 @@ class ReadinessException implements Exception {
 /// rejected the binary" look like "nobody has looked yet". A refusal is
 /// therefore a reason to run `production`, not a reason not to.
 ///
-/// The inversion was not cosmetic. Nothing clears a refusal, and [recordFor]
-/// lets one win over a later hand-over, so a `ready` that failed on a refusal
-/// failed forever: with `train ready && train production` — the line this
-/// package's own README recommended — one `f` on Monday blocked that build's
-/// release permanently, including the five other consoles still outstanding.
-/// Verified against a real repository before this was changed.
+/// The inversion was not cosmetic. Nothing clears a refusal, and
+/// [PromotionLedger.recordFor] lets one win over a later hand-over, so a
+/// `ready` that failed on a refusal failed forever: with `train ready &&
+/// train production` — the line this package's own README recommended — one
+/// `f` on Monday blocked that build's release permanently, including the five
+/// other consoles still outstanding. Verified against a real repository
+/// before this was changed.
 ///
 /// **It is still kept apart from the outstanding work**, which is the useful
 /// half of the original idea. Five destinations nobody has reached are what
