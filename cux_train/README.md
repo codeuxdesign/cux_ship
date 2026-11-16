@@ -2,23 +2,64 @@
 
 Orders the steps of a release, and waits on the ones a person performs.
 
-**One command runs, and it is the one that performs nothing.** `cux_train
-status` prints the evidence grid for a release candidate and writes nothing
-anywhere; the verbs that spend something — `ready`, `internal`, `beta`,
-`production` — are still a plan, and the usage lists only what exists. This
-package is the workspace member that How It Went's release train moves into,
-created ahead of the move so that each step arrives as a commit against a
-package CI already builds, formats, tests and runs a publish dry run over —
-rather than as one commit that creates a package and fills it at the same time.
+**Two commands run, and neither of them performs anything.** `cux_train
+status` prints the evidence grid for a release candidate and `cux_train ready`
+says what `production` has left to do against it; both write nothing anywhere.
+The verbs that spend something — `internal`, `beta`, `production` — are still a
+plan, and the usage lists only what exists. This package is the workspace
+member that How It Went's release train moves into, created ahead of the move
+so that each step arrives as a commit against a package CI already builds,
+formats, tests and runs a publish dry run over — rather than as one commit that
+creates a package and fills it at the same time.
 
 ```console
 $ cux_train status --build 2196 --release 1.9.13
 1.9.13 — build 2196
 
 destination  internal  beta  production
-huawei       pending   n/a   2196 attested
+huawei       pending   n/a   2196 failed
 flathub      n/a       n/a   n/a
+
+huawei production — attempted and refused
+
+$ cux_train ready --build 2196 --release 1.9.13
+1.9.13 — build 2196
+
+production could run.
+
+one thing to take with you:
+
+  huawei turned this build down
+    `refused/huawei/production/v1.9.13+2196` records that huawei was offered
+    build 2196 of 1.9.13 at production and refused it. `production` is how
+    that is retried: the destination is outstanding rather than finished, so
+    a re-run stops there again and asks. …
+
+it would act on 1, in table order:
+  huawei  manual  https://developer.huawei.com
+
+the version tag waits on 1: huawei.
 ```
+
+**The difference between the two is a picture and a reading of it.** The grid
+shows every cell and leaves the sense of it to somebody who knows the evidence
+model; `ready` says what `production` would do next, what the version tag is
+waiting for, and what to take to the console — without the reader having to
+know what `attested` means.
+
+**It is not a gate, and an earlier draft of it was.** That draft refused when a
+destination had turned the build down. §6.1 of the plan records a refusal
+precisely so that the next `production` run returns to that destination, which
+makes a refusal a reason to run rather than a veto — and since nothing clears
+one, the veto never lifted: `train ready && train production` stopped that
+build's release for good, the untouched consoles included. The exit code that
+could say no went with it. One comes back with the reads, where §3's refusals
+actually live.
+
+`ready` is §3's verb with those reads not yet wired: an artifact for the
+candidate at every CI-built destination, anything built outside CI, and the
+`pre-release` gate are all still unchecked, and the report says so on every run
+rather than letting a clean answer read as the whole check.
 
 The destination table it reads is `.cux-train.yaml` in the directory it is run
 from — the repository root, where the launcher sits — or wherever `--table`
@@ -39,8 +80,10 @@ to claim about a cell: read, recorded, contradicted, failed, unknown, or
 nobody's job. Over that sits the **status grid**, which is the shape all of it
 is read in: one row per destination, one column per audience, and in every cell
 a build number with the evidence behind it, never a build number alone. Beside
-them is the **record writer**, which is the only part that leaves a mark on
-anything.
+the grid is the **readiness answer**, which reads the same two things and
+reduces them to a yes or a no: what `production` would act on, what the version
+tag is waiting for, and what has to change first. Beside them all is the
+**record writer**, which is the only part that leaves a mark on anything.
 
 Nearly all of it parses and answers questions — no spawning, no store, no
 credential — which is what lets every case be tested without either. The writer
@@ -90,12 +133,12 @@ and a preflight with nobody's workflow changed.
 
 ## Using it
 
-There is nothing to use yet. When there is, it will be launchable the way its
-siblings are, without a consumer having to find the package in the pub cache:
+Two verbs, both read-only, and it is launchable the way its siblings are —
+without a consumer having to find the package in the pub cache:
 
 ```bash
 dart --packages=<checkout>/.dart_tool/package_config.json \
-     package:cux_train/cli.dart help
+     package:cux_train/cli.dart ready --build 2196 --release 1.9.13
 ```
 
 `bin/cux_train.dart` is a one-line export of that library, so `dart run

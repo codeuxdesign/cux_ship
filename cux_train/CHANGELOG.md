@@ -4,6 +4,46 @@
 
 ### Added
 
+**`cux_train ready`, which reads the record for a purpose.** §3's verb, with
+the half of it that needs nothing but the destination table and the promotion
+refs: what `production` would act on, who acts at each one, what the version
+tag is still waiting for, and what an operator should take with them. A
+destination that refused this build is called out rather than left as a row,
+because a resumable `production` walks back into a refusal and an operator who
+reads that as an ordinary queue entry resubmits the same binary.
+
+**It reports and does not refuse, which is a correction to how it was first
+written.** The first draft treated a refusal as a veto and exited non-zero.
+§6.1 records a refusal so that the next `production` run returns to that
+destination, so the veto was backwards — and because nothing clears a refusal
+and a refusal wins over a later hand-over, it never lifted: with `ready &&
+production`, one rejection stopped that build's release permanently, the
+untouched consoles included. The `notReadyExit` the draft added went with it;
+an exit code nothing can produce is the dropped flag in another spelling, and
+the number returns with the reads that can refuse.
+
+**A record for a destination the table does not declare is refused.** The
+table says where a release goes and the records say where it has been, and one
+naming a place the other does not know is the two disagreeing about the
+release. Dropped quietly, the destination simply would not appear — a
+rejection left out of the answer is the failure the record exists to prevent.
+
+**What `ready` does not check, printed on every run.** §3's verb is four
+bullets and this is one of them — an artifact for the candidate at every
+CI-built destination, anything built outside CI, and the repository's
+pre-release gate are reads this package does not have yet. An operator who
+reads "production could run" as the whole check is the failure the verb exists
+to prevent, so the output says what it did not look at every time. It names
+those by category rather than by one consumer's rows, for the same reason the
+destination table exists.
+
+**`CandidateCommand`, the shared base for a verb about one build.** `--build`,
+`--release`, `--table`, the stray-argument refusal, the hex-build refusal and
+the table lookup move there from `status`. The one that matters is the ledger:
+it is keyed on the build *and* the version, and a second verb building its own
+would have reopened the hole the previous release closed — the grid would still
+render, and the header would still name a release nothing had verified.
+
 **`cux_train status`, which is the first verb that runs.** A `CommandRunner`
 tree in place of the hand-rolled help-or-refuse entry, and one command on it:
 read the destination table, read the promotion refs out of the checkout, build

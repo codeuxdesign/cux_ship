@@ -24,3 +24,15 @@ library;
 /// example exits with the same number — and a constant in each is the correct
 /// amount of coupling to a number that is fixed by convention.
 const int usageExit = 64;
+
+// **There was briefly a `notReadyExit = 2` here, and removing it is the
+// finding rather than the tidying.** `ready` was written as a gate that
+// refused when a destination had turned the build down. §6.1 records a
+// refusal so that the next `production` run returns to that destination, so
+// the refusal is a reason to run rather than a veto — and since nothing
+// clears one, the gate never reopened: `train ready && train production`,
+// which this package's own README recommended, stopped that build's release
+// for good. With the veto gone there is no state this half of the verb can
+// answer no to, every refusal left is an error, and an exit code nothing can
+// produce is the donor's dropped flag in another spelling. The number comes
+// back with the reads, where §3's refusals actually live.

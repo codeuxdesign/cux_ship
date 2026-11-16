@@ -64,6 +64,16 @@ Future<void> main(List<String> args) async {
   } on StatusGridException catch (e) {
     stderr.writeln('cux_train: $e');
     exitCode = 1;
+  } on StoreSelectionException catch (e) {
+    // A table that declares nothing at the stage a verb is about. It reaches
+    // here from `ready` without `--store` existing yet: `resolveStores` is
+    // what every verb asks, narrowed or not, and it has a sentence of its own
+    // for the unnarrowed run.
+    stderr.writeln('cux_train: $e');
+    exitCode = 1;
+  } on ReadinessException catch (e) {
+    stderr.writeln('cux_train: $e');
+    exitCode = 1;
   } on ReleaseException catch (e) {
     // Git ran and said no — not a repository, most often. It arrives from
     // `cux_ship`, because that is whose `Git` reads the refs. A `git` that is
