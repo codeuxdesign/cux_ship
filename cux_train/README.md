@@ -2,11 +2,12 @@
 
 Orders the steps of a release, and waits on the ones a person performs.
 
-**Two commands run, and neither of them performs anything.** `cux_train
-status` prints the evidence grid for a release candidate and `cux_train ready`
-says what `production` has left to do against it; both write nothing anywhere.
-The verbs that spend something — `internal`, `beta`, `production` — are still a
-plan, and the usage lists only what exists. This package is the workspace
+**Three commands run, and one of them spends something.** `cux_train status`
+prints the evidence grid for a release candidate and `cux_train ready` says
+what `production` has left to do against it; both write nothing anywhere.
+`cux_train beta` performs the beta step at every destination that has one and
+records each — the first verb here that acts. `internal` and `production` are
+still a plan, and the usage lists only what exists. This package is the workspace
 member that How It Went's release train moves into, created ahead of the move
 so that each step arrives as a commit against a package CI already builds,
 formats, tests and runs a publish dry run over — rather than as one commit that
@@ -61,6 +62,63 @@ candidate at every CI-built destination, anything built outside CI, and the
 `pre-release` gate are all still unchecked, and the report says so on every run
 rather than letting a clean answer read as the whole check.
 
+## `beta`, the first verb that acts
+
+```console
+$ cux_train beta --build 2196 --release 1.9.13 --yes
+── play · beta · build 2196 ────────────────────────────────────────────
+  run  echo uploading play 1.9.13 build 2196
+uploading play 1.9.13 build 2196
+  recorded promoted/play/beta/v1.9.13+2196
+
+── huawei · beta · build 2196 ──────────────────────────────────────────
+  where    https://developer.huawei.com
+  notes    CHANGELOG.md § 1.9.13, rendered for this store
+
+  [d]one   [s]kip for now   [f]ailed   [q]uit — nothing after this is lost
+  > f
+  why — one line, which is what makes the record usable:
+  > 64-bit libs missing from the apk
+  recorded refused/huawei/beta/v1.9.13+2196
+
+1.9.13 — build 2196 — beta
+
+  play    handed over
+  huawei  refused  — 64-bit libs missing from the apk
+
+  no beta audience: web
+
+1 destination is still outstanding. Run beta again — what is recorded is
+skipped, so it picks up where this stopped.
+```
+
+**It is resumable because of the record and not because of a flag.** A re-run
+names what is already recorded, walks what is not, and stops at the same
+destinations — which is why there is no `--resume`: resuming is what a re-run
+*is* when the state is a tag.
+
+**A step whose command fails is not recorded, and that is a decision rather
+than an omission.** Writing a `refused/` tag for a script that exited non-zero
+would be the obvious thing, and it would be permanent: nothing here clears a
+refusal, and a refusal beats a later hand-over on purpose, so a five-second
+network timeout would mark that destination refused for the life of the build.
+A refusal is a judgement about the artifact; a failed command is an incident.
+It is reported, the destination stays outstanding, and the next run tries
+again.
+
+**`--yes` does not answer a manual step.** It means "do not ask me before
+doing what you were going to do", and a console submission is not something
+the train does. Off a terminal a manual destination is reported pending and
+the run exits non-zero *having done everything else*, so an unattended beta
+still ships what it can.
+
+**`--dry-run` prints every instruction and command and records nothing**,
+which is the release checklist generated for this build. It exits non-zero
+while there is anything left to do, because what it printed it did not
+perform — but it exits zero when it finds the stage already recorded, since
+the exit code answers *is this build at beta* rather than *did this process
+do the work*.
+
 The destination table it reads is `.cux-train.yaml` in the directory it is run
 from — the repository root, where the launcher sits — or wherever `--table`
 names. A sibling file rather than a `train:` block in
@@ -85,12 +143,23 @@ reduces them to a yes or a no: what `production` would act on, what the version
 tag is waiting for, and what has to change first. Beside them all is the
 **record writer**, which is the only part that leaves a mark on anything.
 
-Nearly all of it parses and answers questions — no spawning, no store, no
-credential — which is what lets every case be tested without either. The writer
-is the exception and a narrow one: it names a tag and hands it to `cux_ship`'s
-`recordUpload`, over a checkout root a caller supplies, so its tests point at a
-temporary repository and get the real behaviour. `status` reads that same
+Nearly all of it parses and answers questions — no store, no credential —
+which is what lets every case be tested without either. Two parts are the
+exception and both are narrow. The **record writer** names a tag and hands it
+to `cux_ship`'s `recordUpload` over a checkout root a caller supplies, so its
+tests point at a temporary repository and get the real behaviour. The
+**promotion run** spawns a destination's declared command and asks the
+operator about a manual one, and takes both as arguments — a test hands it a
+recorder and a scripted console, so every decision about what to write is
+asserted without a child process or a terminal. `status` reads that same
 checkout for the refs it renders, and takes the root the same way.
+
+**A declared command is split into arguments here and never handed to a
+shell.** `sh -c` would buy pipes for free and make every interpolated value
+shell source — a version named `1.9.13; rm -rf ~` would be two commands. The
+split happens before interpolation, too, so a value containing a space lands
+in exactly one argument instead of becoming two. A consumer who wants a
+pipeline writes a script and names the script.
 
 **The candidate is named, never guessed**, which is why both `--build` and
 `--release` are required rather than defaulted. A build number does not say

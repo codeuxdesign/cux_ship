@@ -4,6 +4,37 @@
 
 ### Added
 
+**`cux_train beta`, the first verb that spends something.** §3's beta stage,
+walked once: every destination with a beta step is performed and recorded —
+`ship` and `run` by spawning the command the table declares, `manual` through
+§6.1's instruction, wait and record. It is resumable because the record is a
+tag rather than because of a flag, so a re-run names what is already recorded
+and stops at the same destinations; and one destination refusing never stops
+the others.
+
+**A declared `command` is split into arguments and never handed to a shell.**
+That field has been a string nothing read since it was written; this gives it
+a meaning. Interpolation of `{version}`, `{build}`, `{destination}` and
+`{stage}` happens *after* the split, so a value containing a space lands in
+exactly one argument instead of becoming two, and a value carrying shell
+punctuation is an argument rather than a second command. A placeholder the
+package does not define is refused rather than reaching the command as itself.
+
+**A step whose command fails is reported and not recorded.** A `refused/` tag
+for a non-zero exit would be permanent — nothing clears a refusal, and a
+refusal beats a later hand-over on purpose — so a network timeout would mark
+that destination refused for the life of the build. A refusal is a judgement
+about the artifact; a failed command is an incident.
+
+**`--dry-run`, `--yes`, `--store` and `--uploaded-tag` arrive with the verb
+that acts**, which is where `runner.dart` said they would. `--yes` does not
+answer a manual step, and off a terminal a manual destination is reported
+pending while everything else is still performed.
+
+**`incompleteExit`, a 2 for a stage a run did not finish.** The number the
+removed `notReadyExit` was reaching for, now that there is a half of the train
+with states that mean no: refused, failed, skipped, pending, or a dry run.
+
 **`cux_train ready`, which reads the record for a purpose.** §3's verb, with
 the half of it that needs nothing but the destination table and the promotion
 refs: what `production` would act on, who acts at each one, what the version

@@ -25,6 +25,20 @@ library;
 /// amount of coupling to a number that is fixed by convention.
 const int usageExit = 64;
 
+/// The exit code for a stage a run did not finish.
+///
+/// **This is the number the removed `notReadyExit` was reaching for, and what
+/// changed is which half of the train it belongs to.** `ready` reads, and has
+/// no state that means no — which is why its code was deleted below. A verb
+/// that *acts* has several: a destination refused the build, a command failed,
+/// a manual step was skipped or had nobody to answer it, or the run was a dry
+/// one. Each leaves the build not at the stage, and each is a state the run
+/// reached rather than an error it hit, which is why they share a code and why
+/// none of them is a 1.
+///
+/// A caller branches on it, which is why it is a constant and not a literal.
+const int incompleteExit = 2;
+
 // **There was briefly a `notReadyExit = 2` here, and removing it is the
 // finding rather than the tidying.** `ready` was written as a gate that
 // refused when a destination had turned the build down. §6.1 records a

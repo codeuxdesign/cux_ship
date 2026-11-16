@@ -132,8 +132,8 @@ void main() {
           .map((line) => line.trim().split(RegExp(r'\s+')).first)
           .toSet();
 
-      expect(offered, containsAll(['status', 'ready']));
-      for (final planned in ['internal', 'beta', 'production']) {
+      expect(offered, containsAll(['status', 'ready', 'beta']));
+      for (final planned in ['internal', 'production']) {
         expect(
           offered,
           isNot(contains(planned)),
