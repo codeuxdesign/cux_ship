@@ -20,8 +20,9 @@ huawei       pending   n/a   2196 attested
 flathub      n/a       n/a   n/a
 ```
 
-The destination table it reads is `.cux-train.yaml` beside the repository root,
-or wherever `--table` names. A sibling file rather than a `train:` block in
+The destination table it reads is `.cux-train.yaml` in the directory it is run
+from — the repository root, where the launcher sits — or wherever `--table`
+names. A sibling file rather than a `train:` block in
 `.cux-ship.yaml`, which is the arrangement worth having and is not available:
 an unknown key there is an error by design, and that file is read before every
 `cux_ship` command, so the block would fail every upload until a release that

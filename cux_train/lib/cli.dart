@@ -36,7 +36,9 @@ import 'package:cux_train/runner.dart';
 /// `exit()` and is marked as not for in-process callers; this package has no
 /// reason to inherit that.
 ///
-/// **Every clause below prints a sentence and no stack trace.** These are
+/// **Every clause below prints a sentence and no stack trace**, and what no
+/// clause names still prints one — the list is the states somebody is expected
+/// to meet, not a catch-all, so that a bug stays loud. These are
 /// states a release operator is meant to read and act on — a table that is not
 /// there, a candidate that was not named, a ref somebody wrote by hand that
 /// this grammar cannot read — and an unhandled Dart exception buries the one
@@ -63,8 +65,11 @@ Future<void> main(List<String> args) async {
     stderr.writeln('cux_train: $e');
     exitCode = 1;
   } on ReleaseException catch (e) {
-    // Git said no — not a repository, or a `git` that is not on the path. It
-    // arrives from `cux_ship`, because that is whose `Git` reads the refs.
+    // Git ran and said no — not a repository, most often. It arrives from
+    // `cux_ship`, because that is whose `Git` reads the refs. A `git` that is
+    // not on the path at all is *not* this: `Process.runSync` throws a
+    // `ProcessException` before `Git` has an exit code to wrap, and that one
+    // still reaches the operator as a stack trace, here as in `cux_ship`.
     stderr.writeln('cux_train: ${e.message}');
     exitCode = 1;
   }

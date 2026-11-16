@@ -1,7 +1,8 @@
 /// `status`: read the records, render the grid, write nothing.
 ///
-/// **The first verb wired to the library, and the only one that cannot go
-/// wrong.** §3 of `docs/design/authpass-on-the-train.md` defines it as "reads,
+/// **The first verb wired to the library, and the only one that spends
+/// nothing.** It can still be wrong — a grid can misreport — but it cannot cost
+/// anything. §3 of `docs/design/authpass-on-the-train.md` defines it as "reads,
 /// writes nothing", which is what makes it the right one to land first: every
 /// other verb in the plan spends something — a push, a console submission, the
 /// version tag — and none of them can be exercised against a real repository
@@ -75,6 +76,9 @@ class StatusCommand extends Command<void> {
   final String _root;
   final Git Function(String) _openGit;
 
+  /// What `--build` may be spelled as: decimal, optionally signed.
+  static final _digits = RegExp(r'^-?[0-9]+$');
+
   @override
   String get name => 'status';
 
@@ -84,6 +88,20 @@ class StatusCommand extends Command<void> {
 
   @override
   void run() {
+    // **A word after the flags is refused, because `package:args` would
+    // otherwise drop it.** A leaf command is handed its positional arguments
+    // and nothing checks that it read them, so `status --build N --release V
+    // production` printed the whole grid and exited 0 with `production`
+    // ignored — the "flag that would do nothing" the plan refuses, in the one
+    // spelling the parser does not refuse for us.
+    final stray = argResults!.rest;
+    if (stray.isNotEmpty) {
+      usageException(
+        'status takes no arguments besides its flags, and was given '
+        '`${stray.join(' ')}`.',
+      );
+    }
+
     final table = _table();
     final build = _build();
     final release = _release();
@@ -112,7 +130,22 @@ class StatusCommand extends Command<void> {
     // directory, because the launcher sits at the repository root; the two
     // only come apart when a caller passes a root, which is exactly when
     // getting it wrong would be silent.
-    final file = File(p.isAbsolute(path) ? path : p.join(_root, path));
+    //
+    // **The root is a directory, not the repository's top level.** Git walks
+    // upwards from it and this does not, so from a subdirectory the refs are
+    // found and the default table is not. That fails by name, below, rather
+    // than silently — unless the subdirectory holds a table of its own.
+    final resolved = p.isAbsolute(path) ? path : p.join(_root, path);
+    if (Directory(resolved).existsSync()) {
+      // `File.existsSync` is false for a directory, so without this the
+      // message below would tell the operator to write a file where a
+      // directory already is.
+      throw DestinationTableException(
+        '$path is a directory, and the destination table is a file. Name the '
+        'file with --table.',
+      );
+    }
+    final file = File(resolved);
     if (!file.existsSync()) {
       // **Named as a table problem rather than as a usage error**, because the
       // path is usually right and the file is usually missing: the default is
@@ -125,7 +158,18 @@ class StatusCommand extends Command<void> {
         'release goes. Write it there, or name another file with --table.',
       );
     }
-    return DestinationTable.parse(file.readAsStringSync(), source: path);
+    final String yaml;
+    try {
+      yaml = file.readAsStringSync();
+    } on FileSystemException catch (error) {
+      // A file that exists and cannot be read — no permission, or bytes that
+      // are not UTF-8. `cli.dart` maps the table's exception onto a sentence
+      // and knows nothing about `dart:io`'s, so it is translated here.
+      throw DestinationTableException(
+        '$path could not be read: ${error.message}',
+      );
+    }
+    return DestinationTable.parse(yaml, source: path);
   }
 
   int _build() {
@@ -145,7 +189,13 @@ class StatusCommand extends Command<void> {
         '`stable`, which the plan also allows, is not wired yet.)',
       );
     }
-    final build = int.tryParse(declared);
+    // **The digits are checked before they are parsed**, for the reason
+    // `PromotionRecord.parse` gives: `int.tryParse` reads `0x10` as sixteen,
+    // and a grid for build 16 is not what anybody who typed that meant. The
+    // sign and a zero are let through on purpose — the grid refuses a build
+    // below 1 itself, and narrowing them here would make that guard
+    // unreachable from the command line.
+    final build = _digits.hasMatch(declared) ? int.tryParse(declared) : null;
     if (build == null) {
       usageException('--build must be a number, and `$declared` is not one.');
     }

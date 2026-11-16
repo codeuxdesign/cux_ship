@@ -31,8 +31,17 @@ waiting on and a version tag spent early.
 **No global flags yet.** §3 lists `--build`, `--dry-run`, `--yes` and
 `--verbose` as carrying over from the donor, and two of those are about
 spending something. On a verb that writes nothing they would be flags that do
-nothing, which §4's rule refuses rather than drops; they arrive with the verbs
-that act.
+nothing, which the donor's rule (§3 and §4 both apply it) refuses rather than
+drops; they arrive with the verbs that act. An option nobody declared is one
+the parser refuses with a 64, `--store` included — `status` does not narrow.
+
+**`status` refuses what it would otherwise have ignored or misread.** A word
+after the flags (`status … production`), which `package:args` hands a leaf
+command without checking it was read; a `--build 0x10`, which `int.tryParse`
+reads as sixteen; a `--table` that names a directory, which `File.existsSync`
+reports as missing and the missing-table message would answer with "write it
+there"; and a table that exists and cannot be read, whose `FileSystemException`
+the entry point has no clause for.
 
 **The grid `status` prints, which is where §6.2's rule is kept or lost.** One
 row per destination, one column per audience, and in every cell a build number

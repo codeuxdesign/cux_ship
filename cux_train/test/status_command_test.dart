@@ -214,6 +214,114 @@ void main() {
         throwsA(isA<StatusGridException>()),
       );
     });
+
+    test('a build spelled in hex, which int.tryParse would read', () {
+      // `0x10` parses as sixteen, and the grid for build 16 renders without
+      // complaint — every cell `pending`, which is also what a real candidate
+      // with nothing recorded looks like.
+      return expectLater(
+        _status(['--build', '0x10', '--release', '1.9.13']),
+        throwsA(
+          isA<UsageException>().having(
+            (e) => e.message,
+            'message',
+            contains('`0x10` is not one'),
+          ),
+        ),
+      );
+    });
+
+    test('a word after the flags, rather than dropping it', () {
+      // `package:args` hands a leaf command its positional arguments and does
+      // not check that anything read them. Without the guard this prints the
+      // whole grid and exits 0, and `production` did nothing.
+      return expectLater(
+        _status(['--build', '2196', '--release', '1.9.13', 'production']),
+        throwsA(
+          isA<UsageException>().having(
+            (e) => e.message,
+            'message',
+            contains('production'),
+          ),
+        ),
+      );
+    });
+
+    test('--store, because status does not narrow', () {
+      // Not wired on this verb, and the thing to hold is that it is *refused*:
+      // declared and unread, it would be the flag that does nothing. A verb
+      // that learns to narrow replaces this case rather than deleting it.
+      return expectLater(
+        _status([
+          '--build',
+          '2196',
+          '--release',
+          '1.9.13',
+          '--store',
+          'huawei',
+        ]),
+        throwsA(isA<UsageException>()),
+      );
+    });
+
+    test('a table that is a directory, as that and not as missing', () {
+      Directory('${_root.path}/tables').createSync();
+
+      return expectLater(
+        _status([
+          '--build',
+          '2196',
+          '--release',
+          '1.9.13',
+          '--table',
+          'tables',
+        ]),
+        throwsA(
+          isA<DestinationTableException>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains('tables'), contains('is a directory')),
+          ),
+        ),
+      );
+    });
+
+    test('a table that cannot be read, as a table problem', () {
+      // Bytes that are not UTF-8 make `readAsStringSync` throw a
+      // `FileSystemException`, which `cli.dart` has no clause for.
+      File('${_root.path}/$defaultTableFile').writeAsBytesSync([0xff, 0xfe]);
+
+      return expectLater(
+        _status(['--build', '2196', '--release', '1.9.13']),
+        throwsA(
+          isA<DestinationTableException>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains(defaultTableFile), contains('could not be read')),
+          ),
+        ),
+      );
+    });
+
+    test('a ref in a record namespace that is not a record', () {
+      // **Whatever build it was asked about.** The ledger parses every ref
+      // before it filters, so one hand-written `promoted/` tag stops `status`
+      // for every release until it is removed. That is the library's rule
+      // reaching the command line, held here so that a reader who "fixes" it
+      // by skipping has a case to argue with.
+      _tag('promoted/oops', 'by hand');
+
+      return expectLater(
+        _status(['--build', '2196', '--release', '1.9.13']),
+        throwsA(
+          isA<PromotionRecordException>().having(
+            (e) => e.message,
+            'message',
+            contains('promoted/oops'),
+          ),
+        ),
+      );
+    });
   });
 
   group('the command tree', () {

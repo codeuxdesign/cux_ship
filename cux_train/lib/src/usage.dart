@@ -16,10 +16,11 @@ library;
 /// once it depended on `cux_ship` for anything else. It now does depend on it
 /// — `provenance.dart`, for the record writer — and there is nothing to
 /// import: that library's own header says 64 "comes from the argument parser
-/// rather than from any of these", and its exported constants are the five
-/// store-specific codes. So the duplication is not temporary, and it is not a
-/// duplication of anything: both packages take 64 from `sysexits.h`'s
-/// `EX_USAGE`, which is also where `package:args` takes it from, and a
-/// constant in each is the correct amount of coupling to a number that is
-/// fixed by convention.
+/// rather than from any of these", and its exported constants are five codes
+/// for outcomes of its own commands. `cux_ship`'s entry writes the digit with
+/// an `EX_USAGE` comment. So the duplication is not temporary, and it is not
+/// a duplication of anything: both packages take 64 from `sysexits.h`'s
+/// `EX_USAGE` — `package:args` defines no code at all, and its README's
+/// example exits with the same number — and a constant in each is the correct
+/// amount of coupling to a number that is fixed by convention.
 const int usageExit = 64;
