@@ -663,7 +663,21 @@ destinations:
       );
       final report = await _run(console: console, store: ['huawei']);
 
-      expect(report.render(), contains('which nothing here clears'));
+      expect(report.render(), contains('nothing here clears'));
+      // And it does not tell them to run it again in the same breath, which
+      // is the contradiction the sentence exists to avoid.
+      expect(report.render(), isNot(contains('Run beta again')));
+    });
+
+    test('still says run it again when only some are stuck', () async {
+      final report = await _run(
+        console: _ScriptedConsole([ManualAnswer.failed], notes: ['bad apk']),
+        spawns: _Spawns(exitCodes: {'play': 1}),
+        store: ['play', 'huawei'],
+      );
+
+      expect(report.render(), contains('Run beta again'));
+      expect(report.render(), contains('huawei will not settle that way'));
     });
 
     test('a second refusal says the note is the first one', () async {

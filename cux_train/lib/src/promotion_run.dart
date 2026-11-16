@@ -230,14 +230,24 @@ class RunReport {
             step.outcome == StepOutcome.handedOverOverRefusal)
           step.destination,
     ];
+    final count = left == 1 ? '1 destination is' : '$left destinations are';
+    if (stuck.length == left) {
+      // Telling them to run it again here would be the contradiction the
+      // whole paragraph is about: nothing clears a refusal, so every
+      // destination left is one a re-run walks back into unchanged.
+      return '$count still outstanding, and ${left == 1 ? 'it carries' : 'all '
+                    'of them carry'} a refusal that nothing here clears. Running '
+          '${stage.name} again will not settle '
+          '${left == 1 ? 'it' : 'them'} — the binary has to change, or the '
+          'record does.';
+    }
     final advice = stuck.isEmpty
         ? ''
-        : ' ${stuck.join(', ')} ${stuck.length == 1 ? 'carries' : 'carry'} a '
-              'refusal, which nothing here clears, so re-running will not '
-              'settle ${stuck.length == 1 ? 'it' : 'them'}.';
-    return '${left == 1 ? '1 destination is' : '$left destinations are'} '
-        'still outstanding. Run ${stage.name} again — what is recorded is '
-        'skipped, so it picks up where this stopped.$advice';
+        : ' ${stuck.join(', ')} will not settle that way, though: '
+              '${stuck.length == 1 ? 'it carries' : 'they carry'} a refusal '
+              'that nothing here clears.';
+    return '$count still outstanding. Run ${stage.name} again — what is '
+        'recorded is skipped, so it picks up where this stopped.$advice';
   }
 }
 

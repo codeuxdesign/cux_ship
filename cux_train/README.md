@@ -97,6 +97,14 @@ names what is already recorded, walks what is not, and stops at the same
 destinations — which is why there is no `--resume`: resuming is what a re-run
 *is* when the state is a tag.
 
+**A destination that has refused this build says so before it asks.** A
+refusal outranks a later hand-over on purpose, and nothing here clears one, so
+answering `d` over a refusal records the hand-over and still leaves the
+destination unsettled: the report says `handed over, but the refusal stands`
+and the run does not claim the stage is finished. The warning is printed above
+the keys rather than after the answer, because the moment it can change
+anything is while the operator is deciding whether to resubmit.
+
 **A step whose command fails is not recorded, and that is a decision rather
 than an omission.** Writing a `refused/` tag for a script that exited non-zero
 would be the obvious thing, and it would be permanent: nothing here clears a
@@ -158,8 +166,20 @@ checkout for the refs it renders, and takes the root the same way.
 shell.** `sh -c` would buy pipes for free and make every interpolated value
 shell source — a version named `1.9.13; rm -rf ~` would be two commands. The
 split happens before interpolation, too, so a value containing a space lands
-in exactly one argument instead of becoming two. A consumer who wants a
-pipeline writes a script and names the script.
+in exactly one argument instead of becoming two.
+
+**And a template that reads as shell is refused rather than run as not-shell.**
+`make build && ./upload.sh` has no meaning here, and the dangerous half is
+that it has no *error* either: it would run `make` with `build`, `&&` and
+`./upload.sh` as three arguments, and a program that ignores what it does not
+recognise would then be recorded as having done the upload. Unquoted `&&`,
+`||`, `|`, `;`, `>`, `<`, `$`, a backtick, a `*` glob and a leading `~` all
+refuse with the same advice: put it in a script and name the script, or quote
+the character if you meant it literally.
+
+A backslash keeps its character unless there is a reason to escape it, which
+is a deliberate difference from a shell: `C:\tools\ship.exe` stays that path
+instead of becoming `C:toolsship.exe`, while `one\ two` is still one argument.
 
 **The candidate is named, never guessed**, which is why both `--build` and
 `--release` are required rather than defaulted. A build number does not say
