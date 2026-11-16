@@ -17,8 +17,10 @@ $ cux_train status --build 2196 --release 1.9.13
 1.9.13 — build 2196
 
 destination  internal  beta  production
-huawei       pending   n/a   2196 attested
+huawei       pending   n/a   2196 failed
 flathub      n/a       n/a   n/a
+
+huawei production — attempted and refused
 
 $ cux_train ready --build 2196 --release 1.9.13
 1.9.13 — build 2196
@@ -26,8 +28,8 @@ $ cux_train ready --build 2196 --release 1.9.13
 production cannot run: 1 blocker.
 
   huawei turned this build down
-    `refused/huawei/production/v1.9.13+2196` records that huawei was
-    offered build 2196 of 1.9.13 at production and refused it. …
+    `refused/huawei/production/v1.9.13+2196` records that huawei was offered
+    build 2196 of 1.9.13 at production and refused it. …
 ```
 
 **The difference between the two is a picture and an answer.** The grid shows

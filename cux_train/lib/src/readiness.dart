@@ -150,8 +150,11 @@ class Readiness {
                   'refusal is outstanding, not finished, so the destination '
                   'comes up again on every re-run carrying what happened last '
                   'time. Nothing in this tool clears one — if the refusal has '
-                  'since been resolved, the record still says otherwise, and '
-                  'the finish rule still waits on it.',
+                  'since been resolved, the record still says otherwise'
+                  // An after-finish destination is the one the finish rule
+                  // never waited on, and the line under the blockers says so.
+                  '${destination.afterFinish ? '' : ', and the finish rule '
+                            'still waits on it'}.',
             ),
       ],
       acting: acting,
@@ -193,12 +196,16 @@ class Readiness {
   /// too, so printing both would name it twice — once as the problem and once
   /// as a job — and a list of work under the words "cannot run" reads as an
   /// invitation to do it. `status` is where the whole picture lives.
+  ///
+  /// Nor does an answer with nothing outstanding: the verdict has already
+  /// said every destination is recorded, and a heading over no rows is a
+  /// colon with nothing after it.
   String render() {
     final blocks = <String>[
       '$version — build $candidate',
       _verdict(),
       if (blockers.isNotEmpty) _blockers(),
-      if (blockers.isEmpty) _work(),
+      if (blockers.isEmpty && outstanding.isNotEmpty) _work(),
       _finish(),
       _notChecked(),
     ];
@@ -212,9 +219,10 @@ class Readiness {
           '$count ${count == 1 ? 'blocker' : 'blockers'}.';
     }
     if (outstanding.isEmpty) {
-      return 'production could run, and every destination it acts on is '
-          'already recorded for this build — all that is left is the version '
-          'tag.';
+      return _wrap(
+        'production could run, and every destination it acts on is already '
+        'recorded for this build — all that is left is the version tag.',
+      );
     }
     return 'production could run.';
   }

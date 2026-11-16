@@ -81,6 +81,9 @@ void main() {
         _flat(readiness.render()),
         contains('all that is left is the version tag'),
       );
+      // The verdict has said it; a heading over no rows would say "it would
+      // act on 0 of 3" and end in a colon.
+      expect(_flat(readiness.render()), isNot(contains('it would act on')));
     });
 
     test('is no when a destination refused this build', () {
@@ -208,13 +211,45 @@ destinations:
       expect(_flat(report), isNot(contains('it would act on')));
     });
 
-    test('wraps a blocker so a narrow terminal keeps the shape', () {
-      final report = _readiness([
-        'refused/huawei/production/v1.9.13+2196',
-      ]).render();
+    test('does not say finish waits on a refusal it never waited on', () {
+      // `fdroid` is after-finish, so the finish rule does not count it. A
+      // blocker that said the rule "still waits on it" would be contradicted
+      // by the "fdroid is not counted" two lines further down.
+      final afterFinish = _readiness([
+        'refused/fdroid/production/v1.9.13+2196',
+      ]);
+      final counted = _readiness(['refused/huawei/production/v1.9.13+2196']);
 
-      for (final line in report.split('\n')) {
-        expect(line.length, lessThanOrEqualTo(78), reason: line);
+      expect(afterFinish.couldRun, isFalse);
+      expect(
+        _flat(afterFinish.blockers.single.detail),
+        isNot(contains('finish rule')),
+      );
+      expect(_flat(afterFinish.render()), contains('fdroid is not counted'));
+      expect(
+        _flat(counted.blockers.single.detail),
+        contains('the finish rule still waits on it.'),
+      );
+    });
+
+    test('wraps every shape of answer so a narrow terminal keeps it', () {
+      // All three verdicts, because each prints prose the others do not: the
+      // blocker's paragraph, and the sentence for a release with nothing left
+      // but the tag.
+      final reports = [
+        _readiness([]),
+        _readiness(['refused/huawei/production/v1.9.13+2196']),
+        _readiness([
+          'promoted/play/production/v1.9.13+2196',
+          'promoted/huawei/production/v1.9.13+2196',
+          'promoted/fdroid/production/v1.9.13+2196',
+        ]),
+      ];
+
+      for (final report in reports) {
+        for (final line in report.render().split('\n')) {
+          expect(line.length, lessThanOrEqualTo(78), reason: line);
+        }
       }
     });
   });

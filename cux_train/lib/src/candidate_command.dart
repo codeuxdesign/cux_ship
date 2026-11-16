@@ -10,10 +10,11 @@
 /// would name a release nothing had verified. [ledgerFor] is the one call, so
 /// there is one place for that to be right.
 ///
-/// **It is a base class and not a mixin**, because the three options have to be
-/// declared in a constructor body: `Command.argParser` is built before the
-/// subclass's constructor runs, and a mixin cannot reach it at the moment the
-/// parser is still empty.
+/// **It is a base class and not a mixin**, because the three options are
+/// declared in a constructor body and a mixin has none. A mixin could offer a
+/// method that adds them, and then every verb's constructor would have to
+/// remember to call it — a verb that forgot would parse, and refuse `--build`
+/// as an option nobody declared.
 library;
 
 import 'dart:io';

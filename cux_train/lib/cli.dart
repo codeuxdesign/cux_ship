@@ -66,9 +66,9 @@ Future<void> main(List<String> args) async {
     exitCode = 1;
   } on StoreSelectionException catch (e) {
     // A table that declares nothing at the stage a verb is about. It reaches
-    // here from `ready` without `--store` existing yet, which is the case the
-    // flag's own file did not anticipate: its message is written for a
-    // narrowed invocation, and an unnarrowed one meets it too.
+    // here from `ready` without `--store` existing yet: `resolveStores` is
+    // what every verb asks, narrowed or not, and it has a sentence of its own
+    // for the unnarrowed run.
     stderr.writeln('cux_train: $e');
     exitCode = 1;
   } on ReadinessException catch (e) {
