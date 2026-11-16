@@ -64,6 +64,24 @@ Future<void> main(List<String> args) async {
   } on StatusGridException catch (e) {
     stderr.writeln('cux_train: $e');
     exitCode = 1;
+  } on StoreSelectionException catch (e) {
+    // A table that declares nothing at the stage a verb is about. It reaches
+    // here from `ready` without `--store` existing yet, which is the case the
+    // flag's own file did not anticipate: its message is written for a
+    // narrowed invocation, and an unnarrowed one meets it too.
+    stderr.writeln('cux_train: $e');
+    exitCode = 1;
+  } on ReadinessException catch (e) {
+    stderr.writeln('cux_train: $e');
+    exitCode = 1;
+  } on ProductionNotReady catch (e) {
+    // **The one clause that is not an error.** `ready` has already written its
+    // report to stdout; this is the verdict reaching the exit code, and the
+    // line on stderr is for the reader of a log whose stdout went elsewhere.
+    // It gets a code of its own so that `ready && production` can tell "not
+    // yet" from "this tool broke" — see [notReadyExit].
+    stderr.writeln('cux_train: ${e.message}');
+    exitCode = notReadyExit;
   } on ReleaseException catch (e) {
     // Git ran and said no — not a repository, most often. It arrives from
     // `cux_ship`, because that is whose `Git` reads the refs. A `git` that is

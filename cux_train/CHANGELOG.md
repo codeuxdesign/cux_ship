@@ -4,6 +4,34 @@
 
 ### Added
 
+**`cux_train ready`, which answers rather than reports.** "Could `production`
+run for this candidate, and what is in its way" — §3's verb, with the half of
+it that needs nothing but the destination table and the promotion refs. It
+prints what `production` would act on, who acts at each one, and what the
+version tag is still waiting for; a destination that refused this build is a
+blocker rather than a row, because a resumable `production` walks back into a
+refusal instead of stopping at it, and nothing else in the tool says so before
+the run starts.
+
+**An exit code for a release that is not ready.** `notReadyExit`, 2, so that
+`train ready && train production` can tell "not yet" from "this tool broke".
+A blocked answer still writes its whole report to stdout first: the run an
+operator most needs the detail of is the one that says no.
+
+**What `ready` does not check, printed on every run.** §3's verb is four
+bullets and this is one of them — the artifact for the candidate at each
+destination, the local macOS build and the `pre-release` hook are reads this
+package does not have yet. An operator who reads "production could run" as the
+whole check is the failure the verb exists to prevent, so the output says what
+it did not look at even when the answer is yes.
+
+**`CandidateCommand`, the shared base for a verb about one build.** `--build`,
+`--release`, `--table`, the stray-argument refusal, the hex-build refusal and
+the table lookup move there from `status`. The one that matters is the ledger:
+it is keyed on the build *and* the version, and a second verb building its own
+would have reopened the hole the previous release closed — the grid would still
+render, and the header would still name a release nothing had verified.
+
 **`cux_train status`, which is the first verb that runs.** A `CommandRunner`
 tree in place of the hand-rolled help-or-refuse entry, and one command on it:
 read the destination table, read the promotion refs out of the checkout, build

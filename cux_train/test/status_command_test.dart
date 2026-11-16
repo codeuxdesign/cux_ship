@@ -13,6 +13,9 @@ import 'dart:io';
 import 'package:args/command_runner.dart';
 import 'package:cux_train/cux_train.dart';
 import 'package:cux_train/runner.dart';
+// `defaultTableFile` and `promotionRefs` moved here when `ready` arrived and
+// the two verbs' shared plumbing was lifted out of `status`.
+import 'package:cux_train/src/candidate_command.dart';
 import 'package:cux_train/src/status_command.dart';
 import 'package:test/test.dart';
 

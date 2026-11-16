@@ -113,12 +113,29 @@ void main() {
       // sentence. This is the move. The claim worth keeping is the same one
       // inverted: the usage lists what can actually be run, so that an
       // operator reading it is not offered a verb that is still a plan.
+      // **It reads the command list rather than searching the whole text**,
+      // and the second verb is what forced that. `ready`'s one-line
+      // description says what it is about — whether `production` could run —
+      // so a page that legitimately mentions an unwired verb now exists, and
+      // a `isNot(contains('production'))` over the whole of it would fail on
+      // a correct page. The claim is about what is *offered*, which is the
+      // list and not the prose.
       final result = _run(['help']);
+      final lines = (result.stdout as String).split('\n');
+      final heading = lines.indexWhere(
+        (line) => line.trim() == 'Available commands:',
+      );
+      expect(heading, isNot(-1), reason: 'the usage lists its commands');
+      final offered = lines
+          .skip(heading + 1)
+          .takeWhile((line) => line.startsWith('  '))
+          .map((line) => line.trim().split(RegExp(r'\s+')).first)
+          .toSet();
 
-      expect(result.stdout, contains('status'));
-      for (final planned in ['ready', 'internal', 'beta', 'production']) {
+      expect(offered, containsAll(['status', 'ready']));
+      for (final planned in ['internal', 'beta', 'production']) {
         expect(
-          result.stdout,
+          offered,
           isNot(contains(planned)),
           reason: '`$planned` is in §3 of the plan and is not wired yet',
         );

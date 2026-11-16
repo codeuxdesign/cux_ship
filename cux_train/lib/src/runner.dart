@@ -27,6 +27,7 @@ library;
 
 import 'package:args/command_runner.dart';
 
+import 'ready_command.dart';
 import 'status_command.dart';
 
 /// Builds the command tree.
@@ -34,10 +35,13 @@ import 'status_command.dart';
 /// [output] is where a verb's result goes, and defaults to `stdout` — a test
 /// passes a buffer. Errors never come through here: they are exceptions, and
 /// `cli.dart` is the only thing that decides what a process does with one.
-CommandRunner<void> buildRunner({StringSink? output}) => CommandRunner<void>(
-  'cux_train',
-  // **This line is asserted by `cli_library_entry_test.dart`**, which is
-  // how a consumer's launcher proves it reached this program rather than
-  // some other library that happened to have a `main`.
-  'cux_train — order the steps of a release.',
-)..addCommand(StatusCommand(output: output));
+CommandRunner<void> buildRunner({StringSink? output}) =>
+    CommandRunner<void>(
+        'cux_train',
+        // **This line is asserted by `cli_library_entry_test.dart`**, which is
+        // how a consumer's launcher proves it reached this program rather than
+        // some other library that happened to have a `main`.
+        'cux_train — order the steps of a release.',
+      )
+      ..addCommand(StatusCommand(output: output))
+      ..addCommand(ReadyCommand(output: output));
