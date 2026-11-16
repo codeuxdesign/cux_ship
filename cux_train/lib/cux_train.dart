@@ -4,7 +4,6 @@
 /// `cli.dart`.
 library;
 
-export 'src/beta_command.dart' show PromotionIncomplete;
 export 'src/destinations.dart';
 export 'src/evidence.dart';
 export 'src/operator_console.dart';

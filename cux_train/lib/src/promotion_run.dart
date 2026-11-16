@@ -140,6 +140,7 @@ class RunReport {
     required List<StepReport> steps,
     required List<String> noStageHere,
     required this.dryRun,
+    this.pass,
   }) : steps = List.unmodifiable(steps),
        noStageHere = List.unmodifiable(noStageHere);
 
@@ -150,6 +151,14 @@ class RunReport {
 
   /// Destinations the selection named that have no step at this stage.
   final List<String> noStageHere;
+
+  /// Which pass of the stage this is, where there is more than one.
+  ///
+  /// **`production` walks its stage twice**, once before the version tag and
+  /// once after it for the destinations ordered that way. Both passes printed
+  /// the same header, so a finished release ended with two blocks that each
+  /// read as the whole run and each said everything was recorded.
+  final String? pass;
 
   final bool dryRun;
 
@@ -180,6 +189,7 @@ class RunReport {
     final lines = <String>[
       '',
       '$version — build $build — ${stage.name}'
+          '${pass == null ? '' : ' — $pass'}'
           '${dryRun ? ' — dry run, nothing was recorded' : ''}',
       '',
     ];
@@ -196,9 +206,18 @@ class RunReport {
       );
     }
     if (noStageHere.isNotEmpty) {
+      // **"Audience" is §3's word for `beta` and is wrong anywhere else.**
+      // Sixteen of AuthPass's nineteen rows have no beta audience, and the
+      // plan prints exactly that. A `production` row with no step is not a
+      // destination without an audience — `web` reaches users at `internal`
+      // and has nothing left to do at production — so it says what is true of
+      // both: there is no step here.
+      final why = stage == Stage.beta
+          ? 'no beta audience'
+          : 'no ${stage.name} step';
       lines
         ..add('')
-        ..add('  no ${stage.name} audience: ${noStageHere.join(', ')}');
+        ..add('  $why: ${noStageHere.join(', ')}');
     }
     lines
       ..add('')
@@ -268,6 +287,7 @@ class PromotionRun {
     this.yes = false,
     StepSpawn? spawn,
     this.push = true,
+    this.pass,
   }) : spawn = spawn ?? spawnInheritingStdio;
 
   final StoreSelection selection;
@@ -291,6 +311,9 @@ class PromotionRun {
 
   /// Whether a written record is pushed. For tests, as on [writePromotion].
   final bool push;
+
+  /// What to call this pass in the report, where a verb makes more than one.
+  final String? pass;
 
   /// Performs the stage, returning what happened.
   Future<RunReport> perform() async {
@@ -320,6 +343,7 @@ class PromotionRun {
         steps: const [],
         noStageHere: [for (final it in selection.skipped) it.name],
         dryRun: dryRun,
+        pass: pass,
       );
     }
 
@@ -357,6 +381,7 @@ class PromotionRun {
       steps: steps,
       noStageHere: [for (final it in selection.skipped) it.name],
       dryRun: dryRun,
+      pass: pass,
     );
   }
 
@@ -674,4 +699,25 @@ class PromotionRunException implements Exception {
 
   @override
   String toString() => message;
+}
+
+/// Thrown when a run leaves something outstanding, so `cli.dart` can map it.
+///
+/// It carries the report rather than a sentence because the report has already
+/// been printed: this exists to pick an exit code, and inventing a second
+/// description of the same run is how the two drift apart.
+///
+/// **It lives beside the run rather than beside a verb**, which is not where
+/// it started: it was declared in `beta_command.dart` while `beta` was the
+/// only thing that could raise it, and `production` raising the same thing is
+/// what moved it.
+class PromotionIncomplete implements Exception {
+  PromotionIncomplete(this.report);
+
+  final RunReport report;
+
+  @override
+  String toString() =>
+      '${report.outstanding.length} destination(s) outstanding at '
+      '${report.stage.name}';
 }

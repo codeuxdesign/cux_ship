@@ -28,6 +28,7 @@ library;
 import 'package:args/command_runner.dart';
 
 import 'beta_command.dart';
+import 'production_command.dart';
 import 'ready_command.dart';
 import 'status_command.dart';
 
@@ -46,4 +47,5 @@ CommandRunner<void> buildRunner({StringSink? output}) =>
       )
       ..addCommand(StatusCommand(output: output))
       ..addCommand(ReadyCommand(output: output))
-      ..addCommand(BetaCommand(output: output));
+      ..addCommand(BetaCommand(output: output))
+      ..addCommand(ProductionCommand(output: output));

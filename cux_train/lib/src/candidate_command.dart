@@ -82,6 +82,15 @@ abstract class CandidateCommand extends Command<void> {
 
   final Git Function(String) _openGit;
 
+  /// The git handle for [directory], through whatever this command was given.
+  ///
+  /// **Everything that touches git goes through here**, because the injection
+  /// is only worth having if it covers the whole of it. `ledgerFor` used this
+  /// while the verbs that *write* constructed `Git(root)` themselves, so a
+  /// caller substituting a handle got the reads and not the writes — a split
+  /// that is invisible until something relies on it.
+  Git gitAt(String directory) => _openGit(directory);
+
   /// What `--build` may be spelled as: decimal, optionally signed.
   static final _digits = RegExp(r'^-?[0-9]+$');
 

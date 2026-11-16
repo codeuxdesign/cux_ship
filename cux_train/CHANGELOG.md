@@ -4,6 +4,55 @@
 
 ### Added
 
+**`cux_train production`, the verb that finishes a release.** The production
+stage walked as `beta` walks its own, then §3 step 5: the version tag is spent
+once every declared destination with a production step is recorded, and the
+destinations declared `after-finish` are walked afterwards in a second pass
+the report labels. They are not touched while the tag is held, because
+`fdroid-vX.Y.Z` pushed early would annotate a release that may never be
+finished.
+
+**The finish step is recorded, so it is spent once.** It writes
+`finished/vX.Y.Z+N` and a later run that finds that ref says so rather than
+spawning the command again. Until this the one irreversible step in the
+package was the only one with no record, and a `production` re-run on a
+finished release tagged a second commit — or failed on the taken name and
+reported that the version tag was not spent when it had been.
+
+**`--dry-run` reaches the end of the release again.** Recording nothing meant
+the finish rule always said the tag was held, so the checklist stopped before
+"create tag" and before every after-finish destination — which is most of what
+§8 step 1 wants a dry run for. A dry run now subtracts what it has just said
+it would do; a destination it would not reach still holds the tag.
+
+**Everything the second half needs is resolved before the first half spends.**
+A bad placeholder in an after-finish command, or in the `finish` template, was
+refused only after every store had been handed over.
+
+**A top-level `finish:` step in the destination table.** The command that
+spends the version tag, spawned like any other. Composing `v{version}` here
+would be inventing the consumer's convention and being silently wrong wherever
+they spell it differently, so a table without one says so instead of treating
+a fully recorded release as finished, and a `finish` that is `manual` or
+`none` is refused when the table is read.
+
+**The finish rule is asked of a freshly read ledger**, because the walk above
+it has just written records and the question is what the repository holds now.
+
+**`PromotingCommand`, extracted on the second verb that acts** — `--store`,
+`--dry-run`, `--yes`, `--uploaded-tag` and the construction of a promotion
+run. The walk itself is deliberately not hoisted: `production` making two
+passes around the version tag is the one interesting difference between the
+two verbs, and a template method with hooks would make it the hardest thing
+here to read. `PromotionIncomplete` moved from `beta_command.dart` to
+`promotion_run.dart` for the same reason it was declared there: it is about a
+run, and now two verbs raise it.
+
+**A destination with no step at a stage is no longer called an audience
+everywhere.** "No beta audience" is §3's wording for `beta`, where sixteen of
+nineteen rows have none; at production it said something untrue of `web`,
+which reaches users at `internal` and has nothing left to do later.
+
 **`cux_train beta`, the first verb that spends something.** §3's beta stage,
 walked once: every destination with a beta step is performed and recorded —
 `ship` and `run` by spawning the command the table declares, `manual` through
