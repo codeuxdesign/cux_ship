@@ -214,6 +214,124 @@ void main() {
     });
   });
 
+  group('--dry-run is the whole checklist', () {
+    test('reaches the finish step on a fresh candidate', () async {
+      // §8 step 1: the dry run *is* the README checklist for this build. It
+      // recorded nothing, so the finish rule said the tag was held and the
+      // run stopped — leaving the checklist without "create tag" and without
+      // F-Droid, which is the end of the release.
+      await expectLater(
+        _production([
+          '--build',
+          '2196',
+          '--release',
+          '1.9.13',
+          '--dry-run',
+        ], console: _AlwaysDone()),
+        throwsA(isA<PromotionIncomplete>()),
+      );
+
+      expect(_out.toString(), contains('would finish  release-finish 1.9.13'));
+    });
+
+    test('and reaches the destinations ordered after it', () async {
+      await expectLater(
+        _production([
+          '--build',
+          '2196',
+          '--release',
+          '1.9.13',
+          '--dry-run',
+        ], console: _AlwaysDone()),
+        throwsA(isA<PromotionIncomplete>()),
+      );
+
+      expect(_out.toString(), contains('fdroid'));
+      expect(_out.toString(), contains('after the version tag'));
+    });
+
+    test('and still spends and records nothing', () async {
+      await expectLater(
+        _production([
+          '--build',
+          '2196',
+          '--release',
+          '1.9.13',
+          '--dry-run',
+        ], console: _AlwaysDone()),
+        throwsA(isA<PromotionIncomplete>()),
+      );
+
+      expect(_calls, isEmpty);
+      expect(_tags('promoted/*'), isEmpty);
+      expect(_tags('finished/*'), isEmpty);
+    });
+
+    test('a destination it would not reach still holds the tag', () async {
+      // The subtraction is "what this run said it would do", not "everything".
+      // `--store play` leaves `huawei` unrecorded and unprinted.
+      await expectLater(
+        _production([
+          '--build',
+          '2196',
+          '--release',
+          '1.9.13',
+          '--dry-run',
+          '--store',
+          'play',
+        ]),
+        throwsA(isA<PromotionIncomplete>()),
+      );
+
+      expect(_out.toString(), contains('The version tag is not spent'));
+      expect(_out.toString(), isNot(contains('would finish')));
+    });
+  });
+
+  group('before anything is spent', () {
+    test(
+      'a bad command on an after-finish destination is refused first',
+      () async {
+        // It was found after every store had been handed over — the refusal
+        // arriving once it could no longer save anything.
+        _writeTable(
+          _table.replaceFirst('fdroid-tag {version}', 'ft {artifact}'),
+        );
+
+        await expectLater(
+          _production([
+            '--build',
+            '2196',
+            '--release',
+            '1.9.13',
+          ], console: _AlwaysDone()),
+          throwsA(isA<StepCommandException>()),
+        );
+
+        expect(_calls, isEmpty);
+        expect(_tags('promoted/*'), isEmpty);
+      },
+    );
+
+    test('a bad finish template is refused first', () async {
+      _writeTable(
+        _table.replaceFirst('release-finish {version}', 'rf {destination}'),
+      );
+
+      await expectLater(
+        _production([
+          '--build',
+          '2196',
+          '--release',
+          '1.9.13',
+        ], console: _AlwaysDone()),
+        throwsA(isA<StepCommandException>()),
+      );
+
+      expect(_calls, isEmpty);
+    });
+  });
+
   group('the order around the tag', () {
     test('an after-finish destination runs after the finish step', () async {
       await _production([
@@ -257,6 +375,75 @@ void main() {
       );
 
       expect(_calls.map((it) => it.first), isNot(contains('fdroid-tag')));
+    });
+  });
+
+  group('the version tag is spent once', () {
+    test('a re-run of a finished release does not spend it again', () async {
+      // **The worst thing this verb could do, and it did it.** The finish was
+      // the only step in the package with no record, so every later run
+      // spawned it again — five times over five invocations in a scratch
+      // repository. With a real `cux_ship release finish` that is a second
+      // commit tagged, or a refusal on the taken name reported as "the
+      // version tag was not spent" when it had been.
+      await _production([
+        '--build',
+        '2196',
+        '--release',
+        '1.9.13',
+      ], console: _AlwaysDone());
+      final first = _calls.where((it) => it.first == 'release-finish').length;
+      _calls.clear();
+
+      await _production([
+        '--build',
+        '2196',
+        '--release',
+        '1.9.13',
+      ], console: _AlwaysDone());
+
+      expect(first, 1);
+      expect(
+        _calls.where((it) => it.first == 'release-finish'),
+        isEmpty,
+        reason: 'the second run finds the finish recorded',
+      );
+    });
+
+    test('and says which ref records it', () async {
+      await _production([
+        '--build',
+        '2196',
+        '--release',
+        '1.9.13',
+      ], console: _AlwaysDone());
+      _out.clear();
+
+      await _production([
+        '--build',
+        '2196',
+        '--release',
+        '1.9.13',
+      ], console: _AlwaysDone());
+
+      expect(_out.toString(), contains('already finished'));
+      expect(_out.toString(), contains('finished/v1.9.13+2196'));
+    });
+
+    test('the record is written only after the command succeeds', () async {
+      _writeTable(_table.replaceFirst('release-finish {version}', 'boom'));
+
+      await expectLater(
+        _production([
+          '--build',
+          '2196',
+          '--release',
+          '1.9.13',
+        ], console: _AlwaysDone()),
+        throwsA(isA<PromotionRunException>()),
+      );
+
+      expect(_tags('finished/*'), isEmpty);
     });
   });
 
@@ -417,10 +604,14 @@ void main() {
       expect(_calls, isEmpty);
     });
 
-    test('a dry run with work left spends nothing, and stops at the held '
+    test('a dry run that would not reach a destination stops at the held '
         'tag', () async {
-      // Nothing is recorded by a dry run, so the rule is not met and the
-      // finish step is never reached — it is not printed either.
+      // **This case used to be the unnarrowed run**, written when a dry run
+      // could never reach the finish because it records nothing. That made
+      // the checklist stop before "create tag", which §8 step 1 is the whole
+      // reason for — so the rule now subtracts what the dry run said it would
+      // do. What still holds the tag is a destination it did not print, and
+      // narrowing is how you get one.
       await expectLater(
         _production([
           '--build',
@@ -428,6 +619,8 @@ void main() {
           '--release',
           '1.9.13',
           '--dry-run',
+          '--store',
+          'play',
         ], console: _AlwaysDone()),
         throwsA(isA<PromotionIncomplete>()),
       );

@@ -36,6 +36,58 @@ import 'promotion_record.dart';
 export 'package:cux_ship/provenance.dart'
     show Git, UploadCollisionException, UploadRecordResult;
 
+/// The ref recording that the version tag was spent for this build.
+///
+/// **A namespace of its own, not a `promoted/` record.** The finish is not a
+/// promotion to a destination: it has no destination, `finishRule` iterates
+/// the table and would never see it, and `Readiness.of` refuses a record
+/// naming something the table does not declare — so filing it under
+/// `promoted/` would mean reserving a destination name and teaching three
+/// other places to ignore it.
+String finishedRef({required String version, required int build}) =>
+    'finished/v$version+$build';
+
+/// Whether [ref] is already a tag in the repository [git] is open on.
+bool alreadyTagged(Git git, String ref) => taggedCommit(git, ref) != null;
+
+/// Records that the finish step ran for this build.
+///
+/// **The one irreversible step was the only one with no record**, so a
+/// `production` re-run on a finished release spent the version tag again —
+/// which with a real `cux_ship release finish` means tagging a second commit,
+/// or failing because the name is taken and reporting that the tag was not
+/// spent when it had been. Every other step in this package is skipped
+/// because a ref says it happened; this makes the finish one of them.
+UploadRecordResult writeFinish({
+  required Git git,
+  required String version,
+  required int build,
+  required String uploadedTag,
+  bool push = true,
+  bool dryRun = false,
+}) {
+  final commit = taggedCommit(git, uploadedTag);
+  if (commit == null) {
+    throw PromotionWriteException(
+      'No tag `$uploadedTag` in this checkout, so there is no commit to '
+      'record the finish at.',
+    );
+  }
+  return recordUpload(
+    git,
+    UploadRecord(
+      name: finishedRef(version: version, build: build),
+      commit: commit,
+      annotation: 'build $build of $version\nversion tag spent',
+    ),
+    push: push,
+    dryRun: dryRun,
+    // As for a promotion: the tag has already been written by the time this
+    // runs, and failing the run here would not take it back.
+    failedPushIsFatal: false,
+  );
+}
+
 /// A record this file would not write, and why.
 class PromotionWriteException implements Exception {
   PromotionWriteException(this.message);

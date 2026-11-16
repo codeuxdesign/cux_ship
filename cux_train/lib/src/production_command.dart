@@ -29,6 +29,7 @@ import 'destinations.dart';
 import 'promoting_command.dart';
 import 'promotion_ledger.dart';
 import 'promotion_run.dart';
+import 'record_writer.dart';
 import 'step_command.dart';
 import 'store_selection.dart';
 
@@ -61,6 +62,18 @@ class ProductionCommand extends PromotingCommand {
     final selection = selectionFor(table, Stage.production);
     final before = _split(selection, afterFinish: false);
     final after = _split(selection, afterFinish: true);
+    final finish = table.finish;
+
+    // **Everything the second half needs is resolved before the first half
+    // spends anything.** The run already preflights the commands it is about
+    // to spawn; what it did not cover is the commands it will spawn *later*.
+    // A `{artifact}` in the `fdroid` row, or in the `finish` template, was
+    // found after every store had been handed over — the refusal arriving
+    // once it could no longer save anything.
+    final finishArgv = finish == null
+        ? null
+        : _finishArgv(finish, version, build);
+    _resolveAfter(after, version: version, build: build);
 
     final report = await runFor(
       selection: before,
@@ -69,21 +82,24 @@ class ProductionCommand extends PromotingCommand {
       version: version,
       uploadedTag: uploadedTag,
     ).perform();
-    output.write(report.render());
+    // A narrowed run that covers nothing before the tag — `--store fdroid` —
+    // would otherwise print an empty block saying every destination it covers
+    // is recorded, about a destination it has not reached.
+    if (report.steps.isNotEmpty || before.skipped.isNotEmpty) {
+      output.write(report.render());
+    }
 
     // **The rule is asked of a freshly read ledger**, because the walk above
     // has just written records and the question is what the repository holds
     // now — not what it held when this process started.
-    final rule = finishRule(
-      table: table,
-      ledger: ledgerFor(build: build, version: version),
-    );
-    if (!rule.isSatisfied) {
-      output.write(_held(rule, narrowed: !selection.coversEveryDestination));
+    final ledger = ledgerFor(build: build, version: version);
+    final rule = finishRule(table: table, ledger: ledger);
+    final held = _stillHeld(rule, report);
+    if (held.isNotEmpty) {
+      output.write(_held(held, narrowed: !selection.coversEveryDestination));
       throw PromotionIncomplete(report);
     }
 
-    final finish = table.finish;
     if (finish == null) {
       // Not a failure of the release: every destination is recorded, and the
       // table simply never said how this project writes its version tag.
@@ -95,7 +111,12 @@ class ProductionCommand extends PromotingCommand {
       throw PromotionIncomplete(report);
     }
 
-    await _finish(finish, version: version, build: build);
+    await _finish(
+      finishArgv!,
+      version: version,
+      build: build,
+      uploadedTag: uploadedTag,
+    );
 
     if (after.acting.isNotEmpty) {
       final afterReport = await runFor(
@@ -130,30 +151,97 @@ class ProductionCommand extends PromotingCommand {
     coversEveryDestination: selection.coversEveryDestination,
   );
 
-  /// Spends the version tag.
-  Future<void> _finish(
-    DestinationStep finish, {
+  /// The finish command, resolved.
+  List<String> _finishArgv(DestinationStep finish, String version, int build) =>
+      resolveStepCommand(
+        finish.command!,
+        values: {
+          'version': version,
+          'build': '$build',
+          // **The two a destination has and a finish does not.** A finish is
+          // not about one destination, so there is no honest value for
+          // either — and a template using one is a table saying something it
+          // cannot mean. Leaving them out makes that a refusal naming the two
+          // names it does have, rather than a tag with the word `finish` in
+          // it.
+        },
+        where: '`finish`.command',
+      );
+
+  /// Resolves the commands the after-finish pass will need, and discards them.
+  ///
+  /// Called for its refusals. The pass resolves them again when it runs, which
+  /// is cheap and keeps the run the single place that decides what to spawn.
+  void _resolveAfter(
+    StoreSelection after, {
     required String version,
     required int build,
-  }) async {
-    final argv = resolveStepCommand(
-      finish.command!,
-      values: {
-        'version': version,
-        'build': '$build',
-        // **The two a destination has and a finish does not.** A finish is
-        // not about one destination, so there is no honest value for either —
-        // and a template using one is a table saying something it cannot
-        // mean. Leaving them out makes that a refusal naming the two names it
-        // does have, rather than a tag with the word `finish` in it.
-      },
-      where: '`finish`.command',
-    );
+  }) {
+    for (final destination in after.acting) {
+      final step = destination.stepAt(Stage.production);
+      if (step.kind.spawns) {
+        resolveStepCommand(
+          step.command!,
+          values: {
+            'version': version,
+            'build': '$build',
+            'destination': destination.name,
+            'stage': Stage.production.name,
+          },
+          where: '${destination.name}.production.command',
+        );
+      }
+    }
+  }
 
+  /// What is still holding the tag, given what this run did or would do.
+  ///
+  /// **A dry run records nothing, so the rule would always say the tag is
+  /// held** — and `production --dry-run` on a fresh candidate then stopped
+  /// before the finish step and before every after-finish destination. §8
+  /// step 1 is explicit that the dry run *is* the README checklist for this
+  /// build, and a checklist missing "create tag" and F-Droid is missing the
+  /// end of the release. So a dry run subtracts what it has just said it
+  /// would do, and goes on to print the rest.
+  List<Destination> _stillHeld(FinishRule rule, RunReport report) {
+    if (!dryRun) {
+      return rule.waitingOn;
+    }
+    final wouldRecord = {
+      for (final step in report.steps)
+        if (step.outcome == StepOutcome.wouldAct) step.destination,
+    };
+    return [
+      for (final destination in rule.waitingOn)
+        if (!wouldRecord.contains(destination.name)) destination,
+    ];
+  }
+
+  /// Spends the version tag, and records that it did.
+  Future<void> _finish(
+    List<String> argv, {
+    required String version,
+    required int build,
+    required String uploadedTag,
+  }) async {
     if (dryRun) {
       output.write('\nwould finish  ${argv.join(' ')}\n');
       return;
     }
+
+    // **Skipped because a ref says it happened, exactly like every other
+    // step.** Without this the one irreversible thing in the package was the
+    // only thing with no record: a re-run of a finished release spent the tag
+    // again, which with a real `release finish` either tags a second commit
+    // or fails on the taken name and then reports that the tag was not spent
+    // when it had been.
+    final git = gitAt(root);
+    final ref = finishedRef(version: version, build: build);
+    if (alreadyTagged(git, ref)) {
+      output.write('\nalready finished: `$ref` records the version tag.\n');
+      return;
+    }
+
     output.write('\nfinish  ${argv.join(' ')}\n');
     final int code;
     try {
@@ -180,12 +268,25 @@ class ProductionCommand extends PromotingCommand {
         'and running production again resumes here.',
       );
     }
+
+    final result = writeFinish(
+      git: git,
+      version: version,
+      build: build,
+      uploadedTag: uploadedTag,
+      push: push,
+    );
+    output.write('  recorded $ref');
+    if (result == UploadRecordResult.writtenNotPushed) {
+      output.write(' (written here, not pushed — push it when you can)');
+    }
+    output.write('\n');
   }
 
   /// What is holding the version tag.
-  String _held(FinishRule rule, {required bool narrowed}) {
-    final names = rule.waitingOn.map((it) => it.name).join(', ');
-    final count = rule.waitingOn.length;
+  String _held(List<Destination> waitingOn, {required bool narrowed}) {
+    final names = waitingOn.map((it) => it.name).join(', ');
+    final count = waitingOn.length;
     return '\nThe version tag is not spent: '
         '${count == 1 ? '1 destination is' : '$count destinations are'} not '
         'recorded at production — $names.'

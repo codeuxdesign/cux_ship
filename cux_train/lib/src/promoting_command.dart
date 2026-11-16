@@ -16,8 +16,6 @@
 /// `run`, and this supplies the parts.
 library;
 
-import 'package:cux_ship/provenance.dart' show Git;
-
 import 'candidate_command.dart';
 import 'destinations.dart';
 import 'operator_console.dart';
@@ -123,7 +121,7 @@ abstract class PromotingCommand extends CandidateCommand {
     version: version,
     root: root,
     uploadedTag: uploadedTag,
-    git: Git(root),
+    git: gitAt(root),
     output: output,
     console: console ?? StdioConsole(output: output),
     dryRun: dryRun,

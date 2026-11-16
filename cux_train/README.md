@@ -200,6 +200,27 @@ silently wrong wherever they spell it differently. A table with no `finish`
 says so rather than treating a fully recorded release as finished, and a
 `finish` that is `manual` or `none` is refused when the table is read.
 
+**The finish is recorded, like every other step.** It writes
+`finished/vX.Y.Z+N`, and a later run that finds it says so and does not spawn
+the command again. Without that the one irreversible step was the only one
+with no record, so a re-run of a finished release spent the tag a second time.
+
+**`--dry-run` reaches the end of the release.** It records nothing, so the
+finish rule would always say the tag is held — which left the checklist
+without "create tag" and without the after-finish destinations, the part §8
+step 1 wants it for. A dry run therefore subtracts what it has just said it
+would do and goes on; a destination it would *not* reach still holds the tag.
+
+**What the train does not check is the order between destinations.** §3 step 5
+orders the script group — the artifact-server index first, then GitHub and
+FossHub, which read it — and that is the table's declaration order, which a
+run follows. What declaration order does not express is *dependency*: a step
+that fails does not stop the ones after it, so an index step that exits 1
+still lets GitHub and FossHub run against the stale index and be recorded as
+handed over. Narrowing with `--store github` does the same. Until a row can
+say what it depends on, that ordering is a convention the table author keeps,
+not one the train enforces.
+
 The destination table it reads is `.cux-train.yaml` in the directory it is run
 from — the repository root, where the launcher sits — or wherever `--table`
 names. A sibling file rather than a `train:` block in

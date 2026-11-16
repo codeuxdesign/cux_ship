@@ -12,6 +12,23 @@ the report labels. They are not touched while the tag is held, because
 `fdroid-vX.Y.Z` pushed early would annotate a release that may never be
 finished.
 
+**The finish step is recorded, so it is spent once.** It writes
+`finished/vX.Y.Z+N` and a later run that finds that ref says so rather than
+spawning the command again. Until this the one irreversible step in the
+package was the only one with no record, and a `production` re-run on a
+finished release tagged a second commit — or failed on the taken name and
+reported that the version tag was not spent when it had been.
+
+**`--dry-run` reaches the end of the release again.** Recording nothing meant
+the finish rule always said the tag was held, so the checklist stopped before
+"create tag" and before every after-finish destination — which is most of what
+§8 step 1 wants a dry run for. A dry run now subtracts what it has just said
+it would do; a destination it would not reach still holds the tag.
+
+**Everything the second half needs is resolved before the first half spends.**
+A bad placeholder in an after-finish command, or in the `finish` template, was
+refused only after every store had been handed over.
+
 **A top-level `finish:` step in the destination table.** The command that
 spends the version tag, spawned like any other. Composing `v{version}` here
 would be inventing the consumer's convention and being silently wrong wherever
