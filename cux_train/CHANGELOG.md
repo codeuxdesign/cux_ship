@@ -10,7 +10,9 @@ walked once: every destination with a beta step is performed and recorded —
 §6.1's instruction, wait and record. It is resumable because the record is a
 tag rather than because of a flag, so a re-run names what is already recorded
 and stops at the same destinations; and one destination refusing never stops
-the others.
+the others. Every command is resolved and the `uploaded/` tag is looked for
+before the first destination is touched, so a mistake in the table's last row
+or an unfetched tag is a refusal rather than a release half performed.
 
 **A declared `command` is split into arguments and never handed to a shell.**
 That field has been a string nothing read since it was written; this gives it
@@ -33,7 +35,9 @@ pending while everything else is still performed.
 
 **`incompleteExit`, a 2 for a stage a run did not finish.** The number the
 removed `notReadyExit` was reaching for, now that there is a half of the train
-with states that mean no: refused, failed, skipped, pending, or a dry run.
+with states that mean no: refused, failed, skipped, pending, or a dry run
+that found work it did not do. A dry run that finds the stage already recorded
+exits 0, because the code answers whether the build is at the stage.
 
 **`cux_train ready`, which reads the record for a purpose.** §3's verb, with
 the half of it that needs nothing but the destination table and the promotion

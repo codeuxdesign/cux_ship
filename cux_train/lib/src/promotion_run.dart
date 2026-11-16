@@ -283,6 +283,8 @@ class PromotionRun {
       );
     }
 
+    _preflight(todo);
+
     if (!_confirmed(todo)) {
       throw PromotionRunException(
         'Stopped before anything was spent. Re-run with --yes to skip this '
@@ -316,6 +318,44 @@ class PromotionRun {
       noStageHere: [for (final it in selection.skipped) it.name],
       dryRun: dryRun,
     );
+  }
+
+  /// Refuses, before anything is spent, what would otherwise stop the run
+  /// partway through it.
+  ///
+  /// **Two things can be known up front, and both used to be found late.** A
+  /// `command` that will not resolve was discovered when the loop reached it,
+  /// which for the third destination is after two stores have been handed the
+  /// build. And the `uploaded/` tag a record is written at was first looked
+  /// for by the first record — that is, after the first command had already
+  /// succeeded — so a checkout that had not fetched it promoted at a store,
+  /// threw, and left nothing saying so for the next run to skip.
+  ///
+  /// The record is checked through [writePromotion]'s own dry run rather than
+  /// by looking for the tag here, so that what is asked is exactly what the
+  /// write will ask: nothing is created, and nothing is pushed. A dry run of
+  /// the verb goes through this too — a checklist for a run that would
+  /// refuse to start is not the checklist for this build.
+  void _preflight(List<Destination> todo) {
+    for (final destination in todo) {
+      final step = destination.stepAt(stage);
+      if (step.kind == StepKind.ship || step.kind == StepKind.run) {
+        _argv(destination, step);
+      }
+      writePromotion(
+        git: git,
+        record: PromotionRecord(
+          destination: destination.name,
+          stage: stage,
+          version: version,
+          build: build,
+          outcome: PromotionOutcome.handedOver,
+        ),
+        uploadedTag: uploadedTag,
+        push: push,
+        dryRun: true,
+      );
+    }
   }
 
   /// Whether the operator agreed to spend what [todo] will spend.
@@ -365,21 +405,25 @@ class PromotionRun {
     };
   }
 
+  /// What a `ship` or `run` step spawns.
+  List<String> _argv(Destination destination, DestinationStep step) =>
+      resolveStepCommand(
+        step.command!,
+        values: {
+          'version': version,
+          'build': '$build',
+          'destination': destination.name,
+          'stage': stage.name,
+        },
+        where: '${destination.name}.${stage.name}.command',
+      );
+
   /// A `ship` or `run` step: resolve the command, spawn it, record on success.
   Future<StepReport> _spawn(
     Destination destination,
     DestinationStep step,
   ) async {
-    final argv = resolveStepCommand(
-      step.command!,
-      values: {
-        'version': version,
-        'build': '$build',
-        'destination': destination.name,
-        'stage': stage.name,
-      },
-      where: '${destination.name}.${stage.name}.command',
-    );
+    final argv = _argv(destination, step);
 
     if (dryRun) {
       output.write('\n${_rule(destination)}\n  would run  ${argv.join(' ')}\n');
@@ -390,7 +434,23 @@ class PromotionRun {
     }
 
     output.write('\n${_rule(destination)}\n  run  ${argv.join(' ')}\n');
-    final code = await spawn(argv, workingDirectory: root);
+    final int code;
+    try {
+      code = await spawn(argv, workingDirectory: root);
+    } on ProcessException catch (error) {
+      // **A command that could not be started is a failed step, not the end
+      // of the run.** The program is not on the path, or the script is not
+      // executable — nothing ran, so nothing is recorded, and the destinations
+      // after this one are still owed their turn. Left to propagate, it ended
+      // the run as a stack trace with no closing report.
+      return StepReport(
+        destination: destination.name,
+        outcome: StepOutcome.failed,
+        detail:
+            'could not start `${argv.first}`: ${error.message} — nothing '
+            'recorded',
+      );
+    }
     if (code != 0) {
       return StepReport(
         destination: destination.name,

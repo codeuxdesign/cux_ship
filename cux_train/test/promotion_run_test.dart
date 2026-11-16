@@ -97,12 +97,14 @@ Future<RunReport> _run({
   bool dryRun = false,
   bool yes = true,
   List<String> already = const [],
+  DestinationTable? table,
+  String uploadedTag = 'uploaded/v1.9.13+2196',
 }) async {
   for (final ref in already) {
     _git.run(['tag', ref]);
   }
   final selection = resolveStores(
-    table: _table,
+    table: table ?? _table,
     names: store,
     stage: Stage.beta,
   );
@@ -123,7 +125,7 @@ Future<RunReport> _run({
     build: 2196,
     version: '1.9.13',
     root: _root.path,
-    uploadedTag: 'uploaded/v1.9.13+2196',
+    uploadedTag: uploadedTag,
     git: _git,
     output: _out,
     console: console ?? _ScriptedConsole([]),
@@ -218,6 +220,51 @@ void main() {
       ]);
     });
 
+    test('a command that cannot be started is a failure, and the run goes '
+        'on', () async {
+      // A program that is not on the path never answers an exit code at all:
+      // `Process.start` throws. That is one destination's bad luck, exactly
+      // as a non-zero exit is, and it used to end the run as a stack trace.
+      final calls = <List<String>>[];
+      final selection = resolveStores(
+        table: _table,
+        names: ['play', 'appstore:ios'],
+        stage: Stage.beta,
+      );
+      final report = await PromotionRun(
+        selection: selection,
+        ledger: PromotionLedger(const []),
+        stage: Stage.beta,
+        build: 2196,
+        version: '1.9.13',
+        root: _root.path,
+        uploadedTag: 'uploaded/v1.9.13+2196',
+        git: _git,
+        output: _out,
+        console: _ScriptedConsole([]),
+        yes: true,
+        spawn: (argv, {required workingDirectory}) async {
+          calls.add(argv);
+          if (argv[1] == 'play') {
+            throw ProcessException(
+              argv.first,
+              argv.skip(1).toList(),
+              'No such file or directory',
+              2,
+            );
+          }
+          return 0;
+        },
+        push: false,
+      ).perform();
+
+      expect(calls, hasLength(2));
+      expect(_written(), ['promoted/appstore/ios/beta/v1.9.13+2196']);
+      expect(report.steps.first.outcome, StepOutcome.failed);
+      expect(report.steps.first.detail, contains('could not start `ship`'));
+      expect(report.steps.last.outcome, StepOutcome.handedOver);
+    });
+
     test('the record is written for the destination the table names', () async {
       // `appstore:ios` cannot go into a ref with its colon, and the slash it
       // becomes is why `PromotionRecord.parse` reads from the right.
@@ -305,6 +352,77 @@ void main() {
       expect(_written(), isEmpty);
       expect(report.steps.single.detail, 'input ended');
     });
+  });
+
+  group('before anything is spent', () {
+    test('a command that will not resolve at a later destination stops the '
+        'run before the first one spawns', () async {
+      // The mistake is in the second row. Found when the loop reached it,
+      // `play` had already been handed the build by then.
+      final spawns = _Spawns();
+
+      await expectLater(
+        _run(
+          spawns: spawns,
+          table: DestinationTable.parse('''
+destinations:
+  play:
+    beta: {kind: ship, command: "ship play"}
+  snap:
+    beta: {kind: ship, command: "ship snap {artifact}"}
+''', source: '.cux-train.yaml'),
+        ),
+        throwsA(
+          isA<StepCommandException>().having(
+            (e) => e.message,
+            'message',
+            contains('snap.beta.command'),
+          ),
+        ),
+      );
+      expect(spawns.calls, isEmpty);
+      expect(_written(), isEmpty);
+    });
+
+    test(
+      'a missing uploaded tag stops the run before anything spawns',
+      () async {
+        // The record is written after the command succeeds, so a tag that is
+        // not in this checkout used to be discovered with the build already
+        // promoted at the first store and nothing saying so.
+        final spawns = _Spawns();
+
+        await expectLater(
+          _run(
+            spawns: spawns,
+            store: ['play'],
+            uploadedTag: 'uploaded/v1.9.13+9999',
+          ),
+          throwsA(
+            isA<PromotionWriteException>().having(
+              (e) => e.message,
+              'message',
+              contains('uploaded/v1.9.13+9999'),
+            ),
+          ),
+        );
+        expect(spawns.calls, isEmpty);
+      },
+    );
+
+    test(
+      'a dry run is refused for the same reasons the run would be',
+      () async {
+        await expectLater(
+          _run(
+            store: ['play'],
+            dryRun: true,
+            uploadedTag: 'uploaded/v1.9.13+9999',
+          ),
+          throwsA(isA<PromotionWriteException>()),
+        );
+      },
+    );
   });
 
   group('--yes', () {

@@ -90,8 +90,9 @@ Future<void> main(List<String> args) async {
     // run already rendered what is outstanding and why; this exists only to
     // turn that into a number a caller can branch on, and a second sentence
     // saying it again would be the one that goes stale. It covers a dry run
-    // too, which is incomplete having left nothing outstanding — it performed
-    // nothing, so it must not be the cheap way to a zero exit.
+    // that found work to do — what it printed it did not perform, so it must
+    // not be the cheap way to a zero exit — and not one that found the stage
+    // already recorded, which is complete and never throws this.
     exitCode = incompleteExit;
   } on ReleaseException catch (e) {
     // Git ran and said no — not a repository, most often. It arrives from

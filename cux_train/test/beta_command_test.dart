@@ -223,7 +223,7 @@ destinations:
       );
     });
 
-    test('a dry run is 2, because it performed nothing', () {
+    test('a dry run with work left is 2, because none of it was done', () {
       final result = _run([
         'beta',
         '--build',
@@ -236,6 +236,45 @@ destinations:
 
       expect(result.exitCode, incompleteExit);
       expect(result.stdout, contains('nothing was recorded'));
+    });
+
+    test('a dry run that finds the stage already recorded is 0', () {
+      // The other side of the case above: the exit code answers whether the
+      // build is at beta, and it is — whichever invocation put it there.
+      _writeTable('''
+destinations:
+  play:
+    beta: {kind: ship, command: "echo shipped {version}"}
+''');
+      final args = ['beta', '--build', '2196', '--release', '1.9.13', '--yes'];
+      expect(_run(args).exitCode, 0);
+
+      final result = _run([...args, '--dry-run']);
+
+      expect(result.exitCode, 0, reason: result.stderr as String);
+      expect(result.stdout, contains('Already recorded at beta'));
+      expect(result.stdout, contains('is recorded at beta'));
+    });
+
+    test('a command that cannot be started is 2, with a report', () {
+      _writeTable('''
+destinations:
+  play:
+    beta: {kind: ship, command: "no-such-program-cux-train-test play"}
+''');
+
+      final result = _run([
+        'beta',
+        '--build',
+        '2196',
+        '--release',
+        '1.9.13',
+        '--yes',
+      ]);
+
+      expect(result.exitCode, incompleteExit, reason: result.stderr as String);
+      expect(result.stdout, contains('could not start'));
+      expect(_git.run(['tag', '-l', 'promoted/*']).trim(), isEmpty);
     });
 
     test('a manual step with nobody to answer it is 2, not a crash', () {
