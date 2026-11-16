@@ -49,14 +49,13 @@ String _flat(String report) => report.replaceAll(RegExp(r'\s+'), ' ');
 
 void main() {
   group('the verdict', () {
-    test('is yes when nothing is recorded, because that is the normal day', () {
+    test('nothing recorded is the normal day, not a problem', () {
       // The first run of a release reaches `ready` with an empty namespace,
-      // and "nothing recorded" is not a problem — it is the whole of the work
-      // `production` is about to do.
+      // and "nothing recorded" is the whole of the work `production` is about
+      // to do.
       final readiness = _readiness([]);
 
-      expect(readiness.couldRun, isTrue);
-      expect(readiness.blockers, isEmpty);
+      expect(readiness.warnings, isEmpty);
       expect(readiness.outstanding.map((it) => it.name), [
         'play',
         'huawei',
@@ -64,9 +63,9 @@ void main() {
       ]);
     });
 
-    test('is still yes when every destination is already recorded', () {
+    test('everything recorded still leaves the version tag', () {
       // **An empty outstanding list is not a no.** `production` has one step
-      // left — the version tag — and a verdict of "not ready" would send an
+      // left — the version tag — and an answer of "not ready" would send an
       // operator away from the only thing left to do.
       final readiness = _readiness([
         'promoted/play/production/v1.9.13+2196',
@@ -74,7 +73,7 @@ void main() {
         'promoted/fdroid/production/v1.9.13+2196',
       ]);
 
-      expect(readiness.couldRun, isTrue);
+      expect(readiness.warnings, isEmpty);
       expect(readiness.outstanding, isEmpty);
       expect(readiness.finish.isSatisfied, isTrue);
       expect(
@@ -86,25 +85,45 @@ void main() {
       expect(_flat(readiness.render()), isNot(contains('it would act on')));
     });
 
-    test('is no when a destination refused this build', () {
-      // The case the verb exists for: `production` is resumable, so it walks
-      // back into a refusal rather than stopping at it, and nothing else in
-      // the tool tells an operator that before they start.
+    test('a refusal warns, and is never a reason to hold production', () {
+      // **The case this file exists for, and the first version of it asserted
+      // the opposite.** §6.1 records a refusal *so that* the next
+      // `production` run stops at that destination again — `f` exists because
+      // `s` alone makes "the console rejected the binary" look like "nobody
+      // has looked yet". A verb that refused to proceed on one would be
+      // standing between the operator and the retry.
       final readiness = _readiness(['refused/huawei/production/v1.9.13+2196']);
 
-      expect(readiness.couldRun, isFalse);
-      expect(readiness.blockers, hasLength(1));
-      expect(readiness.blockers.single.destination, 'huawei');
+      expect(readiness.warnings, hasLength(1));
+      expect(readiness.warnings.single.destination, 'huawei');
       expect(
-        readiness.blockers.single.detail,
+        readiness.warnings.single.detail,
         contains('refused/huawei/production/v1.9.13+2196'),
       );
+      // Still work to do, and the work list still names it: `production` is
+      // how the refusal is retried.
+      expect(readiness.outstanding.map((it) => it.name), contains('huawei'));
+      expect(_flat(readiness.render()), contains('production could run.'));
+    });
+
+    test('a refusal the console later accepted still only warns', () {
+      // **What made the first version permanent as well as backwards.**
+      // Nothing clears a refusal and `recordFor` lets one win over a later
+      // hand-over, so a `ready` that failed here failed for the life of the
+      // build — with `ready && production`, one `f` on Monday stopped that
+      // release for good, the five untouched consoles included.
+      final readiness = _readiness([
+        'refused/huawei/production/v1.9.13+2196',
+        'promoted/huawei/production/v1.9.13+2196',
+      ]);
+
+      expect(readiness.warnings, hasLength(1));
+      expect(_flat(readiness.render()), contains('production could run'));
     });
 
     test('counts a refusal as work still outstanding, not as work done', () {
       // `isHandedOver` is false for a refusal, which is what makes the
-      // destination come up again — and what makes the two lists overlap, so
-      // the renderer prints one of them and not both.
+      // destination come up again on the next run.
       final readiness = _readiness(['refused/huawei/production/v1.9.13+2196']);
 
       expect(readiness.outstanding.map((it) => it.name), contains('huawei'));
@@ -114,13 +133,13 @@ void main() {
       ]);
     });
 
-    test('a refusal at another stage is not a production blocker', () {
-      // A destination that refused at `internal` has nothing to say about
-      // whether `production` can run, and reading the namespace rather than
-      // the stage would make every historical rejection permanent.
+    test('a refusal at another stage does not warn about production', () {
+      // Reading the namespace rather than the stage would carry every
+      // historical rejection into a report about a stage it says nothing
+      // about.
       final readiness = _readiness(['refused/huawei/internal/v1.9.13+2196']);
 
-      expect(readiness.couldRun, isTrue);
+      expect(readiness.warnings, isEmpty);
     });
 
     test('a refusal at another build is not this run\'s', () {
@@ -129,8 +148,7 @@ void main() {
       // namespace instead — would look identical until a second release.
       final readiness = _readiness(['refused/huawei/production/v1.9.12+2007']);
 
-      expect(readiness.couldRun, isTrue);
-      expect(readiness.blockers, isEmpty);
+      expect(readiness.warnings, isEmpty);
     });
   });
 
@@ -163,6 +181,24 @@ destinations:
       expect(
         () => _readiness([], build: 0),
         throwsA(isA<ReadinessException>()),
+      );
+    });
+
+    test('a record for a destination the table does not declare', () {
+      // The table says where this release goes, the records say where it has
+      // been, and one naming a place the other does not know is the two
+      // disagreeing about the release. Dropped quietly, the destination would
+      // simply not appear — and a rejection that is left out of the answer is
+      // the failure the record exists to prevent.
+      expect(
+        () => _readiness(['refused/nosuch/production/v1.9.13+2196']),
+        throwsA(
+          isA<ReadinessException>().having(
+            (it) => it.message,
+            'message',
+            allOf(contains('nosuch'), contains('huawei')),
+          ),
+        ),
       );
     });
   });
@@ -199,36 +235,48 @@ destinations:
 
       expect(_flat(report), contains('production could run.'));
       expect(_flat(report), contains('not checked here'));
-      expect(_flat(report), contains('pre-release hook'));
+      expect(_flat(report), contains('pre-release gate'));
     });
 
-    test('leaves the work out when it is blocked, to say one thing', () {
+    test('names no consumer of its own in what it did not check', () {
+      // **The draft of that block printed "the local macOS build" and "the
+      // F-Droid changelog"** — two rows of one consumer's table, printed at
+      // every other consumer. The whole argument for the destination table is
+      // that this tool holds no list of stores.
+      final report = _flat(_readiness([]).render());
+
+      for (final instance in ['macOS', 'F-Droid', 'fdroid changelog']) {
+        expect(report, isNot(contains(instance)), reason: instance);
+      }
+    });
+
+    test('shows the work under a warning, because the work is the retry', () {
       final report = _readiness([
         'refused/huawei/production/v1.9.13+2196',
       ]).render();
 
-      expect(_flat(report), contains('production cannot run: 1 blocker.'));
-      expect(_flat(report), isNot(contains('it would act on')));
+      expect(_flat(report), contains('one thing to take with you:'));
+      expect(_flat(report), contains('it would act on 3'));
+      expect(report, contains('huawei  manual'));
     });
 
     test('does not say finish waits on a refusal it never waited on', () {
       // `fdroid` is after-finish, so the finish rule does not count it. A
-      // blocker that said the rule "still waits on it" would be contradicted
-      // by the "fdroid is not counted" two lines further down.
+      // warning that said the rule "goes on waiting" would be contradicted by
+      // the "fdroid is not counted" two lines further down.
       final afterFinish = _readiness([
         'refused/fdroid/production/v1.9.13+2196',
       ]);
       final counted = _readiness(['refused/huawei/production/v1.9.13+2196']);
 
-      expect(afterFinish.couldRun, isFalse);
       expect(
-        _flat(afterFinish.blockers.single.detail),
+        _flat(afterFinish.warnings.single.detail),
         isNot(contains('finish rule')),
       );
       expect(_flat(afterFinish.render()), contains('fdroid is not counted'));
       expect(
-        _flat(counted.blockers.single.detail),
-        contains('the finish rule still waits on it.'),
+        _flat(counted.warnings.single.detail),
+        contains('the finish rule goes on waiting.'),
       );
     });
 

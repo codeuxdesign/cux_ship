@@ -200,7 +200,13 @@ abstract class CandidateCommand extends Command<void> {
         'this package\'s to parse.)',
       );
     }
-    return declared;
+    // **Trimmed, because the whitespace was reaching the comparison.** Only an
+    // all-whitespace value was refused above, so `--release '1.9.13 '` — a
+    // shell quoting slip — printed a header with a stray space in it and then
+    // failed to match `v1.9.13+2196`, reporting a release with records as one
+    // with none. Trimming is not guessing at what was meant: there is no
+    // version whose name has a space at either end.
+    return declared.trim();
   }
 
   /// Every promotion record for [build] of [version], read from [root].

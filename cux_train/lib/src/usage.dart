@@ -25,19 +25,14 @@ library;
 /// amount of coupling to a number that is fixed by convention.
 const int usageExit = 64;
 
-/// The exit code for a `ready` that answered no.
-///
-/// **A state, not a failure, and it has its own number for that reason.**
-/// `cux_ship` draws the same line — `noSuchVersionExit` is documented there as
-/// "an ordinary state, not a failure" — and the distinction is what lets a
-/// launcher write `train ready && train production` without a blocked `ready`
-/// reading as a crashed tool. A 1 here would be indistinguishable from a table
-/// that would not parse.
-///
-/// **2 rather than a number continuing `cux_ship`'s list.** The two binaries
-/// are typed one after the other and share a code where one is fixed by
-/// convention — `usageExit` is 64 in both because `sysexits.h` says so — but
-/// these belong to a command's own outcomes, and `cux_ship`'s 2 through 6 are
-/// five of *its* commands' states. Numbering around them would imply one list
-/// a reader could look up in one place, and there is no such list.
-const int notReadyExit = 2;
+// **There was briefly a `notReadyExit = 2` here, and removing it is the
+// finding rather than the tidying.** `ready` was written as a gate that
+// refused when a destination had turned the build down. §6.1 records a
+// refusal so that the next `production` run returns to that destination, so
+// the refusal is a reason to run rather than a veto — and since nothing
+// clears one, the gate never reopened: `train ready && train production`,
+// which this package's own README recommended, stopped that build's release
+// for good. With the veto gone there is no state this half of the verb can
+// answer no to, every refusal left is an error, and an exit code nothing can
+// produce is the donor's dropped flag in another spelling. The number comes
+// back with the reads, where §3's refusals actually live.

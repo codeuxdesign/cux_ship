@@ -4,7 +4,7 @@ Orders the steps of a release, and waits on the ones a person performs.
 
 **Two commands run, and neither of them performs anything.** `cux_train
 status` prints the evidence grid for a release candidate and `cux_train ready`
-says whether `production` could run against it; both write nothing anywhere.
+says what `production` has left to do against it; both write nothing anywhere.
 The verbs that spend something — `internal`, `beta`, `production` — are still a
 plan, and the usage lists only what exists. This package is the workspace
 member that How It Went's release train moves into, created ahead of the move
@@ -25,24 +25,41 @@ huawei production — attempted and refused
 $ cux_train ready --build 2196 --release 1.9.13
 1.9.13 — build 2196
 
-production cannot run: 1 blocker.
+production could run.
+
+one thing to take with you:
 
   huawei turned this build down
     `refused/huawei/production/v1.9.13+2196` records that huawei was offered
-    build 2196 of 1.9.13 at production and refused it. …
+    build 2196 of 1.9.13 at production and refused it. `production` is how
+    that is retried: the destination is outstanding rather than finished, so
+    a re-run stops there again and asks. …
+
+it would act on 1, in table order:
+  huawei  manual  https://developer.huawei.com
+
+the version tag waits on 1: huawei.
 ```
 
-**The difference between the two is a picture and an answer.** The grid shows
-every cell and leaves the reading to a person; `ready` answers one question —
-could `production` run — and puts the answer in its exit code as well as its
-output, so a launcher can write `train ready && train production` and a release
-script can branch on it. A blocked answer exits 2 rather than 1, because a
-release that is not ready yet and a tool that broke are not the same event.
+**The difference between the two is a picture and a reading of it.** The grid
+shows every cell and leaves the sense of it to somebody who knows the evidence
+model; `ready` says what `production` would do next, what the version tag is
+waiting for, and what to take to the console — without the reader having to
+know what `attested` means.
 
-`ready` is §3's verb with its reads not yet wired: an artifact for the
-candidate at every destination, the local macOS build and the `pre-release`
-hook are all still unchecked, and the report says so on every run rather than
-letting a clean answer read as the whole check.
+**It is not a gate, and an earlier draft of it was.** That draft refused when a
+destination had turned the build down. §6.1 of the plan records a refusal
+precisely so that the next `production` run returns to that destination, which
+makes a refusal a reason to run rather than a veto — and since nothing clears
+one, the veto never lifted: `train ready && train production` stopped that
+build's release for good, the untouched consoles included. The exit code that
+could say no went with it. One comes back with the reads, where §3's refusals
+actually live.
+
+`ready` is §3's verb with those reads not yet wired: an artifact for the
+candidate at every CI-built destination, anything built outside CI, and the
+`pre-release` gate are all still unchecked, and the report says so on every run
+rather than letting a clean answer read as the whole check.
 
 The destination table it reads is `.cux-train.yaml` in the directory it is run
 from — the repository root, where the launcher sits — or wherever `--table`

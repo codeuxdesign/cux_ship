@@ -102,25 +102,23 @@ void main() {
       // ago, by a different run, is what `production` is about to walk into.
       _tag('refused/huawei/production/v1.9.13+2196', 'the console said no');
 
-      await expectLater(
-        _ready(['--build', '2196', '--release', '1.9.13']),
-        throwsA(isA<ProductionNotReady>()),
-      );
+      final out = await _ready(['--build', '2196', '--release', '1.9.13']);
+
+      expect(out, contains('one thing to take with you:'));
+      expect(out, contains('huawei turned this build down'));
     });
 
-    test('names the blocked destination in what reaches stderr', () async {
-      // The report goes to stdout; this sentence is for a log whose stdout
-      // went somewhere else, so it has to carry the destination itself.
-      _tag('refused/huawei/production/v1.9.13+2196', 'the console said no');
+    test('a release spelled with a stray space still finds its records', () {
+      // `--release '1.9.13 '` is a quoting slip, and only an all-whitespace
+      // value was refused — so the header printed a stray space and the
+      // comparison against `v1.9.13+2196` then failed, reporting a release
+      // with records as one with none.
+      _tag('promoted/huawei/production/v1.9.13+2196', 'done');
 
-      await expectLater(
-        _ready(['--build', '2196', '--release', '1.9.13']),
-        throwsA(
-          isA<ProductionNotReady>().having(
-            (it) => it.message,
-            'message',
-            allOf(contains('huawei'), contains('1.9.13'), contains('2196')),
-          ),
+      return expectLater(
+        _ready(['--build', '2196', '--release', '1.9.13 ']),
+        completion(
+          allOf(startsWith('1.9.13 — build 2196'), contains('act on 1 of 2')),
         ),
       );
     });
@@ -205,11 +203,12 @@ void main() {
       expect(result.stdout, contains('production could run.'));
     });
 
-    test('is notReadyExit when it could not, and not 1', () {
-      // **Not 1, which is the point of having a number for it.** A `ready`
-      // that found a refusal has to be distinguishable from a table that
-      // would not parse, or `train ready && train production` cannot tell a
-      // release that is not ready from a tool that broke.
+    test('is still 0 when a destination refused the build', () {
+      // **This case asserted the opposite and the opposite was wrong.** A
+      // refusal is recorded so that the next `production` run returns to that
+      // destination (§6.1), and nothing clears one — so a non-zero exit here
+      // made `ready && production`, which this package's README recommended,
+      // stop that build's release permanently.
       _tag('refused/huawei/production/v1.9.13+2196', 'the console said no');
 
       final result = _spawn([
@@ -220,10 +219,27 @@ void main() {
         '1.9.13',
       ]);
 
-      expect(result.exitCode, notReadyExit);
-      expect(result.exitCode, isNot(1));
-      expect(result.stdout, contains('production cannot run'));
-      expect(result.stderr, contains('production is not ready'));
+      expect(result.exitCode, 0, reason: result.stderr as String);
+      expect(result.stdout, contains('production could run'));
+      expect(result.stdout, contains('turned this build down'));
+      expect(result.stderr, isEmpty);
+    });
+
+    test('is still 0 once the console has accepted it after all', () {
+      // The permanence, which is what made the inversion costly rather than
+      // merely wrong: `recordFor` lets a refusal win over a later hand-over.
+      _tag('refused/huawei/production/v1.9.13+2196', 'the console said no');
+      _tag('promoted/huawei/production/v1.9.13+2196', 'accepted on Thursday');
+
+      final result = _spawn([
+        'ready',
+        '--build',
+        '2196',
+        '--release',
+        '1.9.13',
+      ]);
+
+      expect(result.exitCode, 0, reason: result.stderr as String);
     });
 
     test('is 1 for a table that will not parse, which is a failure', () {

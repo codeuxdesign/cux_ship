@@ -10,11 +10,18 @@
 /// cheaply, and [Readiness.render] says out loud that a clean answer here is
 /// narrower than a clean `ready`, so that nobody reads it as the whole check.
 ///
-/// **What it adds over `status` is a verdict rather than a picture.** The grid
-/// shows every cell and leaves the reading to a person; this answers one
-/// question with a yes or a no, which is what a launcher can put in front of
-/// `production` and what a person can act on without knowing the evidence
-/// model.
+/// **What it adds over `status` is a reading rather than a picture.** The grid
+/// shows every cell and leaves the sense of it to a person who knows the
+/// evidence model; this says what `production` would do next, what the version
+/// tag is waiting for, and what an operator should take with them — in a form
+/// somebody can act on without knowing what `attested` means.
+///
+/// **It is not a gate, and the first draft of it was.** That draft answered
+/// no when a destination had refused the build, which is backwards: §6.1
+/// records a refusal precisely so that the next `production` run returns to
+/// that destination. [ReadinessWarning] has what that cost and how it was
+/// found. A `ready` that can say no arrives with the reads, where §3's
+/// refusals actually live.
 ///
 /// **The version tag is deliberately not checked here**, and it is the obvious
 /// next idea: `production`'s last step spends `vX.Y.Z`, so a tag that already
@@ -41,36 +48,29 @@ class ReadinessException implements Exception {
   String toString() => message;
 }
 
-/// How a blocked `ready` reaches the process exit code.
+/// Something an operator should know before `production` runs, not a veto.
 ///
-/// **Thrown after the report has been written, which reads oddly and is
-/// right.** `cli.dart` is the only thing in this package that knows about exit
-/// codes — deliberately, so that every verb can be driven in process by a test
-/// — and an exception is the only channel a verb has to it. The alternative,
-/// setting `exitCode` from inside the command the way `cux_ship` does, makes a
-/// test mutate the VM's own exit status as a side effect of asserting on text.
+/// **The first version of this type was called `ReadinessBlocker` and made
+/// `ready` exit non-zero, which inverted the design.** §6.1 is explicit that a
+/// refusal is recorded *so that* the next `production` run stops at that
+/// destination again — `f` exists because `s` alone makes "the console
+/// rejected the binary" look like "nobody has looked yet". A refusal is
+/// therefore a reason to run `production`, not a reason not to.
 ///
-/// It carries a sentence rather than the blockers, because the blockers are
-/// already on stdout: this is what a reader of a release log sees when the
-/// report went somewhere else.
-class ProductionNotReady implements Exception {
-  ProductionNotReady(this.message);
-
-  final String message;
-
-  @override
-  String toString() => message;
-}
-
-/// Something that has to change before `production` is worth running.
+/// The inversion was not cosmetic. Nothing clears a refusal, and [recordFor]
+/// lets one win over a later hand-over, so a `ready` that failed on a refusal
+/// failed forever: with `train ready && train production` — the line this
+/// package's own README recommended — one `f` on Monday blocked that build's
+/// release permanently, including the five other consoles still outstanding.
+/// Verified against a real repository before this was changed.
 ///
-/// **A blocker is not the same as outstanding work**, and keeping the two apart
-/// is the whole value of the verb. Five destinations nobody has reached yet are
-/// what `production` is *for*; a destination that turned this build down is a
-/// thing `production` will walk straight back into. Rendered together they
-/// would read as one list of five-plus-one problems.
-class ReadinessBlocker {
-  const ReadinessBlocker({
+/// **It is still kept apart from the outstanding work**, which is the useful
+/// half of the original idea. Five destinations nobody has reached are what
+/// `production` is for; a destination that turned this build down is one it
+/// will walk back into carrying a rejection, and an operator who reads that as
+/// an ordinary queue entry will resubmit the same binary.
+class ReadinessWarning {
+  const ReadinessWarning({
     required this.destination,
     required this.summary,
     required this.detail,
@@ -91,11 +91,11 @@ class Readiness {
   Readiness({
     required this.version,
     required this.candidate,
-    required List<ReadinessBlocker> blockers,
+    required List<ReadinessWarning> warnings,
     required List<Destination> acting,
     required List<Destination> outstanding,
     required this.finish,
-  }) : blockers = List.unmodifiable(blockers),
+  }) : warnings = List.unmodifiable(warnings),
        acting = List.unmodifiable(acting),
        outstanding = List.unmodifiable(outstanding);
 
@@ -127,6 +127,32 @@ class Readiness {
       );
     }
 
+    // **A record for a destination the table does not declare is refused.**
+    // The table says where this release goes and the records say where it has
+    // been; one naming a place the other does not know is a disagreement about
+    // the release itself, and the quiet reading of it is the bad one — the
+    // destination would simply not appear, and an answer that silently left
+    // out a rejection is the failure §2 says the record exists to prevent.
+    // The same shape as the grid's refusal of an observation it cannot place.
+    final declared = {for (final it in table.destinations) it.name};
+    final undeclared =
+        ledger.records
+            .map((it) => it.destination)
+            .where((name) => !declared.contains(name))
+            .toSet()
+            .toList()
+          ..sort();
+    if (undeclared.isNotEmpty) {
+      throw ReadinessException(
+        'Build $candidate of $version has a record for '
+        '${undeclared.join(', ')}, which the destination table does not '
+        'declare. It declares ${declared.join(', ')}. Either the release went '
+        'somewhere this table does not list, or a destination was renamed '
+        'after it was recorded — and an answer about what `production` has '
+        'left to do cannot be right while the two disagree.',
+      );
+    }
+
     final acting = resolveStores(
       table: table,
       names: const [],
@@ -137,24 +163,25 @@ class Readiness {
     return Readiness(
       version: version,
       candidate: candidate,
-      blockers: [
+      warnings: [
         for (final destination in acting)
           if (_refusalAt(ledger, destination) case final refusal?)
-            ReadinessBlocker(
+            ReadinessWarning(
               destination: destination.name,
               summary: '${destination.name} turned this build down',
               detail:
                   '`${refusal.ref}` records that ${destination.name} was '
                   'offered build $candidate of $version at production and '
-                  'refused it. `production` would walk back into it: a '
-                  'refusal is outstanding, not finished, so the destination '
-                  'comes up again on every re-run carrying what happened last '
-                  'time. Nothing in this tool clears one — if the refusal has '
-                  'since been resolved, the record still says otherwise'
+                  'refused it. `production` is how that is retried: the '
+                  'destination is outstanding rather than finished, so a '
+                  're-run stops there again and asks. Take the rejection with '
+                  'you — resubmitting the same binary unchanged is what the '
+                  'record is warning against. Note that nothing clears a '
+                  'refusal: once the console accepts it, this line stays'
                   // An after-finish destination is the one the finish rule
-                  // never waited on, and the line under the blockers says so.
+                  // never waited on, and the line under the warnings says so.
                   '${destination.afterFinish ? '' : ', and the finish rule '
-                            'still waits on it'}.',
+                            'goes on waiting'}.',
             ),
       ],
       acting: acting,
@@ -169,8 +196,8 @@ class Readiness {
   /// The build this is about.
   final int candidate;
 
-  /// What has to change before `production` is worth running, in table order.
-  final List<ReadinessBlocker> blockers;
+  /// What an operator should know before starting, in table order.
+  final List<ReadinessWarning> warnings;
 
   /// Every destination with a production step, in table order.
   final List<Destination> acting;
@@ -181,31 +208,26 @@ class Readiness {
   /// Whether the version tag may be spent, and what is holding it.
   final FinishRule finish;
 
-  /// Whether `production` could run.
-  ///
-  /// **An empty [outstanding] is not a no.** Everything already recorded means
-  /// `production` has one step left — step 5, the version tag — and running it
-  /// is exactly what an operator should then do. A verb that answered "no,
-  /// there is nothing to do" would send them away from the one thing left.
-  bool get couldRun => blockers.isEmpty;
-
   /// The answer as a block of text, ending in a newline.
   ///
-  /// **A blocked answer does not list the outstanding work, and that is a
-  /// choice rather than an omission.** A refused destination is outstanding
-  /// too, so printing both would name it twice — once as the problem and once
-  /// as a job — and a list of work under the words "cannot run" reads as an
-  /// invitation to do it. `status` is where the whole picture lives.
+  /// **Nothing here can say no, and that is the honest shape of this half of
+  /// the verb.** §3's `ready` refuses on four conditions and three of them are
+  /// reads this package does not have. Of what is left, a refusal turned out
+  /// to be a reason to *run* `production` rather than a veto (see
+  /// [ReadinessWarning]), and the two states that genuinely are not answerable
+  /// — a table that declares no production step, a record that disagrees with
+  /// the table — are thrown rather than rendered. So `ready` reports, and the
+  /// first thing that can make it refuse arrives with the reads.
   ///
-  /// Nor does an answer with nothing outstanding: the verdict has already
-  /// said every destination is recorded, and a heading over no rows is a
-  /// colon with nothing after it.
+  /// An answer with nothing outstanding prints no work block: the verdict has
+  /// already said every destination is recorded, and a heading over no rows is
+  /// a colon with nothing after it.
   String render() {
     final blocks = <String>[
       '$version — build $candidate',
       _verdict(),
-      if (blockers.isNotEmpty) _blockers(),
-      if (blockers.isEmpty && outstanding.isNotEmpty) _work(),
+      if (warnings.isNotEmpty) _warnings(),
+      if (outstanding.isNotEmpty) _work(),
       _finish(),
       _notChecked(),
     ];
@@ -213,11 +235,6 @@ class Readiness {
   }
 
   String _verdict() {
-    if (blockers.isNotEmpty) {
-      final count = blockers.length;
-      return 'production cannot run: '
-          '$count ${count == 1 ? 'blocker' : 'blockers'}.';
-    }
     if (outstanding.isEmpty) {
       return _wrap(
         'production could run, and every destination it acts on is already '
@@ -227,12 +244,16 @@ class Readiness {
     return 'production could run.';
   }
 
-  String _blockers() => blockers
-      .map(
-        (blocker) =>
-            '  ${blocker.summary}\n${_wrap(blocker.detail, indent: 4)}',
-      )
-      .join('\n\n');
+  String _warnings() {
+    final count = warnings.length;
+    final heading = count == 1
+        ? 'one thing to take with you:'
+        : '$count things to take with you:';
+    final blocks = warnings.map(
+      (warning) => '  ${warning.summary}\n${_wrap(warning.detail, indent: 4)}',
+    );
+    return [heading, ...blocks].join('\n\n');
+  }
 
   String _work() {
     final done = acting.length - outstanding.length;
@@ -308,12 +329,18 @@ class Readiness {
   /// reads "production could run" and takes it for the whole check is exactly
   /// the failure this verb exists to prevent, and they would be right to, since
   /// nothing else in the output says otherwise. It goes when the reads land.
+  /// **Named by category, not by AuthPass's instances.** The draft of this
+  /// block said "the local macOS build" and "the F-Droid changelog", which are
+  /// two rows of one consumer's table printed at every other consumer. The
+  /// whole argument for the destination table is that the tool holds no list
+  /// of stores, and a sentence that does is the same mistake in prose.
   String _notChecked() => _wrap(
-    'not checked here: whether an artifact for build $candidate exists at '
-    'each destination, whether the local macOS build was made, and the '
-    'pre-release hook (a CHANGELOG section for $version, the F-Droid '
-    'changelog). Those are reads this verb does not have yet, so a clean '
-    'answer above is narrower than a clean `ready`.',
+    'not checked here: whether every CI-built destination has its artifact '
+    'for build $candidate, whether anything built outside CI has been built, '
+    'and whatever this repository checks before a release — a '
+    'section for $version in the changelog, and the rest of its pre-release '
+    'gate. Those are reads this verb does not have yet, so a clean answer '
+    'above is narrower than a clean `ready`.',
   );
 
   /// Wraps [text] at 76 columns, optionally under an [indent].
