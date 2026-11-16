@@ -177,8 +177,22 @@ annotate a release that may never be finished.
 `finish:` step in the table:
 
 ```yaml
-finish: {kind: run, command: "cux_ship release finish --version {version}"}
+finish:
+  kind: run
+  command: "cux_ship release finish --version {version} --build-number {build}"
 ```
+
+**Two things that command has to get right, because nothing here checks
+either.** It has to name the commit: `production` spans days, so `HEAD` when
+the last destination is recorded is rarely the commit the build was made
+from, and `release finish` given only `--version` tags `HEAD`. With
+`--build-number` and `tag.upload.enabled` in `.cux-ship.yaml` it resolves the
+commit through the `uploaded/` record instead. And it has to be safe to
+repeat: nothing records that the finish ran, so every `production` for this
+build after the rule is met spawns it again — including the re-run that picks
+up an `after-finish` destination which failed. `release finish` resolved that
+way is: it finds the tag already at that commit and the branch already
+bumped.
 
 Composing `v$version` here would be inventing somebody else's convention — the
 same mistake as reading a release out of an `uploaded/` tag — and being

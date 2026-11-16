@@ -66,6 +66,9 @@ Future<int> _spawnStub(
   required String workingDirectory,
 }) async {
   _calls.add(argv);
+  if (argv.first == 'missing') {
+    throw ProcessException(argv.first, argv.sublist(1), 'No such file');
+  }
   return argv.first == 'boom' ? 1 : 0;
 }
 
@@ -367,7 +370,57 @@ void main() {
       );
     });
 
-    test('a dry run prints it and spends nothing', () async {
+    test('a finish that cannot be started is a sentence, not a stack '
+        'trace', () async {
+      _writeTable(_table.replaceFirst('release-finish {version}', 'missing'));
+
+      await expectLater(
+        _production([
+          '--build',
+          '2196',
+          '--release',
+          '1.9.13',
+        ], console: _AlwaysDone()),
+        throwsA(
+          isA<PromotionRunException>().having(
+            (e) => e.message,
+            'message',
+            allOf(
+              contains('could not be started'),
+              contains('version tag was not spent'),
+            ),
+          ),
+        ),
+      );
+
+      expect(_calls.map((it) => it.first), isNot(contains('fdroid-tag')));
+    });
+
+    test('a bare `finish:` is refused rather than read as absent', () async {
+      _writeTable(
+        _table.replaceFirst(
+          'finish: {kind: run, command: "release-finish {version}"}',
+          'finish:',
+        ),
+      );
+
+      await expectLater(
+        _production(['--build', '2196', '--release', '1.9.13']),
+        throwsA(
+          isA<DestinationTableException>().having(
+            (e) => e.message,
+            'message',
+            contains('`finish` with nothing in it'),
+          ),
+        ),
+      );
+      expect(_calls, isEmpty);
+    });
+
+    test('a dry run with work left spends nothing, and stops at the held '
+        'tag', () async {
+      // Nothing is recorded by a dry run, so the rule is not met and the
+      // finish step is never reached — it is not printed either.
       await expectLater(
         _production([
           '--build',
@@ -381,6 +434,84 @@ void main() {
 
       expect(_calls, isEmpty);
       expect(_tags('promoted/*'), isEmpty);
+      expect(_out.toString(), isNot(contains('would finish')));
+      expect(_out.toString(), contains('The version tag is not spent'));
+    });
+
+    test('a dry run prints it once the rule is met, and spawns '
+        'nothing', () async {
+      // A first run whose finish fails records `play` and `huawei` and
+      // spends nothing, so the dry run below finds the rule already met.
+      _writeTable(_table.replaceFirst('release-finish {version}', 'boom'));
+      await expectLater(
+        _production([
+          '--build',
+          '2196',
+          '--release',
+          '1.9.13',
+        ], console: _AlwaysDone()),
+        throwsA(isA<PromotionRunException>()),
+      );
+      _writeTable(_table);
+      _out.clear();
+      _calls.clear();
+
+      await expectLater(
+        _production(['--build', '2196', '--release', '1.9.13', '--dry-run']),
+        throwsA(isA<PromotionIncomplete>()),
+        reason: '`fdroid` is still only a would-act',
+      );
+
+      expect(_out.toString(), contains('would finish  release-finish 1.9.13'));
+      expect(_out.toString(), contains('would run  fdroid-tag 1.9.13'));
+      expect(_calls, isEmpty);
+      expect(_tags('promoted/fdroid/*'), isEmpty);
+    });
+  });
+
+  group('after the tag is spent', () {
+    test(
+      'a failing after-finish destination leaves the run incomplete',
+      () async {
+        _writeTable(_table.replaceFirst('fdroid-tag {version}', 'boom'));
+
+        await expectLater(
+          _production([
+            '--build',
+            '2196',
+            '--release',
+            '1.9.13',
+          ], console: _AlwaysDone()),
+          throwsA(
+            isA<PromotionIncomplete>().having(
+              (e) => e.report.pass,
+              'pass',
+              'after the version tag',
+            ),
+          ),
+        );
+
+        expect(_calls.map((it) => it.first), contains('release-finish'));
+        expect(_tags('promoted/fdroid/*'), isEmpty);
+      },
+    );
+
+    test('naming only an after-finish destination does not reach it while '
+        'the tag is held', () async {
+      await expectLater(
+        _production([
+          '--build',
+          '2196',
+          '--release',
+          '1.9.13',
+          '--store',
+          'fdroid',
+        ]),
+        throwsA(isA<PromotionIncomplete>()),
+      );
+
+      expect(_calls, isEmpty);
+      expect(_out.toString(), contains('The version tag is not spent'));
     });
   });
 }

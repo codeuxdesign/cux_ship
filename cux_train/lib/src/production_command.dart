@@ -23,6 +23,8 @@
 /// wherever they spell it differently.
 library;
 
+import 'dart:io';
+
 import 'destinations.dart';
 import 'promoting_command.dart';
 import 'promotion_ledger.dart';
@@ -86,9 +88,9 @@ class ProductionCommand extends PromotingCommand {
       // Not a failure of the release: every destination is recorded, and the
       // table simply never said how this project writes its version tag.
       output.write(
-        '\nEvery destination is recorded at production, and the table '
-        'declares no `finish` step, so there is no version tag to spend. '
-        'Add one to finish a release from here.\n',
+        '\nEvery destination the version tag waits on is recorded at '
+        'production, and the table declares no `finish` step, so there is no '
+        'version tag to spend. Add one to finish a release from here.\n',
       );
       throw PromotionIncomplete(report);
     }
@@ -153,10 +155,24 @@ class ProductionCommand extends PromotingCommand {
       return;
     }
     output.write('\nfinish  ${argv.join(' ')}\n');
-    final code = await (spawn ?? spawnInheritingStdio)(
-      argv,
-      workingDirectory: root,
-    );
+    final int code;
+    try {
+      code = await (spawn ?? spawnInheritingStdio)(
+        argv,
+        workingDirectory: root,
+      );
+    } on ProcessException catch (error) {
+      // The program is not on the path, or the script is not executable. A
+      // destination's step reports the same thing as a failed step; here
+      // there is no step to report it on, and left to propagate it ended a
+      // run that had just recorded every destination as a stack trace.
+      throw PromotionRunException(
+        'The finish step could not be started — `${argv.first}`: '
+        '${error.message} — so the version tag was not spent. Every '
+        'destination is still recorded, so fixing the `finish` command and '
+        'running production again resumes here.',
+      );
+    }
     if (code != 0) {
       throw PromotionRunException(
         'The finish step exited $code, so the version tag was not spent. '

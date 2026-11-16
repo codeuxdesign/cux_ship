@@ -6,7 +6,7 @@
 /// evidence wait with a timeout, and `production` adds the finish rule and the
 /// version tag — both of which are about *this* loop rather than instead of
 /// it, which is why the loop lives in `promotion_run.dart`, the flags in
-/// `promoting_command.dart`, and this file is a `run` of ten lines.
+/// `promoting_command.dart`, and this file is one short `run`.
 library;
 
 import 'destinations.dart';

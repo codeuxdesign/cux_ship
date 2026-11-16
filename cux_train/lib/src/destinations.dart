@@ -178,8 +178,10 @@ class Destination {
   /// next consumer will have the same shape under another name, or none at
   /// all — the donor has none.
   ///
-  /// It says nothing about *order within* the run; it says only that the
-  /// finish rule does not count this destination.
+  /// Two things follow from it and nothing else does: the finish rule does
+  /// not count this destination, and `production` walks it in a second pass,
+  /// after the finish step has run. Among themselves, the destinations
+  /// declared this way keep declaration order like any others.
   final bool afterFinish;
 
   /// Whether reaching this destination at `internal` already reaches users.
@@ -281,7 +283,7 @@ class DestinationTable {
     }
     final table = DestinationTable(
       destinations,
-      finish: _parseFinish(document['finish'], source),
+      finish: _parseFinish(document, source),
     );
     table._checkNamesAreUsable(source);
     return table;
@@ -475,9 +477,21 @@ class DestinationTable {
   /// them about a tag it can see for itself; `none` would mean a table that
   /// declares a finish and has none. Both say more than they mean, so each is
   /// refused by name.
-  static DestinationStep? _parseFinish(Object? declared, String source) {
-    if (declared == null) {
+  static DestinationStep? _parseFinish(YamlMap document, String source) {
+    if (!document.containsKey('finish')) {
       return null;
+    }
+    // **Absent is no finish; written-and-left-empty is a mistake** — the rule
+    // a stage key follows in `_parseDestination`, for the same reason. A bare
+    // `finish:` is a body deleted mid-edit, and reading it as absent would
+    // have `production` say the table declares none of a key its author can
+    // see in the file.
+    final declared = document['finish'];
+    if (declared == null) {
+      throw DestinationTableException(
+        '$source declares `finish` with nothing in it — give it a `ship` or '
+        '`run` command, or leave the key out',
+      );
     }
     final step = _parseStep(declared, '$source: `finish`');
     if (!step.kind.spawns) {
