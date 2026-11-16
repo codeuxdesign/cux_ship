@@ -24,8 +24,16 @@ destinations:
     production: {kind: run, command: "_tools/release/fdroid-tag.sh"}
 ''', source: '.cux-train.yaml');
 
-PromotionLedger _ledger(List<String> refs, {int build = 2196}) =>
-    PromotionLedger.forBuild(refs, build: build, source: 'refs/tags');
+PromotionLedger _ledger(
+  List<String> refs, {
+  int build = 2196,
+  String version = '1.9.13',
+}) => PromotionLedger.forBuild(
+  refs,
+  build: build,
+  version: version,
+  source: 'refs/tags',
+);
 
 List<String> _waitingOn(PromotionLedger ledger) => finishRule(
   table: _table,
@@ -46,6 +54,41 @@ void main() {
       expect(ledger.records, hasLength(1));
       expect(ledger.records.single.version, '1.9.13');
       expect(ledger.isHandedOver('huawei', Stage.production), isTrue);
+    });
+
+    test('the same build under another version is refused, not skipped', () {
+      // **The build alone was the key here, and it is not one.** A build
+      // number is allocated once from a single monotonic counter, so 2196
+      // belongs to one release; a record saying otherwise means the caller
+      // named the wrong version or the counter was reused. Skipping it would
+      // render the cell `pending` — "nothing known" in place of a record that
+      // exists and disagrees — and leave the finish rule waiting forever on a
+      // destination already promoted under the mistyped name.
+      expect(
+        () => _ledger([
+          'promoted/huawei/production/v1.9.13+2196',
+        ], version: '1.9.99'),
+        throwsA(
+          isA<PromotionRecordException>().having(
+            (e) => e.toString(),
+            'message',
+            allOf(contains('1.9.13'), contains('1.9.99'), contains('2196')),
+          ),
+        ),
+      );
+    });
+
+    test('another build under another version is simply not this run\'s', () {
+      // The refusal is about a *collision* on the build number, so a record
+      // that matches neither half is filtered as it always was. Without this
+      // case the guard above passes just as well if it refuses every version
+      // mismatch it sees, which would make a ledger unreadable in any
+      // repository with more than one release in it.
+      final ledger = _ledger([
+        'promoted/huawei/production/v1.9.12+2007',
+      ], version: '1.9.13');
+
+      expect(ledger.records, isEmpty);
     });
 
     test('a stray ref is an error, not a skip', () {

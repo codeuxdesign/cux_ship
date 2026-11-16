@@ -25,9 +25,14 @@ destinations:
 ''', source: '.cux-train.yaml');
 
 const _candidate = 2196;
+const _version = '1.9.13';
 
-PromotionLedger _ledger(List<String> refs) =>
-    PromotionLedger.forBuild(refs, build: _candidate, source: 'refs/tags');
+PromotionLedger _ledger(List<String> refs) => PromotionLedger.forBuild(
+  refs,
+  build: _candidate,
+  version: _version,
+  source: 'refs/tags',
+);
 
 Evidence _evidence(
   String destination, {

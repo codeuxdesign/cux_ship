@@ -4,6 +4,56 @@
 
 ### Added
 
+**`cux_train status`, which is the first verb that runs.** A `CommandRunner`
+tree in place of the hand-rolled help-or-refuse entry, and one command on it:
+read the destination table, read the promotion refs out of the checkout, build
+the grid, write it to stdout. Reads only — every other verb in the plan spends
+something, and the one that reports state is the one worth trusting first.
+
+**Both halves of the candidate are required, and the refusals say what would
+replace them.** `--build N` and `--release X.Y.Z`. The plan allows deriving the
+build from `refs/buildnumbers` for the tip of `stable`, and that is not wired;
+the release is not read from the `uploaded/` tag for the build, because that
+tag's name is the consumer's convention rather than this package's to parse. A
+grid that inferred either would be confidently about the wrong release, which
+is the failure §2 spends its length on.
+
+**`PromotionLedger.forBuild` takes the version too, and a record that collides
+on the build is refused.** The build alone was the key, and it is not one: a
+build number is allocated once from a single monotonic counter, so 2196
+belongs to exactly one release. Until now `--release` was a label — a record
+for build 2196 of 1.9.13 rendered happily under `--release 1.9.99`, header and
+all, exit 0 — so requiring the flag bought nothing, which is the same "wrong
+release, confidently" the paragraph above claims it prevents. A collision is
+now an error naming both versions. A record at *another* build under another
+version is filtered as it always was; only the number that cannot be in two
+places is a collision.
+
+**The table is `.cux-train.yaml` unless `--table` says otherwise**, resolved
+against the same root the refs are read from — the two coming from different
+places would report one repository's progress against another's destinations,
+and nothing in the output would say so.
+
+**The namespaces it reads come from `PromotionOutcome`, not from two literals.**
+A namespace the reader forgets is not a missing row in a report: the finish
+rule counts over these refs, so it would be a destination the rule stops
+waiting on and a version tag spent early.
+
+**No global flags yet.** §3 lists `--build`, `--dry-run`, `--yes` and
+`--verbose` as carrying over from the donor, and two of those are about
+spending something. On a verb that writes nothing they would be flags that do
+nothing, which the donor's rule (§3 and §4 both apply it) refuses rather than
+drops; they arrive with the verbs that act. An option nobody declared is one
+the parser refuses with a 64, `--store` included — `status` does not narrow.
+
+**`status` refuses what it would otherwise have ignored or misread.** A word
+after the flags (`status … production`), which `package:args` hands a leaf
+command without checking it was read; a `--build 0x10`, which `int.tryParse`
+reads as sixteen; a `--table` that names a directory, which `File.existsSync`
+reports as missing and the missing-table message would answer with "write it
+there"; and a table that exists and cannot be read, whose `FileSystemException`
+the entry point has no clause for.
+
 **The grid `status` prints, which is where §6.2's rule is kept or lost.** One
 row per destination, one column per audience, and in every cell a build number
 with the evidence class behind it. The evidence model decides every mark;
@@ -218,6 +268,23 @@ silently did not run, and a consumer capturing stdout for a step's result
 should not find help text in it.
 
 ### Changed
+
+**The usage text is the command tree's rather than this package's.**
+`usageText()` is gone — `CommandRunner` composes the text from the verbs and
+their flags, so a verb added without its help appearing is not a thing that can
+happen. `usageExit` stays, because a consumer branches on the number and nobody
+branches on a paragraph. The refusal for an unknown command is now worded by
+`package:args` (`Could not find a command named "x"`), which is the cost of
+that; the exit code, the stream and the empty stdout are unchanged, and those
+are what `usage_test.dart` says the contract is.
+
+**`usageExit`'s note was wrong about its own future.** It said `cux_ship` owned
+this vocabulary and that this package would import the constant once it
+depended on `cux_ship` for anything else. It now does depend on it, and there
+is nothing to import: `exit_codes.dart`'s own header says 64 "comes from the
+argument parser rather than from any of these". Both take it from `sysexits.h`,
+and a constant in each is the right amount of coupling to a number fixed by
+convention.
 
 **The Dart floor for the whole repository is unchanged, and that is a finding
 rather than a default.** The donor package declares `sdk: ^3.13.0`, which

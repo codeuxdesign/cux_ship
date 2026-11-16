@@ -71,7 +71,21 @@ dependencies:
   # guarantee implemented twice, in two languages" and names it as what made
   # the refusal worthless. Doing it a third time in Dart, beside the package
   # that holds the original, would be worse than either.
+  # **The command tree, and the floor is the version `CommandRunner` settled
+  # into** rather than one anybody measured. `cux_ship` takes the same
+  # constraint for the same class, which matters more than the number does:
+  # the two tools are typed one after the other in a release and their
+  # argument grammars — `--flag=value`, `--no-flag`, `--` — should not come
+  # from two parsers a major version apart.
+  args: ^2.4.0
   cux_ship: ^4.5.0-dev.8
+  # **Deciding whether `--table` is absolute, and joining it to the root when
+  # it is not.** The first half is the one string handling gets wrong — a
+  # Windows drive path does not begin with a slash. Not a measured need: §5 of
+  # `authpass-on-the-train.md` runs the train on the maintainer's laptop and
+  # says it cannot run on the Windows runner today. It is the cheap way not to
+  # write a rule about paths by hand, and `cux_ship` already resolves it.
+  path: ^1.8.0
   # The destination table is a YAML document the consumer writes, so this is
   # the same dependency at the same constraint `cux_ship` takes for
   # `.cux-ship.yaml` — deliberately, because the two files sit beside each

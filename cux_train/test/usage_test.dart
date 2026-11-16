@@ -47,10 +47,20 @@ void main() {
         64,
         reason: 'usageExit must stay sysexits EX_USAGE',
       );
-      expect(result.stderr, contains('unknown command: promote'));
+      // **The wording is `CommandRunner`'s now, and that is the trade.** This
+      // used to read `unknown command: promote`, written here; the command
+      // tree composes its own refusals from the verbs it holds, which is the
+      // reason to use one — a verb added without its help text appearing is
+      // not a thing that can happen. What the case asserts is unchanged: the
+      // name that was not understood is quoted back.
+      expect(result.stderr, contains('Could not find a command named'));
+      expect(result.stderr, contains('promote'));
       // The usage text goes with it, so the operator does not have to run a
       // second command to find out what was available.
-      expect(result.stderr, contains('usage: cux_train'));
+      expect(result.stderr, contains('Usage: cux_train'));
+      // And what was available is named, rather than the usage being a shape
+      // with nothing in it.
+      expect(result.stderr, contains('status'));
     });
 
     test('keeps stdout clean, because a release log reads it', () {
@@ -65,7 +75,7 @@ void main() {
       // one `cux_ship`'s `cli_library_entry_test.dart` records, found the same
       // way. Re-run after this line was added: red, as it should be.
       expect(result.exitCode, usageExit, reason: result.stderr.toString());
-      expect(result.stderr, contains('unknown command'));
+      expect(result.stderr, contains('Could not find a command named'));
 
       // **The stream matters as much as the code.** A consumer that captures
       // stdout for a step's result and lets stderr through to the log would
@@ -79,7 +89,7 @@ void main() {
       final result = _run(['help']);
 
       expect(result.exitCode, 0, reason: result.stderr.toString());
-      expect(result.stdout, contains('usage: cux_train'));
+      expect(result.stdout, contains('Usage: cux_train'));
       expect(result.stderr, isEmpty);
     });
 
@@ -95,13 +105,24 @@ void main() {
       expect(bare.stdout, isNotEmpty);
     });
 
-    test('says plainly that no release commands exist yet', () {
-      // The one claim in the text worth a test: this package is a member with
-      // no train in it, and the usage must not read as though it can ship
-      // something. The move deletes this case along with the sentence.
+    test('names the verbs that exist, and claims no others', () {
+      // **The case this replaces asserted the opposite claim**, that the usage
+      // said "No release commands yet" — written so that a member with no
+      // train in it could not read as though it could ship something, and
+      // marked at the time as the case the move deletes along with the
+      // sentence. This is the move. The claim worth keeping is the same one
+      // inverted: the usage lists what can actually be run, so that an
+      // operator reading it is not offered a verb that is still a plan.
       final result = _run(['help']);
 
-      expect(result.stdout, contains('No release commands yet'));
+      expect(result.stdout, contains('status'));
+      for (final planned in ['ready', 'internal', 'beta', 'production']) {
+        expect(
+          result.stdout,
+          isNot(contains(planned)),
+          reason: '`$planned` is in §3 of the plan and is not wired yet',
+        );
+      }
     });
   });
 }
