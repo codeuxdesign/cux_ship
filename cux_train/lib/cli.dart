@@ -36,14 +36,14 @@ import 'package:cux_train/runner.dart';
 /// `exit()` and is marked as not for in-process callers; this package has no
 /// reason to inherit that.
 ///
-/// **Every clause below prints a sentence and no stack trace**, and what no
-/// clause names still prints one — the list is the states somebody is expected
-/// to meet, not a catch-all, so that a bug stays loud. These are
-/// states a release operator is meant to read and act on — a table that is not
-/// there, a candidate that was not named, a ref somebody wrote by hand that
-/// this grammar cannot read — and an unhandled Dart exception buries the one
-/// line that matters under a frame list nobody needs. `cux_ship`'s entry makes
-/// the same trade for the same reason.
+/// **Every clause below prints a sentence and no stack trace**, and anything
+/// no clause names still gets the stack trace — the list is the states
+/// somebody is expected to meet, not a catch-all, so that a bug stays loud.
+/// These are states a release operator is meant to read and act on — a table
+/// that is not there, a candidate that was not named, a ref somebody wrote by
+/// hand that this grammar cannot read — and an unhandled Dart exception buries
+/// the one line that matters under a frame list nobody needs. `cux_ship`'s
+/// entry makes the same trade for the same reason.
 Future<void> main(List<String> args) async {
   try {
     await buildRunner().run(args);
