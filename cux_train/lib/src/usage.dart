@@ -1,42 +1,25 @@
-/// The command's usage text, and the exit code an unusable invocation gets.
+/// The exit code an unusable invocation gets.
 ///
-/// **This is the whole of the *command* today, and no longer of the package.**
-/// The library beside it parses a destination table and reads a promotion
-/// record, and the entry point reaches none of it yet: the orchestration
-/// `cux_train` is named for still lives in How It Went's `tool/train/`, and
-/// `docs/design/release-train.md` is the plan for moving it. The member came
-/// first so that the move lands as commits against a package CI already
-/// builds, publishes a dry run of and runs `dart format` over, rather than as
-/// one commit that creates a package and fills it at the same time.
+/// **The usage *text* used to live here too, and the command tree took it
+/// over.** `CommandRunner` composes it from the verbs and their flags, which
+/// is the whole reason to use one: a verb added without its help text showing
+/// up is not a thing that can happen. What is left here is the number, which
+/// belongs to the contract rather than to the presentation — a consumer
+/// branches on it, nobody branches on a paragraph.
 library;
 
 /// The exit code for an invocation this command cannot make sense of.
 ///
-/// **Hardcoded, and it will stop being.** `cux_ship` already owns this
-/// vocabulary in `package:cux_ship/exit_codes.dart`, where `UsageException`
-/// maps to 64, and this package will import it the moment it has any other
-/// reason to depend on `cux_ship` — which the first moved step gives it, since
-/// every step spawns the command. Depending on it now, for one integer, would
-/// put googleapis and a JWT signer in the lockfile of a package that does
-/// nothing, and the number is fixed by the same convention either way: 64 is
-/// `EX_USAGE` from `sysexits.h`, which is where both stores' tooling and
-/// `package:args` take it from.
+/// **Hardcoded, and the reason it would stop being has turned out to be
+/// wrong.** The note here used to say that `cux_ship` owns this vocabulary in
+/// `package:cux_ship/exit_codes.dart` and that this package would import it
+/// once it depended on `cux_ship` for anything else. It now does depend on it
+/// — `provenance.dart`, for the record writer — and there is nothing to
+/// import: that library's own header says 64 "comes from the argument parser
+/// rather than from any of these", and its exported constants are the five
+/// store-specific codes. So the duplication is not temporary, and it is not a
+/// duplication of anything: both packages take 64 from `sysexits.h`'s
+/// `EX_USAGE`, which is also where `package:args` takes it from, and a
+/// constant in each is the correct amount of coupling to a number that is
+/// fixed by convention.
 const int usageExit = 64;
-
-/// What the command prints when asked how to use it, or when it cannot tell.
-///
-/// A function rather than a constant because the text will take arguments
-/// before long — the step list it prints is the thing the move brings, and a
-/// consumer's own destinations belong in it.
-String usageText() => '''
-cux_train — order the steps of a release.
-
-usage: cux_train <command>
-
-  help    print this text
-
-No release commands yet. This package is the workspace member the release
-train moves into; see docs/design/release-train.md for what is planned and
-what has already been verified. Until a step lands here, the orchestration
-to use is still How It Went's tool/train.sh.
-''';

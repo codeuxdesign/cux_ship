@@ -23,7 +23,10 @@ library;
 
 import 'dart:io';
 
+import 'package:args/command_runner.dart';
+import 'package:cux_ship/provenance.dart' show ReleaseException;
 import 'package:cux_train/cux_train.dart';
+import 'package:cux_train/runner.dart';
 
 /// Runs the command over [args] and sets the process exit code from it.
 ///
@@ -32,18 +35,37 @@ import 'package:cux_train/cux_train.dart';
 /// tool's output is read by other programs. `cux_ship`'s own `cli.dart` calls
 /// `exit()` and is marked as not for in-process callers; this package has no
 /// reason to inherit that.
+///
+/// **Every clause below prints a sentence and no stack trace.** These are
+/// states a release operator is meant to read and act on — a table that is not
+/// there, a candidate that was not named, a ref somebody wrote by hand that
+/// this grammar cannot read — and an unhandled Dart exception buries the one
+/// line that matters under a frame list nobody needs. `cux_ship`'s entry makes
+/// the same trade for the same reason.
 Future<void> main(List<String> args) async {
-  const help = {'help', '--help', '-h'};
-  if (args.isEmpty || (args.length == 1 && help.contains(args.single))) {
-    stdout.write(usageText());
-    return;
+  try {
+    await buildRunner().run(args);
+  } on UsageException catch (e) {
+    // **To stderr, with the usage text, and a non-zero code.** A command that
+    // cannot be understood is not output somebody wants on stdout — a consumer
+    // piping this into a release log would otherwise get help text where a
+    // step's result belongs, and a zero exit would let a misspelled step pass
+    // for a step that ran.
+    stderr.writeln(e);
+    exitCode = usageExit;
+  } on DestinationTableException catch (e) {
+    stderr.writeln('cux_train: $e');
+    exitCode = 1;
+  } on PromotionRecordException catch (e) {
+    stderr.writeln('cux_train: $e');
+    exitCode = 1;
+  } on StatusGridException catch (e) {
+    stderr.writeln('cux_train: $e');
+    exitCode = 1;
+  } on ReleaseException catch (e) {
+    // Git said no — not a repository, or a `git` that is not on the path. It
+    // arrives from `cux_ship`, because that is whose `Git` reads the refs.
+    stderr.writeln('cux_train: ${e.message}');
+    exitCode = 1;
   }
-  // **To stderr, with the usage text, and a non-zero code.** A command that
-  // cannot be understood is not output somebody wants on stdout — a consumer
-  // piping this into a release log would otherwise get help text where a step's
-  // result belongs, and a zero exit would let a misspelled step pass for a
-  // step that ran.
-  stderr.writeln('cux_train: unknown command: ${args.join(' ')}');
-  stderr.write(usageText());
-  exitCode = usageExit;
 }

@@ -2,11 +2,30 @@
 
 Orders the steps of a release, and waits on the ones a person performs.
 
-**No command runs a release yet.** This package is the workspace member that
-How It Went's release train moves into, created ahead of the move so that each
-step arrives as a commit against a package CI already builds, formats, tests
-and runs a publish dry run over — rather than as one commit that creates a
-package and fills it at the same time.
+**One command runs, and it is the one that performs nothing.** `cux_train
+status` prints the evidence grid for a release candidate and writes nothing
+anywhere; the verbs that spend something — `ready`, `internal`, `beta`,
+`production` — are still a plan, and the usage lists only what exists. This
+package is the workspace member that How It Went's release train moves into,
+created ahead of the move so that each step arrives as a commit against a
+package CI already builds, formats, tests and runs a publish dry run over —
+rather than as one commit that creates a package and fills it at the same time.
+
+```console
+$ cux_train status --build 2196 --release 1.9.13
+1.9.13 — build 2196
+
+destination  internal  beta  production
+huawei       pending   n/a   2196 attested
+flathub      n/a       n/a   n/a
+```
+
+The destination table it reads is `.cux-train.yaml` beside the repository root,
+or wherever `--table` names. A sibling file rather than a `train:` block in
+`.cux-ship.yaml`, which is the arrangement worth having and is not available:
+an unknown key there is an error by design, and that file is read before every
+`cux_ship` command, so the block would fail every upload until a release that
+knows the word — a release with no date yet.
 
 What exists today is the **destination table** and the **promotion record**. A
 consumer declares where a release has to go and who acts at each stage, and
@@ -26,8 +45,16 @@ Nearly all of it parses and answers questions — no spawning, no store, no
 credential — which is what lets every case be tested without either. The writer
 is the exception and a narrow one: it names a tag and hands it to `cux_ship`'s
 `recordUpload`, over a checkout root a caller supplies, so its tests point at a
-temporary repository and get the real behaviour. The entry point still says
-there are no release commands, because there are none.
+temporary repository and get the real behaviour. `status` reads that same
+checkout for the refs it renders, and takes the root the same way.
+
+**The candidate is named, never guessed**, which is why both `--build` and
+`--release` are required rather than defaulted. A build number does not say
+which release it belongs to — one version is two dozen builds — and the newest
+`uploaded/` tag is routinely a pull request's, so a grid that inferred either
+would be confidently about the wrong thing. The plan allows reading the build
+from `refs/buildnumbers` for the tip of `stable`; that is not wired yet, and
+the refusal says so rather than letting the omission read as the design.
 
 The plan, the measurements behind it and the questions still open are in
 [docs/design/release-train.md](../docs/design/release-train.md); what a second
