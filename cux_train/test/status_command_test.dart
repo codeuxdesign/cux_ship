@@ -108,6 +108,27 @@ void main() {
       expect(out, isNot(contains('1940')));
       expect(out, contains('pending'));
     });
+
+    test('--release is checked against the records, not just printed', () {
+      // **The flag was a label.** The ledger filtered on build alone, so a
+      // record for build 2196 of 1.9.13 was rendered under whatever version
+      // was typed: `--release 1.9.99` printed `1.9.99 — build 2196` and
+      // `2196 attested`, exit 0. That is precisely the "confidently about the
+      // wrong release" failure this flag is required in order to prevent, so
+      // the requirement was buying nothing until the value was compared.
+      _tag('promoted/huawei/production/v1.9.13+2196', 'handed over');
+
+      return expectLater(
+        _status(['--build', '2196', '--release', '1.9.99']),
+        throwsA(
+          isA<PromotionRecordException>().having(
+            (e) => e.toString(),
+            'message',
+            allOf(contains('1.9.13'), contains('1.9.99')),
+          ),
+        ),
+      );
+    });
   });
 
   group('the refs it asks git for', () {

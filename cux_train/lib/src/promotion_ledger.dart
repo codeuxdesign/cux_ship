@@ -22,23 +22,48 @@ class PromotionLedger {
   PromotionLedger(Iterable<PromotionRecord> records)
     : records = List.unmodifiable(records);
 
-  /// Reads every ref in [refs], keeping those for [build].
+  /// Reads every ref in [refs], keeping those for [build] of [version].
   ///
   /// [refs] is what a caller gets from globbing the namespaces
   /// [PromotionOutcome.namespaces] names — ref names without `refs/tags/`.
   /// Every one of them must parse; see [PromotionRecord.parse] for why a
   /// stray one is an error rather than a skip.
+  ///
+  /// **A record at [build] under another version is refused, not skipped.**
+  /// The build alone used to be the key here, and it is not one: a build
+  /// number is allocated once, from a single monotonic counter, so build 2196
+  /// belongs to exactly one release. A record that says otherwise means either
+  /// the caller named the wrong version or the counter was reused, and both
+  /// are the shape §2 calls the loudest error this tooling has — one number
+  /// naming two things.
+  ///
+  /// Skipping it would be worse than either. The cell would render `pending`,
+  /// "nothing known" in place of a record that exists and disagrees, and the
+  /// finish rule would wait forever on a destination that has already been
+  /// promoted under the name the operator mistyped.
   factory PromotionLedger.forBuild(
     Iterable<String> refs, {
     required int build,
+    required String version,
     required String source,
   }) {
     final records = <PromotionRecord>[];
     for (final ref in refs) {
       final record = PromotionRecord.parse(ref, source: source);
-      if (record.build == build) {
-        records.add(record);
+      if (record.build != build) {
+        continue;
       }
+      if (record.version != version) {
+        throw PromotionRecordException(
+          '$source: `$ref` records build $build as part of '
+          '${record.version}, and this run was told build $build is part of '
+          '$version. A build number is allocated once, so it belongs to one '
+          'release — one of the two is wrong, and reading the records as '
+          'though neither were would report another release\'s progress as '
+          'this one\'s.',
+        );
+      }
+      records.add(record);
     }
     return PromotionLedger(records);
   }

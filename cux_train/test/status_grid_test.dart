@@ -38,7 +38,15 @@ StatusGrid _grid({
   int candidate = _candidate,
 }) => StatusGrid.of(
   table: table ?? _table,
-  ledger: PromotionLedger.forBuild(refs, build: candidate, source: 'refs/tags'),
+  // The grid's version and the ledger's are the same one on purpose: a case
+  // that passes a `version` is asking what the *header* says, and the records
+  // it hands in are that release's.
+  ledger: PromotionLedger.forBuild(
+    refs,
+    build: candidate,
+    version: version,
+    source: 'refs/tags',
+  ),
   version: version,
   candidate: candidate,
   observations: observations,

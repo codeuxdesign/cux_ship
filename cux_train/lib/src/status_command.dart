@@ -111,6 +111,13 @@ class StatusCommand extends Command<void> {
       ledger: PromotionLedger.forBuild(
         promotionRefs(_openGit(_root)),
         build: build,
+        // **Both halves, so that `--release` is checked rather than printed.**
+        // The ledger used to be keyed on the build alone, which made this flag
+        // a label: a record for build 2196 of 1.9.13 was reported under
+        // whatever version the operator typed, and the grid's header — the one
+        // line that says which release the numbers belong to — was the part
+        // nothing verified.
+        version: release,
         source: 'git tag',
       ),
       version: release,

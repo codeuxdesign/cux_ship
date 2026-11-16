@@ -18,6 +18,17 @@ tag's name is the consumer's convention rather than this package's to parse. A
 grid that inferred either would be confidently about the wrong release, which
 is the failure §2 spends its length on.
 
+**`PromotionLedger.forBuild` takes the version too, and a record that collides
+on the build is refused.** The build alone was the key, and it is not one: a
+build number is allocated once from a single monotonic counter, so 2196
+belongs to exactly one release. Until now `--release` was a label — a record
+for build 2196 of 1.9.13 rendered happily under `--release 1.9.99`, header and
+all, exit 0 — so requiring the flag bought nothing, which is the same "wrong
+release, confidently" the paragraph above claims it prevents. A collision is
+now an error naming both versions. A record at *another* build under another
+version is filtered as it always was; only the number that cannot be in two
+places is a collision.
+
 **The table is `.cux-train.yaml` unless `--table` says otherwise**, resolved
 against the same root the refs are read from — the two coming from different
 places would report one repository's progress against another's destinations,
