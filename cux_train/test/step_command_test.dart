@@ -165,6 +165,16 @@ void main() {
       expect(_resolve(r'cmd a\\b'), [r'cmd', r'a\b']);
     });
 
+    test('inside single quotes nothing is escaped at all', () {
+      // **The case a surviving mutation found.** Once a double-quoted
+      // backslash escaped only the POSIX set, `'a\n'` read the same whether
+      // or not single quotes were excluded — the difference is only visible
+      // before one of the four characters that set contains.
+      expect(_resolve(r"cmd 'a\\b'"), ['cmd', r'a\\b']);
+      expect(_resolve(r"cmd 'a\$b'"), ['cmd', r'a\$b']);
+      expect(_resolve(r"""cmd 'a\"b'"""), ['cmd', r'a\"b']);
+    });
+
     test('inside double quotes it escapes only what POSIX says', () {
       expect(_resolve(r'cmd "a\"b"'), ['cmd', 'a"b']);
       expect(_resolve(r'cmd "a\nb"'), [r'cmd', r'a\nb']);
