@@ -28,6 +28,7 @@ library;
 import 'package:args/command_runner.dart';
 
 import 'beta_command.dart';
+import 'internal_command.dart';
 import 'production_command.dart';
 import 'ready_command.dart';
 import 'status_command.dart';
@@ -45,7 +46,11 @@ CommandRunner<void> buildRunner({StringSink? output}) =>
         // some other library that happened to have a `main`.
         'cux_train — order the steps of a release.',
       )
+      // **In the order a release goes through them**, which is also §2's
+      // listing of the donor's surface: the two that read, then the three that
+      // act, each one further along than the last.
       ..addCommand(StatusCommand(output: output))
       ..addCommand(ReadyCommand(output: output))
+      ..addCommand(InternalCommand(output: output))
       ..addCommand(BetaCommand(output: output))
       ..addCommand(ProductionCommand(output: output));

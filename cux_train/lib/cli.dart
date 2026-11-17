@@ -85,6 +85,19 @@ Future<void> main(List<String> args) async {
   } on PromotionRunException catch (e) {
     stderr.writeln('cux_train: $e');
     exitCode = 1;
+  } on EvidenceWaitException catch (e) {
+    // A `read` command that exited 0 and printed something this package
+    // cannot read as a build number. A table problem, like a `command` it
+    // will not spawn, and the operator typed nothing wrong.
+    stderr.writeln('cux_train: $e');
+    exitCode = 1;
+  } on EvidenceIncomplete {
+    // **Nothing printed, for the reason the next clause gives.** The wait has
+    // already rendered its rows and its "still pending after 1h"; this is the
+    // number for it. The same number as an unfinished walk, because it is the
+    // same state — the build is not at the stage — and whatever branches on
+    // it is asking about the build rather than about which lane fell short.
+    exitCode = incompleteExit;
   } on PromotionIncomplete {
     // **Nothing is printed here, and that is the point of the clause.** The
     // run already rendered what is outstanding and why; this exists only to

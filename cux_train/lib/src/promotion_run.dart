@@ -243,8 +243,13 @@ class RunReport {
     // run again, and saying "nothing was recorded" there describes the
     // invocation while the question is about the build.
     if (complete) {
-      return 'Every destination this run covers is recorded at '
-          '${stage.name}.';
+      // **"This pass" where there is more than one, and a real run showed
+      // why.** `internal` walks the local lane and then waits on the remote
+      // one, so "every destination this run covers is recorded" printed
+      // above two pending rows — true of the walk, and read as the verdict on
+      // the release. `production`'s second pass has the same shape.
+      return 'Every destination this ${pass == null ? 'run' : 'pass'} covers '
+          'is recorded at ${stage.name}.';
     }
     if (dryRun) {
       return 'Nothing was performed and nothing was recorded. Run it again '
@@ -476,6 +481,16 @@ class PromotionRun {
       StepKind.none => throw StateError(
         '${destination.name} has no ${stage.name} step and should have been '
         'skipped by resolveStores',
+      ),
+      // **Also unreachable, and kept apart from `none` because the reason is
+      // different.** A `wait` row has nothing for this loop to perform — the
+      // dispatch set it going and the evidence wait is what settles it — so
+      // `internal` takes those rows out of the selection before building a
+      // run. Reporting one here as anything at all would be this loop
+      // claiming a destination it never touched.
+      StepKind.wait => throw StateError(
+        '${destination.name} is a `wait` at ${stage.name}, which the evidence '
+        'wait settles and this loop does not',
       ),
       StepKind.manual => _manual(destination, step),
       StepKind.ship || StepKind.run => await _spawn(destination, step),

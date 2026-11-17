@@ -127,11 +127,18 @@ void main() {
   tearDown(() => _root.deleteSync(recursive: true));
 
   group('the gates', () {
-    /// The fixture with two gates in front of it.
+    /// The fixture with two production gates in front of it.
+    ///
+    /// **An `internal` gate sits beside them in the table**, and every case in
+    /// this group asserts what ran: a stage-keyed gate list is only worth
+    /// having if `production` runs its own and leaves the other stage's alone.
     String gated([String first = 'check-changelog {version}']) =>
         'gates:\n'
-        '  - {kind: run, command: "$first"}\n'
-        '  - {kind: run, command: "finish-dry-run {build}"}\n'
+        '  production:\n'
+        '    - {kind: run, command: "$first"}\n'
+        '    - {kind: run, command: "finish-dry-run {build}"}\n'
+        '  internal:\n'
+        '    - {kind: run, command: "not-this-stage"}\n'
         '$_table';
 
     test('run before anything is spent, in declaration order', () async {
@@ -153,6 +160,14 @@ void main() {
         spawned.indexOf('check-changelog'),
         lessThan(spawned.indexOf('ship')),
         reason: 'before the first destination',
+      );
+      // The other stage's gate stays where it was declared. A flat list would
+      // have run `release finish --dry-run` in front of the dispatch that
+      // creates the build it checks, and this one in front of the release.
+      expect(
+        spawned,
+        isNot(contains('not-this-stage')),
+        reason: "internal's gate is not production's",
       );
     });
 

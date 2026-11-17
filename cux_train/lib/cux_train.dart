@@ -6,6 +6,7 @@ library;
 
 export 'src/destinations.dart';
 export 'src/evidence.dart';
+export 'src/evidence_wait.dart';
 export 'src/operator_console.dart';
 export 'src/promotion_ledger.dart';
 export 'src/promotion_record.dart';

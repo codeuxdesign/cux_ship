@@ -463,58 +463,213 @@ destinations:
   group('gates', () {
     const one = 'destinations:\n  play:\n    production: none\n';
 
-    test('are a list, and keep the order they were written in', () {
+    test('are keyed by stage, and keep the order within one', () {
       final table = _parse('''
 gates:
-  - {kind: run, command: "_tools/pre-release.sh"}
-  - {kind: ship, command: "cux_ship release finish --dry-run"}
+  production:
+    - {kind: run, command: "_tools/pre-release.sh"}
+    - {kind: ship, command: "cux_ship release finish --dry-run"}
+  internal:
+    - {kind: run, command: "_tools/pre-build.sh"}
 $one''');
 
-      expect(table.gates.map((it) => it.command), [
+      expect(table.gatesAt(Stage.production).map((it) => it.command), [
         '_tools/pre-release.sh',
         'cux_ship release finish --dry-run',
       ]);
-      expect(table.gates.map((it) => it.kind), [StepKind.run, StepKind.ship]);
+      expect(table.gatesAt(Stage.production).map((it) => it.kind), [
+        StepKind.run,
+        StepKind.ship,
+      ]);
+      expect(table.gatesAt(Stage.internal).map((it) => it.command), [
+        '_tools/pre-build.sh',
+      ]);
+      // A stage with no key of its own gets none, rather than the other
+      // stage's — which is the whole reason the key exists.
+      expect(table.gatesAt(Stage.beta), isEmpty);
     });
 
     test('are absent by default, which is the ordinary state', () {
       expect(_parse(one).gates, isEmpty);
+      for (final stage in Stage.values) {
+        expect(_parse(one).gatesAt(stage), isEmpty, reason: stage.name);
+      }
     });
 
-    test('a key written as a map is refused', () {
-      // The shape somebody reaching for the donor's named hook points would
-      // write. The message says what to write instead.
+    test(
+      'a flat list — the shape that used to be right — says what to write',
+      () {
+        // Somebody with a working table from before the key existed. The
+        // generic "must be a map" would send them looking for a typo, so the
+        // list gets its own sentence naming the new shape.
+        expect(
+          () => _parse('gates:\n  - {kind: run, command: x}\n$one'),
+          _refused('keyed by the stage'),
+        );
+      },
+    );
+
+    test(
+      'a hook name where a stage belongs is refused, and lists the stages',
+      () {
+        // The donor's hook names are `pre-build` and `pre-release`; the stage
+        // names are what this table keys on. A table that mixes them parses to
+        // gates nothing runs unless this refuses.
+        expect(
+          () => _parse(
+            'gates:\n  pre-release:\n    - {kind: run, command: x}\n$one',
+          ),
+          _refused('`gates` is keyed by stage, and `pre-release` is not one'),
+        );
+      },
+    );
+
+    test('a stage that spends nothing has no gate to run', () {
+      for (final verb in ['status', 'ready']) {
+        expect(
+          () => _parse('gates:\n  $verb:\n    - {kind: run, command: x}\n$one'),
+          _refused('is not one'),
+          reason: verb,
+        );
+      }
+    });
+
+    test('an empty map, or a stage with nothing under it, is refused', () {
+      // A gate that checks nothing passes always, which is the one thing a
+      // gate must not do — and an absent key already means "no gates".
+      expect(() => _parse('gates: {}\n$one'), _refused('`gates` is empty'));
       expect(
-        () => _parse('gates: {pre-release: "x"}\n$one'),
-        _refused('must be a list of steps'),
+        () => _parse('gates:\n  production: []\n$one'),
+        _refused('must be a non-empty list'),
+      );
+      expect(
+        () => _parse('gates:\n  production:\n$one'),
+        _refused('must be a non-empty list'),
       );
     });
 
-    test('an empty list is refused rather than read as none', () {
-      // A gate that checks nothing passes always, which is the one thing a
-      // gate must not do — and an absent key already means "no gates".
-      expect(() => _parse('gates: []\n$one'), _refused('empty list'));
-    });
-
     test('a gate that spawns nothing is refused by kind', () {
-      for (final kind in ['manual', 'none']) {
+      for (final kind in ['manual', 'none', 'wait']) {
         expect(
-          () => _parse('gates:\n  - $kind\n$one'),
+          () => _parse('gates:\n  production:\n    - $kind\n$one'),
           _refused('has to run something'),
           reason: kind,
         );
       }
     });
 
-    test('the refusal names which gate, by position', () {
+    test('the refusal names which gate, by stage and position', () {
       expect(
         () => _parse('''
 gates:
-  - {kind: run, command: "fine"}
-  - manual
+  production:
+    - {kind: run, command: "fine"}
+    - manual
 $one'''),
-        _refused('gates[1]'),
+        _refused('gates.production[1]'),
       );
+    });
+  });
+
+  group('a `wait` step', () {
+    test('is read at internal, with the read it waits on', () {
+      final table = _parse('''
+destinations:
+  play:
+    internal: wait
+    read: "_tools/read-play.sh {build}"
+''');
+
+      final play = table.byName('play')!;
+      expect(play.stepAt(Stage.internal).kind, StepKind.wait);
+      expect(play.read, '_tools/read-play.sh {build}');
+    });
+
+    test('is refused at any stage but internal', () {
+      // Only `internal` dispatches and waits. The tempting second use is a
+      // production row nobody acts at but whose state can be read — and
+      // taking it would hold the version tag until somebody else's bot got
+      // around to building.
+      for (final stage in [Stage.beta, Stage.production]) {
+        expect(
+          () => _parse('''
+destinations:
+  flathub:
+    ${stage.name}: wait
+    read: "_tools/read-flathub.sh"
+'''),
+          _refused('only `internal` dispatches and waits'),
+          reason: stage.name,
+        );
+      }
+    });
+
+    test(
+      'is refused with no `read`, because the clock is then its only exit',
+      () {
+        expect(
+          () => _parse('destinations:\n  play:\n    internal: wait\n'),
+          _refused('declares no `read`'),
+        );
+      },
+    );
+
+    test(
+      'carries no command and no console, like any step that acts nowhere',
+      () {
+        expect(
+          () => _parse('''
+destinations:
+  play:
+    internal: {kind: wait, command: "x"}
+    read: "y"
+'''),
+          _refused('carries a `command`'),
+        );
+        expect(
+          () => _parse('''
+destinations:
+  play:
+    internal: {kind: wait, console: "https://example.test"}
+    read: "y"
+'''),
+          _refused('carries a `console`'),
+        );
+      },
+    );
+  });
+
+  group('dispatch', () {
+    const one = 'destinations:\n  play:\n    production: none\n';
+
+    test('is the one step that is not about a destination', () {
+      final table = _parse(
+        'dispatch: {kind: run, command: "git push origin HEAD:stable"}\n$one',
+      );
+
+      expect(table.dispatch!.kind, StepKind.run);
+      expect(table.dispatch!.command, 'git push origin HEAD:stable');
+    });
+
+    test('is absent by default, which is the donor\'s own shape', () {
+      expect(_parse(one).dispatch, isNull);
+    });
+
+    test('written and left empty is a mistake, not an absence', () {
+      expect(
+        () => _parse('dispatch:\n$one'),
+        _refused('declares `dispatch` with nothing in it'),
+      );
+    });
+
+    test('has to spawn something', () {
+      for (final kind in ['manual', 'none', 'wait']) {
+        expect(
+          () => _parse('dispatch: $kind\n$one'),
+          _refused('has to run something'),
+          reason: kind,
+        );
+      }
     });
   });
 }
