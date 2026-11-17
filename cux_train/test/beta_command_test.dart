@@ -52,6 +52,7 @@ late List<List<String>> _calls;
 Future<int> _spawnStub(
   List<String> argv, {
   required String workingDirectory,
+  Map<String, String> environment = const {},
 }) async {
   _calls.add(argv);
   return 0;

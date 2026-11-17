@@ -75,6 +75,12 @@ class ProductionCommand extends PromotingCommand {
         : _finishArgv(finish, version, build);
     _resolveAfter(after, version: version, build: build);
 
+    // **§3 step 1, and before the walk is the whole of its value.** The
+    // refusals a gate carries — the wrong branch, a changelog with no section
+    // for this version — are free here and cost a day at the end, where the
+    // finish step would otherwise be the first thing to notice.
+    await _gates(table, selection, version: version, build: build);
+
     final report = await runFor(
       selection: before,
       stage: Stage.production,
@@ -150,6 +156,63 @@ class ProductionCommand extends PromotingCommand {
     skipped: afterFinish ? const [] : selection.skipped,
     coversEveryDestination: selection.coversEveryDestination,
   );
+
+  /// Runs every declared gate in order, refusing on the first that fails.
+  ///
+  /// **A dry run runs them too.** They spend nothing by contract, and a dry
+  /// run that skipped them could not answer the question §8 step 1 wants a dry
+  /// run for — whether this release is ready. `release finish --dry-run`, one
+  /// of the two gates §3 names, is itself exactly this shape.
+  ///
+  /// **`HOOK_STORES` carries the destinations this run will act on**, which §7
+  /// records as the donor's existing hook contract and the part that is
+  /// already generic. A gate that cares whether the run was narrowed reads it;
+  /// one that does not, ignores it.
+  Future<void> _gates(
+    DestinationTable table,
+    StoreSelection selection, {
+    required String version,
+    required int build,
+  }) async {
+    if (table.gates.isEmpty) {
+      return;
+    }
+    final stores = selection.acting.map((it) => it.name).join(' ');
+    for (var i = 0; i < table.gates.length; i++) {
+      final argv = resolveStepCommand(
+        table.gates[i].command!,
+        values: {
+          'version': version,
+          'build': '$build',
+          'stage': Stage.production.name,
+          // No `{destination}`: a gate is about the release, not about one
+          // destination. `HOOK_STORES` is how it learns the set.
+        },
+        where: '`gates[$i]`.command',
+      );
+      output.write('\ngate  ${argv.join(' ')}\n');
+      final int code;
+      try {
+        code = await (spawn ?? spawnInheritingStdio)(
+          argv,
+          workingDirectory: root,
+          environment: {'HOOK_STORES': stores},
+        );
+      } on ProcessException catch (error) {
+        throw PromotionRunException(
+          'The gate `${argv.first}` could not be started: ${error.message}. '
+          'Nothing was spent.',
+        );
+      }
+      if (code != 0) {
+        throw PromotionRunException(
+          'The gate `${argv.join(' ')}` exited $code, so nothing was spent. '
+          'This is the refusal arriving while it is still free — fix what it '
+          'reported and run production again.',
+        );
+      }
+    }
+  }
 
   /// The finish command, resolved.
   List<String> _finishArgv(DestinationStep finish, String version, int build) =>

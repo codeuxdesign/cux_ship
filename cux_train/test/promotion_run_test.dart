@@ -79,6 +79,7 @@ class _Spawns {
   Future<int> call(
     List<String> argv, {
     required String workingDirectory,
+    Map<String, String> environment = const {},
   }) async {
     calls.add(argv);
     return exitCodes[argv.length > 1 ? argv[1] : argv.first] ?? 0;
@@ -253,18 +254,19 @@ void main() {
         output: _out,
         console: _ScriptedConsole([]),
         yes: true,
-        spawn: (argv, {required workingDirectory}) async {
-          calls.add(argv);
-          if (argv[1] == 'play') {
-            throw ProcessException(
-              argv.first,
-              argv.skip(1).toList(),
-              'No such file or directory',
-              2,
-            );
-          }
-          return 0;
-        },
+        spawn:
+            (argv, {required workingDirectory, environment = const {}}) async {
+              calls.add(argv);
+              if (argv[1] == 'play') {
+                throw ProcessException(
+                  argv.first,
+                  argv.skip(1).toList(),
+                  'No such file or directory',
+                  2,
+                );
+              }
+              return 0;
+            },
         push: false,
       ).perform();
 

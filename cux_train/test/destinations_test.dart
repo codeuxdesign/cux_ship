@@ -459,4 +459,62 @@ destinations:
       }
     });
   });
+
+  group('gates', () {
+    const one = 'destinations:\n  play:\n    production: none\n';
+
+    test('are a list, and keep the order they were written in', () {
+      final table = _parse('''
+gates:
+  - {kind: run, command: "_tools/pre-release.sh"}
+  - {kind: ship, command: "cux_ship release finish --dry-run"}
+$one''');
+
+      expect(table.gates.map((it) => it.command), [
+        '_tools/pre-release.sh',
+        'cux_ship release finish --dry-run',
+      ]);
+      expect(table.gates.map((it) => it.kind), [StepKind.run, StepKind.ship]);
+    });
+
+    test('are absent by default, which is the ordinary state', () {
+      expect(_parse(one).gates, isEmpty);
+    });
+
+    test('a key written as a map is refused', () {
+      // The shape somebody reaching for the donor's named hook points would
+      // write. The message says what to write instead.
+      expect(
+        () => _parse('gates: {pre-release: "x"}\n$one'),
+        _refused('must be a list of steps'),
+      );
+    });
+
+    test('an empty list is refused rather than read as none', () {
+      // A gate that checks nothing passes always, which is the one thing a
+      // gate must not do — and an absent key already means "no gates".
+      expect(() => _parse('gates: []\n$one'), _refused('empty list'));
+    });
+
+    test('a gate that spawns nothing is refused by kind', () {
+      for (final kind in ['manual', 'none']) {
+        expect(
+          () => _parse('gates:\n  - $kind\n$one'),
+          _refused('has to run something'),
+          reason: kind,
+        );
+      }
+    });
+
+    test('the refusal names which gate, by position', () {
+      expect(
+        () => _parse('''
+gates:
+  - {kind: run, command: "fine"}
+  - manual
+$one'''),
+        _refused('gates[1]'),
+      );
+    });
+  });
 }

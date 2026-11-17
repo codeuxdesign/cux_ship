@@ -212,8 +212,12 @@ class Destination {
 
 /// Every destination a consumer declares.
 class DestinationTable {
-  DestinationTable(List<Destination> destinations, {this.finish})
-    : destinations = List.unmodifiable(destinations);
+  DestinationTable(
+    List<Destination> destinations, {
+    this.finish,
+    List<DestinationStep> gates = const [],
+  }) : destinations = List.unmodifiable(destinations),
+       gates = List.unmodifiable(gates);
 
   /// Parses a `destinations:` declaration.
   ///
@@ -237,7 +241,7 @@ class DestinationTable {
         '$source must be a map with a `destinations` key',
       );
     }
-    _checkKeys(document, const {'destinations', 'finish'}, source);
+    _checkKeys(document, const {'destinations', 'finish', 'gates'}, source);
 
     // **Missing and malformed are separate messages**, because they are
     // separate mistakes: the first is a file that has not been written yet,
@@ -284,12 +288,35 @@ class DestinationTable {
     final table = DestinationTable(
       destinations,
       finish: _parseFinish(document, source),
+      gates: _parseGates(document, source),
     );
     table._checkNamesAreUsable(source);
     return table;
   }
 
   final List<Destination> destinations;
+
+  /// What has to pass before a release spends anything, in order.
+  ///
+  /// **§3 step 1, and the placement is the whole value.** `production` opens
+  /// with the `pre-release` hook and `release finish --dry-run` so that a
+  /// refusal — the wrong branch, a changelog with no section for this
+  /// version, a missing F-Droid changelog file — arrives *while it is still
+  /// free*. Without them the same refusal arrives from the finish step, after
+  /// a person has stood at eleven consoles, and there is nothing to be done
+  /// with it but start again tomorrow.
+  ///
+  /// **The bodies are the consumer's and the contract is not.** §7 puts the
+  /// hook *bodies* in the consumer and the hook *contract* here, so this is a
+  /// list of commands the train spawns, each of which must exit 0, with
+  /// `HOOK_STORES` naming the destinations the run will act on. A gate that
+  /// wants to know whether this is a narrowed run reads that.
+  ///
+  /// **A gate must spend nothing**, because `--dry-run` runs them. A dry run
+  /// that skipped the gates could not answer the question §8 step 1 wants a
+  /// dry run for — whether this release is ready — and `release finish
+  /// --dry-run` is itself a gate of exactly that shape.
+  final List<DestinationStep> gates;
 
   /// The step that spends the version tag, once the finish rule is met.
   ///
@@ -468,6 +495,58 @@ class DestinationTable {
       );
     }
     return declared;
+  }
+
+  /// The optional top-level `gates:` list.
+  ///
+  /// **A list rather than named hook points**, which is the one choice here
+  /// worth stating. §3 names two gates and the donor names its hooks
+  /// (`pre-build`, `pre-release`), so a map keyed by hook name was the obvious
+  /// shape — and it buys nothing this needs: `production` runs every gate it
+  /// has, in order, so the names would be documentation the parser enforces
+  /// without reading. A list says what matters, which is the order, and leaves
+  /// the consumer free to put a `pre-release` hook and a `release finish
+  /// --dry-run` in whichever order refuses soonest.
+  ///
+  /// Each entry is a step, and each has to spawn: `manual` would be asking a
+  /// person to assert a gate the train could check, and `none` would be a gate
+  /// that passes by being empty — which is the one thing a gate must never do.
+  static List<DestinationStep> _parseGates(YamlMap document, String source) {
+    final declared = document['gates'];
+    if (declared == null) {
+      // **Absent and empty are the same here, unlike a stage.** A table with
+      // no gates is the ordinary state — §8 step 1's table has none, and the
+      // hook bodies are the consumer's to write later — so this is not the
+      // "written and left empty" case `_parseDestination` refuses.
+      return const [];
+    }
+    if (declared is! YamlList) {
+      throw DestinationTableException(
+        '$source: `gates` must be a list of steps, each with a command that '
+        'has to pass before a release spends anything',
+      );
+    }
+    if (declared.isEmpty) {
+      throw DestinationTableException(
+        '$source: `gates` is an empty list. A gate that checks nothing passes '
+        'always, which is the one thing a gate must not do — leave the key '
+        'out instead.',
+      );
+    }
+    final gates = <DestinationStep>[];
+    for (var i = 0; i < declared.length; i++) {
+      final where = '$source: `gates[$i]`';
+      final step = _parseStep(declared[i], where);
+      if (!step.kind.spawns) {
+        throw DestinationTableException(
+          '$where is `${step.kind.name}`, and a gate has to run something. A '
+          '`manual` gate asks a person to assert what the train could check, '
+          'and a `none` gate passes by being empty.',
+        );
+      }
+      gates.add(step);
+    }
+    return gates;
   }
 
   /// The optional top-level `finish:` step.

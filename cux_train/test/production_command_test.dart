@@ -61,15 +61,20 @@ class _AlwaysDone implements OperatorConsole {
   bool? confirm(String question) => true;
 }
 
+/// What each spawn was given, so a case can assert the hook contract.
+late List<Map<String, String>> _envs;
+
 Future<int> _spawnStub(
   List<String> argv, {
   required String workingDirectory,
+  Map<String, String> environment = const {},
 }) async {
   _calls.add(argv);
+  _envs.add(environment);
   if (argv.first == 'missing') {
     throw ProcessException(argv.first, argv.sublist(1), 'No such file');
   }
-  return argv.first == 'boom' ? 1 : 0;
+  return argv.first == 'boom' || argv.first == 'refuse' ? 1 : 0;
 }
 
 void _writeTable(String yaml) =>
@@ -116,9 +121,189 @@ void main() {
     _writeTable(_table);
     _out = StringBuffer();
     _calls = [];
+    _envs = [];
   });
 
   tearDown(() => _root.deleteSync(recursive: true));
+
+  group('the gates', () {
+    /// The fixture with two gates in front of it.
+    String gated([String first = 'check-changelog {version}']) =>
+        'gates:\n'
+        '  - {kind: run, command: "$first"}\n'
+        '  - {kind: run, command: "finish-dry-run {build}"}\n'
+        '$_table';
+
+    test('run before anything is spent, in declaration order', () async {
+      // §3 step 1. The point is the placement: a refusal here is free, and
+      // the same refusal from the finish step costs the operator every
+      // console they already visited.
+      _writeTable(gated());
+
+      await _production([
+        '--build',
+        '2196',
+        '--release',
+        '1.9.13',
+      ], console: _AlwaysDone());
+
+      final spawned = _calls.map((it) => it.first).toList();
+      expect(spawned.take(2), ['check-changelog', 'finish-dry-run']);
+      expect(
+        spawned.indexOf('check-changelog'),
+        lessThan(spawned.indexOf('ship')),
+        reason: 'before the first destination',
+      );
+    });
+
+    test('one that fails stops the run with nothing spent', () async {
+      _writeTable(gated('refuse'));
+
+      await expectLater(
+        _production([
+          '--build',
+          '2196',
+          '--release',
+          '1.9.13',
+        ], console: _AlwaysDone()),
+        throwsA(
+          isA<PromotionRunException>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains('refuse'), contains('while it is still free')),
+          ),
+        ),
+      );
+
+      expect(_calls.map((it) => it.first), ['refuse']);
+      expect(_tags('promoted/*'), isEmpty);
+      expect(_tags('finished/*'), isEmpty);
+    });
+
+    test('a later gate is not reached once one has refused', () async {
+      _writeTable(gated('refuse'));
+
+      await expectLater(
+        _production([
+          '--build',
+          '2196',
+          '--release',
+          '1.9.13',
+        ], console: _AlwaysDone()),
+        throwsA(isA<PromotionRunException>()),
+      );
+
+      expect(_calls.map((it) => it.first), isNot(contains('finish-dry-run')));
+    });
+
+    test('HOOK_STORES names the destinations the run will act on', () async {
+      // §7 records this as the donor's existing hook contract and the half
+      // that is already generic.
+      _writeTable(gated());
+
+      // Narrowed to `play`, so the version tag is still held by `huawei` and
+      // the run is incomplete. The gate ran first either way, which is what
+      // this is about.
+      await expectLater(
+        _production([
+          '--build',
+          '2196',
+          '--release',
+          '1.9.13',
+          '--store',
+          'play',
+        ], console: _AlwaysDone()),
+        throwsA(isA<PromotionIncomplete>()),
+      );
+
+      expect(_envs.first['HOOK_STORES'], 'play');
+    });
+
+    test('and says so for a narrowed run differently', () async {
+      _writeTable(gated());
+
+      await _production([
+        '--build',
+        '2196',
+        '--release',
+        '1.9.13',
+      ], console: _AlwaysDone());
+
+      expect(_envs.first['HOOK_STORES'], 'play huawei fdroid');
+    });
+
+    test('a dry run runs them, because that is what it is for', () async {
+      // §8 step 1 wants `production --dry-run` to answer whether the release
+      // is ready. Skipping the gates would leave it unable to.
+      _writeTable(gated());
+
+      await expectLater(
+        _production([
+          '--build',
+          '2196',
+          '--release',
+          '1.9.13',
+          '--dry-run',
+        ], console: _AlwaysDone()),
+        throwsA(isA<PromotionIncomplete>()),
+      );
+
+      expect(_calls.map((it) => it.first), [
+        'check-changelog',
+        'finish-dry-run',
+      ]);
+    });
+
+    test(
+      'a gate that cannot be started is a sentence, not a stack trace',
+      () async {
+        _writeTable(gated('missing'));
+
+        await expectLater(
+          _production([
+            '--build',
+            '2196',
+            '--release',
+            '1.9.13',
+          ], console: _AlwaysDone()),
+          throwsA(
+            isA<PromotionRunException>().having(
+              (e) => e.message,
+              'message',
+              contains('could not be started'),
+            ),
+          ),
+        );
+      },
+    );
+
+    test('a table with no gates runs as before', () async {
+      await _production([
+        '--build',
+        '2196',
+        '--release',
+        '1.9.13',
+      ], console: _AlwaysDone());
+
+      expect(_calls.map((it) => it.first).first, 'ship');
+    });
+
+    test('a gate naming a destination is refused, since it has none', () async {
+      _writeTable(gated('check {destination}'));
+
+      await expectLater(
+        _production([
+          '--build',
+          '2196',
+          '--release',
+          '1.9.13',
+        ], console: _AlwaysDone()),
+        throwsA(isA<StepCommandException>()),
+      );
+
+      expect(_calls, isEmpty);
+    });
+  });
 
   group('the finish rule', () {
     test('holds the tag while a destination is unrecorded', () async {

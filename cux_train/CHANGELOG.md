@@ -4,6 +4,27 @@
 
 ### Added
 
+**A top-level `gates:` list, run before `production` spends anything.** §3
+step 1: the `pre-release` hook and `release finish --dry-run` open the verb so
+that a refusal — the wrong branch, a changelog with no section for this
+version — arrives while it is still free, rather than from the finish step
+after a person has visited every console. They run in declaration order, each
+must exit 0, and the first failure stops the run.
+
+The bodies are the consumer's and the contract is not: `HOOK_STORES` names the
+destinations the run will act on, which §7 records as the half of the donor's
+hook contract that is already generic. `{destination}` is not offered to a
+gate, since a gate is about the release rather than one row. A gate must
+spawn — `manual` would ask a person to assert what the train can check, and
+`none` would pass by being empty — and an empty `gates:` list is refused for
+the same reason, while an absent key means what it says.
+
+**A dry run runs the gates**, because they spend nothing by contract and a dry
+run that skipped them could not answer whether the release is ready.
+
+**`StepSpawn` takes an environment**, added to the child's rather than
+replacing it, so a hook body still gets the PATH it expected.
+
 **`cux_train production`, the verb that finishes a release.** The production
 stage walked as `beta` walks its own, then §3 step 5: the version tag is spent
 once every declared destination with a production step is recorded, and the
