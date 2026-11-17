@@ -324,11 +324,53 @@ jobs:
 
       # **`pub get` succeeding is not the check.** It exited 0 throughout the
       # window described above — the constraint resolved and the code did not
-      # compile. Running the thing is what tells those two apart, and every
-      # verb is named so that a missing import in any one of them is loud.
+      # compile. Running the thing is what tells those two apart.
+      #
+      # The root `--help` is what carries that, not the loop under it: Dart
+      # compiles the whole program, so a library `cux_ship` no longer
+      # publishes is loud here wherever in the package it is imported from,
+      # and `buildRunner` constructs all four `Command`s before anything is
+      # printed. Naming each verb adds the one thing that does not — each
+      # command's own usage rendering.
       - name: Confirm it compiles and runs
         run: |
           cd /tmp/train-consumer
+          dart run cux_train --help > /dev/null
+          for c in status ready beta production; do
+            dart run cux_train "$c" --help > /dev/null
+          done
+
+      # One verb run for real, which no `--help` does: `status` with no table
+      # reaches the loader, the diagnostic and the exit code, so what is under
+      # test is a command's body and not only its parser. No credential and no
+      # network — the same reason `consume` runs `deps check` for real rather
+      # than only asking it for help.
+      - name: Confirm a verb's body runs
+        run: |
+          cd /tmp/train-consumer
+          if out=$(dart run cux_train status 2>&1); then
+            echo "$out"
+            echo "status succeeded with no destination table"
+            exit 1
+          fi
+          echo "$out"
+          echo "$out" | grep -q '\.cux-train\.yaml' \
+            || { echo "status did not name the table it could not find"; exit 1; }
+
+      # **And the resolution `pub get` picks is the best one, not the declared
+      # one.** Pub takes the highest version a constraint allows, so a floor
+      # lower than the truth goes green the moment an adequate version is
+      # published above it: the commit this job exists to have caught resolves,
+      # compiles and runs today, with its floor still naming dev.8, because
+      # dev.9 now exists for `^4.5.0-dev.8` to pick. `downgrade` resolves every
+      # constraint to its floor instead — which is the version a consumer with
+      # an older lockfile is actually holding — so what this asks is whether
+      # what `cux_train` *declares* can carry it, rather than whether pub.dev's
+      # newest happens to.
+      - name: Confirm the declared floors carry it too
+        run: |
+          cd /tmp/train-consumer
+          dart pub downgrade
           dart run cux_train --help > /dev/null
           for c in status ready beta production; do
             dart run cux_train "$c" --help > /dev/null
