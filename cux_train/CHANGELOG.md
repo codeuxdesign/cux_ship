@@ -47,6 +47,13 @@ run in front of the dispatch that creates the build it checks. A table written
 the old way is refused with the new shape named. Within a stage it is still a
 list, because the order there is the consumer's.
 
+**`beta` runs the gates its stage declares.** The keys are stages, so the
+schema accepts `gates: {beta: […]}` — and `beta` was the one spending verb
+that never asked, so a gate on the verb that reaches public testers parsed,
+was believed by whoever wrote it, and ran nowhere. §3 gives `beta` no gate
+today; that is a fact about the tables rather than a licence for the verb to
+skip the question.
+
 **A walk that is one pass of several says so in its verdict.** "Every
 destination this run covers is recorded" printed above two pending rows — true
 of the walk, and read as the verdict on the release. It is "this pass" where

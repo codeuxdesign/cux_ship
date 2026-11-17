@@ -138,6 +138,15 @@ nothing for "no build yet", and with a non-zero exit for "could not answer",
 which is a reason to keep looking rather than a verdict on the step. A `wait`
 with no `read` is refused, and so is a `wait` at any stage but this one.
 
+**`--store` narrows the dispatch too, and only `--store` does.** The dispatch
+is the stage's step rather than any one destination's, so a full run spawns it
+whether or not a row waits on it — a consumer may dispatch and leave the
+evidence to `status`. But `--store direct:macos` asks for the local half, and
+pushing `HEAD:stable` as well would be a no-op only while `HEAD` has not
+moved: once `main` is ahead of the commit the candidate was cut from, that
+push sets going a different commit than `--build` names. A narrowed run that
+reaches no waiting row says what it is not dispatching instead.
+
 **Nothing the wait sees is recorded.** A read says the destination holds the
 build; a `promoted/` tag would say somebody claims to have put it there, and
 writing one for something this process merely saw would turn the stronger
@@ -270,6 +279,11 @@ were two verbs with gates. `internal` opens with the `pre-build` hook and
 --dry-run` in front of the dispatch that creates the build it is checking.
 Within a stage it stays a list, because the order there is the consumer's: the
 two above go in whichever order refuses soonest.
+
+Any of the three verbs that spend something — `internal`, `beta`,
+`production` — runs the gates under its own key and no others. `beta` has none
+in §3, but the key is accepted and honoured, because a gate that parses and
+never runs is worse than one that was never written: it is believed.
 
 They run in order, each must exit 0, and the first failure stops the run with
 nothing spent. The bodies are the consumer's; the contract is not.
