@@ -269,3 +269,109 @@ jobs:
             echo 'released unattended without --yes'
             exit 1
           fi
+
+  # **The same check for `cux_train`, and its absence cost a day.**
+  #
+  # `consume` above builds a consumer of `cux_ship` only. `cux_train` depends
+  # on `cux_ship` as an ordinary *hosted* constraint — it must, since a
+  # published package may not carry a path dependency — so inside this
+  # workspace that name resolves to the copy on disk, and every build here is
+  # green whatever pub.dev is actually serving.
+  #
+  # What that hid: `provenance.dart` was added to `cux_ship/lib/` after
+  # 4.5.0-dev.8 had been published, under the same version number, and
+  # `cux_train` named `^4.5.0-dev.8` as its floor. Every check in this file
+  # passed. A consumer outside the workspace resolved dev.8 from pub.dev and
+  # then failed to compile `cux_train` — "Error when reading provenance.dart:
+  # No such file or directory" — which is how the first repository that tried
+  # to consume it found out, after its table and launcher were already written.
+  #
+  # Deliberately **no `dependency_override`**. One would make this job test
+  # that the two packages in this commit agree with each other, which the
+  # workspace already guarantees. The question worth asking is whether what is
+  # *published* can carry what this commit declares — the one the workspace
+  # cannot answer, and the one that was wrong.
+  consume_train:
+    name: Resolve cux_train as a git dependency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: 3.13.0
+
+      # The branch head rather than github.sha, for the reason `consume` gives
+      # at length: the merge commit GitHub synthesises is reachable by
+      # actions/checkout and by nothing else, so pub resolves it to a bad
+      # object and the job fails for every pull request regardless of contents.
+      - name: Build a throwaway consumer
+        run: |
+          mkdir -p /tmp/train-consumer
+          cd /tmp/train-consumer
+          cat > pubspec.yaml <<EOF
+          name: train_consumer_probe
+          publish_to: 'none'
+          environment:
+            sdk: ^3.12.2
+          dependencies:
+            cux_train:
+              git:
+                url: https://github.com/${{ github.repository }}.git
+                path: cux_train
+                ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          EOF
+          dart pub get
+
+      # **`pub get` succeeding is not the check.** It exited 0 throughout the
+      # window described above — the constraint resolved and the code did not
+      # compile. Running the thing is what tells those two apart.
+      #
+      # The root `--help` is what carries that, not the loop under it: Dart
+      # compiles the whole program, so a library `cux_ship` no longer
+      # publishes is loud here wherever in the package it is imported from,
+      # and `buildRunner` constructs all four `Command`s before anything is
+      # printed. Naming each verb adds the one thing that does not — each
+      # command's own usage rendering.
+      - name: Confirm it compiles and runs
+        run: |
+          cd /tmp/train-consumer
+          dart run cux_train --help > /dev/null
+          for c in status ready beta production; do
+            dart run cux_train "$c" --help > /dev/null
+          done
+
+      # One verb run for real, which no `--help` does: `status` with no table
+      # reaches the loader, the diagnostic and the exit code, so what is under
+      # test is a command's body and not only its parser. No credential and no
+      # network — the same reason `consume` runs `deps check` for real rather
+      # than only asking it for help.
+      - name: Confirm a verb's body runs
+        run: |
+          cd /tmp/train-consumer
+          if out=$(dart run cux_train status 2>&1); then
+            echo "$out"
+            echo "status succeeded with no destination table"
+            exit 1
+          fi
+          echo "$out"
+          echo "$out" | grep -q '\.cux-train\.yaml' \
+            || { echo "status did not name the table it could not find"; exit 1; }
+
+      # **And the resolution `pub get` picks is the best one, not the declared
+      # one.** Pub takes the highest version a constraint allows, so a floor
+      # lower than the truth goes green the moment an adequate version is
+      # published above it: the commit this job exists to have caught resolves,
+      # compiles and runs today, with its floor still naming dev.8, because
+      # dev.9 now exists for `^4.5.0-dev.8` to pick. `downgrade` resolves every
+      # constraint to its floor instead — which is the version a consumer with
+      # an older lockfile is actually holding — so what this asks is whether
+      # what `cux_train` *declares* can carry it, rather than whether pub.dev's
+      # newest happens to.
+      - name: Confirm the declared floors carry it too
+        run: |
+          cd /tmp/train-consumer
+          dart pub downgrade
+          dart run cux_train --help > /dev/null
+          for c in status ready beta production; do
+            dart run cux_train "$c" --help > /dev/null
+          done
