@@ -78,7 +78,16 @@ dependencies:
   # argument grammars — `--flag=value`, `--no-flag`, `--` — should not come
   # from two parsers a major version apart.
   args: ^2.4.0
-  cux_ship: ^4.5.0-dev.8
+  # **dev.9, because dev.8 does not contain the library this names.** The
+  # constraint said `^4.5.0-dev.8` from the day `provenance.dart` was added,
+  # and that file landed *after* dev.8 was published — under the same version
+  # number, which main still carried. So the floor named a published artifact
+  # that could not satisfy it: inside this workspace `cux_ship` resolves to the
+  # copy on disk and everything built, while any consumer outside it resolved
+  # dev.8 from pub.dev and then failed to compile with "Error when reading
+  # provenance.dart: No such file or directory". `consume_train` in ci.yaml is
+  # the check that would have said so, and did not exist.
+  cux_ship: ^4.5.0-dev.9
   # **Deciding whether `--table` is absolute, and joining it to the root when
   # it is not.** The first half is the one string handling gets wrong — a
   # Windows drive path does not begin with a slash. Not a measured need: §5 of
