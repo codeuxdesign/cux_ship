@@ -442,6 +442,22 @@ void main() {
       expect(_calls, isEmpty);
     });
 
+    test('a lane command that will not resolve refuses first', () async {
+      // The lane is walked *after* the dispatch, which is what makes this one
+      // worth a preflight of its own: discovered where it is used, a `{typo}`
+      // in a notarization arrives with the push already gone, and the operator
+      // is left holding a release whose local half cannot run.
+      _writeTable(_table.replaceAll('notarize {build}', 'notarize {biuld}'));
+
+      await expectLater(
+        _internal([..._candidate, '--yes']),
+        throwsA(isA<StepCommandException>()),
+      );
+
+      expect(_calls, isEmpty);
+      expect(_reads, isEmpty);
+    });
+
     test('a dispatch that fails leaves nothing to wait for', () async {
       _writeTable(_table.replaceAll('push-stable {build}', 'boom'));
 

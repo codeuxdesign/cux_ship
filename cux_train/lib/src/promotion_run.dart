@@ -332,6 +332,21 @@ class PromotionRun {
   /// What to call this pass in the report, where a verb makes more than one.
   final String? pass;
 
+  /// Asks every refusal this run can make before it starts, and makes it.
+  ///
+  /// **Public because `internal` has something to spend before the walk**, and
+  /// that is the one caller with a use for it: the dispatch pushes a branch
+  /// fifteen builds react to, and the walk's own preflight happens inside
+  /// [perform], which is after. A command that will not resolve, or a record
+  /// that cannot be written because the candidate's `uploaded/` tag is not in
+  /// this checkout, then arrived with the push already gone — knowable up
+  /// front and refused too late to be worth anything.
+  ///
+  /// [perform] still preflights, so a caller that skips this loses nothing but
+  /// the earliness. Asking twice costs a resolve and a dry-run write per
+  /// destination, both of which are a read of refs.
+  void preflight() => _preflight(ledger.outstanding(selection.acting, stage));
+
   /// Performs the stage, returning what happened.
   Future<RunReport> perform() async {
     final todo = ledger.outstanding(selection.acting, stage);

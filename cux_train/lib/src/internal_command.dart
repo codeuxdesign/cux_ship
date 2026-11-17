@@ -103,7 +103,11 @@ class InternalCommand extends PromotingCommand {
     // one step here that cannot be taken back: the push starts fifteen builds,
     // and a `{typo}` in a read command found at the first poll would arrive
     // with them already running and nothing able to see them. Constructing the
-    // wait resolves every read; `_dispatchArgv` resolves the push.
+    // wait resolves every read, resolving the dispatch resolves the push, and
+    // the lane's preflight asks every refusal its own walk could make — among
+    // them the one this verb cannot design away, that recording a local step
+    // needs the candidate's `uploaded/` tag, which for a consumer whose
+    // uploads are what the dispatch triggers is written by CI afterwards.
     final wait = waiting.isEmpty
         ? null
         : EvidenceWait(
@@ -133,6 +137,23 @@ class InternalCommand extends PromotingCommand {
             },
             where: '`dispatch`.command',
           );
+    final laneRun = lane.acting.isEmpty
+        ? null
+        : runFor(
+            selection: lane,
+            stage: Stage.internal,
+            build: build,
+            version: version,
+            uploadedTag: uploadedTagFor(version: version, build: build),
+            // **Named as a pass, for the reason `production`'s second one
+            // is.** Unlabelled, this block's own verdict — every destination
+            // it covers is recorded — printed directly above the rows that
+            // were still pending, where it reads as the verdict on the run.
+            pass: waiting.isEmpty ? null : 'the local lane',
+            // The one confirmation below covers this walk too.
+            alreadyConfirmed: true,
+          );
+    laneRun?.preflight();
 
     await runGates(
       table,
@@ -160,22 +181,7 @@ class InternalCommand extends PromotingCommand {
       await _dispatch(dispatchArgv);
     }
 
-    final laneReport = lane.acting.isEmpty
-        ? null
-        : await runFor(
-            selection: lane,
-            stage: Stage.internal,
-            build: build,
-            version: version,
-            uploadedTag: uploadedTagFor(version: version, build: build),
-            // **Named as a pass, for the reason `production`'s second one
-            // is.** Unlabelled, this block's own verdict — every destination
-            // it covers is recorded — printed directly above the rows that
-            // were still pending, where it reads as the verdict on the run.
-            pass: waiting.isEmpty ? null : 'the local lane',
-            // The one confirmation above covered this walk too.
-            alreadyConfirmed: true,
-          ).perform();
+    final laneReport = await laneRun?.perform();
     // The guard `production` uses for its second pass, for the same reason: a
     // lane whose every row was already recorded has nothing to show, and an
     // empty block saying every destination it covers is recorded is a block

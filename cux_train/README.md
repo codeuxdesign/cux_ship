@@ -2,13 +2,15 @@
 
 Orders the steps of a release, and waits on the ones a person performs.
 
-**Four commands run, and two of them spend something.** `cux_train status`
+**Five commands run, and three of them spend something.** `cux_train status`
 prints the evidence grid for a release candidate and `cux_train ready` says
 what `production` has left to do against it; both write nothing anywhere.
+`cux_train internal` sets the build going — one dispatch, the steps this
+machine owns, and a wait for the destinations somebody else fills.
 `cux_train beta` performs the beta step at every destination that has one and
 records each. `cux_train production` does the same at production and then
 spends the version tag, once every destination that has a production step is
-recorded. `internal` is still a plan, and the usage lists only what exists.
+recorded. That is the whole of the donor's surface.
 This package is the workspace
 member that How It Went's release train moves into, created ahead of the move
 so that each step arrives as a commit against a package CI already builds,
@@ -63,6 +65,98 @@ actually live.
 candidate at every CI-built destination, anything built outside CI, and the
 `pre-release` gate are all still unchecked, and the report says so on every run
 rather than letting a clean answer read as the whole check.
+
+## `internal`, the verb with two lanes
+
+```console
+$ cux_train internal --build 2196 --release 1.9.13 --yes
+
+gate  ./pre-build.sh 1.9.13
+pre-build: a changelog section for 1.9.13; HOOK_STORES=[play web direct:macos]
+
+dispatch  ./dispatch.sh 2196
+dispatch: pushed HEAD:stable for build 2196
+
+── direct:macos · internal · build 2196 ────────────────────────────────
+  run  ./notarize.sh 2196
+  recorded promoted/direct/macos/internal/v1.9.13+2196
+
+1.9.13 — build 2196 — internal — the local lane
+
+  direct:macos  handed over
+
+  no internal step: huawei
+
+Every destination this pass covers is recorded at internal.
+
+waiting for play, web — up to 1h
+  play  nothing there yet
+  web   nothing there yet
+  waiting on 2: play, web — 0s elapsed of 1h
+  play  holds 2196
+  web   holds 2196
+
+1.9.13 — build 2196 — internal — the remote lane
+
+  play  observed
+  web   observed
+
+Every destination this run waits on holds build 2196.
+```
+
+**Most of a consumer's destinations are filled by somebody else**, and that is
+what makes this verb different from the other two that act. §5: AuthPass's CI
+builds and uploads fifteen of its nineteen rows, so there is nothing for the
+train to *do* at them — it spawns one dispatch, the push CI reacts to, and
+then reads each of them until the build turns up. Beside that runs the one step
+no CI can take, the notarized macOS build on the laptop. §5 calls the two
+lanes "remote" and "local".
+
+```yaml
+dispatch: {kind: run, command: "git push origin HEAD:stable"}
+
+gates:
+  internal:
+    - {kind: run, command: "_tools/pre-build.sh"}
+
+destinations:
+  play:
+    internal: wait
+    read: "_tools/read-play.sh"
+  web:
+    internal: wait
+    public-at-internal: true
+    read: "_tools/read-web.sh"
+  "direct:macos":
+    internal: {kind: run, command: "_tools/notarize.sh {build}"}
+```
+
+**`wait` is a kind, not an absence.** A destination CI fills is not `none` —
+something is certainly happening there — and not `manual`, since nobody is
+being asked to act. Its `read` answers with one build number on stdout, with
+nothing for "no build yet", and with a non-zero exit for "could not answer",
+which is a reason to keep looking rather than a verdict on the step. A `wait`
+with no `read` is refused, and so is a `wait` at any stage but this one.
+
+**Nothing the wait sees is recorded.** A read says the destination holds the
+build; a `promoted/` tag would say somebody claims to have put it there, and
+writing one for something this process merely saw would turn the stronger
+evidence into the weaker on the way past. It also makes a re-run free:
+everything that already arrived answers at once.
+
+**The timeout is not optional, because the failure signal is.** Without `gh`
+there is no way to observe that a CI job failed, so for a destination whose
+build failed the only exit is the clock. `--wait-timeout` takes `90s`, `45m`
+or `2h` — a bare number is refused rather than read as minutes — and the
+default is an hour, so the normal path never types it. A timed-out row is
+`pending`, never `failed`: not hearing back is not being told no, and the
+summary says which destinations and for how long.
+
+**The confirmation names what the push makes public.** For AuthPass's `web`,
+`packagecloud` and the snap on `edge`, `internal` reaches users rather than
+testers — a fact about those workflows rather than something the train causes,
+and a verb whose help says "testers have it" must not hide it. The rows marked
+`public-at-internal` are named in the prompt, while it is still a question.
 
 ## `beta`, the first verb that acts
 
@@ -165,9 +259,17 @@ somebody has already stood at eleven consoles. The table declares them:
 
 ```yaml
 gates:
-  - {kind: run, command: "_tools/pre-release.sh"}
-  - {kind: run, command: "_tools/ship.sh release finish --dry-run"}
+  production:
+    - {kind: run, command: "_tools/pre-release.sh"}
+    - {kind: run, command: "_tools/ship.sh release finish --dry-run"}
 ```
+
+**Keyed by the stage that runs them**, and it was one flat list until there
+were two verbs with gates. `internal` opens with the `pre-build` hook and
+`production` with `pre-release`; one list would have run `release finish
+--dry-run` in front of the dispatch that creates the build it is checking.
+Within a stage it stays a list, because the order there is the consumer's: the
+two above go in whichever order refuses soonest.
 
 They run in order, each must exit 0, and the first failure stops the run with
 nothing spent. The bodies are the consumer's; the contract is not.
@@ -340,8 +442,8 @@ and a preflight with nobody's workflow changed.
 
 ## Using it
 
-Two verbs, both read-only, and it is launchable the way its siblings are —
-without a consumer having to find the package in the pub cache:
+Five verbs, two of them read-only, and it is launchable the way its siblings
+are — without a consumer having to find the package in the pub cache:
 
 ```bash
 dart --packages=<checkout>/.dart_tool/package_config.json \
