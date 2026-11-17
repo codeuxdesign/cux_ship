@@ -4,6 +4,62 @@
 
 ### Added
 
+**`cux_train internal`, the verb with two lanes.** §5: a consumer whose builds
+happen on other machines has nothing to *do* at most of its destinations, so
+this verb spawns one dispatch — the push CI reacts to, declared top-level as
+`dispatch:` — walks the rows this machine owns, and then reads the rest until
+each holds the candidate. §3's order, and three of its four items are about
+spending nothing you cannot get back: the gates first, then a confirmation
+that names what the push makes public, then the dispatch, and only then is
+there anything to wait for.
+
+**A `wait` step kind, and a `read` contract for it.** A destination CI fills is
+not `none` — something is certainly happening there — and not `manual`, since
+nobody is being asked to act. A `wait` row declares how to read what the
+destination holds: one build number on stdout, nothing on stdout for "no build
+yet", a non-zero exit for "could not answer". A `wait` with no `read` is
+refused, because the clock would then be its only exit, and a `wait` outside
+`internal` is refused, because waiting for somebody else's bot at production
+would hold the version tag open for days.
+
+**`--wait-timeout`, which §3 says is not optional because the failure signal
+is.** Without `gh` there is no way to observe that a CI job failed, so for a
+destination whose build failed the only exit is the clock. It takes `90s`,
+`45m` or `2h`; a bare number is refused rather than read as minutes, and the
+default is an hour, so the normal path never types it. A timed-out row is
+`pending` — §6.2's "no evidence either way" — and never `failed`: not hearing
+back is not being told no, and the summary says so in as many words.
+
+**Nothing the wait sees is recorded**, which keeps §6.2's *observed* and
+*attested* apart rather than turning the stronger evidence into the weaker one
+on the way past. It also makes a re-run free: everything that already arrived
+answers at once, so `internal` resumes by looking rather than by remembering.
+
+### Changed
+
+**`gates:` is keyed by the stage that runs them.** It was a flat list, on the
+argument that `production` runs every gate it has so a key would be
+documentation the parser enforced without reading — true of one verb and false
+of two. §3 gives `internal` a `pre-build` gate and `production` a
+`pre-release` one, and one list would hand each verb the other's: `release
+finish --dry-run`, which refuses anywhere but the release branch, would have
+run in front of the dispatch that creates the build it checks. A table written
+the old way is refused with the new shape named. Within a stage it is still a
+list, because the order there is the consumer's.
+
+**`beta` runs the gates its stage declares.** The keys are stages, so the
+schema accepts `gates: {beta: […]}` — and `beta` was the one spending verb
+that never asked, so a gate on the verb that reaches public testers parsed,
+was believed by whoever wrote it, and ran nowhere. §3 gives `beta` no gate
+today; that is a fact about the tables rather than a licence for the verb to
+skip the question.
+
+**A walk that is one pass of several says so in its verdict.** "Every
+destination this run covers is recorded" printed above two pending rows — true
+of the walk, and read as the verdict on the release. It is "this pass" where
+the verb has more than one, which `production`'s second pass has wanted since
+it existed.
+
 **A top-level `gates:` list, run before `production` spends anything.** §3
 step 1: the `pre-release` hook and `release finish --dry-run` open the verb so
 that a refusal — the wrong branch, a changelog with no section for this

@@ -243,8 +243,13 @@ class RunReport {
     // run again, and saying "nothing was recorded" there describes the
     // invocation while the question is about the build.
     if (complete) {
-      return 'Every destination this run covers is recorded at '
-          '${stage.name}.';
+      // **"This pass" where there is more than one, and a real run showed
+      // why.** `internal` walks the local lane and then waits on the remote
+      // one, so "every destination this run covers is recorded" printed
+      // above two pending rows — true of the walk, and read as the verdict on
+      // the release. `production`'s second pass has the same shape.
+      return 'Every destination this ${pass == null ? 'run' : 'pass'} covers '
+          'is recorded at ${stage.name}.';
     }
     if (dryRun) {
       return 'Nothing was performed and nothing was recorded. Run it again '
@@ -326,6 +331,21 @@ class PromotionRun {
 
   /// What to call this pass in the report, where a verb makes more than one.
   final String? pass;
+
+  /// Asks every refusal this run can make before it starts, and makes it.
+  ///
+  /// **Public because `internal` has something to spend before the walk**, and
+  /// that is the one caller with a use for it: the dispatch pushes a branch
+  /// fifteen builds react to, and the walk's own preflight happens inside
+  /// [perform], which is after. A command that will not resolve, or a record
+  /// that cannot be written because the candidate's `uploaded/` tag is not in
+  /// this checkout, then arrived with the push already gone — knowable up
+  /// front and refused too late to be worth anything.
+  ///
+  /// [perform] still preflights, so a caller that skips this loses nothing but
+  /// the earliness. Asking twice costs a resolve and a dry-run write per
+  /// destination, both of which are a read of refs.
+  void preflight() => _preflight(ledger.outstanding(selection.acting, stage));
 
   /// Performs the stage, returning what happened.
   Future<RunReport> perform() async {
@@ -476,6 +496,16 @@ class PromotionRun {
       StepKind.none => throw StateError(
         '${destination.name} has no ${stage.name} step and should have been '
         'skipped by resolveStores',
+      ),
+      // **Also unreachable, and kept apart from `none` because the reason is
+      // different.** A `wait` row has nothing for this loop to perform — the
+      // dispatch set it going and the evidence wait is what settles it — so
+      // `internal` takes those rows out of the selection before building a
+      // run. Reporting one here as anything at all would be this loop
+      // claiming a destination it never touched.
+      StepKind.wait => throw StateError(
+        '${destination.name} is a `wait` at ${stage.name}, which the evidence '
+        'wait settles and this loop does not',
       ),
       StepKind.manual => _manual(destination, step),
       StepKind.ship || StepKind.run => await _spawn(destination, step),

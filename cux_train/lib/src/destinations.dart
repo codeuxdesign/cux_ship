@@ -66,7 +66,7 @@ enum Stage {
 
 /// Who acts on a destination at one stage.
 ///
-/// Four kinds, and the fourth is why the table works for AuthPass at all: a
+/// Five kinds, and the last two are why the table works for AuthPass at all: a
 /// cell nobody can automate is still a row, declared rather than omitted, so
 /// the five verbs mean the same thing before anything is automated.
 enum StepKind {
@@ -78,6 +78,30 @@ enum StepKind {
 
   /// A person acts. The train instructs, waits, and records.
   manual,
+
+  /// Something elsewhere acts, and the train watches for the result.
+  ///
+  /// **This is §5's remote lane, and it is a kind rather than an absence
+  /// because the difference is the whole of `internal`.** AuthPass's CI builds
+  /// and uploads fifteen of its nineteen destinations; the train's `internal`
+  /// spawns one dispatch and then has nothing left to *do* at those rows —
+  /// but something is certainly happening at them, so they are not `none`, and
+  /// nobody is being asked to act, so they are not `manual`. What the train
+  /// does instead is read, until the destination shows the candidate or the
+  /// clock runs out.
+  ///
+  /// **A `wait` row has to declare `read`**, enforced below: the wait's only
+  /// other exit is the timeout, so a wait with nothing to read is an hour of
+  /// nothing followed by a `pending` that was never going to be anything else.
+  ///
+  /// **`internal` only**, also enforced below. The tempting second use is a
+  /// production row nobody acts at but whose state can be read — AuthPass's
+  /// `flathub`, whose production cell §3 calls "observe only" — and taking it
+  /// would hold the version tag until Flathub's bot got around to building,
+  /// days later. §6.3 is explicit that the publishing decision there is not the
+  /// train's, and §4 makes such a row `none`: satisfied vacuously, observed by
+  /// `status` afterwards.
+  wait,
 
   /// Nobody acts, and that is a fact about the destination rather than a gap.
   /// Every "no beta audience" cell is one of these.
@@ -160,6 +184,14 @@ class Destination {
   /// Null means unreadable, which is not a defect — it is what makes a
   /// destination *attested* rather than *observed*, and four of AuthPass's
   /// are: the store consoles, with two more the plan takes no position on.
+  ///
+  /// **The contract is one build number on stdout**, and nothing else: exit 0
+  /// having printed a number means the destination holds that build, exit 0
+  /// having printed nothing means it holds no build this command could see,
+  /// and a non-zero exit means the read could not answer — §6.2's `Unreadable`,
+  /// which is not evidence about the step. It is deliberately not a document:
+  /// every one of AuthPass's reads is a URL and a field, and a schema here
+  /// would make each of them a program.
   final String? read;
 
   /// Per-destination identity: `package`, `bundle-id`, whatever the step needs.
@@ -214,10 +246,14 @@ class Destination {
 class DestinationTable {
   DestinationTable(
     List<Destination> destinations, {
+    this.dispatch,
     this.finish,
-    List<DestinationStep> gates = const [],
+    Map<Stage, List<DestinationStep>> gates = const {},
   }) : destinations = List.unmodifiable(destinations),
-       gates = List.unmodifiable(gates);
+       gates = Map.unmodifiable({
+         for (final entry in gates.entries)
+           entry.key: List<DestinationStep>.unmodifiable(entry.value),
+       });
 
   /// Parses a `destinations:` declaration.
   ///
@@ -241,7 +277,12 @@ class DestinationTable {
         '$source must be a map with a `destinations` key',
       );
     }
-    _checkKeys(document, const {'destinations', 'finish', 'gates'}, source);
+    _checkKeys(document, const {
+      'destinations',
+      'dispatch',
+      'finish',
+      'gates',
+    }, source);
 
     // **Missing and malformed are separate messages**, because they are
     // separate mistakes: the first is a file that has not been written yet,
@@ -287,6 +328,7 @@ class DestinationTable {
     }
     final table = DestinationTable(
       destinations,
+      dispatch: _parseDispatch(document, source),
       finish: _parseFinish(document, source),
       gates: _parseGates(document, source),
     );
@@ -316,7 +358,43 @@ class DestinationTable {
   /// that skipped the gates could not answer the question §8 step 1 wants a
   /// dry run for — whether this release is ready — and `release finish
   /// --dry-run` is itself a gate of exactly that shape.
-  final List<DestinationStep> gates;
+  ///
+  /// **Keyed by the stage that runs them, and it was a flat list for exactly
+  /// one verb.** The argument for the list was that `production` runs every
+  /// gate it has in order, so hook names would be documentation the parser
+  /// enforced without reading. The second acting verb ended that: §3's
+  /// `internal` opens with the `pre-build` hook and `production` with
+  /// `pre-release`, and running one table's single list at both would put
+  /// `release finish --dry-run` — which refuses anywhere but the release
+  /// branch — in front of the dispatch that *creates* the build it is
+  /// checking. The names the donor uses are stage names here, which is why
+  /// this is a stage key and not a hook name.
+  final Map<Stage, List<DestinationStep>> gates;
+
+  /// The gates [stage] runs, in declaration order. Empty where none are
+  /// declared, which is the ordinary state.
+  List<DestinationStep> gatesAt(Stage stage) => gates[stage] ?? const [];
+
+  /// The one step `internal` performs that is not about a destination.
+  ///
+  /// **§3's step 2: the push CI reacts to, typed by the train instead of by a
+  /// person reading README step 2.** It is top-level rather than a row because
+  /// it is not a row: one `git push origin HEAD:stable` is what fifteen of
+  /// AuthPass's destinations are built by, and writing it on one of them would
+  /// make that destination's turn the thing every other destination depends
+  /// on.
+  ///
+  /// **Optional, and its absence is the donor's shape rather than a gap.** A
+  /// consumer whose `internal` builds locally at each destination — the donor
+  /// itself, with `build.sh` and `upload.sh` per platform — has nothing to
+  /// dispatch and declares none; `internal` then walks its rows and, with no
+  /// `wait` rows either, has nothing to wait for.
+  ///
+  /// **Idempotence is the command's business, not the train's.** There is no
+  /// `dispatched/` record: pushing the same commit twice is a no-op, and what
+  /// a re-run would otherwise skip is the one step that makes the next wait
+  /// mean anything.
+  final DestinationStep? dispatch;
 
   /// The step that spends the version tag, once the finish rule is met.
   ///
@@ -430,6 +508,9 @@ class DestinationTable {
       steps[stage] = _parseStep(declared, '$where, `${stage.name}`');
     }
 
+    final read = _optionalString(value, 'read', where);
+    _checkWaits(steps, read, where);
+
     return Destination(
       name: name,
       // **Unmodifiable, as `DestinationTable.destinations` is.** A parsed
@@ -437,7 +518,7 @@ class DestinationTable {
       // put a step into this map could make the train act on a destination at
       // a stage the consumer never declared.
       steps: Map.unmodifiable(steps),
-      read: _optionalString(value, 'read', where),
+      read: read,
       identity: _parseIdentity(value['identity'], where),
       afterFinish: _parseStageFlag(
         value,
@@ -461,6 +542,42 @@ class DestinationTable {
         pointless: 'nothing this release does reaches it at that stage',
       ),
     );
+  }
+
+  /// **A `wait` step belongs to `internal`, and needs something to read.**
+  ///
+  /// Both rules are [StepKind.wait]'s doc comment made enforceable, and both
+  /// are about a table that would otherwise parse and then behave as if the
+  /// row said something else. A `wait` at `beta` or `production` reaches a
+  /// walk that has no case for it; a `wait` with no `read` reaches a loop
+  /// whose only remaining exit is the timeout, which is an hour spent
+  /// producing the `pending` it started with.
+  static void _checkWaits(
+    Map<Stage, DestinationStep> steps,
+    String? read,
+    String where,
+  ) {
+    for (final entry in steps.entries) {
+      if (entry.value.kind != StepKind.wait) {
+        continue;
+      }
+      if (entry.key != Stage.internal) {
+        throw DestinationTableException(
+          '$where is `wait` at `${entry.key.name}`, and only `internal` '
+          'dispatches and waits. A destination nobody acts at but whose state '
+          'can be read is `none` here and is read by `status` afterwards — '
+          'waiting for it at ${entry.key.name} would hold the release open '
+          'for however long somebody else takes.',
+        );
+      }
+      if (read == null) {
+        throw DestinationTableException(
+          '$where is `wait` at `internal` and declares no `read`. The wait '
+          'ends when the destination shows the build or when the clock runs '
+          'out, so with nothing to read it can only ever end the second way.',
+        );
+      }
+    }
   }
 
   /// **A flag about a stage is only meaningful where somebody acts at it.**
@@ -497,56 +614,122 @@ class DestinationTable {
     return declared;
   }
 
-  /// The optional top-level `gates:` list.
+  /// The optional top-level `gates:` map, stage to steps in order.
   ///
-  /// **A list rather than named hook points**, which is the one choice here
-  /// worth stating. §3 names two gates and the donor names its hooks
-  /// (`pre-build`, `pre-release`), so a map keyed by hook name was the obvious
-  /// shape — and it buys nothing this needs: `production` runs every gate it
-  /// has, in order, so the names would be documentation the parser enforces
-  /// without reading. A list says what matters, which is the order, and leaves
-  /// the consumer free to put a `pre-release` hook and a `release finish
-  /// --dry-run` in whichever order refuses soonest.
+  /// **The stage is the key, and the first draft had one flat list**, on the
+  /// argument that `production` runs every gate it has so a key would be
+  /// documentation the parser enforced without reading. That argument was true
+  /// of one verb and false of two: §3 gives `internal` a `pre-build` gate and
+  /// `production` a `pre-release` one, and a single list would hand each verb
+  /// the other's. Within a stage it is still a list, because the order is the
+  /// consumer's — a `pre-release` hook and a `release finish --dry-run` go in
+  /// whichever order refuses soonest.
   ///
   /// Each entry is a step, and each has to spawn: `manual` would be asking a
   /// person to assert a gate the train could check, and `none` would be a gate
   /// that passes by being empty — which is the one thing a gate must never do.
-  static List<DestinationStep> _parseGates(YamlMap document, String source) {
+  static Map<Stage, List<DestinationStep>> _parseGates(
+    YamlMap document,
+    String source,
+  ) {
     final declared = document['gates'];
     if (declared == null) {
       // **Absent and empty are the same here, unlike a stage.** A table with
       // no gates is the ordinary state — §8 step 1's table has none, and the
       // hook bodies are the consumer's to write later — so this is not the
       // "written and left empty" case `_parseDestination` refuses.
-      return const [];
+      return const {};
     }
-    if (declared is! YamlList) {
+    if (declared is YamlList) {
+      // **The shape that used to be right gets its own sentence.** A list is
+      // what the released schema took, and the generic "must be a map" would
+      // send somebody who wrote a working table off to find a typo.
       throw DestinationTableException(
-        '$source: `gates` must be a list of steps, each with a command that '
-        'has to pass before a release spends anything',
+        '$source: `gates` is a list, and gates are now keyed by the stage '
+        'that runs them — `gates: {production: [...]}`. One list cannot serve '
+        'both verbs: `internal` runs its gates before the build exists and '
+        '`production` runs its own before the release does.',
+      );
+    }
+    if (declared is! YamlMap) {
+      throw DestinationTableException(
+        '$source: `gates` must be a map of stage to a list of steps, each '
+        'with a command that has to pass before that stage spends anything',
       );
     }
     if (declared.isEmpty) {
       throw DestinationTableException(
-        '$source: `gates` is an empty list. A gate that checks nothing passes '
-        'always, which is the one thing a gate must not do — leave the key '
-        'out instead.',
+        '$source: `gates` is empty. A gate that checks nothing passes always, '
+        'which is the one thing a gate must not do — leave the key out '
+        'instead.',
       );
     }
-    final gates = <DestinationStep>[];
-    for (var i = 0; i < declared.length; i++) {
-      final where = '$source: `gates[$i]`';
-      final step = _parseStep(declared[i], where);
-      if (!step.kind.spawns) {
+    final gates = <Stage, List<DestinationStep>>{};
+    for (final entry in declared.entries) {
+      final key = entry.key;
+      final stage = key is String ? Stage.byName(key) : null;
+      if (stage == null) {
         throw DestinationTableException(
-          '$where is `${step.kind.name}`, and a gate has to run something. A '
-          '`manual` gate asks a person to assert what the train could check, '
-          'and a `none` gate passes by being empty.',
+          '$source: `gates` is keyed by stage, and `${entry.key}` is not one '
+          '— expected ${Stage.values.map((it) => it.name).join(', ')}. '
+          '`status` and `ready` spend nothing, so neither has a gate to run.',
         );
       }
-      gates.add(step);
+      final steps = entry.value;
+      if (steps is! YamlList || steps.isEmpty) {
+        throw DestinationTableException(
+          '$source: `gates.${stage.name}` must be a non-empty list of steps. '
+          'A stage keyed with nothing under it is a gate that passes by being '
+          'empty — leave the key out instead.',
+        );
+      }
+      gates[stage] = [
+        for (var i = 0; i < steps.length; i++)
+          _checkedGate(steps[i], '$source: `gates.${stage.name}[$i]`'),
+      ];
     }
     return gates;
+  }
+
+  /// One gate: a step, which has to be one that spawns.
+  static DestinationStep _checkedGate(Object? declared, String where) {
+    final step = _parseStep(declared, where);
+    if (!step.kind.spawns) {
+      throw DestinationTableException(
+        '$where is `${step.kind.name}`, and a gate has to run something. A '
+        '`manual` gate asks a person to assert what the train could check, '
+        'and a `none` gate passes by being empty.',
+      );
+    }
+    return step;
+  }
+
+  /// The optional top-level `dispatch:` step.
+  ///
+  /// **It has to spawn something**, for `finish`'s reason in another place: a
+  /// `manual` dispatch would be instructing a person to push a branch the
+  /// train could push and then believing them about it, and a `none` dispatch
+  /// is a table that declares a dispatch and has none.
+  static DestinationStep? _parseDispatch(YamlMap document, String source) {
+    if (!document.containsKey('dispatch')) {
+      return null;
+    }
+    final declared = document['dispatch'];
+    if (declared == null) {
+      throw DestinationTableException(
+        '$source declares `dispatch` with nothing in it — give it a `ship` or '
+        '`run` command, or leave the key out',
+      );
+    }
+    final step = _parseStep(declared, '$source: `dispatch`');
+    if (!step.kind.spawns) {
+      throw DestinationTableException(
+        '$source: `dispatch` is `${step.kind.name}`, and the dispatch is the '
+        'command that sets the build going — it has to run something. Give it '
+        'a `ship` or `run` command, or leave `dispatch` out.',
+      );
+    }
+    return step;
   }
 
   /// The optional top-level `finish:` step.

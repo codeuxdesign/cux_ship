@@ -132,14 +132,12 @@ void main() {
           .map((line) => line.trim().split(RegExp(r'\s+')).first)
           .toSet();
 
-      expect(offered, containsAll(['status', 'ready', 'beta', 'production']));
-      for (final planned in ['internal']) {
-        expect(
-          offered,
-          isNot(contains(planned)),
-          reason: '`$planned` is in §3 of the plan and is not wired yet',
-        );
-      }
+      // **All five of §2's verbs, and the exclusion list is empty for the
+      // first time.** The claim this case was written for — the usage never
+      // offers a verb that is still a plan — is kept by asserting the set
+      // exactly rather than by naming what is missing: there is nothing left
+      // to name, and a sixth verb appearing is now what it would catch.
+      expect(offered, {'status', 'ready', 'internal', 'beta', 'production'});
     });
   });
 }
