@@ -196,12 +196,18 @@ void main() {
       await _internal([..._candidate, '--yes']);
 
       expect(_spawned(), ['pre-build', 'push-stable', 'notarize']);
-      // The reads only start once the dispatch has happened: reading before
-      // it would be asking about a build nothing had set going.
       expect(_reads, isNotEmpty);
+      // The reads only start once the dispatch has happened: reading before
+      // it would be asking about a build nothing had set going. The wait's
+      // own opening line is what says when they started, so the order is
+      // asserted over the output — `_reads` being non-empty holds no order.
       expect(
         _out.toString(),
-        stringContainsInOrder(['dispatch  push-stable 2196', 'notarize 2196']),
+        stringContainsInOrder([
+          'dispatch  push-stable 2196',
+          'notarize 2196',
+          'waiting for play, web',
+        ]),
       );
     });
 
@@ -386,25 +392,62 @@ void main() {
     test('a read that answers with something else stops the wait', () async {
       // A table defect rather than a state of the world: no amount of
       // waiting changes what the command prints.
-      _answers['read-play'] = [
-        const ReadOutput(exitCode: 0, stdout: '1.9.13+2196\n'),
-      ];
+      //
+      // **The three answers are what `int.parse` would take and a build
+      // number is not.** `1.9.13+2196` it rejects on its own, so that case
+      // alone holds nothing: `+2196` and `0x89c` are accepted by `int.parse`
+      // — the second as 2204 — and it is the digits-only guard, not the
+      // parse, that refuses them. Without it a store answering `0x89c` is
+      // read as holding some other build and waited out in silence.
+      for (final said in ['1.9.13+2196', '+2196', '0x89c']) {
+        _answers['read-play'] = [ReadOutput(exitCode: 0, stdout: '$said\n')];
 
-      await expectLater(
-        _internal([..._candidate, '--yes']),
-        throwsA(
-          isA<EvidenceWaitException>().having(
-            (e) => e.message,
-            'message',
-            allOf(
-              contains('is not a build number'),
-              contains('waiting will not change'),
+        await expectLater(
+          _internal([..._candidate, '--yes']),
+          throwsA(
+            isA<EvidenceWaitException>().having(
+              (e) => e.message,
+              'message',
+              allOf(
+                contains(said),
+                contains('is not a build number'),
+                contains('waiting will not change'),
+              ),
             ),
           ),
-        ),
-      );
+          reason: 'a read answering `$said`',
+        );
 
-      expect(_slept, isEmpty);
+        expect(_slept, isEmpty, reason: 'a read answering `$said`');
+      }
+    });
+
+    test('a --store that reaches no waiting row dispatches nothing', () async {
+      // **`--store direct:macos` asks for the local half, not for the push.**
+      // Dispatching anyway sets fifteen builds going from whatever HEAD is
+      // now, which for a candidate cut some commits back is not the build the
+      // operator named — and with --yes there is no prompt to catch it in.
+      await _internal([..._candidate, '--yes', '--store', 'direct:macos']);
+
+      expect(_spawned(), ['pre-build', 'notarize']);
+      expect(_reads, isEmpty);
+      expect(_out.toString(), contains('Not dispatching'));
+    });
+
+    test('a full run dispatches even with no row waiting on it', () async {
+      // The other half of the rule, and the shape the narrowing must not
+      // break: a consumer may dispatch and leave the evidence to `status`.
+      _writeTable('''
+dispatch: {kind: run, command: "push-stable {build}"}
+destinations:
+  "direct:macos":
+    internal: {kind: run, command: "notarize {build}"}
+''');
+
+      await _internal([..._candidate, '--yes']);
+
+      expect(_spawned(), ['push-stable', 'notarize']);
+      expect(_out.toString(), isNot(contains('Not dispatching')));
     });
 
     test('is narrowed by --store, like every other verb', () async {
@@ -412,6 +455,8 @@ void main() {
 
       expect(_reads.map((it) => it.first).toSet(), {'read-play'});
       expect(_spawned(), isNot(contains('notarize')));
+      // A waiting row is in the selection, so the push it waits on happens.
+      expect(_spawned(), contains('push-stable'));
     });
   });
 
@@ -641,6 +686,35 @@ void main() {
           ),
         ),
       );
+    });
+
+    test('refuses a wait longer than a day, however it is written', () async {
+      // **The last two are the ones that cost something.** `3000000000h`
+      // overflows `Duration`'s microseconds into a negative, which the loop
+      // reads as a deadline already past — so the operator who asked for the
+      // longest possible wait would have got no wait at all. The last
+      // overflows `int.parse`, which arrived as a stack trace rather than as
+      // the usage message this flag has one of.
+      for (final asked in [
+        '25h',
+        '1441m',
+        '86401s',
+        '3000000000h',
+        '99999999999999999999s',
+      ]) {
+        await expectLater(
+          _internal([..._candidate, '--yes', '--wait-timeout', asked]),
+          throwsA(
+            isA<UsageException>().having(
+              (e) => e.message,
+              'message',
+              contains('longest this verb waits is 24h'),
+            ),
+          ),
+          reason: '--wait-timeout $asked',
+        );
+        expect(_calls, isEmpty, reason: '--wait-timeout $asked');
+      }
     });
   });
 

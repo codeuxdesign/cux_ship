@@ -198,6 +198,26 @@ void main() {
     });
   });
 
+  group('the gates its stage declares', () {
+    test('a beta gate runs, and runs before the walk', () async {
+      // The case that was missing while `runGates` had two callers and this
+      // verb was not one: `gates: {beta: […]}` parsed, was believed by
+      // whoever wrote it, and never ran. The other stage's gate is in the
+      // same table to show the key is doing the choosing.
+      _writeTable('''
+gates:
+  beta:
+    - {kind: run, command: "pre-beta {version}"}
+  production:
+    - {kind: run, command: "not-this-stage"}
+$_table''');
+
+      await _beta(['--build', '2196', '--release', '1.9.13']);
+
+      expect(_calls.map((it) => it.first).toList(), ['pre-beta', 'ship']);
+    });
+  });
+
   group('the exit code', () {
     test('is 0 when every destination is recorded', () {
       // A real child process, so the spawn, the exit code it answers and the

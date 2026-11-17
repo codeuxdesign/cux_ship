@@ -12,7 +12,7 @@ published; `cux_train` is not yet.
 | [**`cux_ship`**](cux_ship) | **You are shipping.** The command, and the App Store Connect and Google Play clients behind it. | [pub.dev](https://pub.dev/packages/cux_ship) · [README](cux_ship/README.md) |
 | [**`cux_ship_verify`**](cux_ship_verify) | **You are checking.** The changelog parser, the App Store metadata model, and the offline checks over both. No dependencies at all, so it belongs in your `dev_dependencies`. | [pub.dev](https://pub.dev/packages/cux_ship_verify) · [README](cux_ship_verify/README.md) |
 | [**`cux_buildnumber`**](cux_buildnumber) | **You are numbering a build.** Monotonic build numbers shared through git refs, which a build allocates before it has an artifact. Its one runtime dependency is `git` on PATH. | [pub.dev](https://pub.dev/packages/cux_buildnumber) · [README](cux_buildnumber/README.md) |
-| [**`cux_train`**](cux_train) | **You are ordering a release.** The steps, their credentials, and the ones a person performs by hand. Nothing implemented yet — see [the design](docs/design/release-train.md). | [README](cux_train/README.md) |
+| [**`cux_train`**](cux_train) | **You are ordering a release.** The steps, their credentials, and the ones a person performs by hand. All five verbs — `status`, `ready`, `internal`, `beta`, `production` — over a destination table the consumer declares; see [the design](docs/design/release-train.md). | [README](cux_train/README.md) |
 
 `cux_ship` depends on `cux_ship_verify`, never the reverse. That direction is why
 those two are separate packages: both stores enforce their limits *after* an

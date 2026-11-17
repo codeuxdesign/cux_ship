@@ -123,7 +123,21 @@ class InternalCommand extends PromotingCommand {
             sleep: sleep,
             now: now,
           );
-    final dispatch = table.dispatch;
+    // **The dispatch is narrowed by `--store`, and only by it.** It is the
+    // stage's own step rather than any one destination's, so a full run spawns
+    // it whether or not the table has a row waiting on it: a consumer may
+    // dispatch and leave the evidence to `status`. A narrowed run is a
+    // different instruction. `--store direct:macos` — §3's "the step people
+    // forget", and the row §5 found missing for 1.9.13 — asks for the local
+    // half, and would otherwise push `HEAD:stable` as well. That push is the
+    // no-op its own doc claims only while HEAD has not moved: once `main` is
+    // ahead of the commit the named build was cut from, it sets going a
+    // *different* commit than `--build` says, and with `--yes` there is no
+    // prompt to notice it in.
+    final dispatch = selection.coversEveryDestination || waiting.isNotEmpty
+        ? table.dispatch
+        : null;
+    final withheld = table.dispatch != null && dispatch == null;
     final dispatchArgv = dispatch == null
         ? null
         : resolveStepCommand(
@@ -154,6 +168,16 @@ class InternalCommand extends PromotingCommand {
             alreadyConfirmed: true,
           );
     laneRun?.preflight();
+
+    // Said rather than left to be inferred: a run that silently drops the
+    // table's one irreversible step is the same defect as one that silently
+    // takes it.
+    if (withheld) {
+      output.write(
+        '\nNot dispatching: --store covers no destination that waits for CI, '
+        'so there is nothing here for the push to set going.\n',
+      );
+    }
 
     await runGates(
       table,
@@ -245,7 +269,28 @@ class InternalCommand extends PromotingCommand {
         '`$declared` is not one.',
       );
     }
-    final amount = int.parse(match.group(1)!);
+    final unit = match.group(2)!;
+    // **Bounded before it is a `Duration`, because `Duration` does not
+    // complain.** `Duration(hours: 3000000000)` overflows its microseconds
+    // silently into a negative, which the loop reads as a deadline already
+    // past: an operator asking to wait a very long time would get no wait at
+    // all, the one answer they certainly did not mean. Comparing the amount
+    // against a per-unit ceiling cannot overflow, since the parse has already
+    // refused anything an int cannot hold.
+    final amount = int.tryParse(match.group(1)!);
+    final longest = switch (unit) {
+      's' => Duration(hours: 24).inSeconds,
+      'm' => Duration(hours: 24).inMinutes,
+      _ => 24,
+    };
+    if (amount == null || amount > longest) {
+      usageException(
+        '--wait-timeout is `$declared`, and the longest this verb waits is '
+        '24h. A build that is not at internal after a day is something to '
+        'look at rather than to keep polling — the exit code for pending is '
+        'not a failure, so a run that times out can simply be run again.',
+      );
+    }
     if (amount == 0) {
       // Zero is a legitimate thing to want — look once, do not wait — but
       // `0h` and `0s` are the same instruction written two ways, and the verb
@@ -255,7 +300,7 @@ class InternalCommand extends PromotingCommand {
         'pending. --dry-run is the verb for looking without dispatching.',
       );
     }
-    return switch (match.group(2)!) {
+    return switch (unit) {
       's' => Duration(seconds: amount),
       'm' => Duration(minutes: amount),
       _ => Duration(hours: amount),

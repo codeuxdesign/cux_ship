@@ -38,8 +38,25 @@ class BetaCommand extends PromotingCommand {
     final build = candidateBuild();
     final version = candidateRelease();
 
+    final selection = selectionFor(table, Stage.beta);
+
+    // **`beta` runs the gates its stage declares, though §3 gives it none.**
+    // The gate schema's rule is that the key *is* the stage, so `Stage.values`
+    // is what `gates:` accepts — and with this call missing, `gates: {beta:
+    // […]}` parsed, was believed, and never ran, which is the one state this
+    // package will not ship a gate in. A verb that spends something asks its
+    // gates first; that `beta`'s list is empty in every table today is a fact
+    // about the tables, not a licence for the verb to skip the question.
+    await runGates(
+      table,
+      selection,
+      stage: Stage.beta,
+      version: version,
+      build: build,
+    );
+
     final report = await runFor(
-      selection: selectionFor(table, Stage.beta),
+      selection: selection,
       stage: Stage.beta,
       build: build,
       version: version,
