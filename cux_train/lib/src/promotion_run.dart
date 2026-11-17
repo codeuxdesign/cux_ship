@@ -43,8 +43,16 @@ import 'step_command.dart';
 import 'store_selection.dart';
 
 /// Spawns [argv] and answers its exit code.
+///
+/// [environment] is added to the child's, never replacing it: §7 keeps the
+/// hook *contract* here and the hook *bodies* in the consumer, and a body is a
+/// shell script that needs the PATH it was going to get.
 typedef StepSpawn =
-    Future<int> Function(List<String> argv, {required String workingDirectory});
+    Future<int> Function(
+      List<String> argv, {
+      required String workingDirectory,
+      Map<String, String> environment,
+    });
 
 /// The real spawn: the child inherits this process's streams.
 ///
@@ -54,11 +62,15 @@ typedef StepSpawn =
 Future<int> spawnInheritingStdio(
   List<String> argv, {
   required String workingDirectory,
+  Map<String, String> environment = const {},
 }) async {
   final process = await Process.start(
     argv.first,
     argv.skip(1).toList(),
     workingDirectory: workingDirectory,
+    // `includeParentEnvironment` defaults to true, so this adds rather than
+    // replaces — see the typedef.
+    environment: environment.isEmpty ? null : environment,
     mode: ProcessStartMode.inheritStdio,
   );
   return process.exitCode;

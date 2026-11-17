@@ -157,6 +157,30 @@ finish  release-finish 1.9.13
   fdroid  handed over
 ```
 
+**Gates run before anything is spent.** §3 opens `production` with the
+`pre-release` hook and `release finish --dry-run`, and the placement is the
+whole value: a wrong branch, or a changelog with no section for this version,
+refuses while it is still free — rather than from the finish step, after
+somebody has already stood at eleven consoles. The table declares them:
+
+```yaml
+gates:
+  - {kind: run, command: "_tools/pre-release.sh"}
+  - {kind: run, command: "_tools/ship.sh release finish --dry-run"}
+```
+
+They run in order, each must exit 0, and the first failure stops the run with
+nothing spent. The bodies are the consumer's; the contract is not.
+`HOOK_STORES` carries the destinations this run will act on, so a gate that
+cares whether the run was narrowed can read it — and `{destination}` is
+deliberately **not** offered, because a gate is about the release rather than
+about one row.
+
+**A dry run runs them too.** They spend nothing by contract, and a dry run
+that skipped them could not answer whether the release is ready, which is most
+of what a dry run is for. `release finish --dry-run` is itself a gate of
+exactly that shape.
+
 **The finish rule asks the record, never the invocation.** `vX.Y.Z` is spent
 once every declared destination with a production step is *recorded* at
 production. A destination whose production kind is `none` is satisfied
